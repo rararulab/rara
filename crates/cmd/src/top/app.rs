@@ -20,35 +20,35 @@ use crate::top::{
     client::KernelClient,
     types::{
         AgentInfo, AgentTimeline, ApprovalRequest, AuditEvent, KernelEventEnvelope,
-        MetricsSnapshot, PanelFocus, ProcessStats, SessionState, SessionView, SystemStats,
+        MetricsSnapshot, PanelFocus, SessionStats, SessionState, SessionView, SystemStats,
     },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
-    Processes,
+    Sessions,
     Agents,
     Approvals,
     Audit,
-    Sessions,
+    SessionDetails,
 }
 
 impl Tab {
     pub const ALL: [Tab; 5] = [
-        Tab::Processes,
+        Tab::Sessions,
         Tab::Agents,
         Tab::Approvals,
         Tab::Audit,
-        Tab::Sessions,
+        Tab::SessionDetails,
     ];
 
     pub fn title(self) -> &'static str {
         match self {
-            Tab::Processes => "Processes",
+            Tab::Sessions => "Sessions",
             Tab::Agents => "Agents",
             Tab::Approvals => "Approvals",
             Tab::Audit => "Audit",
-            Tab::Sessions => "Sessions",
+            Tab::SessionDetails => "Details",
         }
     }
 }
@@ -57,7 +57,7 @@ pub struct App {
     pub tab:            Tab,
     pub scroll_offset:  usize,
     pub stats:          Option<SystemStats>,
-    pub processes:      Vec<ProcessStats>,
+    pub sessions_list:  Vec<SessionStats>,
     pub agents:         Vec<AgentInfo>,
     pub approvals:      Vec<ApprovalRequest>,
     pub audit:          Vec<AuditEvent>,
@@ -70,10 +70,10 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            tab:            Tab::Processes,
+            tab:            Tab::Sessions,
             scroll_offset:  0,
             stats:          None,
-            processes:      Vec::new(),
+            sessions_list:  Vec::new(),
             agents:         Vec::new(),
             approvals:      Vec::new(),
             audit:          Vec::new(),
@@ -87,11 +87,11 @@ impl App {
     /// Returns the number of rows in the current tab's data.
     pub fn current_row_count(&self) -> usize {
         match self.tab {
-            Tab::Processes => self.processes.len(),
+            Tab::Sessions => self.sessions_list.len(),
             Tab::Agents => self.agents.len(),
             Tab::Approvals => self.approvals.len(),
             Tab::Audit => self.audit.len(),
-            Tab::Sessions => self.session_state.sessions.len(),
+            Tab::SessionDetails => self.session_state.sessions.len(),
         }
     }
 
@@ -101,7 +101,7 @@ impl App {
                 self.should_quit = true;
             }
             KeyCode::Char('1') => {
-                self.tab = Tab::Processes;
+                self.tab = Tab::Sessions;
                 self.scroll_offset = 0;
             }
             KeyCode::Char('2') => {
@@ -117,36 +117,36 @@ impl App {
                 self.scroll_offset = 0;
             }
             KeyCode::Char('5') => {
-                self.tab = Tab::Sessions;
+                self.tab = Tab::SessionDetails;
                 self.scroll_offset = 0;
             }
             KeyCode::Tab => {
-                if self.tab == Tab::Sessions {
+                if self.tab == Tab::SessionDetails {
                     self.session_state.focus = match self.session_state.focus {
                         PanelFocus::SessionList => PanelFocus::Gantt,
-                        PanelFocus::Gantt => PanelFocus::ProcessTree,
-                        PanelFocus::ProcessTree => PanelFocus::SessionList,
+                        PanelFocus::Gantt => PanelFocus::SessionTree,
+                        PanelFocus::SessionTree => PanelFocus::SessionList,
                     };
                 }
             }
             KeyCode::BackTab => {
-                if self.tab == Tab::Sessions {
+                if self.tab == Tab::SessionDetails {
                     self.session_state.focus = match self.session_state.focus {
-                        PanelFocus::SessionList => PanelFocus::ProcessTree,
+                        PanelFocus::SessionList => PanelFocus::SessionTree,
                         PanelFocus::Gantt => PanelFocus::SessionList,
-                        PanelFocus::ProcessTree => PanelFocus::Gantt,
+                        PanelFocus::SessionTree => PanelFocus::Gantt,
                     };
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.tab == Tab::Sessions {
+                if self.tab == Tab::SessionDetails {
                     self.handle_sessions_up();
                 } else {
                     self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.tab == Tab::Sessions {
+                if self.tab == Tab::SessionDetails {
                     self.handle_sessions_down();
                 } else {
                     let max = self.current_row_count().saturating_sub(1);
@@ -156,7 +156,7 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if self.tab == Tab::Sessions
+                if self.tab == Tab::SessionDetails
                     && self.session_state.focus == PanelFocus::SessionList
                     && !self.session_state.sessions.is_empty()
                 {
@@ -184,7 +184,7 @@ impl App {
             PanelFocus::Gantt => {
                 ss.gantt_selected = ss.gantt_selected.saturating_sub(1);
             }
-            PanelFocus::ProcessTree => {
+            PanelFocus::SessionTree => {
                 ss.tree_selected = ss.tree_selected.saturating_sub(1);
             }
         }
@@ -210,7 +210,7 @@ impl App {
                     }
                 }
             }
-            PanelFocus::ProcessTree => {
+            PanelFocus::SessionTree => {
                 if let Some(sv) = ss.sessions.get_index(ss.selected_session).map(|(_, v)| v) {
                     let max = sv.agents.len().saturating_sub(1);
                     if ss.tree_selected < max {
@@ -288,8 +288,8 @@ impl App {
                 }
             }
 
-            // 3. Look up in processes data.
-            for p in &self.processes {
+            // 3. Look up in sessions list data.
+            for p in &self.sessions_list {
                 if p.agent_id == *agent_id {
                     return p.session_id.clone();
                 }
@@ -317,15 +317,15 @@ impl App {
         }
 
         // Fetch the rest in parallel; individual failures are tolerated.
-        let (processes, agents, approvals, audit) = tokio::join!(
-            client.processes(),
+        let (sessions, agents, approvals, audit) = tokio::join!(
+            client.sessions(),
             client.agents(),
             client.approvals(),
             client.audit(50),
         );
 
-        if let Ok(p) = processes {
-            self.processes = p;
+        if let Ok(s) = sessions {
+            self.sessions_list = s;
         }
         if let Ok(a) = agents {
             self.agents = a;
@@ -337,14 +337,14 @@ impl App {
             self.audit = a;
         }
 
-        // Update session state from processes data.
-        self.sync_sessions_from_processes();
+        // Update session state from sessions data.
+        self.sync_session_details();
     }
 
-    /// Sync SessionState with process data obtained from the kernel API.
-    fn sync_sessions_from_processes(&mut self) {
+    /// Sync SessionState with session data obtained from the kernel API.
+    fn sync_session_details(&mut self) {
         let now = Instant::now();
-        for p in &self.processes {
+        for p in &self.sessions_list {
             let ss = &mut self.session_state;
 
             // Use uptime_ms to compute the actual start time of this process.

@@ -47,14 +47,14 @@ fn default_audit_limit() -> usize { 50 }
 pub fn kernel_routes(handle: KernelHandle) -> Router {
     Router::new()
         .route("/api/v1/kernel/stats", get(get_stats))
-        .route("/api/v1/kernel/processes", get(list_processes))
+        .route("/api/v1/kernel/sessions", get(list_sessions))
         .route(
-            "/api/v1/kernel/processes/{agent_id}/turns",
-            get(get_process_turns),
+            "/api/v1/kernel/sessions/{agent_id}/turns",
+            get(get_session_turns),
         )
         .route(
-            "/api/v1/kernel/processes/{agent_id}/stream",
-            get(stream_process),
+            "/api/v1/kernel/sessions/{agent_id}/stream",
+            get(stream_session),
         )
         .route("/api/v1/kernel/events/stream", get(stream_kernel_events))
         .route("/api/v1/kernel/approvals", get(list_approvals))
@@ -72,13 +72,13 @@ async fn get_stats(
     Ok(Json(handle.system_stats()))
 }
 
-async fn list_processes(
+async fn list_sessions(
     State(handle): State<KernelHandle>,
-) -> Result<Json<Vec<rara_kernel::process::ProcessStats>>, ProblemDetails> {
+) -> Result<Json<Vec<rara_kernel::process::SessionStats>>, ProblemDetails> {
     Ok(Json(handle.list_processes().await))
 }
 
-async fn get_process_turns(
+async fn get_session_turns(
     State(handle): State<KernelHandle>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<rara_kernel::agent_turn::TurnTrace>>, ProblemDetails> {
@@ -86,11 +86,11 @@ async fn get_process_turns(
         uuid::Uuid::parse_str(&agent_id)
             .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
     );
-    // Verify the process exists before returning traces.
+    // Verify the session exists before returning traces.
     if handle.process_table().get(aid).is_none() {
         return Err(ProblemDetails::not_found(
-            "Process Not Found",
-            format!("process not found: {agent_id}"),
+            "Session Not Found",
+            format!("session not found: {agent_id}"),
         ));
     }
     Ok(Json(handle.get_process_turns(aid)))
@@ -113,7 +113,7 @@ async fn query_audit(
     Ok(Json(handle.audit_query(filter).await))
 }
 
-async fn stream_process(
+async fn stream_session(
     State(handle): State<KernelHandle>,
     Path(agent_id): Path<String>,
     ws: WebSocketUpgrade,
@@ -123,16 +123,16 @@ async fn stream_process(
             .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
     );
 
-    let process = handle.process_table().get(aid).ok_or_else(|| {
+    let session = handle.process_table().get(aid).ok_or_else(|| {
         ProblemDetails::not_found(
-            "Process Not Found",
-            format!("process not found: {agent_id}"),
+            "Session Not Found",
+            format!("session not found: {agent_id}"),
         )
     })?;
-    let session_id = process.session_id.clone();
+    let session_id = session.session_id.clone();
     let stream_hub = handle.stream_hub().clone();
 
-    Ok(ws.on_upgrade(move |socket| handle_process_stream(socket, stream_hub, session_id)))
+    Ok(ws.on_upgrade(move |socket| handle_session_stream(socket, stream_hub, session_id)))
 }
 
 async fn stream_kernel_events(
@@ -159,7 +159,7 @@ async fn stream_kernel_events(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-async fn handle_process_stream(
+async fn handle_session_stream(
     mut socket: WebSocket,
     stream_hub: std::sync::Arc<rara_kernel::io::stream::StreamHub>,
     session_id: rara_kernel::process::SessionId,
@@ -207,7 +207,7 @@ async fn handle_process_stream(
                     return;
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
-                    tracing::warn!(lagged = n, "process stream subscriber lagged");
+                    tracing::warn!(lagged = n, "session stream subscriber lagged");
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
             }

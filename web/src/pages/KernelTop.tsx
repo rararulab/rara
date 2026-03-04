@@ -62,7 +62,7 @@ interface SystemStats {
   uptime_ms: number;
 }
 
-interface ProcessStats {
+interface SessionStats {
   agent_id: string;
   session_id: string;
   manifest_name: string;
@@ -134,22 +134,22 @@ function stateColor(state: string): "default" | "secondary" | "destructive" | "o
 }
 
 // ---------------------------------------------------------------------------
-// useProcessStream hook
+// useSessionStream hook
 // ---------------------------------------------------------------------------
 
-function useProcessStream(agentId: string | null, processState: string | null) {
+function useSessionStream(agentId: string | null, sessionState: string | null) {
   const [nodes, setNodes] = useState<StreamingNode[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
 
   useEffect(() => {
-    if (!agentId || !processState) return;
-    if (processState !== "Running" && processState !== "Idle") return;
+    if (!agentId || !sessionState) return;
+    if (sessionState !== "Running" && sessionState !== "Idle") return;
 
     const host = window.location.host;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const token = localStorage.getItem("access_token") ?? "";
     const ws = new WebSocket(
-      `${protocol}//${host}/api/v1/kernel/processes/${agentId}/stream?token=${token}`
+      `${protocol}//${host}/api/v1/kernel/sessions/${agentId}/stream?token=${token}`
     );
 
     let currentThought = "";
@@ -246,7 +246,7 @@ function useProcessStream(agentId: string | null, processState: string | null) {
       setIsStreaming(false);
       setNodes([]);
     };
-  }, [agentId, processState]);
+  }, [agentId, sessionState]);
 
   return { streamingNodes: nodes, isStreaming };
 }
@@ -259,7 +259,7 @@ const AUTO_REFRESH_INTERVAL = 5_000;
 
 export default function KernelTop() {
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [selectedProcess, setSelectedProcess] = useState<string | null>(null);
+  const [selectedSession, setSelectedSession] = useState<string | null>(null);
 
   const statsQuery = useQuery({
     queryKey: ["kernel-stats"],
@@ -267,42 +267,42 @@ export default function KernelTop() {
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
-  const processesQuery = useQuery({
-    queryKey: ["kernel-processes"],
-    queryFn: () => api.get<ProcessStats[]>("/api/v1/kernel/processes"),
+  const sessionsQuery = useQuery({
+    queryKey: ["kernel-sessions"],
+    queryFn: () => api.get<SessionStats[]>("/api/v1/kernel/sessions"),
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
   const turnsQuery = useQuery({
-    queryKey: ["process-turns", selectedProcess],
+    queryKey: ["session-turns", selectedSession],
     queryFn: () =>
       api.get<TurnTrace[]>(
-        `/api/v1/kernel/processes/${selectedProcess}/turns`,
+        `/api/v1/kernel/sessions/${selectedSession}/turns`,
       ),
-    enabled: !!selectedProcess,
+    enabled: !!selectedSession,
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
   const stats = statsQuery.data;
-  const processes = processesQuery.data ?? [];
+  const sessions = sessionsQuery.data ?? [];
 
-  const selectedProcessState = processes.find(
-    (p) => p.agent_id === selectedProcess
+  const selectedSessionState = sessions.find(
+    (p) => p.agent_id === selectedSession
   )?.state ?? null;
 
-  const { streamingNodes, isStreaming } = useProcessStream(
-    selectedProcess,
-    selectedProcessState
+  const { streamingNodes, isStreaming } = useSessionStream(
+    selectedSession,
+    selectedSessionState
   );
 
   const handleRefresh = () => {
     statsQuery.refetch();
-    processesQuery.refetch();
-    if (selectedProcess) turnsQuery.refetch();
+    sessionsQuery.refetch();
+    if (selectedSession) turnsQuery.refetch();
   };
 
   const handleRowClick = (agentId: string) => {
-    setSelectedProcess((prev) => (prev === agentId ? null : agentId));
+    setSelectedSession((prev) => (prev === agentId ? null : agentId));
   };
 
   return (
@@ -312,7 +312,7 @@ export default function KernelTop() {
         <div>
           <h2 className="text-xl font-bold">Kernel Top</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Real-time kernel process monitor
+            Real-time kernel session monitor
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -330,12 +330,12 @@ export default function KernelTop() {
             variant="outline"
             size="sm"
             onClick={handleRefresh}
-            disabled={statsQuery.isFetching || processesQuery.isFetching}
+            disabled={statsQuery.isFetching || sessionsQuery.isFetching}
             className="gap-1.5"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${
-                statsQuery.isFetching || processesQuery.isFetching
+                statsQuery.isFetching || sessionsQuery.isFetching
                   ? "animate-spin"
                   : ""
               }`}
@@ -350,7 +350,7 @@ export default function KernelTop() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">
-              Active Processes
+              Active Sessions
             </CardTitle>
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -409,7 +409,7 @@ export default function KernelTop() {
               </div>
             )}
             <p className="mt-1 text-xs text-muted-foreground">
-              Across all processes
+              Across all sessions
             </p>
           </CardContent>
         </Card>
@@ -434,29 +434,29 @@ export default function KernelTop() {
         </Card>
       </div>
 
-      {/* Process Table */}
+      {/* Session Table */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-base">
               <Zap className="h-4 w-4" />
-              Processes
+              Sessions
               <Badge variant="secondary" className="ml-1 text-xs">
-                {processes.length}
+                {sessions.length}
               </Badge>
             </CardTitle>
           </div>
         </CardHeader>
         <CardContent className="pt-0">
-          {processesQuery.isLoading ? (
+          {sessionsQuery.isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => (
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
-          ) : processes.length === 0 ? (
+          ) : sessions.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              No active processes
+              No active sessions
             </div>
           ) : (
             <Table>
@@ -473,15 +473,15 @@ export default function KernelTop() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {processes.map((p) => (
+                {sessions.map((p) => (
                   <Fragment key={p.agent_id}>
                     <TableRow
                       className="cursor-pointer transition-colors hover:bg-muted/50"
-                      data-state={selectedProcess === p.agent_id ? "selected" : undefined}
+                      data-state={selectedSession === p.agent_id ? "selected" : undefined}
                       onClick={() => handleRowClick(p.agent_id)}
                     >
                       <TableCell className="w-6 px-2">
-                        {selectedProcess === p.agent_id ? (
+                        {selectedSession === p.agent_id ? (
                           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                         ) : (
                           <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
@@ -531,7 +531,7 @@ export default function KernelTop() {
                         {formatRelativeTime(p.last_activity)}
                       </TableCell>
                     </TableRow>
-                    {selectedProcess === p.agent_id && (
+                    {selectedSession === p.agent_id && (
                       <TableRow>
                         <TableCell colSpan={8} className="bg-muted/20 p-4">
                           <div className="space-y-3">

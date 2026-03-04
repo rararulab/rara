@@ -120,15 +120,15 @@ fn render_content(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     match app.tab {
-        Tab::Processes => render_processes_table(frame, area, app),
+        Tab::Sessions => render_sessions_table(frame, area, app),
         Tab::Agents => render_agents_table(frame, area, app),
         Tab::Approvals => render_approvals_table(frame, area, app),
         Tab::Audit => render_audit_table(frame, area, app),
-        Tab::Sessions => render_sessions_tab(frame, area, app),
+        Tab::SessionDetails => render_session_details_tab(frame, area, app),
     }
 }
 
-fn render_processes_table(frame: &mut Frame, area: Rect, app: &App) {
+fn render_sessions_table(frame: &mut Frame, area: Rect, app: &App) {
     let header = Row::new(vec![
         Cell::from("ID"),
         Cell::from("Name"),
@@ -147,7 +147,7 @@ fn render_processes_table(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     let rows: Vec<Row> = app
-        .processes
+        .sessions_list
         .iter()
         .skip(app.scroll_offset)
         .map(|p| {
@@ -180,7 +180,7 @@ fn render_processes_table(frame: &mut Frame, area: Rect, app: &App) {
     let table = Table::new(rows, widths).header(header).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Processes ({}) ", app.processes.len())),
+            .title(format!(" Sessions ({}) ", app.sessions_list.len())),
     );
 
     frame.render_widget(table, area);
@@ -339,7 +339,7 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
 // Sessions tab — 3-panel layout
 // ---------------------------------------------------------------------------
 
-fn render_sessions_tab(frame: &mut Frame, area: Rect, app: &App) {
+fn render_session_details_tab(frame: &mut Frame, area: Rect, app: &App) {
     let [list_area, detail_area] = Layout::horizontal([
         Constraint::Percentage(20),
         Constraint::Percentage(80),
@@ -362,13 +362,13 @@ fn render_sessions_tab(frame: &mut Frame, area: Rect, app: &App) {
             app.session_state.gantt_selected,
             app.session_state.focus == PanelFocus::Gantt,
         );
-        render_process_tree(
+        render_session_tree(
             frame,
             tree_area,
             session_view,
-            &app.processes,
+            &app.sessions_list,
             app.session_state.tree_selected,
-            app.session_state.focus == PanelFocus::ProcessTree,
+            app.session_state.focus == PanelFocus::SessionTree,
         );
     } else {
         let msg = Paragraph::new("No sessions available")
@@ -616,11 +616,11 @@ fn render_gantt(
     }
 }
 
-fn render_process_tree(
+fn render_session_tree(
     frame: &mut Frame,
     area: Rect,
     session_view: &SessionView,
-    _processes: &[crate::top::types::ProcessStats],
+    _sessions: &[crate::top::types::SessionStats],
     selected: usize,
     is_focused: bool,
 ) {
@@ -632,7 +632,7 @@ fn render_process_tree(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Process Tree ")
+        .title(" Session Tree ")
         .border_style(border_style);
 
     let inner = block.inner(area);
@@ -732,7 +732,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(":Refresh"),
     ];
 
-    if app.tab == Tab::Sessions {
+    if app.tab == Tab::SessionDetails {
         spans.push(Span::raw("  "));
         Span::styled("Tab", Style::default().fg(Color::Yellow));
         spans.push(Span::styled("Tab", Style::default().fg(Color::Yellow)));
