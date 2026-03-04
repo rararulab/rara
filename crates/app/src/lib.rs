@@ -21,7 +21,6 @@ use std::{
 };
 
 use opendal::Operator;
-use rara_domain_shared::notify::client::NotifyClient;
 use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
@@ -39,8 +38,9 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 /// Static application configuration — immutable after startup.
 ///
-/// Loaded exclusively from Consul KV. All fields are required;
-/// missing keys cause startup failure with a clear error.
+/// Loaded from a YAML config file (see [`rara_paths::config_file()`]).
+/// All required fields must be present; missing keys cause startup
+/// failure with a clear error.
 ///
 /// For runtime-changeable values (OpenRouter key, Telegram token, …) see
 /// `rara_backend_admin::settings::SettingsSvc`.
@@ -116,37 +116,23 @@ pub struct StartOptions {
 }
 
 impl AppConfig {
-    /// Load config from Consul KV.
+    /// Load config from YAML file.
     ///
-    /// Requires `CONSUL_HTTP_ADDR` environment variable to be set.
-    /// All config keys must be present in Consul; missing keys cause
+    /// Reads from the path returned by [`rara_paths::config_file()`]
+    /// (typically `~/.config/job/config.yaml`).
+    /// All required fields must be present; missing keys cause
     /// a deserialization error at startup.
-    pub async fn new() -> Result<Self, config::ConfigError> {
-        let consul_addr = base::env::var("CONSUL_HTTP_ADDR")
-            .map_err(|e| config::ConfigError::Message(e.to_string()))?
-            .ok_or_else(|| {
-                config::ConfigError::Message("CONSUL_HTTP_ADDR is required but not set".to_string())
-            })?;
+    pub fn new() -> Result<Self, config::ConfigError> {
+        let path = rara_paths::config_file();
+        println!("Loading configuration from {}", path.display());
 
-        let consul_prefix = if cfg!(debug_assertions) {
-            format!("{}local", rara_consul::DEFAULT_PREFIX)
-        } else {
-            format!("{}k8s", rara_consul::DEFAULT_PREFIX)
-        };
-        println!("Loading configuration from Consul KV: {consul_addr}, {consul_prefix}");
+        let cfg = config::Config::builder()
+            .add_source(
+                config::File::from(path.as_path()).format(config::FileFormat::Yaml),
+            )
+            .build()?;
 
-        let cfg = config::ConfigBuilder::<config::builder::AsyncState>::default()
-            .add_async_source(rara_consul::ConsulSource::with_prefix(
-                rara_consul::Config {
-                    address: consul_addr,
-                    ..Default::default()
-                },
-                consul_prefix,
-            ))
-            .build()
-            .await?;
-
-        tracing::info!(?cfg, "Raw configuration from Consul");
+        tracing::info!(?cfg, "Raw configuration");
         cfg.try_deserialize()
     }
 
@@ -173,7 +159,7 @@ impl AppConfig {
 
         // -- infrastructure --------------------------------------------------
 
-        let (object_store, db_store, notify_client) = self
+        let (object_store, db_store) = self
             .init_infra()
             .await
             .whatever_context("Failed to initialize infrastructure services")?;
@@ -195,7 +181,6 @@ impl AppConfig {
         let rara = rara_boot::state::RaraState::init(
             pool.clone(),
             object_store,
-            notify_client.clone(),
             settings_provider.clone(),
             self.memory.mem0_base_url.clone(),
             self.memory.memos_base_url.clone(),
@@ -210,7 +195,6 @@ impl AppConfig {
 
         let backend = rara_backend_admin::state::BackendState::init(
             pool.clone(),
-            notify_client.clone(),
             rara.session_repo.clone(),
             settings_provider.clone(),
             settings_svc.clone(),
@@ -595,7 +579,7 @@ impl AppConfig {
         Ok(Some(adapter))
     }
 
-    async fn init_infra(&self) -> Result<(Operator, DBStore, NotifyClient), Whatever> {
+    async fn init_infra(&self) -> Result<(Operator, DBStore), Whatever> {
         let object_store = self
             .object_store
             .open()
@@ -609,12 +593,7 @@ impl AppConfig {
             .whatever_context("Failed to initialize database")?;
         info!("Database initialized");
 
-        let notify_client = NotifyClient::new(db_store.clone())
-            .await
-            .whatever_context("Failed to initialize notify queue client")?;
-        info!("Notify queue client initialized");
-
-        Ok((object_store, db_store, notify_client))
+        Ok((object_store, db_store))
     }
 }
 

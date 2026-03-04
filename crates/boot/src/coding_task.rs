@@ -19,11 +19,10 @@ use std::sync::Arc;
 /// Create a [`CodingTaskService`](rara_coding_task::service::CodingTaskService).
 pub fn init_coding_task_service(
     pool: sqlx::PgPool,
-    notify: rara_domain_shared::notify::client::NotifyClient,
     settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     default_repo_url: String,
 ) -> rara_coding_task::service::CodingTaskService {
     let workspace_manager =
         rara_workspace::WorkspaceManager::new(rara_paths::workspaces_dir().clone());
-    rara_coding_task::service::wire(pool, workspace_manager, notify, settings, default_repo_url)
+    rara_coding_task::service::wire(pool, workspace_manager, settings, default_repo_url)
 }

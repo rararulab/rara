@@ -20,7 +20,6 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use rara_domain_shared::settings::SettingsProvider;
 use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
 pub mod services;
@@ -55,7 +54,7 @@ pub use write_file::WriteFileTool;
 
 /// Dependencies required to construct primitive tools.
 pub struct PrimitiveDeps {
-    pub settings:               Arc<dyn SettingsProvider>,
+    pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
 }
@@ -93,8 +92,6 @@ pub struct ServiceToolDeps {
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
     pub skill_registry:      rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
-    pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
-    pub settings:            Arc<dyn SettingsProvider>,
 }
 
 /// Register all Layer 2 service tools into the given [`ToolRegistry`].
@@ -127,11 +124,7 @@ pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps
     )));
 
     // Screenshot
-    registry.register_service(Arc::new(services::ScreenshotTool::new(
-        deps.notify_client,
-        deps.settings,
-        project_root,
-    )));
+    registry.register_service(Arc::new(services::ScreenshotTool::new(project_root)));
 
     // Skill tools
     registry.register_service(Arc::new(services::ListSkillsTool::new(

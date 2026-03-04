@@ -55,7 +55,6 @@ impl RaraState {
     pub async fn init(
         pool: sqlx::PgPool,
         object_store: Operator,
-        notify_client: rara_domain_shared::notify::client::NotifyClient,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         mem0_base_url: String,
         memos_base_url: String,
@@ -147,7 +146,6 @@ impl RaraState {
             .unwrap_or_else(|_| "https://github.com/rararulab/rara".to_owned());
         let coding_task_service = crate::coding_task::init_coding_task_service(
             pool.clone(),
-            notify_client.clone(),
             settings_provider.clone(),
             default_repo_url,
         );
@@ -172,8 +170,6 @@ impl RaraState {
                 coding_task_service: coding_task_service.clone(),
                 skill_registry: skill_registry.clone(),
                 mcp_manager: mcp_manager.clone(),
-                notify_client,
-                settings: settings_provider.clone(),
             },
         );
 

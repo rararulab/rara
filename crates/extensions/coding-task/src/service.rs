@@ -16,13 +16,6 @@
 
 use std::sync::Arc;
 
-use rara_domain_shared::{
-    notify::{
-        client::NotifyClient,
-        types::{NotificationPriority, SendTelegramNotificationRequest},
-    },
-    settings::{SettingsProvider, keys},
-};
 use rara_workspace::WorkspaceManager;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -35,13 +28,12 @@ use crate::{
 };
 
 /// Orchestrates coding task lifecycle: workspace setup, agent dispatch,
-/// PR creation, notifications.
+/// PR creation.
 #[derive(Clone)]
 pub struct CodingTaskService {
     repo:              Arc<dyn CodingTaskRepository>,
     workspace_manager: WorkspaceManager,
-    notify:            NotifyClient,
-    settings:          Arc<dyn SettingsProvider>,
+    settings:          Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     default_repo_url:  String,
 }
 
@@ -49,14 +41,12 @@ impl CodingTaskService {
     pub fn new(
         repo: Arc<dyn CodingTaskRepository>,
         workspace_manager: WorkspaceManager,
-        notify: NotifyClient,
-        settings: Arc<dyn SettingsProvider>,
+        settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         default_repo_url: String,
     ) -> Self {
         Self {
             repo,
             workspace_manager,
-            notify,
             settings,
             default_repo_url,
         }
@@ -128,15 +118,6 @@ impl CodingTaskService {
                     .update_status(task_id, CodingTaskStatus::Failed)
                     .await;
                 let _ = svc.repo.set_completed(task_id).await;
-                svc.send_notification(
-                    task_id,
-                    &prompt,
-                    &branch,
-                    agent_type,
-                    false,
-                    Some(&e.to_string()),
-                )
-                .await;
             }
         });
 
@@ -296,10 +277,6 @@ impl CodingTaskService {
             .await?;
         self.repo.set_completed(id).await?;
 
-        // 8. Send notification
-        self.send_notification(id, prompt, branch, agent_type, true, None)
-            .await;
-
         Ok(())
     }
 
@@ -364,51 +341,6 @@ impl CodingTaskService {
         self.repo.set_completed(id).await?;
         Ok(())
     }
-
-    async fn send_notification(
-        &self,
-        id: Uuid,
-        prompt: &str,
-        branch: &str,
-        agent_type: AgentType,
-        success: bool,
-        error_msg: Option<&str>,
-    ) {
-        let emoji = if success { "\u{2705}" } else { "\u{274c}" };
-        let status_label = if success { "completed" } else { "failed" };
-        let short_id = &id.to_string()[..8];
-        let prompt_short = truncate(prompt, 100);
-        let mut msg = format!(
-            "{emoji} Coding task {short_id} {status_label}\nBranch: {branch}\nAgent: \
-             {agent_type}\nPrompt: \"{prompt_short}\""
-        );
-        if let Some(err) = error_msg {
-            let tail = truncate(err, 500);
-            msg.push_str(&format!("\n\nError:\n{tail}"));
-        }
-
-        let chat_id = self
-            .settings
-            .get(keys::TELEGRAM_CHAT_ID)
-            .await
-            .and_then(|v| v.parse::<i64>().ok());
-
-        let request = SendTelegramNotificationRequest {
-            chat_id,
-            recipient: None,
-            subject: None,
-            body: msg,
-            priority: NotificationPriority::Normal,
-            max_retries: 3,
-            reference_type: None,
-            reference_id: None,
-            metadata: None,
-            photo_path: None,
-        };
-        if let Err(e) = self.notify.send_telegram(request).await {
-            warn!(id = %id, "failed to send coding task notification: {e}");
-        }
-    }
 }
 
 /// Keep only the last `max_bytes` of output.
@@ -440,10 +372,9 @@ fn truncate(s: &str, max: usize) -> String {
 pub fn wire(
     pool: sqlx::PgPool,
     workspace_manager: WorkspaceManager,
-    notify: NotifyClient,
-    settings: Arc<dyn SettingsProvider>,
+    settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     default_repo_url: String,
 ) -> CodingTaskService {
     let repo = Arc::new(crate::pg_repository::PgCodingTaskRepository::new(pool));
-    CodingTaskService::new(repo, workspace_manager, notify, settings, default_repo_url)
+    CodingTaskService::new(repo, workspace_manager, settings, default_repo_url)
 }

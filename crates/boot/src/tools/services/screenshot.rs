@@ -14,38 +14,21 @@
 
 //! Layer 2 service tool for capturing web page screenshots via Playwright.
 
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
-use rara_domain_shared::{
-    notify::{
-        client::NotifyClient,
-        types::{NotificationPriority, SendTelegramNotificationRequest},
-    },
-    settings::{SettingsProvider, keys},
-};
 use rara_kernel::tool::AgentTool;
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 pub struct ScreenshotTool {
-    notify:       NotifyClient,
-    settings:     Arc<dyn SettingsProvider>,
     project_root: PathBuf,
 }
 
 impl ScreenshotTool {
-    pub fn new(
-        notify: NotifyClient,
-        settings: Arc<dyn SettingsProvider>,
-        project_root: PathBuf,
-    ) -> Self {
-        Self {
-            notify,
-            settings,
-            project_root,
-        }
+    pub fn new(project_root: PathBuf) -> Self {
+        Self { project_root }
     }
 }
 
@@ -54,7 +37,7 @@ impl AgentTool for ScreenshotTool {
     fn name(&self) -> &str { "screenshot" }
 
     fn description(&self) -> &str {
-        "Take a screenshot of a web page using Playwright and optionally send it to Telegram. \
+        "Take a screenshot of a web page using Playwright. \
          Useful for previewing frontend work, checking UI changes, or sharing visual results."
     }
 
@@ -81,14 +64,6 @@ impl AgentTool for ScreenshotTool {
                 "full_page": {
                     "type": "boolean",
                     "description": "Capture full scrollable page (default: false)"
-                },
-                "send": {
-                    "type": "boolean",
-                    "description": "Send the screenshot to Telegram (default: true)"
-                },
-                "caption": {
-                    "type": "string",
-                    "description": "Optional caption for the Telegram photo"
                 }
             },
             "required": ["url"]
@@ -111,11 +86,6 @@ impl AgentTool for ScreenshotTool {
             .get("full_page")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let send = params.get("send").and_then(|v| v.as_bool()).unwrap_or(true);
-        let caption = params
-            .get("caption")
-            .and_then(|v| v.as_str())
-            .map(String::from);
 
         let output_path =
             std::env::temp_dir().join(format!("rara-screenshot-{}.png", Uuid::new_v4()));
@@ -152,46 +122,9 @@ impl AgentTool for ScreenshotTool {
             return Err(anyhow::anyhow!("screenshot file was not created"));
         }
 
-        let mut sent = false;
-
-        // Send to Telegram if requested.
-        if send {
-            let chat_id: Option<i64> = self
-                .settings
-                .get(keys::TELEGRAM_CHAT_ID)
-                .await
-                .and_then(|v| v.parse().ok());
-
-            let caption_text = caption.unwrap_or_else(|| format!("Screenshot: {url}"));
-
-            let request = SendTelegramNotificationRequest {
-                chat_id,
-                recipient: None,
-                subject: None,
-                body: caption_text,
-                priority: NotificationPriority::Normal,
-                max_retries: 3,
-                reference_type: None,
-                reference_id: None,
-                metadata: None,
-                photo_path: Some(output_str.clone()),
-            };
-
-            match self.notify.send_telegram(request).await {
-                Ok(_) => {
-                    sent = true;
-                    info!(url, "screenshot queued for telegram delivery");
-                }
-                Err(e) => {
-                    warn!(url, error = %e, "failed to queue screenshot notification");
-                }
-            }
-        }
-
         Ok(json!({
             "success": true,
             "path": output_str,
-            "sent": sent,
         }))
     }
 }

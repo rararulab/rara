@@ -15,8 +15,7 @@
 //! Backend domain-service state — holds all HTTP admin services and routes.
 //!
 //! [`BackendState`] is the domain-service half of the old `AppState` god
-//! object.  It wires scheduler, session (chat), settings, contacts, and
-//! notification services.
+//! object.  It wires scheduler, session (chat), settings, and contacts.
 
 use std::sync::Arc;
 
@@ -32,7 +31,6 @@ pub struct BackendState {
     pub session_service:   crate::chat::service::SessionService,
     pub settings_svc:      crate::settings::SettingsSvc,
     pub contact_repo:      rara_channels::telegram::contacts::repository::ContactRepository,
-    pub notify_client:     rara_domain_shared::notify::client::NotifyClient,
 }
 
 impl BackendState {
@@ -42,7 +40,6 @@ impl BackendState {
     /// settings provider is also needed by `RaraState`).
     pub async fn init(
         pool: sqlx::PgPool,
-        notify_client: rara_domain_shared::notify::client::NotifyClient,
         session_repo: Arc<dyn rara_sessions::repository::SessionRepository>,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
@@ -67,7 +64,6 @@ impl BackendState {
             session_service,
             settings_svc,
             contact_repo,
-            notify_client,
         })
     }
 
@@ -140,7 +136,6 @@ impl BackendState {
                 (name = "chat", description = "Chat sessions and messaging"),
                 (name = "scheduler", description = "Task scheduling"),
                 (name = "settings", description = "Runtime settings"),
-                (name = "notifications", description = "Notification queue"),
                 (name = "contacts", description = "Telegram contacts allowlist"),
                 (name = "system", description = "System utilities")
             )
