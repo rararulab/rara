@@ -18,7 +18,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
 use crate::top::{
     client::KernelClient,
-    types::{AgentInfo, ApprovalRequest, AuditEvent, ProcessStats, SystemStats},
+    types::{
+        AgentInfo, ApprovalRequest, AuditEvent, KernelEventCommonFields, ProcessStats, SystemStats,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,10 +29,17 @@ pub enum Tab {
     Agents,
     Approvals,
     Audit,
+    Events,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Processes, Tab::Agents, Tab::Approvals, Tab::Audit];
+    pub const ALL: [Tab; 5] = [
+        Tab::Processes,
+        Tab::Agents,
+        Tab::Approvals,
+        Tab::Audit,
+        Tab::Events,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -38,6 +47,7 @@ impl Tab {
             Tab::Agents => "Agents",
             Tab::Approvals => "Approvals",
             Tab::Audit => "Audit",
+            Tab::Events => "Events",
         }
     }
 }
@@ -50,6 +60,7 @@ pub struct App {
     pub agents:        Vec<AgentInfo>,
     pub approvals:     Vec<ApprovalRequest>,
     pub audit:         Vec<AuditEvent>,
+    pub kernel_events: Vec<KernelEventCommonFields>,
     pub connected:     bool,
     pub error:         Option<String>,
     pub should_quit:   bool,
@@ -65,6 +76,7 @@ impl App {
             agents:        Vec::new(),
             approvals:     Vec::new(),
             audit:         Vec::new(),
+            kernel_events: Vec::new(),
             connected:     false,
             error:         None,
             should_quit:   false,
@@ -78,6 +90,7 @@ impl App {
             Tab::Agents => self.agents.len(),
             Tab::Approvals => self.approvals.len(),
             Tab::Audit => self.audit.len(),
+            Tab::Events => self.kernel_events.len(),
         }
     }
 
@@ -102,6 +115,10 @@ impl App {
                 self.tab = Tab::Audit;
                 self.scroll_offset = 0;
             }
+            KeyCode::Char('5') => {
+                self.tab = Tab::Events;
+                self.scroll_offset = 0;
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
@@ -115,6 +132,19 @@ impl App {
                 // refresh is handled externally; this is just a signal
             }
             _ => {}
+        }
+    }
+
+    pub fn push_kernel_event(&mut self, event: KernelEventCommonFields) {
+        const MAX_KERNEL_EVENTS: usize = 200;
+
+        self.kernel_events.push(event);
+        let overflow = self.kernel_events.len().saturating_sub(MAX_KERNEL_EVENTS);
+        if overflow > 0 {
+            self.kernel_events.drain(..overflow);
+            self.scroll_offset = self
+                .scroll_offset
+                .saturating_sub(overflow.min(self.scroll_offset));
         }
     }
 
@@ -163,6 +193,11 @@ impl App {
         client: &KernelClient,
     ) -> std::io::Result<()> {
         let mut poll_interval = tokio::time::interval(Duration::from_secs(1));
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let stream_client = client.clone();
+        let stream_task = tokio::spawn(async move {
+            stream_client.stream_events(event_tx).await;
+        });
         // Do an initial fetch immediately.
         self.refresh(client).await;
 
@@ -174,6 +209,11 @@ impl App {
             tokio::select! {
                 _ = poll_interval.tick() => {
                     self.refresh(client).await;
+                }
+                maybe_kernel_event = event_rx.recv() => {
+                    if let Some(event) = maybe_kernel_event {
+                        self.push_kernel_event(event);
+                    }
                 }
                 maybe_event = poll_crossterm_event() => {
                     if let Some(ev) = maybe_event {
@@ -196,6 +236,8 @@ impl App {
             }
         }
 
+        stream_task.abort();
+
         Ok(())
     }
 }
@@ -214,4 +256,29 @@ async fn poll_crossterm_event() -> Option<Event> {
     .await
     .ok()
     .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+    use crate::top::types::KernelEventCommonFields;
+
+    #[test]
+    fn push_kernel_event_keeps_latest_entries() {
+        let mut app = App::new();
+
+        for idx in 0..205 {
+            app.push_kernel_event(KernelEventCommonFields {
+                timestamp:  format!("2026-03-04T00:00:{idx:02}Z"),
+                event_type: format!("event_{idx}"),
+                priority:   "normal".to_string(),
+                agent_id:   Some(format!("agent-{idx}")),
+                summary:    format!("summary {idx}"),
+            });
+        }
+
+        assert_eq!(app.kernel_events.len(), 200);
+        assert_eq!(app.kernel_events.first().unwrap().event_type, "event_5");
+        assert_eq!(app.kernel_events.last().unwrap().event_type, "event_204");
+    }
 }

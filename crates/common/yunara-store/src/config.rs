@@ -54,9 +54,7 @@ impl DatabaseConfig {
         sqlx::query("PRAGMA busy_timeout=5000")
             .execute(&pool)
             .await?;
-        sqlx::query("PRAGMA foreign_keys=ON")
-            .execute(&pool)
-            .await?;
+        sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
 
         tracing::info!("SQLite database initialized: {database_url}");
 

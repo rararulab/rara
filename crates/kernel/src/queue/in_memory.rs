@@ -27,6 +27,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::broadcast;
 
 use super::shard::ShardQueue;
 use crate::io::types::BusError;
@@ -64,6 +65,11 @@ pub trait EventQueue: Send + Sync + 'static {
 
     /// Current total pending count across all tiers.
     fn pending_count(&self) -> usize;
+
+    /// Subscribe to enqueued events if this queue supports observation.
+    fn subscribe(&self) -> Option<broadcast::Receiver<super::observable::ObservableKernelEvent>> {
+        None
+    }
 
     /// Whether this queue is a sharded event queue.
     ///

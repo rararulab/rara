@@ -17,8 +17,10 @@
 //! Groups the single-queue and sharded queue implementations under one module.
 
 mod in_memory;
+mod observable;
 pub(crate) mod shard;
 mod sharded;
 
 pub use in_memory::{EventPriority, EventQueue, EventQueueRef, InMemoryEventQueue, KernelEvent};
+pub use observable::{ObservableEventQueue, ObservableEventQueueRef, ObservableKernelEvent};
 pub use sharded::{ShardedEventQueue, ShardedEventQueueConfig, ShardedQueueRef};

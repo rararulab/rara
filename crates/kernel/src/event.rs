@@ -20,6 +20,8 @@
 
 use std::sync::Arc;
 
+use jiff::Timestamp;
+use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -41,7 +43,7 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// Auto-inferred priority tier for event queue ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, strum::Display)]
 pub enum EventPriority {
     /// Signal, Shutdown — processed first.
     Critical = 0,
@@ -58,7 +60,7 @@ pub enum EventPriority {
 /// Syscall variants — all interactions that a `ProcessHandle` routes through
 /// the kernel event queue. Each variant carries identity fields plus a oneshot
 /// reply channel for the kernel event loop to respond on.
-#[derive(derive_more::Debug, strum::IntoStaticStr)]
+#[derive(derive_more::Debug, Serialize, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum Syscall {
     // -- Process queries --
@@ -66,6 +68,7 @@ pub enum Syscall {
     QueryStatus {
         target:   AgentId,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<ProcessInfo>>,
     },
 
@@ -73,6 +76,7 @@ pub enum Syscall {
     QueryChildren {
         parent:   AgentId,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<Vec<ProcessInfo>>,
     },
 
@@ -85,6 +89,7 @@ pub enum Syscall {
         key:        String,
         value:      serde_json::Value,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:   oneshot::Sender<crate::error::Result<()>>,
     },
 
@@ -93,6 +98,7 @@ pub enum Syscall {
         agent_id: AgentId,
         key:      String,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<Option<serde_json::Value>>>,
     },
 
@@ -104,6 +110,7 @@ pub enum Syscall {
         key:       String,
         value:     serde_json::Value,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:  oneshot::Sender<crate::error::Result<()>>,
     },
 
@@ -114,6 +121,7 @@ pub enum Syscall {
         scope:     KvScope,
         key:       String,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:  oneshot::Sender<crate::error::Result<Option<serde_json::Value>>>,
     },
 
@@ -123,6 +131,7 @@ pub enum Syscall {
         owner:    AgentId,
         target:   AgentId,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<(PipeWriter, PipeReader)>>,
     },
 
@@ -131,6 +140,7 @@ pub enum Syscall {
         owner:    AgentId,
         name:     String,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<(PipeWriter, PipeReader)>>,
     },
 
@@ -139,6 +149,7 @@ pub enum Syscall {
         connector: AgentId,
         name:      String,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:  oneshot::Sender<crate::error::Result<PipeReader>>,
     },
 
@@ -147,6 +158,7 @@ pub enum Syscall {
     RequiresApproval {
         tool_name: String,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:  oneshot::Sender<bool>,
     },
 
@@ -157,6 +169,7 @@ pub enum Syscall {
         tool_name: String,
         summary:   String,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:  oneshot::Sender<crate::error::Result<bool>>,
     },
 
@@ -167,6 +180,7 @@ pub enum Syscall {
         #[debug("{} checks", checks.len())]
         checks:     Vec<(String, serde_json::Value)>,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:   oneshot::Sender<Vec<crate::guard::Verdict>>,
     },
 
@@ -175,6 +189,7 @@ pub enum Syscall {
     GetManifest {
         agent_id: AgentId,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<AgentManifest>>,
     },
 
@@ -183,6 +198,7 @@ pub enum Syscall {
     GetToolRegistry {
         agent_id: AgentId,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
     },
 
@@ -191,6 +207,7 @@ pub enum Syscall {
     ResolveDriver {
         agent_id: AgentId,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<(crate::llm::LlmDriverRef, String)>>,
     },
 
@@ -240,6 +257,28 @@ impl Syscall {
             Self::RequiresApproval { .. } => AgentId(uuid::Uuid::nil()),
         }
     }
+
+    /// Extract a stable event type label for observability.
+    pub fn event_type(&self) -> String {
+        let syscall_type: &'static str = self.into();
+        format!("syscall:{syscall_type}")
+    }
+
+    /// Agent id for observability; hides the nil sentinel used internally.
+    pub fn observable_agent_id(&self) -> Option<AgentId> {
+        let agent_id = self.agent_id();
+        if agent_id.0.is_nil() {
+            None
+        } else {
+            Some(agent_id)
+        }
+    }
+
+    /// Human-readable summary for observability.
+    pub fn summary(&self) -> String {
+        let syscall_type: &'static str = self.into();
+        format!("handle syscall {syscall_type}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +290,7 @@ impl Syscall {
 /// Every interaction with the kernel — user messages, process control,
 /// internal callbacks, output delivery — is represented as a `KernelEvent`
 /// and processed by the single `Kernel::run()` event loop.
-#[derive(derive_more::Debug, strum::IntoStaticStr)]
+#[derive(derive_more::Debug, Serialize, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum KernelEvent {
     // === Input: from external sources ===
@@ -272,6 +311,7 @@ pub enum KernelEvent {
         principal: Principal,
         parent_id: Option<AgentId>,
         #[debug(skip)]
+        #[serde(skip_serializing)]
         reply_tx:  oneshot::Sender<crate::error::Result<AgentId>>,
     },
 
@@ -284,6 +324,7 @@ pub enum KernelEvent {
         agent_id:    AgentId,
         session_id:  SessionId,
         #[debug("{}", if result.is_ok() { "Ok(..)" } else { "Err(..)" })]
+        #[serde(skip_serializing)]
         result:      Result<AgentTurnResult, String>,
         in_reply_to: MessageId,
         user:        UserId,
@@ -310,6 +351,16 @@ pub enum KernelEvent {
     // === System ===
     /// Graceful shutdown request.
     Shutdown,
+}
+
+/// Stable common fields exposed for any observed kernel event.
+#[derive(Debug, Clone, Serialize)]
+pub struct KernelEventCommonFields {
+    pub timestamp:  Timestamp,
+    pub event_type: String,
+    pub priority:   String,
+    pub agent_id:   Option<String>,
+    pub summary:    String,
 }
 
 impl KernelEvent {
@@ -343,6 +394,75 @@ impl KernelEvent {
             | Self::Deliver(_)
             | Self::Syscall(_) => EventPriority::Normal,
             Self::UserMessage(_) | Self::SpawnAgent { .. } => EventPriority::Low,
+        }
+    }
+
+    /// Stable event type label for observability.
+    pub fn event_type(&self) -> String {
+        match self {
+            Self::Syscall(syscall) => syscall.event_type(),
+            _ => {
+                let kind: &'static str = self.into();
+                kind.to_string()
+            }
+        }
+    }
+
+    /// Human-readable summary for observability.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::UserMessage(msg) => {
+                format!("user message queued for session {}", msg.session_id)
+            }
+            Self::SpawnAgent { manifest, .. } => format!("spawn agent {}", manifest.name),
+            Self::SendSignal { target, signal } => {
+                format!("send {signal:?} to {target}")
+            }
+            Self::TurnCompleted {
+                agent_id, result, ..
+            } => {
+                let status = if result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                format!("turn {status} for {agent_id}")
+            }
+            Self::ChildCompleted {
+                parent_id,
+                child_id,
+                ..
+            } => {
+                format!("child {child_id} completed for parent {parent_id}")
+            }
+            Self::Deliver(envelope) => {
+                format!(
+                    "deliver outbound message for session {}",
+                    envelope.session_id
+                )
+            }
+            Self::Syscall(syscall) => syscall.summary(),
+            Self::Shutdown => "shutdown requested".to_string(),
+        }
+    }
+
+    /// Common observability fields derived from the event itself.
+    pub fn common_fields(&self) -> KernelEventCommonFields {
+        let agent_id = match self {
+            Self::Syscall(syscall) => syscall.observable_agent_id(),
+            _ => self.agent_id(),
+        };
+
+        KernelEventCommonFields {
+            timestamp:  Timestamp::now(),
+            event_type: self.event_type(),
+            priority:   match self.priority() {
+                EventPriority::Critical => "critical".to_string(),
+                EventPriority::Normal => "normal".to_string(),
+                EventPriority::Low => "low".to_string(),
+            },
+            agent_id:   agent_id.map(|id| id.to_string()),
+            summary:    self.summary(),
         }
     }
 }
@@ -384,6 +504,32 @@ mod tests {
     fn agent_id_for_user_message_is_none() {
         let event = KernelEvent::UserMessage(test_inbound("hello"));
         assert!(event.agent_id().is_none());
+    }
+
+    #[test]
+    fn common_fields_and_serialization_use_kernel_event_contract() {
+        let agent_id = AgentId::new();
+        let event = KernelEvent::SendSignal {
+            target: agent_id,
+            signal: Signal::Pause,
+        };
+
+        let fields = event.common_fields();
+        let json = serde_json::to_value(&event).unwrap();
+
+        assert_eq!(fields.event_type, "send_signal");
+        assert_eq!(fields.priority, "critical");
+        assert_eq!(fields.agent_id, Some(agent_id.to_string()));
+        assert!(fields.summary.contains("Pause"));
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "SendSignal": {
+                    "target": agent_id,
+                    "signal": "Pause"
+                }
+            })
+        );
     }
 
     #[test]

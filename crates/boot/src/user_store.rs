@@ -20,9 +20,7 @@ use rara_kernel::{
     error::{KernelError, Result},
     process::{
         principal::Role,
-        user::{
-            KernelUser, Permission, ROOT_USER_NAME, SYSTEM_USER_NAME, UserStore,
-        },
+        user::{KernelUser, Permission, ROOT_USER_NAME, SYSTEM_USER_NAME, UserStore},
     },
 };
 use sqlx::SqlitePool;
@@ -32,13 +30,13 @@ use tracing::info;
 
 #[derive(sqlx::FromRow)]
 struct UserRow {
-    id:         uuid::Uuid,
-    name:       String,
-    role:       i16,
+    id:          uuid::Uuid,
+    name:        String,
+    role:        i16,
     permissions: serde_json::Value,
-    enabled:    bool,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
+    enabled:     bool,
+    created_at:  chrono::DateTime<chrono::Utc>,
+    updated_at:  chrono::DateTime<chrono::Utc>,
 }
 
 // -- Conversion helpers ------------------------------------------------------

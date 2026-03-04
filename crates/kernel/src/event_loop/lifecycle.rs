@@ -425,9 +425,9 @@ mod tests {
 
     #[derive(Default)]
     struct MemorySessionRepository {
-        sessions:  Mutex<HashMap<SessionKey, SessionEntry>>,
-        messages:  Mutex<HashMap<SessionKey, Vec<ChatMessage>>>,
-        bindings:  Mutex<HashMap<(String, String, String), ChannelBinding>>,
+        sessions: Mutex<HashMap<SessionKey, SessionEntry>>,
+        messages: Mutex<HashMap<SessionKey, Vec<ChatMessage>>>,
+        bindings: Mutex<HashMap<(String, String, String), ChannelBinding>>,
     }
 
     #[async_trait]
@@ -474,10 +474,7 @@ mod tests {
             Ok(entry.clone())
         }
 
-        async fn delete_session(
-            &self,
-            key: &SessionKey,
-        ) -> std::result::Result<(), SessionError> {
+        async fn delete_session(&self, key: &SessionKey) -> std::result::Result<(), SessionError> {
             self.sessions.lock().await.remove(key);
             self.messages.lock().await.remove(key);
             Ok(())
@@ -581,7 +578,11 @@ mod tests {
                 .bindings
                 .lock()
                 .await
-                .get(&(channel_type.to_string(), account.to_string(), chat_id.to_string()))
+                .get(&(
+                    channel_type.to_string(),
+                    account.to_string(),
+                    chat_id.to_string(),
+                ))
                 .cloned())
         }
     }
@@ -618,7 +619,11 @@ mod tests {
         )
     }
 
-    async fn insert_runtime(kernel: &Kernel, runtimes: &RuntimeTable, state: ProcessState) -> AgentId {
+    async fn insert_runtime(
+        kernel: &Kernel,
+        runtimes: &RuntimeTable,
+        state: ProcessState,
+    ) -> AgentId {
         let manifest = crate::testing::test_manifests()
             .into_iter()
             .next()

@@ -42,6 +42,32 @@ use crate::{
     llm::ModelCapabilities,
 };
 
+fn parse_tool_call_arguments(arguments: &str) -> Result<serde_json::Value, String> {
+    let args = serde_json::from_str::<serde_json::Value>(arguments)
+        .map_err(|err| format!("invalid tool arguments: {err}"))?;
+    if !args.is_object() {
+        return Err(format!(
+            "invalid tool arguments: expected JSON object, got {args}"
+        ));
+    }
+    Ok(args)
+}
+
+fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
+    messages
+        .iter()
+        .cloned()
+        .map(|mut message| {
+            if !message.tool_calls.is_empty() {
+                message
+                    .tool_calls
+                    .retain(|call| parse_tool_call_arguments(&call.arguments).is_ok());
+            }
+            message
+        })
+        .collect()
+}
+
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
@@ -102,6 +128,7 @@ pub(crate) async fn run_inline_agent_loop(
 
     tracing::Span::current().record("model", model.as_str());
 
+    let capabilities = ModelCapabilities::detect(provider_hint, &model);
     let input_text = user_text.clone();
 
     // Build initial messages: system + optional history + user
@@ -118,7 +145,6 @@ pub(crate) async fn run_inline_agent_loop(
     let tool_defs = if tools.is_empty() {
         vec![]
     } else {
-        let capabilities = ModelCapabilities::detect(provider_hint, &model);
         if !capabilities.supports_tools {
             warn!(
                 model_name = %model,
@@ -138,6 +164,7 @@ pub(crate) async fn run_inline_agent_loop(
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
 
     for iteration in 0..max_iterations {
+        messages = sanitize_messages_for_llm(&messages);
         let iter_span = info_span!(
             "llm_iteration",
             iter = iteration,
@@ -171,7 +198,7 @@ pub(crate) async fn run_inline_agent_loop(
             } else {
                 llm::ToolChoice::Auto
             },
-            parallel_tool_calls: true,
+            parallel_tool_calls: !tool_defs.is_empty() && capabilities.supports_parallel_tool_calls,
         };
 
         // Start streaming via LlmDriver
@@ -335,29 +362,14 @@ pub(crate) async fn run_inline_agent_loop(
             .filter_map(|idx| pending_tool_calls.remove(&idx))
             .collect();
 
-        // Reconstruct assistant message with tool_calls for message history
-        let assistant_tool_calls: Vec<llm::ToolCallRequest> = tool_call_list
-            .iter()
-            .map(|tc| llm::ToolCallRequest {
-                id:        tc.id.clone(),
-                name:      tc.name.clone(),
-                arguments: tc.arguments_buf.clone(),
-            })
-            .collect();
-
-        messages.push(llm::Message::assistant_with_tool_calls(
-            accumulated_text.clone(),
-            assistant_tool_calls,
-        ));
-
         // Parse and validate tool calls
         let mut valid_tool_calls = Vec::new();
+        let mut assistant_tool_calls = Vec::new();
         for tool_call in tool_call_list {
             tool_calls_made += 1;
-            let args = match serde_json::from_str::<serde_json::Value>(&tool_call.arguments_buf) {
+            let args = match parse_tool_call_arguments(&tool_call.arguments_buf) {
                 Ok(args) => args,
-                Err(err) => {
-                    let error_message = format!("invalid tool arguments: {err}");
+                Err(error_message) => {
                     messages.push(llm::Message::tool_result(
                         &tool_call.id,
                         serde_json::json!({ "error": error_message }).to_string(),
@@ -366,12 +378,27 @@ pub(crate) async fn run_inline_agent_loop(
                 }
             };
 
+            assistant_tool_calls.push(llm::ToolCallRequest {
+                id:        tool_call.id.clone(),
+                name:      tool_call.name.clone(),
+                arguments: tool_call.arguments_buf.clone(),
+            });
+
             stream_handle.emit(StreamEvent::ToolCallStart {
                 name:      tool_call.name.clone(),
                 id:        tool_call.id.clone(),
                 arguments: args.clone(),
             });
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
+        }
+
+        if assistant_tool_calls.is_empty() {
+            messages.push(llm::Message::assistant(accumulated_text.clone()));
+        } else {
+            messages.push(llm::Message::assistant_with_tool_calls(
+                accumulated_text.clone(),
+                assistant_tool_calls,
+            ));
         }
 
         iter_span.record("tool_count", valid_tool_calls.len());
@@ -540,7 +567,7 @@ pub(crate) async fn run_inline_agent_loop(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use tokio::sync::mpsc;
@@ -557,6 +584,7 @@ mod tests {
         },
         process::{AgentId, AgentManifest, SessionId, principal::Principal},
         testing::TestKernelBuilder,
+        tool::AgentTool,
     };
 
     fn test_manifest() -> AgentManifest {
@@ -709,6 +737,169 @@ mod tests {
         }
     }
 
+    struct EchoTool;
+
+    #[async_trait]
+    impl AgentTool for EchoTool {
+        fn name(&self) -> &str { "test_tool" }
+
+        fn description(&self) -> &str { "Echo test tool" }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                }
+            })
+        }
+
+        async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            Ok(params)
+        }
+    }
+
+    struct InvalidToolCallDriver {
+        calls: Mutex<usize>,
+    }
+
+    struct RecordingDriver {
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    #[async_trait]
+    impl LlmDriver for RecordingDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::error::Result<CompletionResponse> {
+            unreachable!("stream is used in tests")
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            tx: mpsc::Sender<StreamDelta>,
+        ) -> crate::error::Result<CompletionResponse> {
+            self.requests.lock().unwrap().push(request);
+
+            let _ = tx
+                .send(StreamDelta::TextDelta {
+                    text: "ok".to_string(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::Done {
+                    stop_reason: StopReason::Stop,
+                    usage:       None,
+                })
+                .await;
+
+            Ok(CompletionResponse {
+                content:           Some("ok".to_string()),
+                reasoning_content: None,
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             None,
+                model:             "test-model".to_string(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl LlmDriver for InvalidToolCallDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::error::Result<CompletionResponse> {
+            unreachable!("stream is used in tests")
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            tx: mpsc::Sender<StreamDelta>,
+        ) -> crate::error::Result<CompletionResponse> {
+            let call_index = {
+                let mut calls = self.calls.lock().unwrap();
+                *calls += 1;
+                *calls
+            };
+
+            if call_index == 1 {
+                let _ = tx
+                    .send(StreamDelta::TextDelta {
+                        text: "checking".to_string(),
+                    })
+                    .await;
+                let _ = tx
+                    .send(StreamDelta::ToolCallStart {
+                        index: 0,
+                        id:    "call_1".to_string(),
+                        name:  "test_tool".to_string(),
+                    })
+                    .await;
+                let _ = tx
+                    .send(StreamDelta::ToolCallArgumentsDelta {
+                        index:     0,
+                        arguments: "{\"query\":".to_string(),
+                    })
+                    .await;
+                let _ = tx
+                    .send(StreamDelta::Done {
+                        stop_reason: StopReason::ToolCalls,
+                        usage:       None,
+                    })
+                    .await;
+
+                return Ok(CompletionResponse {
+                    content:           Some("checking".to_string()),
+                    reasoning_content: None,
+                    tool_calls:        vec![],
+                    stop_reason:       StopReason::ToolCalls,
+                    usage:             None,
+                    model:             "test-model".to_string(),
+                });
+            }
+
+            let has_invalid_tool_args = request.messages.iter().any(|message| {
+                message.tool_calls.iter().any(|call| {
+                    !matches!(
+                        serde_json::from_str::<serde_json::Value>(&call.arguments),
+                        Ok(serde_json::Value::Object(_))
+                    )
+                })
+            });
+
+            if has_invalid_tool_args {
+                return Err(crate::KernelError::Provider {
+                    message: "invalid tool call arguments".into(),
+                });
+            }
+
+            let _ = tx
+                .send(StreamDelta::TextDelta {
+                    text: "recovered".to_string(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::Done {
+                    stop_reason: StopReason::Stop,
+                    usage:       None,
+                })
+                .await;
+
+            Ok(CompletionResponse {
+                content:           Some("recovered".to_string()),
+                reasoning_content: None,
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             None,
+                model:             "test-model".to_string(),
+            })
+        }
+    }
+
     /// Set up a test kernel with a DriverRegistry. Returns (kernel_arc,
     /// agent_id, cancel).
     async fn setup_test_kernel_with_driver(
@@ -739,6 +930,40 @@ mod tests {
             .unwrap();
 
         // Wait briefly for spawn to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        (kernel_arc, agent_id, cancel)
+    }
+
+    async fn setup_test_kernel_with_manifest_and_tool(
+        driver: LlmDriverRef,
+        manifest: AgentManifest,
+        tool: crate::tool::AgentToolRef,
+    ) -> (Arc<Kernel>, AgentId, CancellationToken) {
+        let driver_registry = Arc::new(
+            DriverRegistryBuilder::new("test", "test-model")
+                .driver("test", driver)
+                .build(),
+        );
+
+        let kernel = TestKernelBuilder::new()
+            .driver_registry(driver_registry)
+            .tool(tool)
+            .build();
+
+        let cancel = CancellationToken::new();
+        let (kernel_arc, handle) = kernel.start(cancel.clone());
+
+        let agent_id = handle
+            .spawn_with_input(
+                manifest,
+                "init".to_string(),
+                Principal::user("test-user"),
+                None,
+            )
+            .await
+            .unwrap();
+
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         (kernel_arc, agent_id, cancel)
@@ -896,6 +1121,92 @@ mod tests {
         );
 
         cancel_kernel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_run_inline_agent_loop_drops_invalid_tool_call_arguments_before_retry() {
+        let driver: LlmDriverRef = Arc::new(InvalidToolCallDriver {
+            calls: Mutex::new(0),
+        });
+        let mut manifest = test_manifest();
+        manifest.tools = vec!["test_tool".to_string()];
+        let (kernel, agent_id, cancel) =
+            setup_test_kernel_with_manifest_and_tool(driver, manifest, Arc::new(EchoTool)).await;
+
+        let session_id = SessionId::new();
+        let handle = ProcessHandle::new(
+            agent_id,
+            session_id.clone(),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let stream_handle = kernel.stream_hub().open(session_id);
+        let turn_cancel = CancellationToken::new();
+
+        let result = run_inline_agent_loop(
+            &handle,
+            "what models are available?".to_string(),
+            None,
+            &stream_handle,
+            &turn_cancel,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected recovery, got: {:?}", result);
+        assert_eq!(result.unwrap().text, "recovered");
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_run_inline_agent_loop_disables_parallel_tool_calls_for_ollama() {
+        let recording_driver = Arc::new(RecordingDriver {
+            requests: Mutex::new(Vec::new()),
+        });
+        let driver: LlmDriverRef = recording_driver.clone();
+        let mut manifest = test_manifest();
+        manifest.model = Some("qwen3.5:cloud".to_string());
+        manifest.tools = vec!["test_tool".to_string()];
+        let (kernel, agent_id, cancel) =
+            setup_test_kernel_with_manifest_and_tool(driver, manifest, Arc::new(EchoTool)).await;
+
+        let session_id = SessionId::new();
+        let handle = ProcessHandle::new(
+            agent_id,
+            session_id.clone(),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let stream_handle = kernel.stream_hub().open(session_id);
+        let turn_cancel = CancellationToken::new();
+
+        let result = run_inline_agent_loop(
+            &handle,
+            "use the tool".to_string(),
+            None,
+            &stream_handle,
+            &turn_cancel,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected success, got: {:?}", result);
+
+        let requests = recording_driver.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "expected exactly one LLM request");
+        let request = &requests[0];
+        assert_eq!(
+            request.tools.len(),
+            1,
+            "tool definitions should still be sent"
+        );
+        assert!(
+            !request.parallel_tool_calls,
+            "ollama-compatible requests should disable parallel tool calls"
+        );
+
+        cancel.cancel();
     }
 
     #[test]

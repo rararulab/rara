@@ -32,9 +32,9 @@ use crate::{
     error::{KernelError, Result},
     guard::{Guard, GuardContext, GuardRef, Verdict},
     process::{
+        AgentId,
         principal::{Principal, Role, UserId},
         user::{Permission, UserStore, UserStoreRef},
-        AgentId,
     },
 };
 
@@ -352,9 +352,7 @@ impl SecuritySubsystem {
         Self {
             user_store: Arc::new(crate::process::noop_user_store::NoopUserStore),
             guard:      Arc::new(crate::guard::noop::NoopGuard),
-            approval:   Arc::new(ApprovalManager::new(
-                ApprovalPolicy::default(),
-            )),
+            approval:   Arc::new(ApprovalManager::new(ApprovalPolicy::default())),
         }
     }
 }

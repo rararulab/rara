@@ -158,13 +158,15 @@ impl OutboxStore for PgOutboxStore {
     }
 
     async fn mark_delivered(&self, id: &MessageId) -> Result<(), BusError> {
-        sqlx::query("UPDATE kernel_outbox SET status = 1, delivered_at = datetime('now') WHERE id = ?1")
-            .bind(&id.0)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| BusError::Internal {
-                message: format!("outbox mark_delivered: {e}"),
-            })?;
+        sqlx::query(
+            "UPDATE kernel_outbox SET status = 1, delivered_at = datetime('now') WHERE id = ?1",
+        )
+        .bind(&id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| BusError::Internal {
+            message: format!("outbox mark_delivered: {e}"),
+        })?;
 
         Ok(())
     }

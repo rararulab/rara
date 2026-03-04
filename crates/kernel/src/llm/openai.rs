@@ -423,23 +423,23 @@ fn parse_stop_reason(reason: Option<&str>) -> StopReason {
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
-    model:                 &'a str,
-    messages:              Vec<WireMessage<'a>>,
-    stream:                bool,
+    model:               &'a str,
+    messages:            Vec<WireMessage<'a>>,
+    stream:              bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature:           Option<f32>,
+    temperature:         Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    max_completion_tokens: Option<u32>,
+    max_tokens:          Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools:                 Option<Vec<WireTool<'a>>>,
+    tools:               Option<Vec<WireTool<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice:           Option<serde_json::Value>,
+    tool_choice:         Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parallel_tool_calls:   Option<bool>,
+    parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    thinking:              Option<serde_json::Value>,
+    thinking:            Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options:        Option<WireStreamOptions>,
+    stream_options:      Option<WireStreamOptions>,
 }
 
 #[derive(Serialize)]
@@ -527,11 +527,11 @@ impl<'a> ChatRequest<'a> {
                 .collect();
 
             let tool_choice = match &request.tool_choice {
-                ToolChoice::Auto => serde_json::json!("auto"),
-                ToolChoice::None => serde_json::json!("none"),
-                ToolChoice::Required => serde_json::json!("required"),
+                ToolChoice::Auto => None,
+                ToolChoice::None => Some(serde_json::json!("none")),
+                ToolChoice::Required => Some(serde_json::json!("required")),
                 ToolChoice::Specific(name) => {
-                    serde_json::json!({"type": "function", "function": {"name": name}})
+                    Some(serde_json::json!({"type": "function", "function": {"name": name}}))
                 }
             };
 
@@ -541,7 +541,7 @@ impl<'a> ChatRequest<'a> {
                 None
             };
 
-            (Some(tools), Some(tool_choice), parallel)
+            (Some(tools), tool_choice, parallel)
         } else {
             (None, None, None)
         };
@@ -571,7 +571,7 @@ impl<'a> ChatRequest<'a> {
             messages,
             stream,
             temperature: request.temperature,
-            max_completion_tokens: request.max_tokens,
+            max_tokens: request.max_tokens,
             tools,
             tool_choice,
             parallel_tool_calls,
@@ -656,6 +656,7 @@ struct RawStreamChoice {
 #[derive(Debug, Deserialize)]
 struct RawDelta {
     content:           Option<String>,
+    #[serde(alias = "reasoning")]
     reasoning_content: Option<String>,
     tool_calls:        Option<Vec<RawToolCallChunk>>,
     #[allow(dead_code)]
@@ -700,6 +701,7 @@ struct RawResponseChoice {
 #[derive(Debug, Deserialize)]
 struct RawResponseMessage {
     content:           Option<String>,
+    #[serde(alias = "reasoning")]
     reasoning_content: Option<String>,
     tool_calls:        Option<Vec<RawResponseToolCall>>,
 }
@@ -782,10 +784,11 @@ mod tests {
         assert_eq!(body["tools"].as_array().unwrap().len(), 1);
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["function"]["name"], "read_file");
-        assert_eq!(body["tool_choice"], "auto");
+        assert!(body.get("tool_choice").is_none());
         assert_eq!(body["parallel_tool_calls"], true);
         assert_eq!(body["stream"], true);
-        assert_eq!(body["max_completion_tokens"], 4096);
+        assert_eq!(body["max_tokens"], 4096);
+        assert!(body.get("max_completion_tokens").is_none());
     }
 
     #[test]
@@ -890,6 +893,17 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_sse_reasoning_delta_ollama_alias() {
+        let data = r#"{"id":"resp_1","choices":[{"index":0,"delta":{"reasoning":"Let me think about this..."},"finish_reason":null}]}"#;
+        let chunk: RawStreamChunk = serde_json::from_str(data).unwrap();
+        assert!(chunk.choices[0].delta.content.is_none());
+        assert_eq!(
+            chunk.choices[0].delta.reasoning_content.as_deref(),
+            Some("Let me think about this...")
+        );
+    }
+
+    #[test]
     fn test_parse_sse_tool_call_delta() {
         let data = r#"{"id":"resp_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]},"finish_reason":null}]}"#;
         let chunk: RawStreamChunk = serde_json::from_str(data).unwrap();
@@ -921,6 +935,18 @@ mod tests {
             Some("I should greet the user")
         );
         assert_eq!(resp.model.as_deref(), Some("deepseek-r1"));
+    }
+
+    #[test]
+    fn test_parse_non_streaming_response_with_ollama_reasoning_alias() {
+        let data = r#"{"choices":[{"message":{"content":"Hello!","reasoning":"I should greet the user","tool_calls":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15},"model":"qwen3.5:cloud"}"#;
+        let resp: RawCompletionResponse = serde_json::from_str(data).unwrap();
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("Hello!"));
+        assert_eq!(
+            resp.choices[0].message.reasoning_content.as_deref(),
+            Some("I should greet the user")
+        );
+        assert_eq!(resp.model.as_deref(), Some("qwen3.5:cloud"));
     }
 
     #[test]

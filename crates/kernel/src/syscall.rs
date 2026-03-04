@@ -26,7 +26,7 @@ use snafu::ResultExt;
 use tracing::debug_span;
 
 use crate::{
-    audit::{AuditEvent, AuditEventType, MemoryOp, AuditRef},
+    audit::{AuditEvent, AuditEventType, AuditRef, MemoryOp},
     error::{KernelError, Result},
     event::Syscall,
     event_loop::runtime::RuntimeTable,
@@ -36,7 +36,9 @@ use crate::{
     llm::DriverRegistryRef,
     memory::{KvScope, MemoryRef},
     notification::NotificationBusRef,
-    process::{AgentId, ProcessInfo, ProcessTable, agent_registry::AgentRegistryRef, principal::Principal},
+    process::{
+        AgentId, ProcessInfo, ProcessTable, agent_registry::AgentRegistryRef, principal::Principal,
+    },
     security::SecurityRef,
     tool::ToolRegistryRef,
 };
@@ -50,17 +52,17 @@ use crate::{
 /// parameters to `dispatch()`.
 pub(crate) struct SyscallDispatcher {
     /// Cross-agent shared key-value store (OpenDAL-backed).
-    shared_kv: SharedKv,
+    shared_kv:       SharedKv,
     /// Inter-agent pipe registry for streaming data between agents.
-    pipe_registry: PipeRegistry,
+    pipe_registry:   PipeRegistry,
     /// Multi-driver LLM registry with per-agent overrides.
     driver_registry: DriverRegistryRef,
     /// Global tool registry.
-    tool_registry: ToolRegistryRef,
+    tool_registry:   ToolRegistryRef,
     /// Event bus for publishing kernel notifications.
-    event_bus: NotificationBusRef,
+    event_bus:       NotificationBusRef,
     /// Kernel configuration.
-    config: KernelConfig,
+    config:          KernelConfig,
 }
 
 impl SyscallDispatcher {
@@ -296,9 +298,7 @@ impl SyscallDispatcher {
                     tool_name: tool_name.clone(),
                     tool_args: serde_json::json!({"summary": &summary}),
                     summary,
-                    risk_level: crate::security::ApprovalManager::classify_risk(
-                        &tool_name,
-                    ),
+                    risk_level: crate::security::ApprovalManager::classify_risk(&tool_name),
                     requested_at: Timestamp::now(),
                     timeout_secs: policy.timeout_secs,
                 };
@@ -307,10 +307,7 @@ impl SyscallDispatcher {
                 // for human approval.
                 tokio::spawn(async move {
                     let decision = approval.request_approval(req).await;
-                    let approved = matches!(
-                        decision,
-                        crate::security::ApprovalDecision::Approved
-                    );
+                    let approved = matches!(decision, crate::security::ApprovalDecision::Approved);
                     let _ = reply_tx.send(Ok(approved));
                 });
             }

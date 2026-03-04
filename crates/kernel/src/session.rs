@@ -359,10 +359,7 @@ pub trait SessionIndex: Send + Sync + 'static {
     async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError>;
 
     /// Upsert a channel binding.
-    async fn bind_channel(
-        &self,
-        binding: &ChannelBinding,
-    ) -> Result<ChannelBinding, SessionError>;
+    async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError>;
 
     /// Resolve a channel binding by `(channel_type, account, chat_id)`.
     async fn get_channel_binding(
@@ -397,10 +394,7 @@ impl SessionIndex for NoopSessionIndex {
         Ok(entry.clone())
     }
 
-    async fn get_session(
-        &self,
-        _key: &SessionKey,
-    ) -> Result<Option<SessionEntry>, SessionError> {
+    async fn get_session(&self, _key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
         Ok(None)
     }
 
@@ -416,14 +410,9 @@ impl SessionIndex for NoopSessionIndex {
         Ok(entry.clone())
     }
 
-    async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> {
-        Ok(())
-    }
+    async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
 
-    async fn bind_channel(
-        &self,
-        binding: &ChannelBinding,
-    ) -> Result<ChannelBinding, SessionError> {
+    async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         Ok(binding.clone())
     }
 
@@ -451,10 +440,7 @@ impl SessionRepository for NoopSessionRepository {
         Ok(entry.clone())
     }
 
-    async fn get_session(
-        &self,
-        _key: &SessionKey,
-    ) -> Result<Option<SessionEntry>, SessionError> {
+    async fn get_session(&self, _key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
         Ok(None)
     }
 
@@ -489,9 +475,7 @@ impl SessionRepository for NoopSessionRepository {
         Ok(vec![])
     }
 
-    async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> {
-        Ok(())
-    }
+    async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
 
     async fn fork_session(
         &self,
@@ -512,10 +496,7 @@ impl SessionRepository for NoopSessionRepository {
         })
     }
 
-    async fn bind_channel(
-        &self,
-        binding: &ChannelBinding,
-    ) -> Result<ChannelBinding, SessionError> {
+    async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         Ok(binding.clone())
     }
 

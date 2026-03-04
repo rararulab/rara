@@ -719,9 +719,25 @@ async fn handle_update(
     };
     drop(username_guard);
 
-    // Fire-and-forget ingest.
-    let session_key = format_session_key(chat_id);
-    match handle.ingest(raw).await {
+    let msg = match handle.ingress_pipeline().resolve(raw).await {
+        Ok(msg) => msg,
+        Err(IngestError::SystemBusy) => {
+            let _ = bot
+                .send_message(
+                    ChatId(chat_id),
+                    "⚠️ System is busy, please try again later.",
+                )
+                .await;
+            return;
+        }
+        Err(other) => {
+            error!(error = %other, "telegram adapter: ingest failed");
+            return;
+        }
+    };
+
+    let session_id = msg.session_id;
+    match handle.submit_message(msg) {
         Ok(()) => {
             // Spawn stream forwarder for progressive editMessageText.
             spawn_stream_forwarder(
@@ -729,16 +745,13 @@ async fn handle_update(
                 Arc::clone(active_streams),
                 bot.clone(),
                 chat_id,
-                &session_key,
+                session_id,
             );
         }
-        Err(IngestError::SystemBusy) => {
+        Err(_) => {
             let _ = bot
                 .send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。")
                 .await;
-        }
-        Err(other) => {
-            error!(error = %other, "telegram adapter: ingest failed");
         }
     }
 }
@@ -754,11 +767,9 @@ fn spawn_stream_forwarder(
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     bot: teloxide::Bot,
     chat_id: i64,
-    session_key: &str,
+    session_id: rara_kernel::process::SessionId,
 ) {
-    use rara_kernel::{io::stream::StreamEvent, process::SessionId};
-
-    let session_key = session_key.to_string();
+    use rara_kernel::io::stream::StreamEvent;
 
     tokio::spawn(async move {
         let hub = {
@@ -766,17 +777,6 @@ fn spawn_stream_forwarder(
             match guard.as_ref() {
                 Some(hub) => Arc::clone(hub),
                 None => return,
-            }
-        };
-
-        let session_id = match SessionId::try_from_raw(&session_key) {
-            Ok(id) => id,
-            Err(_) => {
-                warn!(
-                    session_key,
-                    "invalid session key for telegram stream forwarder"
-                );
-                return;
             }
         };
 
@@ -792,7 +792,7 @@ fn spawn_stream_forwarder(
         };
 
         if subs.is_empty() {
-            tracing::debug!(session_key, "telegram stream forwarder: no streams found");
+            tracing::debug!(session_id = %session_id, "telegram stream forwarder: no streams found");
             return;
         }
 
@@ -1821,5 +1821,32 @@ mod tests {
         stream_handle.emit(StreamEvent::TextDelta {
             text: "late delta".to_string(),
         });
+    }
+
+    #[tokio::test]
+    async fn test_spawn_stream_forwarder_uses_internal_session_id() {
+        use rara_kernel::{io::stream::StreamHub, process::SessionId};
+
+        let hub = Arc::new(StreamHub::new(64));
+        let stream_hub: Arc<RwLock<Option<StreamHubRef>>> =
+            Arc::new(RwLock::new(Some(hub.clone())));
+        let active_streams: Arc<DashMap<i64, StreamingMessage>> = Arc::new(DashMap::new());
+        let bot = teloxide::Bot::new("fake_token");
+        let chat_id = 12345_i64;
+        let session_id = SessionId::new();
+
+        let _stream_handle = hub.open(session_id);
+
+        spawn_stream_forwarder(
+            stream_hub,
+            Arc::clone(&active_streams),
+            bot,
+            chat_id,
+            session_id,
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(active_streams.contains_key(&chat_id));
     }
 }

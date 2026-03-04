@@ -225,7 +225,6 @@ pub struct McpServerConfig {
     #[serde(skip_serializing_if = "HashSet::is_empty")]
     #[builder(default)]
     pub tools_disabled: HashSet<String>,
-
 }
 
 /// Transport type for MCP server connections.
@@ -267,5 +266,4 @@ mod tests {
         let parsed: TransportType = serde_json::from_str(r#""sse""#).unwrap();
         assert_eq!(parsed, TransportType::Sse);
     }
-
 }

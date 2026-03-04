@@ -87,9 +87,7 @@ impl RuntimeTable {
     }
 
     /// Insert a new process runtime entry.
-    pub fn insert(&self, id: AgentId, rt: ProcessRuntime) {
-        self.inner.insert(id, rt);
-    }
+    pub fn insert(&self, id: AgentId, rt: ProcessRuntime) { self.inner.insert(id, rt); }
 
     /// Remove a process runtime entry, returning the key-value pair if it
     /// existed.
@@ -98,9 +96,7 @@ impl RuntimeTable {
     }
 
     /// Check whether a runtime exists for the given agent.
-    pub fn contains(&self, id: &AgentId) -> bool {
-        self.inner.contains_key(id)
-    }
+    pub fn contains(&self, id: &AgentId) -> bool { self.inner.contains_key(id) }
 
     // -- Turn control -------------------------------------------------------
 

@@ -49,10 +49,10 @@ pub enum ConnectionStatus {
 /// Manages the lifecycle of multiple MCP server connections.
 #[derive(Clone)]
 pub struct McpManager {
-    inner:        Arc<RwLock<McpManagerInner>>,
+    inner:      Arc<RwLock<McpManagerInner>>,
     /// Per-server log ring buffer.  Lives outside the `RwLock` because
     /// `McpLogBuffer` carries its own `Arc<RwLock<…>>` internally.
-    log_buffer:   McpLogBuffer,
+    log_buffer: McpLogBuffer,
 }
 
 struct McpManagerInner {
@@ -71,7 +71,7 @@ impl McpManager {
         store: KeyringStoreRef,
     ) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(McpManagerInner {
+            inner:      Arc::new(RwLock::new(McpManagerInner {
                 clients: HashMap::new(),
                 elicitation_requests: ElicitationRequestManager::default(),
                 registry,
@@ -190,7 +190,6 @@ impl McpManager {
                 .push(name, "info", "disconnected".into())
                 .await;
         }
-
     }
 
     /// Restart a server.
@@ -212,7 +211,6 @@ impl McpManager {
     /// Drains all clients in a single write-lock acquisition, then cancels
     /// them all. Much cheaper than calling [`stop_server`](Self::stop_server)
     /// in a loop (which would acquire/release the lock N times).
-    ///
     #[instrument(skip(self))]
     pub async fn shutdown_all(&self) {
         let clients: Vec<AsyncManagedClient> = {

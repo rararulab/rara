@@ -33,14 +33,14 @@ use tracing::info;
 /// Does NOT hold a `Kernel` — the app crate builds one from these fields.
 #[derive(Clone)]
 pub struct RaraState {
-    pub credential_store:    rara_keyring_store::KeyringStoreRef,
-    pub driver_registry:     Arc<rara_kernel::llm::DriverRegistry>,
-    pub tool_registry:       Arc<rara_kernel::tool::ToolRegistry>,
-    pub user_store:          Arc<dyn rara_kernel::process::user::UserStore>,
-    pub session_repo:        Arc<dyn rara_sessions::repository::SessionRepository>,
-    pub memory_manager:      Arc<rara_memory::MemoryManager>,
-    pub skill_registry:      rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
+    pub credential_store:  rara_keyring_store::KeyringStoreRef,
+    pub driver_registry:   Arc<rara_kernel::llm::DriverRegistry>,
+    pub tool_registry:     Arc<rara_kernel::tool::ToolRegistry>,
+    pub user_store:        Arc<dyn rara_kernel::process::user::UserStore>,
+    pub session_repo:      Arc<dyn rara_sessions::repository::SessionRepository>,
+    pub memory_manager:    Arc<rara_memory::MemoryManager>,
+    pub skill_registry:    rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:       rara_mcp::manager::mgr::McpManager,
     pub settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 }
 

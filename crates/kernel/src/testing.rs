@@ -40,7 +40,7 @@ use tokio::sync::Semaphore;
 use crate::{
     device::DeviceRegistry,
     io::{pipe::PipeRegistry, stream::StreamHub},
-    kernel::{Kernel, KernelConfig, SettingsRef, NoopSettingsProvider},
+    kernel::{Kernel, KernelConfig, NoopSettingsProvider, SettingsRef},
     llm::DriverRegistryRef,
     memory::NoopMemory,
     notification::NoopNotificationBus,

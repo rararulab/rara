@@ -64,7 +64,8 @@ pub struct LlmModelsConfig {
 #[serde(default)]
 pub struct ProviderConfig {
     pub base_url: Option<String>,
-    /// Required for all providers. For Ollama, use any placeholder value (e.g. `"ollama"`).
+    /// Required for all providers. For Ollama, use any placeholder value (e.g.
+    /// `"ollama"`).
     pub api_key:  Option<String>,
 }
 
@@ -157,11 +158,17 @@ mod tests {
         let mut pairs = Vec::new();
         flatten_llm(&llm, &mut pairs);
 
-        let map: HashMap<&str, &str> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let map: HashMap<&str, &str> = pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
         assert_eq!(map["llm.default_provider"], "ollama");
         assert_eq!(map["llm.models.default"], "qwen3:32b");
-        assert_eq!(map["llm.providers.ollama.base_url"], "http://localhost:11434/v1");
+        assert_eq!(
+            map["llm.providers.ollama.base_url"],
+            "http://localhost:11434/v1"
+        );
         assert_eq!(map["llm.providers.ollama.api_key"], "ollama");
     }
 
@@ -177,7 +184,10 @@ mod tests {
         let mut pairs = Vec::new();
         flatten_telegram(&tg, &mut pairs);
 
-        let map: HashMap<&str, &str> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let map: HashMap<&str, &str> = pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
         assert_eq!(map["telegram.bot_token"], "123:ABC");
         assert_eq!(map["telegram.chat_id"], "456");

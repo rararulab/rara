@@ -310,7 +310,7 @@ impl Default for AgentEnv {
 // ---------------------------------------------------------------------------
 
 /// Control signals for agent processes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum Signal {
     /// Interrupt the current operation (cancel in-flight LLM call).

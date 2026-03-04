@@ -103,8 +103,7 @@ impl KVStore {
 
         let mut tx = self.pool.begin().await?;
 
-        let mut builder =
-            QueryBuilder::<Sqlite>::new("INSERT INTO kv_table (key, value) ");
+        let mut builder = QueryBuilder::<Sqlite>::new("INSERT INTO kv_table (key, value) ");
         builder.push_values(serialized_pairs.iter(), |mut row, (key, value_json)| {
             row.push_bind(key).push_bind(value_json);
         });
@@ -138,10 +137,7 @@ impl KVStore {
         }
         separated.push_unseparated(")");
 
-        let rows: Vec<(String, String)> = builder
-            .build_query_as()
-            .fetch_all(&self.pool)
-            .await?;
+        let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(&self.pool).await?;
 
         let mut result = HashMap::new();
         for (key, value_json) in rows {

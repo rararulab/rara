@@ -265,13 +265,12 @@ impl CachedSkill {
             .build()
         })?;
 
-        let allowed_tools: Vec<String> =
-            serde_json::from_str(&row.allowed_tools).map_err(|e| {
-                InvalidInputSnafu {
-                    message: format!("failed to deserialize allowed_tools: {e}"),
-                }
-                .build()
-            })?;
+        let allowed_tools: Vec<String> = serde_json::from_str(&row.allowed_tools).map_err(|e| {
+            InvalidInputSnafu {
+                message: format!("failed to deserialize allowed_tools: {e}"),
+            }
+            .build()
+        })?;
 
         Ok(Self {
             metadata:     SkillMetadata {

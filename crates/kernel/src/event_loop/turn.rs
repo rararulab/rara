@@ -94,7 +94,12 @@ impl Kernel {
             // Swap out the conversation for async compaction, then put it
             // back after compaction completes.
             let conversation = std::mem::take(&mut rt.conversation);
-            (conversation, rt.max_context_tokens, rt.handle.clone(), rt.turn_cancel.clone())
+            (
+                conversation,
+                rt.max_context_tokens,
+                rt.handle.clone(),
+                rt.turn_cancel.clone(),
+            )
         });
 
         let Some((conversation, max_context_tokens, handle, turn_cancel)) = turn_data else {
@@ -470,5 +475,4 @@ impl Kernel {
             }
         }
     }
-
 }

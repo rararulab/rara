@@ -27,9 +27,7 @@ pub struct ScreenshotTool {
 }
 
 impl ScreenshotTool {
-    pub fn new(project_root: PathBuf) -> Self {
-        Self { project_root }
-    }
+    pub fn new(project_root: PathBuf) -> Self { Self { project_root } }
 }
 
 #[async_trait]
@@ -37,8 +35,8 @@ impl AgentTool for ScreenshotTool {
     fn name(&self) -> &str { "screenshot" }
 
     fn description(&self) -> &str {
-        "Take a screenshot of a web page using Playwright. \
-         Useful for previewing frontend work, checking UI changes, or sharing visual results."
+        "Take a screenshot of a web page using Playwright. Useful for previewing frontend work, \
+         checking UI changes, or sharing visual results."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

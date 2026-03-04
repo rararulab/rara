@@ -275,9 +275,10 @@ pub enum LlmProviderFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelCapabilities {
-    pub provider:              LlmProviderFamily,
-    pub supports_tools:        bool,
-    pub tools_disabled_reason: Option<&'static str>,
+    pub provider:                     LlmProviderFamily,
+    pub supports_tools:               bool,
+    pub supports_parallel_tool_calls: bool,
+    pub tools_disabled_reason:        Option<&'static str>,
 }
 
 impl ModelCapabilities {
@@ -293,6 +294,7 @@ impl ModelCapabilities {
             return Self {
                 provider,
                 supports_tools: false,
+                supports_parallel_tool_calls: false,
                 tools_disabled_reason: Some(
                     "ollama deepseek-r1 variants do not support function/tool calling",
                 ),
@@ -302,6 +304,7 @@ impl ModelCapabilities {
         Self {
             provider,
             supports_tools: true,
+            supports_parallel_tool_calls: !matches!(provider, LlmProviderFamily::Ollama),
             tools_disabled_reason: None,
         }
     }
@@ -358,6 +361,7 @@ mod model_tests {
         let caps = ModelCapabilities::detect(Some("ollama"), "deepseek-r1:14b");
         assert_eq!(caps.provider, LlmProviderFamily::Ollama);
         assert!(!caps.supports_tools);
+        assert!(!caps.supports_parallel_tool_calls);
         assert!(caps.tools_disabled_reason.is_some());
     }
 
@@ -366,6 +370,7 @@ mod model_tests {
         let caps =
             ModelCapabilities::detect(Some("ollama"), "registry.ollama.ai/library/deepseek-r1:14b");
         assert!(!caps.supports_tools);
+        assert!(!caps.supports_parallel_tool_calls);
     }
 
     #[test]
@@ -373,6 +378,7 @@ mod model_tests {
         let caps = ModelCapabilities::detect(None, "deepseek-r1:14b");
         assert_eq!(caps.provider, LlmProviderFamily::Ollama);
         assert!(!caps.supports_tools);
+        assert!(!caps.supports_parallel_tool_calls);
     }
 
     #[test]
@@ -380,6 +386,7 @@ mod model_tests {
         let caps = ModelCapabilities::detect(Some("openrouter"), "google/gemini-2.0-flash");
         assert_eq!(caps.provider, LlmProviderFamily::OpenRouter);
         assert!(caps.supports_tools);
+        assert!(caps.supports_parallel_tool_calls);
         assert!(caps.tools_disabled_reason.is_none());
     }
 
@@ -388,5 +395,14 @@ mod model_tests {
         let caps = ModelCapabilities::detect(Some("codex"), "gpt-5");
         assert_eq!(caps.provider, LlmProviderFamily::Codex);
         assert!(caps.supports_tools);
+        assert!(caps.supports_parallel_tool_calls);
+    }
+
+    #[test]
+    fn disables_parallel_tool_calls_for_ollama_models_even_when_tools_are_supported() {
+        let caps = ModelCapabilities::detect(Some("ollama"), "qwen3.5:cloud");
+        assert_eq!(caps.provider, LlmProviderFamily::Ollama);
+        assert!(caps.supports_tools);
+        assert!(!caps.supports_parallel_tool_calls);
     }
 }

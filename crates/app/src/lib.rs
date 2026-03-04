@@ -112,7 +112,8 @@ impl AppConfig {
     /// Load config from YAML files.
     ///
     /// Sources (later sources override earlier ones):
-    /// - **release**: `~/.config/job/config.yaml` (global) → `./config.yaml` (local override)
+    /// - **release**: `~/.config/job/config.yaml` (global) → `./config.yaml`
+    ///   (local override)
     /// - **debug**: `./config.yaml` only
     ///
     /// All required fields must be present after merging; missing
@@ -130,9 +131,8 @@ impl AppConfig {
             );
         }
 
-        builder = builder.add_source(
-            config::File::new("config", config::FileFormat::Yaml).required(true),
-        );
+        builder = builder
+            .add_source(config::File::new("config", config::FileFormat::Yaml).required(true));
 
         let cfg = builder.build()?;
         tracing::info!(?cfg, "Raw configuration");
@@ -284,21 +284,20 @@ impl AppConfig {
 
         // -- telegram adapter (optional) --------------------------------------
 
-        let telegram_adapter =
-            match Self::try_build_telegram(&backend.settings_svc).await {
-                Ok(Some(adapter)) => {
-                    info!("Telegram adapter built");
-                    Some(adapter)
-                }
-                Ok(None) => {
-                    info!("Telegram not configured (bot_token unset in settings), skipping");
-                    None
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to build Telegram adapter, skipping");
-                    None
-                }
-            };
+        let telegram_adapter = match Self::try_build_telegram(&backend.settings_svc).await {
+            Ok(Some(adapter)) => {
+                info!("Telegram adapter built");
+                Some(adapter)
+            }
+            Ok(None) => {
+                info!("Telegram not configured (bot_token unset in settings), skipping");
+                None
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to build Telegram adapter, skipping");
+                None
+            }
+        };
 
         // Register egress adapters.
         if let Some(ref tg) = telegram_adapter {

@@ -101,8 +101,7 @@ impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::{
             kernel::NoopSettingsProvider, llm::DriverRegistryBuilder,
-            process::noop_user_store::NoopUserStore,
-            session::NoopSessionRepository,
+            process::noop_user_store::NoopUserStore, session::NoopSessionRepository,
         };
 
         Self {
@@ -149,9 +148,8 @@ pub fn boot(config: BootConfig) -> Kernel {
     let stream_hub: Arc<StreamHub> = crate::stream::default_stream_hub(config.stream_capacity);
 
     // Resolvers
-    let identity_resolver: Arc<dyn IdentityResolver> = config
-        .identity_resolver
-        .unwrap_or_else(|| {
+    let identity_resolver: Arc<dyn IdentityResolver> =
+        config.identity_resolver.unwrap_or_else(|| {
             Arc::new(DefaultIdentityResolver::new(
                 rara_kernel::process::principal::UserId("root".to_string()),
             ))
@@ -204,9 +202,9 @@ pub fn boot(config: BootConfig) -> Kernel {
         kernel_config.event_queue = eq_config;
     }
 
-    let session_index: Arc<dyn SessionIndex> = config.session_index.unwrap_or_else(|| {
-        Arc::new(rara_kernel::session::NoopSessionIndex)
-    });
+    let session_index: Arc<dyn SessionIndex> = config
+        .session_index
+        .unwrap_or_else(|| Arc::new(rara_kernel::session::NoopSessionIndex));
 
     Kernel::new(
         kernel_config,

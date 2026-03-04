@@ -285,10 +285,7 @@ impl Egress {
     }
 
     /// Resolve which endpoints should receive this envelope.
-    fn resolve_targets(
-        endpoints: &EndpointRegistry,
-        envelope: &OutboundEnvelope,
-    ) -> Vec<Endpoint> {
+    fn resolve_targets(endpoints: &EndpointRegistry, envelope: &OutboundEnvelope) -> Vec<Endpoint> {
         let connected = endpoints.get_endpoints(&envelope.user);
 
         match &envelope.routing {

@@ -68,3 +68,18 @@ pub struct AuditEvent {
     pub event_type: String,
     pub details:    serde_json::Value,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KernelEventCommonFields {
+    pub timestamp:  String,
+    pub event_type: String,
+    pub priority:   String,
+    pub agent_id:   Option<String>,
+    pub summary:    String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KernelEventEnvelope {
+    pub common: KernelEventCommonFields,
+    pub event:  serde_json::Value,
+}

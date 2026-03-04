@@ -298,9 +298,7 @@ struct WebAdapterState {
 // ---------------------------------------------------------------------------
 
 /// Verify that the provided token matches the expected owner token.
-fn verify_owner_token(expected: &str, provided: &str) -> bool {
-    expected == provided
-}
+fn verify_owner_token(expected: &str, provided: &str) -> bool { expected == provided }
 
 /// Build a Web endpoint and its associated UserId for endpoint registration.
 ///

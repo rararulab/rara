@@ -38,7 +38,7 @@ use crate::{
 /// delivery and `register_endpoint()` for stateless channel registration.
 pub(crate) struct DeliverySubsystem {
     /// Registered egress adapters keyed by channel type.
-    egress_adapters: HashMap<ChannelType, EgressAdapterRef>,
+    egress_adapters:   HashMap<ChannelType, EgressAdapterRef>,
     /// Per-user endpoint registry (tracks connected channels).
     endpoint_registry: EndpointRegistryRef,
 }
@@ -65,9 +65,7 @@ impl DeliverySubsystem {
     }
 
     /// Access the endpoint registry.
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef {
-        &self.endpoint_registry
-    }
+    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
 
     /// Spawn a Deliver event as an independent task so that egress I/O
     /// (Telegram API, WebSocket send, etc.) does not block the event loop.
@@ -88,12 +86,7 @@ impl DeliverySubsystem {
 
         tokio::spawn(
             async move {
-                crate::io::egress::Egress::deliver(
-                    &adapters,
-                    &endpoints,
-                    envelope,
-                )
-                .await;
+                crate::io::egress::Egress::deliver(&adapters, &endpoints, envelope).await;
             }
             .instrument(span),
         );

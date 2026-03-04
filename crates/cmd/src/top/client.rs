@@ -14,7 +14,14 @@
 
 use std::fmt;
 
-use crate::top::types::{AgentInfo, ApprovalRequest, AuditEvent, ProcessStats, SystemStats};
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
+use tokio::{sync::mpsc::UnboundedSender, time::Duration};
+
+use crate::top::types::{
+    AgentInfo, ApprovalRequest, AuditEvent, KernelEventCommonFields, KernelEventEnvelope,
+    ProcessStats, SystemStats,
+};
 
 #[derive(Debug)]
 pub enum ClientError {
@@ -38,6 +45,7 @@ impl fmt::Display for ClientError {
 
 impl std::error::Error for ClientError {}
 
+#[derive(Clone)]
 pub struct KernelClient {
     base_url: String,
     client:   reqwest::Client,
@@ -75,6 +83,56 @@ impl KernelClient {
     pub async fn audit(&self, limit: usize) -> Result<Vec<AuditEvent>, ClientError> {
         let url = format!("{}/api/v1/kernel/audit?limit={limit}", self.base_url);
         self.get_json(&url).await
+    }
+
+    pub async fn stream_events(&self, tx: UnboundedSender<KernelEventCommonFields>) {
+        let url = format!("{}/api/v1/kernel/events/stream", self.base_url);
+
+        loop {
+            let response = match self.client.get(&url).send().await {
+                Ok(resp) => match resp.error_for_status() {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "kernel event stream returned error status");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                },
+                Err(err) => {
+                    tracing::warn!(error = %err, "kernel event stream connection failed");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            let mut stream = response.bytes_stream().eventsource();
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(event) => {
+                        if event.event == "lagged" {
+                            continue;
+                        }
+
+                        match serde_json::from_str::<KernelEventEnvelope>(&event.data) {
+                            Ok(envelope) => {
+                                if tx.send(envelope.common).is_err() {
+                                    return;
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, "failed to decode kernel event");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "kernel event stream disconnected");
+                        break;
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, ClientError> {

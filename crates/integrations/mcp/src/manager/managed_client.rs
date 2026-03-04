@@ -140,15 +140,8 @@ impl AsyncManagedClient {
         let fut = async move {
             validate_mcp_server_name(&server_name)?;
 
-            let client = Arc::new(
-                make_rmcp_client(
-                    &server_name,
-                    &config,
-                    store_mode,
-                    store,
-                )
-                .await?,
-            );
+            let client =
+                Arc::new(make_rmcp_client(&server_name, &config, store_mode, store).await?);
 
             let startup_timeout = config
                 .startup_timeout_secs

@@ -40,8 +40,7 @@
 //! All internal state is protected by [`DashMap`], making the registry safe
 //! for concurrent access from multiple tasks without external locking.
 
-use std::fmt;
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
 use dashmap::DashMap;

@@ -55,8 +55,8 @@ impl KeyringStore for PgKeyringStore {
     async fn save(&self, service: &str, account: &str, value: &str) -> Result<()> {
         sqlx::query(
             "INSERT INTO credential_store (service, account, value, updated_at) VALUES (?1, ?2, \
-             ?3, datetime('now')) ON CONFLICT (service, account) DO UPDATE SET value = ?3, updated_at = \
-             datetime('now')",
+             ?3, datetime('now')) ON CONFLICT (service, account) DO UPDATE SET value = ?3, \
+             updated_at = datetime('now')",
         )
         .bind(service)
         .bind(account)

@@ -385,8 +385,7 @@ static GLOBAL_UT_LOG_GUARD: Lazy<Arc<Mutex<Option<Vec<WorkerGuard>>>>> =
 ///
 /// This is used as a fallback when neither the `level` field in
 /// `LoggingOptions` nor the `RUST_LOG` environment variable is set.
-const DEFAULT_LOG_TARGETS: &str =
-    "warn,rara=info,rara_=info,common_=info,yunara_=info,base=info";
+const DEFAULT_LOG_TARGETS: &str = "warn,rara=info,rara_=info,common_=info,yunara_=info,base=info";
 
 /// Initialize comprehensive logging with full configuration options.
 ///

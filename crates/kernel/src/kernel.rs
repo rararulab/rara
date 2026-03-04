@@ -63,7 +63,7 @@ use crate::{
     memory::MemoryRef,
     notification::NotificationBusRef,
     process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
-    queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
+    queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::{SessionIndexRef, SessionRepoRef},
     syscall::SyscallDispatcher,
@@ -157,51 +157,51 @@ pub use noop::NoopSettingsProvider;
 /// flattened directly into this struct.
 pub struct Kernel {
     /// Kernel configuration.
-    config: KernelConfig,
+    config:           KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table: Arc<ProcessTable>,
+    process_table:    Arc<ProcessTable>,
     /// Global semaphore limiting total concurrent agent processes.
     global_semaphore: Arc<Semaphore>,
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
-    memory: MemoryRef,
+    memory:           MemoryRef,
     /// Unified security subsystem (auth + authz + approval).
-    security: SecurityRef,
+    security:         SecurityRef,
     /// Agent registry for looking up named agent definitions.
-    agent_registry: AgentRegistryRef,
+    agent_registry:   AgentRegistryRef,
     /// Unified audit subsystem (logging + tool call recording).
-    audit: AuditRef,
+    audit:            AuditRef,
     /// Session repository for conversation history (legacy — being replaced by
     /// tape + session_index).
-    session_repo: SessionRepoRef,
+    session_repo:     SessionRepoRef,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
-    session_index: SessionIndexRef,
+    session_index:    SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
-    settings: SettingsRef,
+    settings:         SettingsRef,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
-    device_registry: DeviceRegistryRef,
+    device_registry:  DeviceRegistryRef,
     /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
     /// tool_registry, event_bus).
-    syscall: SyscallDispatcher,
+    syscall:          SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
     /// Ephemeral stream hub for real-time token deltas.
-    stream_hub: StreamHubRef,
+    stream_hub:       StreamHubRef,
     /// Ingress pipeline for adapters to push inbound messages.
     ingress_pipeline: IngressPipelineRef,
     /// Egress delivery subsystem (adapters + endpoint registry).
-    delivery: DeliverySubsystem,
+    delivery:         DeliverySubsystem,
     /// Unified event queue for all kernel interactions.
-    event_queue: EventQueueRef,
+    event_queue:      EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
     ///
     /// Always present. When `num_shards == 0` (single-queue mode), all
     /// events are routed to the global queue and processed by a single
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
-    sharded_queue: ShardedQueueRef,
+    sharded_queue:    ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
-    started_at: Timestamp,
+    started_at:       Timestamp,
 }
 
 impl Kernel {
@@ -240,7 +240,8 @@ impl Kernel {
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
             config.event_queue.clone(),
         ));
-        let event_queue: EventQueueRef = sharded_queue.clone();
+        let event_queue: EventQueueRef =
+            Arc::new(ObservableEventQueue::new(sharded_queue.clone(), 512));
 
         let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
 
@@ -356,9 +357,7 @@ impl Kernel {
     pub fn audit(&self) -> &AuditRef { &self.audit }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::security::ApprovalManager> {
-        self.security.approval()
-    }
+    pub fn approval(&self) -> &Arc<crate::security::ApprovalManager> { self.security.approval() }
 
     /// Access the unified security subsystem.
     pub fn security(&self) -> &SecurityRef { &self.security }
@@ -424,7 +423,8 @@ impl Kernel {
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
             crate::queue::ShardedEventQueueConfig::single(),
         ));
-        let event_queue: EventQueueRef = sharded_queue.clone();
+        let event_queue: EventQueueRef =
+            Arc::new(ObservableEventQueue::new(sharded_queue.clone(), 512));
 
         let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
         let endpoint_registry = Arc::new(EndpointRegistry::new());

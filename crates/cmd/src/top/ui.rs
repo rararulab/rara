@@ -121,6 +121,7 @@ fn render_content(frame: &mut Frame, area: Rect, app: &App) {
         Tab::Agents => render_agents_table(frame, area, app),
         Tab::Approvals => render_approvals_table(frame, area, app),
         Tab::Audit => render_audit_table(frame, area, app),
+        Tab::Events => render_events_table(frame, area, app),
     }
 }
 
@@ -330,6 +331,58 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(table, area);
 }
 
+fn render_events_table(frame: &mut Frame, area: Rect, app: &App) {
+    let header = Row::new(vec![
+        Cell::from("Timestamp"),
+        Cell::from("Event"),
+        Cell::from("Priority"),
+        Cell::from("Agent"),
+        Cell::from("Summary"),
+    ])
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let rows: Vec<Row> = app
+        .kernel_events
+        .iter()
+        .skip(app.scroll_offset)
+        .map(|event| {
+            Row::new(vec![
+                Cell::from(event.timestamp.as_str()),
+                Cell::from(event.event_type.as_str()),
+                Cell::from(priority_styled(&event.priority)),
+                Cell::from(
+                    event
+                        .agent_id
+                        .as_deref()
+                        .map(short_id)
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                Cell::from(event.summary.chars().take(80).collect::<String>()),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(22),
+        Constraint::Length(20),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Fill(1),
+    ];
+
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Events ({}) ", app.kernel_events.len())),
+    );
+
+    frame.render_widget(table, area);
+}
+
 // ---------------------------------------------------------------------------
 // Help bar
 // ---------------------------------------------------------------------------
@@ -338,7 +391,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
     let help = Line::from(vec![
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::raw(":Quit  "),
-        Span::styled("1-4", Style::default().fg(Color::Yellow)),
+        Span::styled("1-5", Style::default().fg(Color::Yellow)),
         Span::raw(":Tab  "),
         Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Yellow)),
         Span::raw(":Scroll  "),
@@ -398,4 +451,14 @@ fn state_styled(state: &str) -> Span<'_> {
         _ => Color::White,
     };
     Span::styled(state, Style::default().fg(color))
+}
+
+fn priority_styled(priority: &str) -> Span<'_> {
+    let color = match priority {
+        "critical" => Color::Red,
+        "normal" => Color::Cyan,
+        "low" => Color::Gray,
+        _ => Color::White,
+    };
+    Span::styled(priority, Style::default().fg(color))
 }

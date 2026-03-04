@@ -62,41 +62,39 @@ impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
         // Load config first (Consul KV or env vars) so observability
         // settings are available before initialising the tracing subscriber.
-        let config = AppConfig::new()
-            .whatever_context("Failed to load config")?;
+        let config = AppConfig::new().whatever_context("Failed to load config")?;
 
-        let logging_opts =
-            if let Some(ref endpoint) = config
-                .telemetry
-                .otlp_endpoint
-                .as_deref()
-                .filter(|s| !s.is_empty())
-            {
-                use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-                let protocol = config.telemetry.otlp_protocol.as_deref().map(|p| match p {
-                    "grpc" => OtlpExportProtocol::Grpc,
-                    _ => OtlpExportProtocol::Http,
-                });
-                LoggingOptions {
-                    enable_otlp_tracing: true,
-                    otlp_endpoint: Some(endpoint.to_string()),
-                    otlp_export_protocol: protocol,
-                    ..Default::default()
-                }
-            } else if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
-                // Running in Kubernetes — auto-connect to Alloy OTLP collector.
-                use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-                tracing::info!("Kubernetes detected — auto-enabling OTLP tracing to Alloy");
-                LoggingOptions {
-                    enable_otlp_tracing: true,
-                    otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
-                    otlp_export_protocol: Some(OtlpExportProtocol::Http),
-                    log_format: common_telemetry::logging::LogFormat::Json,
-                    ..Default::default()
-                }
-            } else {
-                common_telemetry::logging::LoggingOptions::default()
-            };
+        let logging_opts = if let Some(ref endpoint) = config
+            .telemetry
+            .otlp_endpoint
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+            let protocol = config.telemetry.otlp_protocol.as_deref().map(|p| match p {
+                "grpc" => OtlpExportProtocol::Grpc,
+                _ => OtlpExportProtocol::Http,
+            });
+            LoggingOptions {
+                enable_otlp_tracing: true,
+                otlp_endpoint: Some(endpoint.to_string()),
+                otlp_export_protocol: protocol,
+                ..Default::default()
+            }
+        } else if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+            // Running in Kubernetes — auto-connect to Alloy OTLP collector.
+            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+            tracing::info!("Kubernetes detected — auto-enabling OTLP tracing to Alloy");
+            LoggingOptions {
+                enable_otlp_tracing: true,
+                otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
+                otlp_export_protocol: Some(OtlpExportProtocol::Http),
+                log_format: common_telemetry::logging::LogFormat::Json,
+                ..Default::default()
+            }
+        } else {
+            common_telemetry::logging::LoggingOptions::default()
+        };
 
         let _guards = common_telemetry::logging::init_global_logging(
             "rara",
@@ -127,8 +125,7 @@ struct ChatArgs {
 
 impl ChatArgs {
     async fn run(self) -> Result<(), Whatever> {
-        let config = AppConfig::new()
-            .whatever_context("Failed to load config")?;
+        let config = AppConfig::new().whatever_context("Failed to load config")?;
 
         // Minimal telemetry for CLI mode (no OTLP, console only).
         let _guards = common_telemetry::logging::init_global_logging(

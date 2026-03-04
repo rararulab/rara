@@ -79,7 +79,10 @@ impl PgSessionRepository {
     ///
     /// `sessions_dir` is the directory where JSONL message files are stored.
     /// The directory is created if it does not exist.
-    pub async fn new(pool: SqlitePool, sessions_dir: impl Into<PathBuf>) -> Result<Self, SessionError> {
+    pub async fn new(
+        pool: SqlitePool,
+        sessions_dir: impl Into<PathBuf>,
+    ) -> Result<Self, SessionError> {
         let store = SessionStore::new(sessions_dir).await?;
         Ok(Self { pool, store })
     }

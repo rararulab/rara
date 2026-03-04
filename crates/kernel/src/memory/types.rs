@@ -46,7 +46,7 @@ pub enum Scope {
 ///
 /// Used by `ProcessHandle::shared_store` and `ProcessHandle::shared_recall`
 /// to provide cross-agent data sharing with explicit scope control.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KvScope {
     /// Global scope — key stored as-is. Requires Root or Admin role.
     Global,

@@ -4,7 +4,6 @@ set dotenv-filename := ".env"
 
 # Environment variables with defaults
 RUST_TOOLCHAIN := `grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2`
-PYO3_PYTHON := `uv python find 3.10`
 RARA__DATABASE__DATABASE_URL := env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/rara")
 RARA__DATABASE__MIGRATION_DIR := env("RARA__DATABASE__MIGRATION_DIR", "crates/rara-model/migrations")
 
@@ -26,7 +25,6 @@ help: default
 env:
     @echo "🔧 Environment Configuration:"
     @echo "  RUST_TOOLCHAIN: {{RUST_TOOLCHAIN}}"
-    @echo "  PYO3_PYTHON: {{PYO3_PYTHON}}"
 
 # ========================================================================================
 # Code Quality
@@ -217,7 +215,7 @@ docs-open:
 [group("🏃 Running")]
 run:
     @echo "🏃 Running rara binary..."
-    PYO3_PYTHON={{PYO3_PYTHON}} cargo run -p rara-cli -- server
+    cargo run -p rara-cli -- server
 
 [doc("run hello-world example")]
 [group("🏃 Running")]

@@ -18,10 +18,13 @@ use axum::{
         Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
+    response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::get,
 };
+use futures::StreamExt;
 use rara_kernel::{KernelHandle, audit::AuditFilter};
 use serde::Deserialize;
+use tokio_stream::wrappers::BroadcastStream;
 
 use super::problem::ProblemDetails;
 
@@ -53,6 +56,7 @@ pub fn kernel_routes(handle: KernelHandle) -> Router {
             "/api/v1/kernel/processes/{agent_id}/stream",
             get(stream_process),
         )
+        .route("/api/v1/kernel/events/stream", get(stream_kernel_events))
         .route("/api/v1/kernel/approvals", get(list_approvals))
         .route("/api/v1/kernel/audit", get(query_audit))
         .with_state(handle)
@@ -129,6 +133,30 @@ async fn stream_process(
     let stream_hub = handle.stream_hub().clone();
 
     Ok(ws.on_upgrade(move |socket| handle_process_stream(socket, stream_hub, session_id)))
+}
+
+async fn stream_kernel_events(
+    State(handle): State<KernelHandle>,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
+    let stream = if let Some(rx) = handle.event_queue().subscribe() {
+        BroadcastStream::new(rx)
+            .filter_map(|item| async move {
+                match item {
+                    Ok(record) => {
+                        let data = serde_json::to_string(&record).ok()?;
+                        Some(Ok(SseEvent::default().event("kernel_event").data(data)))
+                    }
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                        Some(Ok(SseEvent::default().event("lagged").data(n.to_string())))
+                    }
+                }
+            })
+            .boxed()
+    } else {
+        futures::stream::empty().boxed()
+    };
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn handle_process_stream(
