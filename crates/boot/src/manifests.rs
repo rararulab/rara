@@ -16,8 +16,10 @@
 
 use std::path::Path;
 
-use rara_kernel::agent::{AgentRegistry, ManifestLoader};
-use rara_kernel::identity::Role;
+use rara_kernel::{
+    agent::{AgentRegistry, ManifestLoader},
+    identity::Role,
+};
 use tracing::info;
 
 /// Load agent manifests and build an AgentRegistry.

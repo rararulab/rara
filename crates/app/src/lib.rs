@@ -176,9 +176,10 @@ pub async fn start_with_options(
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
 
-    let rara = rara_boot::state::RaraState::init(pool.clone(), settings_provider.clone())
-        .await
-        .whatever_context("Failed to initialize RaraState")?;
+    let rara =
+        rara_boot::state::RaraState::init(pool.clone(), settings_provider.clone(), &config.users)
+            .await
+            .whatever_context("Failed to initialize RaraState")?;
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),
@@ -189,24 +190,9 @@ pub async fn start_with_options(
     .await
     .whatever_context("Failed to initialize BackendState")?;
 
-    rara_boot::user_store::ensure_default_users(&pool)
-        .await
-        .whatever_context("Failed to ensure default kernel users")?;
-
-    rara_boot::user_store::ensure_configured_users(&pool, &config.users)
-        .await
-        .whatever_context("Failed to sync configured users")?;
-
-    let security = Arc::new(rara_kernel::security::SecuritySubsystem::new(
-        rara.user_store.clone(),
-        Arc::new(rara_kernel::security::ApprovalManager::new(
-            rara_kernel::security::ApprovalPolicy::default(),
-        )),
-    ));
-    let identity_resolver: Arc<dyn rara_kernel::io::IdentityResolver> =
-        Arc::new(rara_boot::resolvers::PlatformIdentityResolver::new(
-            &config.users,
-        ));
+    let identity_resolver: Arc<dyn rara_kernel::io::IdentityResolver> = Arc::new(
+        rara_boot::resolvers::PlatformIdentityResolver::new(&config.users),
+    );
     let session_resolver = Arc::new(rara_boot::resolvers::DefaultSessionResolver::new(
         rara.session_index.clone(),
     ));
@@ -235,7 +221,10 @@ pub async fn start_with_options(
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
     }
-    io.register_adapter(ChannelType::Web, web_adapter.clone() as Arc<dyn ChannelAdapter>);
+    io.register_adapter(
+        ChannelType::Web,
+        web_adapter.clone() as Arc<dyn ChannelAdapter>,
+    );
     if let Some(ref cli) = options.cli_adapter {
         io.register_adapter(ChannelType::Cli, cli.clone() as Arc<dyn ChannelAdapter>);
     }
@@ -248,7 +237,12 @@ pub async fn start_with_options(
         rara.session_index.clone(),
         rara.tape_service.clone(),
         settings_provider.clone(),
-        security,
+        Arc::new(rara_kernel::security::SecuritySubsystem::new(
+            rara.user_store.clone(),
+            Arc::new(rara_kernel::security::ApprovalManager::new(
+                rara_kernel::security::ApprovalPolicy::default(),
+            )),
+        )),
         io,
     );
 

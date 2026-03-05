@@ -76,8 +76,8 @@ impl DriverRegistry {
     pub fn new(default_driver: impl Into<String>) -> Self {
         Self {
             state: RwLock::new(DriverRegistryState {
-                drivers: HashMap::new(),
-                default_driver: default_driver.into(),
+                drivers:         HashMap::new(),
+                default_driver:  default_driver.into(),
                 provider_models: HashMap::new(),
                 agent_overrides: HashMap::new(),
             }),

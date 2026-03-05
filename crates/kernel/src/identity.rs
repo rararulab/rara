@@ -57,47 +57,14 @@ pub enum Permission {
 /// Kernel user — analogous to a record in `/etc/passwd`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelUser {
-    pub id:          uuid::Uuid,
+    /// Primary key — must be unique across all users.
     pub name:        String,
     pub role:        Role,
     pub permissions: Vec<Permission>,
     pub enabled:     bool,
-    pub created_at:  jiff::Timestamp,
-    pub updated_at:  jiff::Timestamp,
 }
 
-/// Well-known user name for the root superuser.
-pub const ROOT_USER_NAME: &str = "root";
-/// Well-known user name for the system service account.
-pub const SYSTEM_USER_NAME: &str = "system";
-
 impl KernelUser {
-    /// Create the root superuser — `Role::Root` + `Permission::All`.
-    pub fn root() -> Self {
-        Self {
-            id:          uuid::Uuid::new_v4(),
-            name:        ROOT_USER_NAME.to_string(),
-            role:        Role::Root,
-            permissions: vec![Permission::All],
-            enabled:     true,
-            created_at:  jiff::Timestamp::now(),
-            updated_at:  jiff::Timestamp::now(),
-        }
-    }
-
-    /// Create the system service account — `Role::Admin` + `Permission::All`.
-    pub fn system() -> Self {
-        Self {
-            id:          uuid::Uuid::new_v4(),
-            name:        SYSTEM_USER_NAME.to_string(),
-            role:        Role::Admin,
-            permissions: vec![Permission::All],
-            enabled:     true,
-            created_at:  jiff::Timestamp::now(),
-            updated_at:  jiff::Timestamp::now(),
-        }
-    }
-
     /// Check whether this user has the given permission.
     pub fn has_permission(&self, perm: &Permission) -> bool {
         self.permissions.contains(&Permission::All) || self.permissions.contains(perm)
@@ -156,13 +123,9 @@ impl Principal {
 
 pub type UserStoreRef = Arc<dyn UserStore>;
 
-/// Persistence trait for kernel user management.
+/// Read-only user lookup, backed by in-memory config.
 #[async_trait]
 pub trait UserStore: Send + Sync {
-    async fn get_by_id(&self, id: uuid::Uuid) -> Result<Option<KernelUser>>;
     async fn get_by_name(&self, name: &str) -> Result<Option<KernelUser>>;
-    async fn create(&self, user: &KernelUser) -> Result<()>;
-    async fn update(&self, user: &KernelUser) -> Result<()>;
-    async fn delete(&self, id: uuid::Uuid) -> Result<()>;
     async fn list(&self) -> Result<Vec<KernelUser>>;
 }

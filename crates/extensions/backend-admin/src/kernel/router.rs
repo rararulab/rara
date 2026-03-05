@@ -23,7 +23,6 @@ use axum::{
 };
 use futures::StreamExt;
 use rara_kernel::{handle::KernelHandle, session::SessionKey};
-use tokio_stream::wrappers::BroadcastStream;
 
 use super::problem::ProblemDetails;
 
@@ -106,25 +105,10 @@ async fn stream_session(
 }
 
 async fn stream_kernel_events(
-    State(handle): State<KernelHandle>,
+    State(_handle): State<KernelHandle>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
-    let stream = if let Some(rx) = handle.event_queue().subscribe() {
-        BroadcastStream::new(rx)
-            .filter_map(|item| async move {
-                match item {
-                    Ok(record) => {
-                        let data = serde_json::to_string(&record).ok()?;
-                        Some(Ok(SseEvent::default().event("kernel_event").data(data)))
-                    }
-                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                        Some(Ok(SseEvent::default().event("lagged").data(n.to_string())))
-                    }
-                }
-            })
-            .boxed()
-    } else {
-        futures::stream::empty().boxed()
-    };
+    // TODO: re-implement via EventBus once kernel event observation is added back.
+    let stream = futures::stream::empty().boxed();
 
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

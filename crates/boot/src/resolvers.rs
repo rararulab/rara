@@ -14,8 +14,8 @@
 
 //! Identity and session resolvers for the I/O Bus pipeline.
 //!
-//! - [`DefaultIdentityResolver`] — single-owner mode (all channels → one user).
-//! - [`PlatformIdentityResolver`] — config-driven mode (platform identity → kernel user via DB).
+//! - [`PlatformIdentityResolver`] — config-driven identity resolver (platform
+//!   identity → kernel user via in-memory mapping).
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -29,41 +29,6 @@ use rara_kernel::{
 use tracing::debug;
 
 use crate::user_store::UserConfig;
-
-// ---------------------------------------------------------------------------
-// DefaultIdentityResolver
-// ---------------------------------------------------------------------------
-
-/// Identity resolver that always returns the single owner user.
-///
-/// In single-owner mode, all channels (Web, Telegram, CLI) resolve to the
-/// same kernel user.
-pub struct DefaultIdentityResolver {
-    owner_user_id: UserId,
-}
-
-impl DefaultIdentityResolver {
-    /// Create a new resolver for the given owner.
-    pub fn new(owner_user_id: UserId) -> Self { Self { owner_user_id } }
-}
-
-#[async_trait]
-impl IdentityResolver for DefaultIdentityResolver {
-    async fn resolve(
-        &self,
-        channel_type: ChannelType,
-        platform_user_id: &str,
-        _platform_chat_id: Option<&str>,
-    ) -> Result<UserId, IOError> {
-        debug!(
-            channel = %channel_type,
-            platform_user_id,
-            resolved_user = %self.owner_user_id.0,
-            "identity resolved to owner"
-        );
-        Ok(self.owner_user_id.clone())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // PlatformIdentityResolver

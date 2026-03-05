@@ -41,17 +41,15 @@
 
 use std::sync::Arc;
 
+use futures::future::join_all;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use futures::future::join_all;
 use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     KernelError,
-    agent::{
-        AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, run_agent_loop,
-    },
+    agent::{AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, run_agent_loop},
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -59,7 +57,7 @@ use crate::{
     llm::DriverRegistryRef,
     memory::TapeService,
     notification::{BroadcastNotificationBus, NotificationBusRef},
-    queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
+    queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::{
         AgentRunLoopResult, Session, SessionIndexRef, SessionKey, SessionState, SessionTable,
@@ -176,8 +174,7 @@ impl Kernel {
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
             config.event_queue.clone(),
         ));
-        let event_queue: EventQueueRef =
-            Arc::new(ObservableEventQueue::new(sharded_queue.clone(), 512));
+        let event_queue: EventQueueRef = sharded_queue.clone();
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
 
@@ -351,7 +348,7 @@ impl Kernel {
     async fn run_processor(
         &self,
         id: usize,
-        queue: Arc<crate::queue::shard::ShardQueue>,
+        queue: Arc<crate::queue::ShardQueue>,
         shutdown: CancellationToken,
     ) {
         info!(processor_id = id, "event processor started");
@@ -360,9 +357,9 @@ impl Kernel {
             tokio::select! {
                 _ = queue.wait() => {
                     loop {
-                        let events = queue.drain(32);
-                        if events.is_empty() { break; }
-                        let futs = events.into_iter().map(|event| {
+                        let mut events = queue.drain(32).peekable();
+                        if events.peek().is_none() { break; }
+                        let futs = events.map(|event| {
                             let event_type: &'static str = (&event.kind).into();
                             let span = info_span!(
                                 "handle_event",
@@ -376,8 +373,7 @@ impl Kernel {
                 }
                 _ = shutdown.cancelled() => {
                     info!(processor_id = id, "event processor shutting down");
-                    let remaining = queue.drain(1024);
-                    for event in remaining {
+                    for event in queue.drain(1024) {
                         if matches!(event.kind, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
                             self.handle_event(event).await;
                         } else {

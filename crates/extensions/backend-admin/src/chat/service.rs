@@ -26,8 +26,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::session::SessionIndexRef;
-use rara_kernel::memory::TapeService;
+use rara_kernel::{memory::TapeService, session::SessionIndexRef};
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
 use tracing::{info, instrument};
 

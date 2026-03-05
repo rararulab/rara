@@ -46,8 +46,11 @@ impl BackendState {
 
         // -- session service (renamed from ChatService) ----------------------
 
-        let session_service =
-            crate::chat::service::SessionService::new(session_index, tape_service, settings_provider);
+        let session_service = crate::chat::service::SessionService::new(
+            session_index,
+            tape_service,
+            settings_provider,
+        );
         info!("Session service initialized");
 
         Ok(Self {

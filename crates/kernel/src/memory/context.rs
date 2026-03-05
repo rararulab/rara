@@ -133,7 +133,8 @@ fn append_tool_result_entry(
 fn render_tool_result(result: &Value) -> TapResult<String> {
     Ok(match result {
         Value::String(text) => text.clone(),
-        other => serde_json::to_string(other)
-            .map_err(|source| super::TapError::JsonEncode { source })?,
+        other => {
+            serde_json::to_string(other).map_err(|source| super::TapError::JsonEncode { source })?
+        }
     })
 }

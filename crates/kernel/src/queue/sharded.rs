@@ -25,10 +25,61 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use crossbeam_queue::SegQueue;
+use tokio::sync;
 
-use super::{in_memory::EventQueue, shard::ShardQueue};
+use super::EventQueue;
 use crate::{event::KernelEventEnvelope, io::IOError};
+
+/// A single lock-free FIFO shard with async notification.
+pub(crate) struct ShardQueue {
+    queue:    SegQueue<KernelEventEnvelope>,
+    notify:   sync::Notify,
+    capacity: usize,
+}
+
+impl ShardQueue {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            queue: SegQueue::new(),
+            notify: sync::Notify::new(),
+            capacity,
+        }
+    }
+
+    /// Push an event. Returns `IOError::Full` if at capacity.
+    pub fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
+        if self.queue.len() >= self.capacity {
+            return Err(IOError::Full);
+        }
+        self.queue.push(event);
+        self.notify.notify_one();
+        Ok(())
+    }
+
+    /// Lazy iterator that pops up to `max` events. Zero allocation.
+    pub fn drain(&self, max: usize) -> impl Iterator<Item = KernelEventEnvelope> + '_ {
+        let mut remaining = max;
+        std::iter::from_fn(move || {
+            if remaining == 0 {
+                return None;
+            }
+            let event = self.queue.pop()?;
+            remaining -= 1;
+            Some(event)
+        })
+    }
+
+    /// Wait until events are available.
+    pub async fn wait(&self) {
+        if !self.queue.is_empty() {
+            return;
+        }
+        self.notify.notified().await;
+    }
+
+    pub fn pending_count(&self) -> usize { self.queue.len() }
+}
 
 /// Shared reference to the [`ShardedEventQueue`].
 pub type ShardedQueueRef = Arc<ShardedEventQueue>;
@@ -134,7 +185,6 @@ impl ShardedEventQueue {
     }
 }
 
-#[async_trait]
 impl EventQueue for ShardedEventQueue {
     fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.try_push(event) }
 
@@ -143,52 +193,5 @@ impl EventQueue for ShardedEventQueue {
             ShardTarget::Global => self.global.push(event),
             ShardTarget::Shard(idx) => self.shards[idx].push(event),
         }
-    }
-
-    fn drain(&self, max: usize) -> Vec<KernelEventEnvelope> {
-        // Drain from global first, then round-robin across shards.
-        let mut result = Vec::with_capacity(max);
-        let mut remaining = max;
-
-        // Global first
-        let global_events = self.global.drain(remaining);
-        remaining -= global_events.len();
-        result.extend(global_events);
-
-        // Then shards
-        for shard in &self.shards {
-            if remaining == 0 {
-                break;
-            }
-            let shard_events = shard.drain(remaining);
-            remaining -= shard_events.len();
-            result.extend(shard_events);
-        }
-
-        result
-    }
-
-    async fn wait(&self) {
-        // Fast path: if anything is pending, return immediately.
-        if self.pending_count() > 0 {
-            return;
-        }
-
-        // Wait on the global queue's notify.
-        // Each EventProcessor also waits on its own shard independently.
-        self.global.wait().await;
-    }
-
-    fn pending_count(&self) -> usize { self.total_pending() }
-
-    fn is_sharded(&self) -> bool { !self.shards.is_empty() }
-}
-
-impl std::fmt::Debug for ShardedEventQueue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ShardedEventQueue")
-            .field("num_shards", &self.shards.len())
-            .field("total_pending", &self.total_pending())
-            .finish()
     }
 }

@@ -56,6 +56,7 @@ impl RaraState {
     pub async fn init(
         pool: sqlx::SqlitePool,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+        users: &[crate::user_store::UserConfig],
     ) -> Result<Self, Whatever> {
         // -- credential store --------------------------------------------------
 
@@ -112,7 +113,7 @@ impl RaraState {
         let workspace_path =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let tape_service = rara_kernel::memory::TapeService::new(
-            rara_kernel::memory::FileTapeStore::new(rara_paths::home_dir(), &workspace_path)
+            rara_kernel::memory::FileTapeStore::new(rara_paths::memory_dir(), &workspace_path)
                 .await
                 .whatever_context("Failed to initialize FileTapeStore")?,
         );
@@ -159,11 +160,7 @@ impl RaraState {
         // -- user store -------------------------------------------------------
 
         let user_store: Arc<dyn rara_kernel::identity::UserStore> =
-            Arc::new(crate::user_store::SqliteUserStore::new(pool.clone()));
-        crate::user_store::ensure_default_users(&pool)
-            .await
-            .whatever_context("Failed to ensure default users")?;
-
+            Arc::new(crate::user_store::InMemoryUserStore::from_config(users));
         info!("RaraState initialized");
 
         Ok(Self {

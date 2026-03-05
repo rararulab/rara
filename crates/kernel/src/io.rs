@@ -901,8 +901,8 @@ pub struct RawPlatformMessage {
 
 /// Resolves a platform identity to a unified [`UserId`].
 ///
-/// Implementations may look up a database mapping, create auto-provisioned
-/// users, or apply group-chat policies.
+/// Implementations use an in-memory mapping built from config to translate
+/// `(channel_type, platform_user_id)` into a kernel user identity.
 #[async_trait]
 pub trait IdentityResolver: Send + Sync + 'static {
     /// Map platform coordinates to a kernel-level user identity.
@@ -1091,7 +1091,8 @@ pub enum EgressError {
     Timeout,
 }
 
-/// Shared reference to a [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter).
+/// Shared reference to a
+/// [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter).
 pub type ChannelAdapterRef = crate::channel::adapter::ChannelAdapterRef;
 
 /// Shared reference to the [`EndpointRegistry`].
@@ -1113,7 +1114,7 @@ pub struct IOSubsystem {
     identity_resolver: IdentityResolverRef,
     session_resolver:  SessionResolverRef,
     stream_hub:        StreamHubRef,
-    adapters:   HashMap<ChannelType, ChannelAdapterRef>,
+    adapters:          HashMap<ChannelType, ChannelAdapterRef>,
     endpoint_registry: EndpointRegistryRef,
 }
 

@@ -544,7 +544,8 @@ impl KernelHandle {
 
     // -- Context queries (used by agent_loop) --
 
-    /// Get the manifest for a session (direct access — no event queue roundtrip).
+    /// Get the manifest for a session (direct access — no event queue
+    /// roundtrip).
     pub async fn session_manifest(&self, session_key: &SessionKey) -> Result<AgentManifest> {
         self.process_table
             .with(session_key, |p| p.manifest.clone())

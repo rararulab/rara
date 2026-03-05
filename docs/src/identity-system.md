@@ -70,28 +70,18 @@ users:
 
 ## Boot Sequence
 
-At startup, Rara processes the `users` config in this order:
+At startup, Rara builds the identity system entirely from the `users` config (no database):
 
-1. **`ensure_default_users`** — creates built-in `root` and `system` users if absent
-2. **`ensure_configured_users`** — for each entry in `users`:
-   - Creates the `KernelUser` record in SQLite if it doesn't exist
-   - Updates the role if it changed in config
-3. **`PlatformIdentityResolver`** is built from the `users` config as an in-memory `HashMap<(channel_type, platform_uid), user_name>`
+1. **`InMemoryUserStore`** — built from `users` config entries into a `HashMap<name, KernelUser>`
+2. **`PlatformIdentityResolver`** — built from the `users` config as an in-memory `HashMap<(channel_type, platform_uid), user_name>`
 
-Both steps are idempotent and safe to run on every startup.
+Users are never persisted to the database — the YAML config is the single source of truth.
 
-## Resolver Modes
+## Identity Resolution
 
-Rara selects the identity resolver based on whether `users` is configured:
+`PlatformIdentityResolver` maps `(channel_type, platform_user_id)` to a kernel user name via an in-memory `HashMap` built from the `users` config.
 
-| Config | Resolver | Behavior |
-|--------|----------|----------|
-| `users` absent or empty | `DefaultIdentityResolver` | All channels resolve to the single owner (`root`) |
-| `users` present | `PlatformIdentityResolver` | In-memory `HashMap` lookup by `(channel_type, platform_uid)` |
-
-### Unknown Platform Users
-
-When `PlatformIdentityResolver` is active and a message arrives from a platform user not listed in the config, the message is **silently dropped**. No reply is sent. The event is logged at `debug` level.
+If a message arrives from a platform user not listed in the config, the message is **rejected** with `IOError::IdentityResolutionFailed`. The event is logged at `debug` level.
 
 ## Architecture
 
@@ -100,7 +90,7 @@ When `PlatformIdentityResolver` is active and a message arrives from a platform 
 | Type | Location | Description |
 |------|----------|-------------|
 | `UserId(String)` | `rara-kernel` | Runtime identity (user name) |
-| `KernelUser` | `rara-kernel` | Persistent user record (UUID, role, permissions) |
+| `KernelUser` | `rara-kernel` | In-memory user record (UUID, role, permissions) |
 | `Principal` | `rara-kernel` | Runtime security context derived from `KernelUser` |
 | `UserConfig` | `rara-boot` | YAML config entry for a user |
 | `PlatformBindingConfig` | `rara-boot` | YAML config entry for a platform binding |
@@ -110,7 +100,6 @@ When `PlatformIdentityResolver` is active and a message arrives from a platform 
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
 | `IdentityResolver` trait | `crates/kernel/src/io.rs` | Maps platform identity to `UserId` |
-| `DefaultIdentityResolver` | `crates/boot/src/resolvers.rs` | Single-owner mode (ignores platform ID) |
-| `PlatformIdentityResolver` | `crates/boot/src/resolvers.rs` | Config-driven mode (in-memory HashMap lookup) |
-| `SqliteUserStore` | `crates/boot/src/user_store.rs` | CRUD for `kernel_users` |
+| `PlatformIdentityResolver` | `crates/boot/src/resolvers.rs` | Config-driven identity resolver (in-memory HashMap lookup) |
+| `InMemoryUserStore` | `crates/boot/src/user_store.rs` | Config-driven in-memory user store |
 | `SecuritySubsystem` | `crates/kernel/src/security.rs` | Validates user exists, is enabled, has permissions |

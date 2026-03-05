@@ -147,6 +147,7 @@ chrono = { version = "^0.4", features = ["serde"] }
 clap = { version = "4.4", features = ["derive"] }
 config = { version = "0.15", features = ["yaml"] }
 croner = "3"
+crossbeam-queue = "0.3"
 crossterm = "0.28"
 derive_more = { version = "2.0", features = ["full"] }
 dirs = "^6"

@@ -18,10 +18,7 @@
 //! handles bootstrap anchors, fork/merge convenience flows, anchor-relative
 //! queries, and search over persisted message entries.
 
-use std::{
-    future::Future,
-    sync::OnceLock,
-};
+use std::{future::Future, sync::OnceLock};
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -81,9 +78,7 @@ pub struct TapeService {
 
 impl TapeService {
     /// Create a service backed by the given store.
-    pub fn new(store: FileTapeStore) -> Self {
-        Self { store }
-    }
+    pub fn new(store: FileTapeStore) -> Self { Self { store } }
 
     /// Read all entries for the given tape.
     pub async fn entries(&self, tape_name: &str) -> TapResult<Vec<TapEntry>> {
@@ -155,53 +150,34 @@ impl TapeService {
     /// Append a system entry.
     pub async fn append_system(&self, tape_name: &str, content: &str) -> TapResult<()> {
         self.store
-            .append(
-                tape_name,
-                TapEntryKind::System,
-                json!({"content": content}),
-            )
+            .append(tape_name, TapEntryKind::System, json!({"content": content}))
             .await?;
         Ok(())
     }
 
     /// Append a message entry.
-    pub async fn append_message(
-        &self,
-        tape_name: &str,
-        payload: Value,
-    ) -> TapResult<TapEntry> {
+    pub async fn append_message(&self, tape_name: &str, payload: Value) -> TapResult<TapEntry> {
         self.store
             .append(tape_name, TapEntryKind::Message, payload)
             .await
     }
 
     /// Append a tool-call entry.
-    pub async fn append_tool_call(
-        &self,
-        tape_name: &str,
-        payload: Value,
-    ) -> TapResult<TapEntry> {
+    pub async fn append_tool_call(&self, tape_name: &str, payload: Value) -> TapResult<TapEntry> {
         self.store
             .append(tape_name, TapEntryKind::ToolCall, payload)
             .await
     }
 
     /// Append a tool-result entry.
-    pub async fn append_tool_result(
-        &self,
-        tape_name: &str,
-        payload: Value,
-    ) -> TapResult<TapEntry> {
+    pub async fn append_tool_result(&self, tape_name: &str, payload: Value) -> TapResult<TapEntry> {
         self.store
             .append(tape_name, TapEntryKind::ToolResult, payload)
             .await
     }
 
     /// Build LLM-ready messages from tape entries since the last anchor.
-    pub async fn build_llm_context(
-        &self,
-        tape_name: &str,
-    ) -> TapResult<Vec<crate::llm::Message>> {
+    pub async fn build_llm_context(&self, tape_name: &str) -> TapResult<Vec<crate::llm::Message>> {
         let entries = self
             .from_last_anchor(
                 tape_name,
@@ -416,9 +392,7 @@ impl TapeService {
     }
 
     /// List all tape names known to the underlying store.
-    pub async fn list_tapes(&self) -> TapResult<Vec<String>> {
-        self.store.list_tapes().await
-    }
+    pub async fn list_tapes(&self) -> TapResult<Vec<String>> { self.store.list_tapes().await }
 }
 
 /// Find the most recent anchor ID for a named anchor.

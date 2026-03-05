@@ -14,15 +14,30 @@
 
 //! Queue subsystem for kernel event dispatch.
 //!
-//! Groups the single-queue and sharded queue implementations under one module.
+//! The [`EventQueue`] trait is a push-only sink. The drain/wait hot path
+//! goes through [`ShardQueue`] directly.
 
-mod in_memory;
-mod observable;
-pub(crate) mod shard;
 mod sharded;
 
-pub use in_memory::{
-    EventPriority, EventQueue, EventQueueRef, InMemoryEventQueue, KernelEvent, KernelEventEnvelope,
-};
-pub use observable::{ObservableEventQueue, ObservableEventQueueRef, ObservableKernelEvent};
+use std::sync::Arc;
+
+pub(crate) use sharded::ShardQueue;
 pub use sharded::{ShardedEventQueue, ShardedEventQueueConfig, ShardedQueueRef};
+
+pub use crate::event::{EventPriority, KernelEvent, KernelEventEnvelope};
+use crate::io::IOError;
+
+/// Shared reference to an [`EventQueue`] implementation.
+pub type EventQueueRef = Arc<dyn EventQueue>;
+
+/// Push-only event sink for the kernel event queue.
+///
+/// The drain/wait hot path is handled by [`ShardQueue`] directly —
+/// this trait only covers the ingress (push) side.
+pub trait EventQueue: Send + Sync + 'static {
+    /// Push an event into the queue. Returns `IOError::Full` if at capacity.
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError>;
+
+    /// Non-blocking push (identical to `push` for in-memory queues).
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError>;
+}

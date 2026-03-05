@@ -57,8 +57,8 @@ use rara_kernel::{
     error::KernelError,
     handle::KernelHandle,
     io::{
-        EgressError, Endpoint, EndpointAddress, IOError, InteractionType,
-        PlatformOutbound, RawPlatformMessage, ReplyContext, StreamHubRef,
+        EgressError, Endpoint, EndpointAddress, IOError, InteractionType, PlatformOutbound,
+        RawPlatformMessage, ReplyContext, StreamHubRef,
     },
 };
 use teloxide::{
@@ -520,7 +520,6 @@ impl ChannelAdapter for TelegramAdapter {
             })?;
         Ok(())
     }
-
 }
 
 // ---------------------------------------------------------------------------
