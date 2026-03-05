@@ -34,7 +34,6 @@ pub mod channel;
 pub mod compaction;
 pub mod error;
 pub mod event;
-pub mod event_loop;
 pub mod handle;
 pub mod io;
 pub mod kernel;

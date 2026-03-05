@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use base::shared_string::SharedString;
 use derive_more::Debug;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -38,19 +37,7 @@ use crate::{
     tool::ToolRegistry,
 };
 
-// ---------------------------------------------------------------------------
-// EventId
-// ---------------------------------------------------------------------------
-
-/// ULID-based event identifier (time-sortable, unique).
-///
-/// Every kernel event gets a unique `EventId` for correlation, tracing,
-/// and deduplication.
 base::define_id!(EventId);
-
-// ---------------------------------------------------------------------------
-// EventBase
-// ---------------------------------------------------------------------------
 
 /// Common base fields for every kernel event.
 ///
@@ -561,10 +548,11 @@ impl KernelEventEnvelope {
         }
     }
 
-    /// Returns the session key used for shard routing, or `None` for global events.
+    /// Returns the session key used for shard routing, or `None` for global
+    /// events.
     ///
-    /// - **Global** (returns `None`): `UserMessage`, `CreateSession`, `Deliver`,
-    ///   `IdleCheck`, `Shutdown`
+    /// - **Global** (returns `None`): `UserMessage`, `CreateSession`,
+    ///   `Deliver`, `IdleCheck`, `Shutdown`
     /// - **Sharded** (returns `Some`): `SendSignal`, `TurnCompleted`,
     ///   `ChildSessionDone`, `SessionCommand`
     pub fn shard_key(&self) -> Option<SessionKey> {

@@ -44,7 +44,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, warn};
+use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     KernelError,
@@ -334,8 +334,8 @@ impl Kernel {
         (kernel, handle)
     }
 
-    /// Run the unified event loop, spawning 1 global + N shard
-    /// [`EventProcessor`] tasks.
+    /// Run the unified event loop, spawning 1 global + N shard processor
+    /// tasks.
     ///
     /// When `num_shards == 0` (single-queue mode), only the global processor
     /// is spawned — functionally identical to the former single-queue path
@@ -344,12 +344,6 @@ impl Kernel {
     /// Called from [`start()`](Kernel::start) which already wraps Kernel in
     /// Arc.
     async fn run_event_loop_arc(kernel: Arc<Kernel>, shutdown: CancellationToken) {
-        /// Agent name for admin/root users.
-        const ADMIN_AGENT_NAME: &'static str = "rara";
-        /// Agent name for regular users.
-        const USER_AGENT_NAME: &'static str = "nana";
-        use crate::event_loop::processor::EventProcessor;
-
         let sq = kernel.sharded_queue().clone();
         let num_shards = sq.num_shards();
 
@@ -363,32 +357,24 @@ impl Kernel {
 
         // Global processor (id=0) — always present.
         {
-            let proc = EventProcessor {
-                id:    0,
-                queue: Arc::clone(sq.global()),
-            };
             let k = Arc::clone(&kernel);
+            let q = Arc::clone(sq.global());
             let sd = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                proc.run(&k, sd).await;
+                k.run_processor(0, q, sd).await;
             }));
         }
 
         // Shard processors (id=1..=N) — only when sharding is enabled.
         for i in 0..num_shards {
-            let proc = EventProcessor {
-                id:    i + 1,
-                queue: Arc::clone(sq.shard(i)),
-            };
             let k = Arc::clone(&kernel);
+            let q = Arc::clone(sq.shard(i));
             let sd = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                proc.run(&k, sd).await;
+                k.run_processor(i + 1, q, sd).await;
             }));
         }
 
-        // Wait for all processors to finish.
-        // TODO: use futures::join_all and handle panics more robustly (currently if any
         for handle in handles {
             if let Err(e) = handle.await {
                 error!("event processor panicked: {e}");
@@ -396,6 +382,59 @@ impl Kernel {
         }
 
         info!("kernel event loop stopped");
+    }
+
+    /// Run a single event processor that drains events from one shard queue.
+    ///
+    /// Each processor runs independently, allowing parallel event handling
+    /// across different agent shards. Drains in batches of up to 32.
+    async fn run_processor(
+        &self,
+        id: usize,
+        queue: Arc<crate::queue::shard::ShardQueue>,
+        shutdown: CancellationToken,
+    ) {
+        info!(processor_id = id, "event processor started");
+
+        loop {
+            tokio::select! {
+                _ = queue.wait() => {
+                    loop {
+                        let events = queue.drain(32);
+                        if events.is_empty() { break; }
+                        for event in events {
+                            let event_type: &'static str = (&event.kind).into();
+                            let span = info_span!(
+                                "handle_event",
+                                processor_id = id,
+                                event_type,
+                            );
+                            self.handle_event(event)
+                                .instrument(span)
+                                .await;
+                        }
+                    }
+                }
+                _ = shutdown.cancelled() => {
+                    info!(processor_id = id, "event processor shutting down");
+                    let remaining = queue.drain(1024);
+                    for event in remaining {
+                        if matches!(event.kind, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
+                            self.handle_event(event).await;
+                        } else {
+                            warn!(
+                                processor_id = id,
+                                event = ?event,
+                                "dropping non-critical event during shutdown"
+                            );
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        info!(processor_id = id, "event processor stopped");
     }
 
     /// Dispatch a single event to its handler.
