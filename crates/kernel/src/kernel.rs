@@ -189,6 +189,7 @@ impl Kernel {
             tool_registry,
             event_bus,
             config.clone(),
+            tape_service.clone(),
         );
 
         Self {
