@@ -126,10 +126,10 @@ pub struct AgentTurnResult {
 
 use crate::{
     error::KernelError,
-    handle::process_handle::ProcessHandle,
-    io::stream::{StreamEvent, StreamHandle},
-    llm,
+    handle::KernelHandle,
+    io::{StreamEvent, StreamHandle},
     llm::ModelCapabilities,
+    session::SessionKey,
 };
 
 fn parse_tool_call_arguments(arguments: &str) -> Result<serde_json::Value, String> {
@@ -172,11 +172,12 @@ fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
 #[tracing::instrument(
     skip(handle, history, stream_handle, turn_cancel),
     fields(
-        session_key = %handle.session_key(),
+        session_key = %session_key,
     )
 )]
 pub(crate) async fn run_inline_agent_loop(
-    handle: &ProcessHandle,
+    handle: &KernelHandle,
+    session_key: SessionKey,
     user_text: String,
     history: Option<Vec<llm::Message>>,
     stream_handle: &StreamHandle,
@@ -184,13 +185,13 @@ pub(crate) async fn run_inline_agent_loop(
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest = handle
-        .manifest()
+        .session_manifest(&session_key)
         .await
         .map_err(|e| KernelError::AgentExecution {
             message: format!("failed to get manifest: {e}"),
         })?;
     let full_tools = handle
-        .tool_registry()
+        .session_tool_registry(session_key)
         .await
         .map_err(|e| KernelError::AgentExecution {
             message: format!("failed to get tool registry: {e}"),
@@ -209,7 +210,7 @@ pub(crate) async fn run_inline_agent_loop(
     // Resolve driver + model via the DriverRegistry syscall.
     let (driver, model) =
         handle
-            .resolve_driver()
+            .session_resolve_driver(session_key)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to resolve LLM driver: {e}"),
@@ -267,7 +268,7 @@ pub(crate) async fn run_inline_agent_loop(
         let _iter_guard = iter_span.enter();
 
         stream_handle.emit(StreamEvent::Progress {
-            stage: crate::io::types::stages::THINKING.to_string(),
+            stage: crate::io::stages::THINKING.to_string(),
         });
         info!(
             iteration,
@@ -509,38 +510,13 @@ pub(crate) async fn run_inline_agent_loop(
 
         iter_span.record("tool_count", valid_tool_calls.len());
 
-        // Guard check: batch-verify all tool calls before execution
-        let guard_checks: Vec<(String, serde_json::Value)> = valid_tool_calls
-            .iter()
-            .map(|(_, name, args)| (name.clone(), args.clone()))
-            .collect();
-
-        let verdicts = if !guard_checks.is_empty() {
-            handle
-                .check_guard_batch(guard_checks)
-                .await
-                .unwrap_or_else(|_| vec![crate::guard::Verdict::Allow; valid_tool_calls.len()])
-        } else {
-            vec![]
-        };
-
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
-            .zip(
-                verdicts
-                    .iter()
-                    .chain(std::iter::repeat(&crate::guard::Verdict::Allow)),
-            )
             .map(|((_id, name, args), verdict)| {
                 let tool = tools.get(name);
                 let args = args.clone();
                 let name = name.clone();
-                let is_denied = matches!(verdict, crate::guard::Verdict::Deny { .. });
-                let deny_reason = match verdict {
-                    crate::guard::Verdict::Deny { reason } => Some(reason.clone()),
-                    _ => None,
-                };
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -549,13 +525,6 @@ pub(crate) async fn run_inline_agent_loop(
                 async move {
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
-                    if is_denied {
-                        tool_span.record("success", false);
-                        let reason = deny_reason.unwrap_or_default();
-                        let err = format!("sandbox denied: {reason}");
-                        let dur = tool_start.elapsed().as_millis() as u64;
-                        return (false, serde_json::json!({ "error": &err }), Some(err), dur);
-                    }
                     if let Some(tool) = tool {
                         match tool.execute(args).await {
                             Ok(result) => {
@@ -603,16 +572,6 @@ pub(crate) async fn run_inline_agent_loop(
                 error: err.clone(),
             });
 
-            // Fire-and-forget tool call audit recording.
-            let _ = handle
-                .record_tool_call(
-                    name.clone(),
-                    args.clone(),
-                    result.clone(),
-                    success,
-                    duration_ms,
-                )
-                .await;
             tool_call_traces.push(ToolCallTrace {
                 name: name.clone(),
                 id: id.clone(),

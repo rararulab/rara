@@ -16,6 +16,7 @@
 
 use base::define_id;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::user::{KernelUser, Permission};
 

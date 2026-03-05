@@ -30,10 +30,10 @@ use uuid::Uuid;
 pub enum KernelNotification {
     /// A tool was executed.
     ToolExecuted {
-        agent_id:  Uuid,
-        tool_name: String,
-        success:   bool,
-        timestamp: Timestamp,
+        session_key: SessionKey,
+        tool_name:   String,
+        success:     bool,
+        timestamp:   Timestamp,
     },
     /// Memory was updated.
     MemoryUpdated {
@@ -53,11 +53,6 @@ pub enum KernelNotification {
         agent_id:  Uuid,
         tool_name: String,
         reason:    String,
-        timestamp: Timestamp,
-    },
-    /// A device event (connected, disconnected, error, tools changed).
-    Device {
-        event:     crate::device::DeviceEvent,
         timestamp: Timestamp,
     },
 }
@@ -152,3 +147,5 @@ mod noop {
 
 #[cfg(any(test, feature = "testing"))]
 pub use noop::NoopNotificationBus;
+
+use crate::session::SessionKey;

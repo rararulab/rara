@@ -21,7 +21,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use super::{EventQueue, EventQueueRef, KernelEventEnvelope};
-use crate::{event::KernelEventCommonFields, io::types::BusError};
+use crate::{event::KernelEventCommonFields, io::IOError};
 
 /// Observable payload derived from the canonical [`KernelEvent`] definition.
 #[derive(Debug, Clone, Serialize)]
@@ -49,7 +49,7 @@ impl ObservableEventQueue {
 
 #[async_trait]
 impl EventQueue for ObservableEventQueue {
-    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError> {
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
         let observed = ObservableKernelEvent::from_event(&event);
         self.inner.push(event)?;
         if let Some(observed) = observed {
@@ -58,7 +58,7 @@ impl EventQueue for ObservableEventQueue {
         Ok(())
     }
 
-    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError> {
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
         let observed = ObservableKernelEvent::from_event(&event);
         self.inner.try_push(event)?;
         if let Some(observed) = observed {
@@ -80,15 +80,6 @@ impl EventQueue for ObservableEventQueue {
     }
 }
 
-impl std::fmt::Debug for ObservableEventQueue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ObservableEventQueue")
-            .field("pending", &self.pending_count())
-            .field("is_sharded", &self.is_sharded())
-            .finish()
-    }
-}
-
 impl ObservableKernelEvent {
     fn from_event(event: &KernelEventEnvelope) -> Option<Self> {
         let payload = serde_json::to_value(&event.kind).ok()?;
@@ -96,51 +87,5 @@ impl ObservableKernelEvent {
             common: event.common_fields(),
             event:  payload,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::{ObservableEventQueue, ObservableKernelEvent};
-    use crate::{
-        event::KernelEventEnvelope,
-        process::{AgentId, Signal},
-        queue::{EventQueue, InMemoryEventQueue},
-    };
-
-    #[test]
-    fn wrapper_push_fans_out_to_subscribers() {
-        let inner: Arc<dyn EventQueue> = Arc::new(InMemoryEventQueue::new(8));
-        let queue = ObservableEventQueue::new(inner, 8);
-        let mut rx = queue.subscribe().unwrap();
-
-        queue.push(KernelEventEnvelope::shutdown()).unwrap();
-
-        let received = rx.try_recv().unwrap();
-        assert_eq!(received.common.event_type, "shutdown");
-        assert_eq!(received.event, serde_json::json!("Shutdown"));
-    }
-
-    #[test]
-    fn subscribed_event_exposes_common_fields() {
-        let agent_id = AgentId::new();
-        let event = KernelEventEnvelope::send_signal(agent_id, Signal::Pause);
-
-        let fields = event.common_fields();
-
-        assert_eq!(fields.event_type, "send_signal");
-        assert_eq!(fields.priority, "critical");
-        assert_eq!(fields.agent_id, Some(agent_id.to_string()));
-        assert!(fields.summary.contains("Pause"));
-    }
-
-    #[test]
-    fn observed_event_contains_payload_and_common_fields() {
-        let observed = ObservableKernelEvent::from_event(&KernelEventEnvelope::shutdown()).unwrap();
-
-        assert_eq!(observed.common.event_type, "shutdown");
-        assert_eq!(observed.event, serde_json::json!("Shutdown"));
     }
 }

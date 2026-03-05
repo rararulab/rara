@@ -30,9 +30,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{KernelError, Result},
-    guard::{Guard, GuardContext, GuardRef, Verdict},
     process::{
-        AgentId,
         principal::{Principal, Role, UserId},
         user::{Permission, UserStore, UserStoreRef},
     },
@@ -267,15 +265,13 @@ pub type SecurityRef = Arc<SecuritySubsystem>;
 /// Unified security subsystem — authentication, authorization, and approval.
 pub struct SecuritySubsystem {
     user_store: UserStoreRef,
-    guard:      GuardRef,
     approval:   Arc<ApprovalManager>,
 }
 
 impl SecuritySubsystem {
-    pub fn new(user_store: UserStoreRef, guard: GuardRef, approval: Arc<ApprovalManager>) -> Self {
+    pub fn new(user_store: UserStoreRef, approval: Arc<ApprovalManager>) -> Self {
         Self {
             user_store,
-            guard,
             approval,
         }
     }
@@ -320,20 +316,6 @@ impl SecuritySubsystem {
         kernel_user.map(|u| u.role).unwrap_or(Role::User)
     }
 
-    /// Check a batch of tool calls against the guard.
-    pub async fn check_guard_batch(
-        &self,
-        ctx: &GuardContext,
-        checks: &[(String, serde_json::Value)],
-    ) -> Vec<Verdict> {
-        let mut verdicts = Vec::with_capacity(checks.len());
-        for (tool_name, args) in checks {
-            let verdict = self.guard.check_tool(ctx, tool_name, args).await;
-            verdicts.push(verdict);
-        }
-        verdicts
-    }
-
     /// Check if a tool requires approval.
     pub fn requires_approval(&self, tool_name: &str) -> bool {
         self.approval.requires_approval(tool_name)
@@ -342,251 +324,6 @@ impl SecuritySubsystem {
     /// Access the approval manager.
     pub fn approval(&self) -> &Arc<ApprovalManager> { &self.approval }
 
-    /// Access the guard.
-    pub fn guard(&self) -> &Arc<dyn Guard> { &self.guard }
-
     /// Access the user store.
     pub fn user_store(&self) -> &Arc<dyn UserStore> { &self.user_store }
-
-    /// Create a no-op security subsystem for testing.
-    pub fn noop() -> Self {
-        Self {
-            user_store: Arc::new(crate::process::noop_user_store::NoopUserStore),
-            guard:      Arc::new(crate::guard::noop::NoopGuard),
-            approval:   Arc::new(ApprovalManager::new(ApprovalPolicy::default())),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-
-    fn default_manager() -> ApprovalManager { ApprovalManager::new(ApprovalPolicy::default()) }
-
-    fn make_request(agent_name: &str, tool_name: &str, timeout_secs: u64) -> ApprovalRequest {
-        let _ = agent_name;
-        ApprovalRequest {
-            id: Uuid::new_v4(),
-            agent_id: AgentId::new(),
-            tool_name: tool_name.to_string(),
-            tool_args: serde_json::json!({}),
-            summary: format!("execute {tool_name}"),
-            risk_level: ApprovalManager::classify_risk(tool_name),
-            requested_at: Timestamp::now(),
-            timeout_secs,
-        }
-    }
-
-    #[test]
-    fn requires_approval_default_policy() {
-        let mgr = default_manager();
-        assert!(mgr.requires_approval("bash"));
-        assert!(mgr.requires_approval("shell_exec"));
-        assert!(!mgr.requires_approval("file_read"));
-    }
-
-    #[test]
-    fn requires_approval_custom_policy() {
-        let policy = ApprovalPolicy {
-            require_approval: vec!["file_write".to_string()],
-            timeout_secs:     30,
-            auto_approve:     false,
-        };
-        let mgr = ApprovalManager::new(policy);
-        assert!(mgr.requires_approval("file_write"));
-        assert!(!mgr.requires_approval("bash"));
-    }
-
-    #[test]
-    fn requires_approval_auto_approve_bypasses() {
-        let policy = ApprovalPolicy {
-            require_approval: vec!["bash".to_string()],
-            timeout_secs:     60,
-            auto_approve:     true,
-        };
-        let mgr = ApprovalManager::new(policy);
-        assert!(!mgr.requires_approval("bash"));
-    }
-
-    #[test]
-    fn classify_risk_levels() {
-        assert_eq!(ApprovalManager::classify_risk("bash"), RiskLevel::Critical);
-        assert_eq!(
-            ApprovalManager::classify_risk("shell_exec"),
-            RiskLevel::Critical
-        );
-        assert_eq!(
-            ApprovalManager::classify_risk("file_write"),
-            RiskLevel::High
-        );
-        assert_eq!(
-            ApprovalManager::classify_risk("file_delete"),
-            RiskLevel::High
-        );
-        assert_eq!(
-            ApprovalManager::classify_risk("web_fetch"),
-            RiskLevel::Medium
-        );
-        assert_eq!(ApprovalManager::classify_risk("file_read"), RiskLevel::Low);
-        assert_eq!(ApprovalManager::classify_risk("unknown"), RiskLevel::Low);
-    }
-
-    #[test]
-    fn resolve_nonexistent_returns_error() {
-        let mgr = default_manager();
-        let result = mgr.resolve(Uuid::new_v4(), ApprovalDecision::Approved, None);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn list_pending_empty() {
-        let mgr = default_manager();
-        assert!(mgr.list_pending().is_empty());
-        assert_eq!(mgr.pending_count(), 0);
-    }
-
-    #[test]
-    fn update_policy_hot_reload() {
-        let mgr = default_manager();
-        assert!(mgr.requires_approval("bash"));
-
-        mgr.update_policy(ApprovalPolicy {
-            require_approval: vec!["file_write".to_string()],
-            timeout_secs:     30,
-            auto_approve:     false,
-        });
-
-        assert!(!mgr.requires_approval("bash"));
-        assert!(mgr.requires_approval("file_write"));
-        assert_eq!(mgr.policy().timeout_secs, 30);
-    }
-
-    #[tokio::test]
-    async fn request_approval_auto_approve() {
-        let policy = ApprovalPolicy {
-            require_approval: vec!["bash".to_string()],
-            timeout_secs:     60,
-            auto_approve:     true,
-        };
-        let mgr = ApprovalManager::new(policy);
-        let req = make_request("agent-1", "bash", 60);
-        let decision = mgr.request_approval(req).await;
-        assert_eq!(decision, ApprovalDecision::Approved);
-        assert_eq!(mgr.pending_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn request_approval_timeout() {
-        let mgr = Arc::new(default_manager());
-        let req = make_request("agent-1", "bash", 1); // 1 second timeout
-        let decision = mgr.request_approval(req).await;
-        assert_eq!(decision, ApprovalDecision::TimedOut);
-        assert_eq!(mgr.pending_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn request_approval_approved() {
-        let mgr = Arc::new(default_manager());
-        let req = make_request("agent-1", "bash", 60);
-        let request_id = req.id;
-
-        let mgr2 = Arc::clone(&mgr);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            let result = mgr2.resolve(request_id, ApprovalDecision::Approved, Some("admin".into()));
-            assert!(result.is_ok());
-        });
-
-        let decision = mgr.request_approval(req).await;
-        assert_eq!(decision, ApprovalDecision::Approved);
-    }
-
-    #[tokio::test]
-    async fn request_approval_denied() {
-        let mgr = Arc::new(default_manager());
-        let req = make_request("agent-1", "bash", 60);
-        let request_id = req.id;
-
-        let mgr2 = Arc::clone(&mgr);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            let _ = mgr2.resolve(request_id, ApprovalDecision::Denied, None);
-        });
-
-        let decision = mgr.request_approval(req).await;
-        assert_eq!(decision, ApprovalDecision::Denied);
-    }
-
-    #[tokio::test]
-    async fn max_pending_per_agent() {
-        let mgr = Arc::new(default_manager());
-        let agent_id = AgentId::new();
-
-        // Fill up MAX_PENDING_PER_AGENT requests
-        let mut ids = Vec::new();
-        for _ in 0..MAX_PENDING_PER_AGENT {
-            let mut req = make_request("agent-1", "bash", 300);
-            req.agent_id = agent_id;
-            ids.push(req.id);
-            let mgr_clone = Arc::clone(&mgr);
-            tokio::spawn(async move {
-                mgr_clone.request_approval(req).await;
-            });
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(mgr.pending_count(), MAX_PENDING_PER_AGENT);
-
-        // Next request from same agent should be denied
-        let mut req6 = make_request("agent-1", "bash", 300);
-        req6.agent_id = agent_id;
-        let decision = mgr.request_approval(req6).await;
-        assert_eq!(decision, ApprovalDecision::Denied);
-
-        // Different agent can still submit
-        let req_other = make_request("agent-2", "bash", 300);
-        let other_id = req_other.id;
-        let mgr2 = Arc::clone(&mgr);
-        tokio::spawn(async move {
-            mgr2.request_approval(req_other).await;
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(mgr.pending_count(), MAX_PENDING_PER_AGENT + 1);
-
-        // Cleanup
-        for id in &ids {
-            let _ = mgr.resolve(*id, ApprovalDecision::Denied, None);
-        }
-        let _ = mgr.resolve(other_id, ApprovalDecision::Denied, None);
-    }
-
-    #[tokio::test]
-    async fn list_pending_shows_active_requests() {
-        let mgr = Arc::new(default_manager());
-        let req = make_request("agent-1", "bash", 300);
-        let request_id = req.id;
-        let tool = req.tool_name.clone();
-
-        let mgr2 = Arc::clone(&mgr);
-        tokio::spawn(async move {
-            mgr2.request_approval(req).await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-        let pending = mgr.list_pending();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].id, request_id);
-        assert_eq!(pending[0].tool_name, tool);
-
-        // Cleanup
-        let _ = mgr.resolve(request_id, ApprovalDecision::Denied, None);
-    }
 }

@@ -14,8 +14,8 @@
 
 //! # rara-kernel
 //!
-//! Unified agent orchestrator — the single core crate for agent lifecycle,
-//! 7-component architecture, and LLM ↔ Tool execution loop.
+//! Unified session orchestrator — the single core crate for session lifecycle,
+//! 6-component architecture, and LLM ↔ Tool execution loop.
 //!
 //! ## 6 Components
 //!
@@ -32,11 +32,9 @@ pub mod agent_loop;
 pub mod channel;
 // TODO: deprecate me
 pub mod compaction;
-pub(crate) mod delivery;
 pub mod error;
 pub mod event;
 pub mod event_loop;
-pub mod handle;
 pub mod handle;
 pub mod io;
 pub mod kernel;
@@ -52,35 +50,3 @@ pub(crate) mod syscall;
 pub mod tool;
 
 pub use error::{KernelError, Result};
-// Session-centric runtime re-exports (new names + backwards-compatible aliases)
-pub use handle::{
-    AgentHandle, kernel_handle::KernelHandle, process_handle::ProcessHandle,
-    syscall_tool::SyscallTool,
-};
-pub use kernel::{Kernel, KernelConfig};
-pub use process::{
-    // New canonical names
-
-    // Backwards-compatible aliases
-    AgentRole,
-    MetricsSnapshot,
-    Priority,
-    ProcessTable,
-    RuntimeMetrics,
-    SandboxConfig,
-    SessionInfo,
-
-    SessionRuntime,
-    SessionState,
-    SessionStats,
-    SessionTable,
-    Signal,
-    SystemStats,
-    agent_registry::AgentRegistry,
-    manifest_loader::ManifestLoader,
-    principal::{Principal, Role, UserId},
-};
-pub use security::{
-    ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse,
-    RiskLevel, SecuritySubsystem,
-};

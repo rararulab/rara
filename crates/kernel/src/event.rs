@@ -24,13 +24,11 @@ use derive_more::Debug;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::{
-    agent_turn::AgentTurnResult,
-    io::{
-        pipe::{PipeReader, PipeWriter},
-        types::{InboundMessage, MessageId, OutboundEnvelope},
-    },
+    agent_loop::AgentTurnResult,
+    io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter},
     kv::KvScope,
     process::{
         AgentManifest, AgentRunLoopResult, SessionInfo, Signal,
@@ -110,9 +108,9 @@ impl SyscallEnvelope {
     pub fn session_key(&self) -> SessionKey { self.session_key }
 }
 
-/// Syscall variants — all interactions that a `ProcessHandle` routes through
-/// the kernel event queue. Each variant carries identity fields plus a oneshot
-/// reply channel for the kernel event loop to respond on.
+/// Syscall variants — all session-scoped operations routed through the kernel
+/// event queue. Each variant carries identity fields plus a oneshot reply
+/// channel for the kernel event loop to respond on.
 #[derive(derive_more::Debug, Serialize, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum Syscall {
@@ -216,22 +214,13 @@ pub enum Syscall {
         reply_tx:  oneshot::Sender<crate::error::Result<bool>>,
     },
 
-    /// Check guard verdict for a batch of tool calls before execution.
-    CheckGuardBatch {
-        session_id: SessionKey,
-        #[debug("{} checks", checks.len())]
-        checks:     Vec<(String, serde_json::Value)>,
-        #[debug(skip)]
-        #[serde(skip_serializing)]
-        reply_tx:   oneshot::Sender<Vec<crate::guard::Verdict>>,
-    },
-
     // -- Context queries (used by agent_turn) --
     /// Get the manifest for an agent process.
     GetManifest {
+        session_key: SessionKey,
         #[debug(skip)]
         #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<crate::error::Result<AgentManifest>>,
+        reply_tx:    oneshot::Sender<crate::error::Result<AgentManifest>>,
     },
 
     /// Get the tool registry, enriched with per-process tools (e.g.
@@ -255,15 +244,6 @@ pub enum Syscall {
     PublishEvent {
         event_type: String,
         payload:    serde_json::Value,
-    },
-
-    /// Record a tool call for audit trail (fire-and-forget, no reply channel).
-    RecordToolCall {
-        tool_name:   String,
-        args:        serde_json::Value,
-        result:      serde_json::Value,
-        success:     bool,
-        duration_ms: u64,
     },
 }
 
@@ -313,13 +293,13 @@ pub enum KernelEvent {
         reply_tx:  oneshot::Sender<crate::error::Result<SessionKey>>,
     },
 
-    /// Send a control signal to an agent process.
-    /// The target agent is in [`EventBase::agent_id`].
+    /// Send a control signal to a session.
+    /// The target session is in [`EventBase::session_key`].
     SendSignal { signal: Signal },
 
     // === Internal callbacks: from async task completion ===
     /// An LLM turn completed (success or failure).
-    /// Agent and session are in [`EventBase`].
+    /// Session key is in [`EventBase::session_key`].
     TurnCompleted {
         #[debug("{}", if result.is_ok() { "Ok(..)" } else { "Err(..)" })]
         #[serde(skip_serializing)]
@@ -329,7 +309,7 @@ pub enum KernelEvent {
     },
 
     /// A child session completed its work.
-    /// The parent agent is in [`EventBase::agent_id`].
+    /// The parent session is in [`EventBase::session_key`].
     ChildSessionDone {
         child_id: SessionKey,
         result:   AgentRunLoopResult,
@@ -375,7 +355,7 @@ impl KernelEvent {
     /// Stable event type label for observability.
     pub fn event_type(&self) -> String {
         match self {
-            Self::SessionCommand(syscall) => syscall.event_type(),
+            Self::SessionCommand(envelope) => envelope.payload.event_type(),
             _ => {
                 let kind: &'static str = self.into();
                 kind.to_string()
@@ -409,9 +389,8 @@ pub struct KernelEventEnvelope {
 impl KernelEventEnvelope {
     /// Create a `UserMessage` event.
     pub fn user_message(msg: InboundMessage) -> Self {
-        let session_id = Some(msg.session_key.clone());
         Self {
-            base: EventBase::new(None, session_id),
+            base: EventBase::from(msg.session_key.clone()),
             kind: KernelEvent::UserMessage(msg),
         }
     }
@@ -425,7 +404,7 @@ impl KernelEventEnvelope {
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
     ) -> Self {
         Self {
-            base: EventBase::new(None, None),
+            base: EventBase::from(SessionKey::new()),
             kind: KernelEvent::CreateSession {
                 manifest,
                 input,
@@ -450,21 +429,20 @@ impl KernelEventEnvelope {
     /// Create a `SendSignal` event.
     pub fn send_signal(target: SessionKey, signal: Signal) -> Self {
         Self {
-            base: EventBase::new(Some(target), None),
+            base: EventBase::from(target),
             kind: KernelEvent::SendSignal { signal },
         }
     }
 
     /// Create a `TurnCompleted` event.
     pub fn turn_completed(
-        agent_id: SessionKey,
-        session_id: SessionKey,
+        session_key: SessionKey,
         result: Result<AgentTurnResult, String>,
         in_reply_to: MessageId,
         user: UserId,
     ) -> Self {
         Self {
-            base: EventBase::new(Some(agent_id), Some(session_id)),
+            base: EventBase::from(session_key),
             kind: KernelEvent::TurnCompleted {
                 result,
                 in_reply_to,
@@ -480,7 +458,7 @@ impl KernelEventEnvelope {
         result: AgentRunLoopResult,
     ) -> Self {
         Self {
-            base: EventBase::new(Some(parent_id), None),
+            base: EventBase::from(parent_id),
             kind: KernelEvent::ChildSessionDone { child_id, result },
         }
     }
@@ -496,29 +474,33 @@ impl KernelEventEnvelope {
 
     /// Create a `Deliver` event.
     pub fn deliver(envelope: OutboundEnvelope) -> Self {
-        let session_id = Some(envelope.session_id.clone());
+        let session_key = envelope.session_id.clone();
         Self {
-            base: EventBase::new(None, session_id),
+            base: EventBase::from(session_key),
             kind: KernelEvent::Deliver(envelope),
         }
     }
 
     /// Create a `SessionCommand` event.
-    pub fn session_command(syscall: Syscall) -> Self {
-        let agent_id = Some(syscall.agent_id());
+    pub fn session_command(session_key: SessionKey, syscall: Syscall) -> Self {
         Self {
-            base: EventBase::new(agent_id, None),
-            kind: KernelEvent::SessionCommand(syscall),
+            base: EventBase::from(session_key),
+            kind: KernelEvent::SessionCommand(SyscallEnvelope {
+                session_key,
+                payload: syscall,
+            }),
         }
     }
 
     /// Backwards-compatible alias for `session_command`.
-    pub fn syscall(syscall: Syscall) -> Self { Self::session_command(syscall) }
+    pub fn syscall(session_key: SessionKey, syscall: Syscall) -> Self {
+        Self::session_command(session_key, syscall)
+    }
 
     /// Create an `IdleCheck` event.
     pub fn idle_check() -> Self {
         Self {
-            base: EventBase::new(None, None),
+            base: EventBase::from(SessionKey::new()),
             kind: KernelEvent::IdleCheck,
         }
     }
@@ -526,7 +508,7 @@ impl KernelEventEnvelope {
     /// Create a `Shutdown` event.
     pub fn shutdown() -> Self {
         Self {
-            base: EventBase::new(None, None),
+            base: EventBase::from(SessionKey::new()),
             kind: KernelEvent::Shutdown,
         }
     }
@@ -535,12 +517,6 @@ impl KernelEventEnvelope {
 // -- Accessor / observability methods --------------------------------------
 
 impl KernelEventEnvelope {
-    /// The primary agent scope for this event.
-    pub fn agent_id(&self) -> Option<SessionKey> { self.base.agent_id }
-
-    /// The session scope for this event.
-    pub fn session_id(&self) -> &SessionKey { self.base.session_key.as_ref() }
-
     /// The priority tier for this event.
     pub fn priority(&self) -> EventPriority { self.kind.priority() }
 
@@ -556,48 +532,59 @@ impl KernelEventEnvelope {
             KernelEvent::CreateSession { manifest, .. } => {
                 format!("create session for {}", manifest.name)
             }
-            KernelEvent::SendSignal { signal } => match self.base.agent_id {
-                Some(target) => format!("send {signal:?} to {target}"),
-                None => format!("send {signal:?}"),
-            },
+            KernelEvent::SendSignal { signal } => {
+                format!("send {signal:?} to {}", self.base.session_key)
+            }
             KernelEvent::TurnCompleted { result, .. } => {
                 let status = if result.is_ok() {
                     "completed"
                 } else {
                     "failed"
                 };
-                match self.base.agent_id {
-                    Some(agent_id) => format!("turn {status} for {agent_id}"),
-                    None => format!("turn {status}"),
-                }
+                format!("turn {status} for {}", self.base.session_key)
             }
-            KernelEvent::ChildSessionDone { child_id, .. } => match self.base.agent_id {
-                Some(parent_id) => {
-                    format!("child session {child_id} done for parent {parent_id}")
-                }
-                None => format!("child session {child_id} done"),
-            },
+            KernelEvent::ChildSessionDone { child_id, .. } => {
+                format!(
+                    "child session {child_id} done for parent {}",
+                    self.base.session_key
+                )
+            }
             KernelEvent::Deliver(envelope) => {
                 format!(
                     "deliver outbound message for session {}",
                     envelope.session_id
                 )
             }
-            KernelEvent::SessionCommand(syscall) => syscall.summary(),
+            KernelEvent::SessionCommand(envelope) => envelope.payload.summary(),
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }
     }
 
-    /// Common observability fields derived from the event
-    /// FIXME: use into trait.
+    /// Returns the session key used for shard routing, or `None` for global events.
+    ///
+    /// - **Global** (returns `None`): `UserMessage`, `CreateSession`, `Deliver`,
+    ///   `IdleCheck`, `Shutdown`
+    /// - **Sharded** (returns `Some`): `SendSignal`, `TurnCompleted`,
+    ///   `ChildSessionDone`, `SessionCommand`
+    pub fn shard_key(&self) -> Option<SessionKey> {
+        match &self.kind {
+            KernelEvent::SendSignal { .. }
+            | KernelEvent::TurnCompleted { .. }
+            | KernelEvent::ChildSessionDone { .. }
+            | KernelEvent::SessionCommand(_) => Some(self.base.session_key),
+            _ => None,
+        }
+    }
+
+    /// Common observability fields derived from the event.
     pub fn common_fields(&self) -> KernelEventCommonFields {
         KernelEventCommonFields {
             id:         self.base.id.clone(),
             timestamp:  self.base.timestamp,
             event_type: self.kind.event_type(),
             priority:   self.kind.priority().to_string(),
-            session_id: Some(self.session_id().to_string()),
+            session_id: Some(self.base.session_key.to_string()),
             summary:    self.summary(),
         }
     }

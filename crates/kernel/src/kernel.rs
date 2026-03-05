@@ -15,15 +15,15 @@
 //! Kernel — the unified OS-inspired orchestrator for agent lifecycle.
 //!
 //! The [`Kernel`] is the single entry point for all agent operations.
-//! It manages a [`ProcessTable`] of running agents, enforces concurrency
-//! limits via dual semaphores (global + per-agent), and provides
-//! [`spawn`](Kernel::spawn) as the primary API for creating agent processes.
+//! It manages a [`SessionTable`] of running sessions, enforces concurrency
+//! limits via dual semaphores (global + per-session), and provides
+//! [`spawn`](Kernel::spawn) as the primary API for creating sessions.
 //!
 //! # Architecture
 //!
 //! ```text
 //! Kernel (top-level, behind Arc after start())
-//!   ├── ProcessTable  (all running agents)
+//!   ├── SessionTable  (all running sessions)
 //!   ├── global_semaphore (max total concurrent agents)
 //!   ├── AgentRegistry   (named agent definitions)
 //!   ├── DriverRegistry  (multi-driver LLM)
@@ -44,29 +44,28 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, info_span, warn};
 
 use crate::{
-    Signal,
+    KernelError,
     channel::types::{ChannelType, ChatMessage},
-    delivery::DeliverySubsystem,
-    device::{DeviceRegistry, DeviceRegistryRef},
     event::{KernelEvent, KernelEventEnvelope},
-    event_loop::RuntimeTable,
+    event_loop::runtime::{SessionContext, RuntimeTable},
     io::{
-        egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
-        ingress::{IdentityResolverRef, IngressPipeline, IngressPipelineRef, SessionResolverRef},
-        pipe::PipeRegistry,
-        stream::StreamHubRef,
-        types::{InboundMessage, OutboundEnvelope},
+        EgressAdapterRef, EndpointRegistry, EndpointRegistryRef, IdentityResolverRef,
+        InboundMessage, IngressPipeline, IngressPipelineRef, MessageId, OutboundEnvelope,
+        PipeRegistry, SessionResolverRef, StreamHubRef, StreamId,
     },
     kv::SharedKv,
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
-    process::{AgentRunLoopResult, SessionState, SessionTable, agent_registry::AgentRegistryRef},
+    process::{
+        AgentEnv, AgentManifest, AgentRunLoopResult, SessionRuntime, SessionState, SessionTable,
+        Signal, agent_registry::AgentRegistryRef, principal::Principal,
+    },
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
-    session::{SessionIndexRef, SessionKey},
+    session::{self, SessionIndexRef, SessionKey},
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
@@ -132,8 +131,6 @@ pub struct Kernel {
     session_index:    SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
     settings:         SettingsRef,
-    /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
-    device_registry:  DeviceRegistryRef,
     /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
     /// tool_registry, event_bus).
     syscall:          SyscallDispatcher,
@@ -142,8 +139,6 @@ pub struct Kernel {
     stream_hub:       StreamHubRef,
     /// Ingress pipeline for adapters to push inbound messages.
     ingress_pipeline: IngressPipelineRef,
-    /// Egress delivery subsystem (adapters + endpoint registry).
-    delivery:         DeliverySubsystem,
     /// Unified event queue for all kernel interactions.
     event_queue:      EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
@@ -216,11 +211,9 @@ impl Kernel {
             tape_store,
             session_index,
             settings,
-            device_registry: Arc::new(DeviceRegistry::new()),
             syscall,
             stream_hub,
             ingress_pipeline,
-            delivery: DeliverySubsystem::new(endpoint_registry),
             event_queue,
             sharded_queue,
             started_at: Timestamp::now(),
@@ -270,7 +263,7 @@ impl Kernel {
     }
 
     /// Get the detailed turn traces for a specific agent process.
-    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<crate::agent_turn::TurnTrace> {
+    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<crate::agent_loop::TurnTrace> {
         self.process_table.get_turn_traces(session_key)
     }
 
@@ -279,8 +272,8 @@ impl Kernel {
     /// The handle is cheap to clone (all `Arc`s) and routes all mutations
     /// through the event queue, while exposing read-only accessors for
     /// kernel subsystems.
-    pub fn handle(&self) -> crate::handle::kernel_handle::KernelHandle {
-        crate::handle::kernel_handle::KernelHandle::new(
+    pub fn handle(&self) -> crate::handle::KernelHandle {
+        crate::handle::KernelHandle::new(
             self.event_queue.clone(),
             Arc::clone(&self.agent_registry),
             Arc::clone(&self.process_table),
@@ -322,7 +315,7 @@ impl Kernel {
     pub fn start(
         self,
         cancel_token: CancellationToken,
-    ) -> (Arc<Self>, crate::handle::kernel_handle::KernelHandle) {
+    ) -> (Arc<Self>, crate::handle::KernelHandle) {
         let kernel = Arc::new(self);
         let handle = kernel.handle();
 
@@ -409,7 +402,7 @@ impl Kernel {
     }
 
     /// Dispatch a single event to its handler.
-    async fn handle_event(&self, event: KernelEventEnvelope, runtimes: &RuntimeTable) {
+    pub(crate) async fn handle_event(&self, event: KernelEventEnvelope, runtimes: &RuntimeTable) {
         let event_type: &'static str = (&event).into();
         crate::metrics::EVENT_PROCESSED
             .with_label_values(&[event_type])
@@ -436,19 +429,15 @@ impl Kernel {
                 let _ = reply_tx.send(result);
             }
             KernelEvent::SendSignal { signal } => {
-                let target = base.agent_id.expect("SendSignal requires agent_id");
-                self.handle_signal(target, signal, runtimes).await;
+                self.handle_signal(base.session_key, signal, runtimes).await;
             }
             KernelEvent::TurnCompleted {
                 result,
                 in_reply_to,
                 user,
             } => {
-                let agent_id = base.agent_id.expect("TurnCompleted requires agent_id");
-                let session_id = base.session_key.expect("TurnCompleted requires session_id");
                 self.handle_turn_completed(
-                    agent_id,
-                    session_id,
+                    base.session_key,
                     result,
                     in_reply_to,
                     user,
@@ -457,28 +446,28 @@ impl Kernel {
                 .await;
             }
             KernelEvent::ChildSessionDone { child_id, result } => {
-                let parent_id = base.agent_id.expect("ChildSessionDone requires agent_id");
-                self.handle_child_completed(parent_id, child_id, result, runtimes)
+                self.handle_child_completed(base.session_key, child_id, result, runtimes)
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
                 self.delivery().deliver(envelope);
             }
             KernelEvent::SessionCommand(syscall) => {
-                self.syscall_dispatcher()
+                let kernel_handle = self.handle();
+                self.syscall
                     .dispatch(
                         syscall,
-                        self.process_table(),
+                        &self.process_table,
                         runtimes,
-                        self.security(),
-                        self.audit(),
-                        self.agent_registry(),
+                        &self.security,
+                        &self.agent_registry,
+                        &kernel_handle,
                     )
                     .await;
             }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
-                self.process_table()
+                self.process_table
                     .reap_terminal(std::time::Duration::from_secs(300));
             }
             KernelEvent::Shutdown => {
@@ -577,31 +566,25 @@ impl Kernel {
             CancellationToken::new()
         };
 
-        // Build ProcessHandle — uses the process's own session.
         let child_limit = manifest
             .max_children
             .unwrap_or(self.config().default_child_limit);
-
-        let handle = Arc::new(ProcessHandle::new(
-            session_key,
-            principal.clone(),
-            self.event_queue().clone(),
-        ));
 
         let max_context_tokens = manifest
             .max_context_tokens
             .unwrap_or(crate::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
 
-        // Create runtime entry. The global permit is stored here so it lives
-        // as long as the process — dropping the runtime entry automatically
-        // releases the semaphore slot.
-        let runtime = ProcessRuntime {
+        // Create session context. The global permit is stored here so it lives
+        // as long as the session — dropping the context automatically releases
+        // the semaphore slot.
+        let runtime = SessionContext {
             conversation: initial_messages,
             turn_cancel: CancellationToken::new(),
             process_cancel,
             paused: false,
             pause_buffer: Vec::new(),
-            handle,
+            session_key,
+            principal: principal.clone(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             max_context_tokens,
             last_result: None,
@@ -817,13 +800,13 @@ impl Kernel {
 
     /// Handle a user message with 3-path routing:
     ///
-    /// 1. **ID addressing** (`target_agent_id` set): deliver to specific
-    ///    process — error if terminal or not found (A2A Protocol pattern).
+    /// 1. **ID addressing** (`target_session_key` set): deliver to specific
+    ///    session — error if terminal or not found (A2A Protocol pattern).
     /// 2. **Session addressing** (session_index match): deliver to bound
-    ///    process — if terminal, clear binding and respawn transparently
+    ///    session — if terminal, clear binding and respawn transparently
     ///    (AutoGen lazy instantiation pattern).
     /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, always
-    ///    spawn a new process (Anthropic spawn-new pattern).
+    ///    spawn a new session (Anthropic spawn-new pattern).
     async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
         let span = info_span!(
             "handle_user_message",
@@ -1003,7 +986,7 @@ impl Kernel {
         if should_buffer == Some(true) {
             return;
         }
-        self.start_llm_turn(agent_id, msg, runtimes).await;
+        self.start_llm_turn(session_key, msg, runtimes).await;
     }
 
     /// Determine the default agent name for a user based on their role.
@@ -1061,7 +1044,7 @@ impl Kernel {
         /// cleanup.
         struct TurnGuard {
             event_queue:    EventQueueRef,
-            stream_hub:     Arc<crate::io::stream::StreamHub>,
+            stream_hub:     Arc<crate::io::StreamHub>,
             stream_id:      StreamId,
             typing_refresh: Option<tokio::task::JoinHandle<()>>,
             session_key:    SessionKey,
@@ -1084,7 +1067,6 @@ impl Kernel {
                     // Push a failed TurnCompleted so the process exits Running state.
                     let event = KernelEventEnvelope::turn_completed(
                         self.session_key,
-                        self.session_key.clone(),
                         Err("turn task terminated unexpectedly".to_string()),
                         self.msg_id.clone(),
                         self.user.clone(),
@@ -1146,7 +1128,7 @@ impl Kernel {
                     msg_id.clone(),
                     user.clone(),
                     egress_session_key.clone(),
-                    crate::io::types::stages::THINKING,
+                    crate::io::stages::THINKING,
                     None,
                 )));
 
@@ -1167,12 +1149,13 @@ impl Kernel {
             (
                 conversation,
                 rt.max_context_tokens,
-                rt.handle.clone(),
+                rt.session_key,
+                rt.principal.clone(),
                 rt.turn_cancel.clone(),
             )
         });
 
-        let Some((conversation, max_context_tokens, handle, turn_cancel)) = turn_data else {
+        let Some((conversation, max_context_tokens, rt_session_key, rt_principal, turn_cancel)) = turn_data else {
             warn!(session_key = %session_key, "runtime disappeared during LLM turn setup");
             return;
         };
@@ -1216,6 +1199,7 @@ impl Kernel {
         let stream_handle = self.stream_hub().open(session_key.clone());
 
         // Clone what we need for the spawned task.
+        let kernel_handle = self.handle();
         let event_queue = self.event_queue().clone();
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
@@ -1257,7 +1241,7 @@ impl Kernel {
                                 mid.clone(),
                                 usr.clone(),
                                 sid.clone(),
-                                crate::io::types::stages::THINKING,
+                                crate::io::stages::THINKING,
                                 None,
                             )));
                     }
@@ -1277,8 +1261,9 @@ impl Kernel {
                 completed: false,
             };
 
-            let turn_result = crate::agent_turn::run_inline_agent_loop(
-                &handle,
+            let turn_result = crate::agent_loop::run_inline_agent_loop(
+                &kernel_handle,
+                rt_session_key,
                 user_text,
                 history,
                 &stream_handle,
@@ -1302,7 +1287,7 @@ impl Kernel {
 
             // Emit turn metrics before closing stream.
             if let Ok(ref result) = turn_result {
-                stream_handle.emit(crate::io::stream::StreamEvent::TurnMetrics {
+                stream_handle.emit(crate::io::StreamEvent::TurnMetrics {
                     duration_ms: elapsed_ms,
                     iterations:  result.iterations,
                     tool_calls:  result.tool_calls,
@@ -1318,7 +1303,7 @@ impl Kernel {
             // KernelEvent requires Clone but KernelError does not implement it.
             let result = turn_result.map_err(|e| e.to_string());
             let event =
-                KernelEventEnvelope::turn_completed(session_key, session_key, result, msg_id, user);
+                KernelEventEnvelope::turn_completed(session_key, result, msg_id, user);
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, session_key = %session_key, "failed to push TurnCompleted");
             }
@@ -1338,7 +1323,7 @@ impl Kernel {
     async fn handle_turn_completed(
         &self,
         session_key: SessionKey,
-        result: std::result::Result<crate::agent_turn::AgentTurnResult, String>,
+        result: std::result::Result<crate::agent_loop::AgentTurnResult, String>,
         in_reply_to: MessageId,
         user: crate::process::principal::UserId,
         runtimes: &RuntimeTable,
@@ -1346,7 +1331,7 @@ impl Kernel {
         let span = tracing::Span::current();
 
         if self
-            .process_table()
+            .process_table
             .get(session_key)
             .map(|process| process.state.is_terminal())
             .unwrap_or(false)
@@ -1365,13 +1350,13 @@ impl Kernel {
         // have egress delivery — their results flow back to the parent via
         // ChildSessionDone.
         let egress_session_key = self
-            .process_table()
+            .process_table
             .get(session_key)
             .and_then(|p| p.channel_session_key.clone())
             .unwrap_or_else(|| session_key.clone());
 
         // Update metrics.
-        if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+        if let Some(metrics) = self.process_table.get_metrics(&session_key) {
             metrics.touch().await;
         }
 
@@ -1380,7 +1365,8 @@ impl Kernel {
         let mut turn_failed = false;
 
         let agent_name = self
-            .process_table()
+            .process_table
+            .as_ref()
             .get(session_key)
             .map(|p| p.manifest.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
@@ -1408,11 +1394,11 @@ impl Kernel {
                 );
 
                 // Store turn trace for observability.
-                self.process_table()
+                self.process_table
                     .push_turn_trace(session_key, turn.trace.clone());
 
                 // Record metrics.
-                if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+                if let Some(metrics) = self.process_table.get_metrics(&session_key) {
                     metrics.record_llm_call();
                     metrics.record_tool_calls(turn.tool_calls as u64);
                     let estimated_tokens = (turn.text.len() as u64).saturating_div(4).max(1);

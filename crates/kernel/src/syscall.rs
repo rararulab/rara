@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Syscall dispatcher — handles all `ProcessHandle` interactions dispatched
+//! Syscall dispatcher — handles all session-scoped kernel operations dispatched
 //! by the kernel event loop.
 //!
 //! Extracted from `event_loop/syscall.rs` to encapsulate the kernel
@@ -21,28 +21,33 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use jiff::Timestamp;
+use serde::Deserialize;
 use snafu::ResultExt;
-use tracing::debug_span;
+use tracing::{debug_span, info, warn};
 
 use crate::{
-    SessionInfo,
-    audit::{AuditEvent, AuditEventType, AuditRef, MemoryOp},
-    error::{KernelError, Result},
+    error::KernelError,
     event::{Syscall, SyscallEnvelope},
     event_loop::runtime::RuntimeTable,
-    io::pipe::{self, PipeEntry, PipeRegistry},
+    handle::KernelHandle,
+    io::{AgentHandle, PipeEntry, PipeRegistry, pipe},
     kernel::KernelConfig,
     kv::{KvScope, SharedKv},
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
-    process::{ProcessTable, agent_registry::AgentRegistryRef, principal::Principal},
+    process::{
+        AgentManifest, SessionInfo, SessionTable,
+        agent_registry::AgentRegistryRef,
+        principal::Principal,
+    },
     security::SecurityRef,
     session::SessionKey,
     tool::ToolRegistryRef,
 };
 
-/// Dispatches syscalls from `ProcessHandle` to the appropriate kernel
+/// Dispatches syscalls from session-scoped operations to the appropriate kernel
 /// sub-component.
 ///
 /// Owns the kernel fields used exclusively by syscall handling: shared KV,
@@ -86,7 +91,7 @@ impl SyscallDispatcher {
 
     // -- Dispatch -----------------------------------------------------------
 
-    /// Handle a syscall from a ProcessHandle.
+    /// Handle a syscall from a session.
     ///
     /// All business logic lives here, executed by the kernel event loop.
     /// TODO: implement dispatch by using `syscallEnvelope` to route to more
@@ -95,23 +100,22 @@ impl SyscallDispatcher {
     pub async fn dispatch(
         &self,
         syscall: SyscallEnvelope,
-        process_table: &ProcessTable,
+        process_table: &SessionTable,
         runtimes: &RuntimeTable,
         security: &SecurityRef,
-        audit: &AuditRef,
         agent_registry: &AgentRegistryRef,
+        kernel_handle: &KernelHandle,
     ) {
-        let syscall_sender = syscall.session_key();
+        let syscall_sender = syscall.session_key;
         let syscall = syscall.payload;
         let syscall_type: &'static str = (&syscall).into();
         crate::metrics::SYSCALL_TOTAL
             .with_label_values(&[syscall_type])
             .inc();
-        let syscall_session_key = syscall.session_key();
         let span = debug_span!(
             "handle_syscall",
             syscall_type,
-            session_key = %syscall_session_key,
+            session_key = %syscall_sender,
         );
         let _guard = span.enter();
 
@@ -125,15 +129,12 @@ impl SyscallDispatcher {
                     });
                 let _ = reply_tx.send(result);
             }
-
             Syscall::QueryChildren { reply_tx } => {
                 let children = process_table.children_of(syscall_sender);
                 let _ = reply_tx.send(children);
             }
-
             Syscall::MemStore {
                 session_key,
-                session_key: session_id, // WHAT ?
                 principal,
                 key,
                 value,
@@ -146,18 +147,15 @@ impl SyscallDispatcher {
                         &principal,
                         &key,
                         value,
-                        audit,
                     )
                     .await;
                 let _ = reply_tx.send(result);
             }
-
             Syscall::MemRecall { key, reply_tx } => {
                 let namespaced = format!("session:{}:{}", syscall_sender, key);
                 let result = Ok(self.shared_kv.get(&namespaced).await);
                 let _ = reply_tx.send(result);
             }
-
             Syscall::SharedStore {
                 principal,
                 scope,
@@ -170,7 +168,6 @@ impl SyscallDispatcher {
                     .await;
                 let _ = reply_tx.send(result);
             }
-
             Syscall::SharedRecall {
                 principal,
                 scope,
@@ -182,9 +179,8 @@ impl SyscallDispatcher {
                     .await;
                 let _ = reply_tx.send(result);
             }
-
             Syscall::CreatePipe { target, reply_tx } => {
-                let (writer, reader) = pipe::pipe(64);
+                let (writer, reader) = pipe(64);
                 self.pipe_registry.register(
                     writer.pipe_id().clone(),
                     PipeEntry {
@@ -195,7 +191,6 @@ impl SyscallDispatcher {
                 );
                 let _ = reply_tx.send(Ok((writer, reader)));
             }
-
             Syscall::CreateNamedPipe { name, reply_tx } => {
                 if self.pipe_registry.resolve_name(&name).is_some() {
                     let _ = reply_tx.send(Err(KernelError::Other {
@@ -203,7 +198,7 @@ impl SyscallDispatcher {
                     }));
                     return;
                 }
-                let (writer, reader) = pipe::pipe(64);
+                let (writer, reader) = pipe(64);
                 let pipe_id = writer.pipe_id().clone();
                 self.pipe_registry.register_named(
                     name,
@@ -216,7 +211,6 @@ impl SyscallDispatcher {
                 );
                 let _ = reply_tx.send(Ok((writer, reader)));
             }
-
             Syscall::ConnectPipe { name, reply_tx } => {
                 let result = match self.pipe_registry.resolve_name(&name) {
                     Some(pipe_id) => match self.pipe_registry.take_parked_reader(&pipe_id) {
@@ -238,7 +232,6 @@ impl SyscallDispatcher {
                 };
                 let _ = reply_tx.send(result);
             }
-
             Syscall::RequiresApproval {
                 tool_name,
                 reply_tx,
@@ -246,7 +239,6 @@ impl SyscallDispatcher {
                 let result = security.requires_approval(&tool_name);
                 let _ = reply_tx.send(result);
             }
-
             Syscall::RequestApproval {
                 principal: _,
                 tool_name,
@@ -274,35 +266,6 @@ impl SyscallDispatcher {
                     let _ = reply_tx.send(Ok(approved));
                 });
             }
-
-            Syscall::CheckGuardBatch {
-                session_id,
-                checks,
-                reply_tx,
-            } => {
-                let (user_id, session_uuid) = process_table
-                    .get(syscall_session_key)
-                    .map(|proc| {
-                        (
-                            proc.principal.user_id.0.clone(),
-                            proc.session_id.to_string(),
-                        )
-                    })
-                    .unwrap_or_else(|| (String::new(), session_id.to_string()));
-
-                let ctx = crate::guard::GuardContext {
-                    session_key: syscall_session_key,
-                    user_id:     uuid::Uuid::parse_str(&user_id).unwrap_or(uuid::Uuid::nil()),
-                    session_id:  uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
-                };
-
-                let security = Arc::clone(security);
-                tokio::spawn(async move {
-                    let verdicts = security.check_guard_batch(&ctx, &checks).await;
-                    let _ = reply_tx.send(verdicts);
-                });
-            }
-
             Syscall::GetManifest {
                 session_key,
                 reply_tx,
@@ -315,77 +278,41 @@ impl SyscallDispatcher {
                     });
                 let _ = reply_tx.send(result);
             }
-
-            Syscall::GetToolRegistry {
-                session_key,
-                reply_tx,
-            } => {
+            Syscall::GetToolRegistry { reply_tx } => {
                 let mut registry = self.tool_registry.as_ref().clone();
-                if let Some(syscall_tool) = runtimes.with(&session_key, |rt| {
-                    crate::handle::syscall_tool::SyscallTool::new(
-                        Arc::clone(&rt.handle),
-                        Arc::clone(agent_registry),
-                    )
-                }) {
+                if runtimes.contains(&syscall_sender) {
+                    let syscall_tool = SyscallTool::new(
+                        kernel_handle.clone(),
+                        syscall_sender,
+                    );
                     registry.register_builtin(Arc::new(syscall_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));
             }
-
-            Syscall::ResolveDriver {
-                session_key,
-                reply_tx,
-            } => {
-                let result = match process_table.get(session_key) {
+            Syscall::ResolveDriver { reply_tx } => {
+                let result = match process_table.get(syscall_sender) {
                     Some(process) => self.driver_registry.resolve(
                         &process.manifest.name,
                         process.manifest.provider_hint.as_deref(),
                         process.manifest.model.as_deref(),
                     ),
                     None => Err(KernelError::ProcessNotFound {
-                        id: session_key.to_string(),
+                        id: syscall_sender.to_string(),
                     }),
                 };
                 let _ = reply_tx.send(result);
             }
-
             Syscall::PublishEvent {
-                session_key,
                 event_type,
                 payload: _,
             } => {
                 self.event_bus
                     .publish(crate::notification::KernelNotification::ToolExecuted {
-                        session_key: session_key.0,
+                        session_key: syscall_sender,
                         tool_name:   format!("event:{event_type}"),
                         success:     true,
                         timestamp:   Timestamp::now(),
                     })
-                    .await;
-            }
-
-            Syscall::RecordToolCall {
-                session_key,
-                tool_name,
-                args,
-                result,
-                success,
-                duration_ms,
-            } => {
-                let agent_name = process_table
-                    .get(session_key)
-                    .map(|p| p.manifest.name)
-                    .unwrap_or_else(|| "unknown".to_string());
-                crate::metrics::record_turn_tool_call(&agent_name, &tool_name);
-                audit
-                    .record_tool_call(
-                        session_key,
-                        &tool_name,
-                        &args,
-                        &result,
-                        success,
-                        duration_ms,
-                    )
                     .await;
             }
         }
@@ -403,8 +330,7 @@ impl SyscallDispatcher {
         principal: &Principal,
         key: &str,
         value: serde_json::Value,
-        audit: &AuditRef,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         let namespaced = format!("agent:{}:{}", session_key.0, key);
 
         // Check quota before inserting — only if this is a new key.
@@ -415,7 +341,7 @@ impl SyscallDispatcher {
                 let count = self.shared_kv.count_prefix(&prefix).await;
                 if count >= max {
                     return Err(KernelError::MemoryQuotaExceeded {
-                        session_key: session_key.to_string(),
+                        session_key,
                         current: count,
                         max,
                     });
@@ -428,19 +354,6 @@ impl SyscallDispatcher {
             .await
             .whatever_context::<_, KernelError>("KV store error")?;
 
-        // Audit: MemoryAccess (Store)
-        audit.record(AuditEvent {
-            timestamp: Timestamp::now(),
-            session_key,
-            session_key: session_id.clone(),
-            user_id: principal.user_id.clone(),
-            event_type: AuditEventType::MemoryAccess {
-                operation: MemoryOp::Store,
-                key:       key.to_string(),
-            },
-            details: serde_json::Value::Null,
-        });
-
         Ok(())
     }
 
@@ -449,7 +362,7 @@ impl SyscallDispatcher {
         session_key: SessionKey,
         principal: &Principal,
         scope: &KvScope,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         match scope {
             KvScope::Global | KvScope::Team(_) => {
                 if !principal.is_admin() {
@@ -493,7 +406,7 @@ impl SyscallDispatcher {
         scope: &KvScope,
         key: &str,
         value: serde_json::Value,
-    ) -> Result<()> {
+    ) -> crate::error::Result<()> {
         Self::check_scope_permission(session_key, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
         self.shared_kv
@@ -510,9 +423,482 @@ impl SyscallDispatcher {
         principal: &Principal,
         scope: &KvScope,
         key: &str,
-    ) -> Result<Option<serde_json::Value>> {
+    ) -> crate::error::Result<Option<serde_json::Value>> {
         Self::check_scope_permission(session_key, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
         Ok(self.shared_kv.get(&scoped).await)
+    }
+}
+
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/// Unified LLM-callable tool wrapping all session-scoped kernel syscall
+/// operations.
+pub struct SyscallTool {
+    handle:      KernelHandle,
+    session_key: SessionKey,
+}
+
+impl SyscallTool {
+    pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
+        Self {
+            handle,
+            session_key,
+        }
+    }
+
+    fn available_agents(&self) -> Vec<String> {
+        self.handle
+            .agent_registry()
+            .list()
+            .iter()
+            .map(|m| m.name.clone())
+            .collect()
+    }
+
+    fn resolve_manifest(&self, name: &str) -> Result<AgentManifest, anyhow::Error> {
+        self.handle.agent_registry().get(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown agent: '{}'. Available agents: {:?}",
+                name,
+                self.available_agents()
+            )
+        })
+    }
+
+    // ========================================================================
+    // Spawn
+    // ========================================================================
+
+    /// Look up the principal for the current session from the process table.
+    fn principal(&self) -> Result<Principal, anyhow::Error> {
+        self.handle
+            .process_table()
+            .get(self.session_key)
+            .map(|p| p.principal.clone())
+            .ok_or_else(|| anyhow::anyhow!("session not found: {}", self.session_key))
+    }
+
+    async fn exec_spawn(
+        &self,
+        agent_name: &str,
+        task: &str,
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        let manifest = self.resolve_manifest(agent_name)?;
+        let principal = self.principal()?;
+
+        info!(
+            agent = agent_name,
+            task = task,
+            "kernel: spawning single agent"
+        );
+
+        let agent_handle = self
+            .handle
+            .spawn_child(&self.session_key, &principal, manifest, task.to_string())
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
+
+        let child_key = agent_handle.session_key;
+
+        let result = agent_handle.result_rx.await.map_err(|_| {
+            anyhow::anyhow!(
+                "agent {} was dropped without producing a result",
+                child_key
+            )
+        })?;
+
+        Ok(serde_json::json!({
+            "agent_id": child_key.to_string(),
+            "output": result.output,
+            "iterations": result.iterations,
+            "tool_calls": result.tool_calls,
+        }))
+    }
+
+    async fn exec_spawn_parallel(
+        &self,
+        tasks: Vec<SpawnRequest>,
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        info!(count = tasks.len(), "kernel: spawning agents in parallel");
+        let principal = self.principal()?;
+
+        let mut handles: Vec<(String, AgentHandle)> = Vec::new();
+        for task_req in &tasks {
+            let manifest = self.resolve_manifest(&task_req.agent)?;
+            match self.handle.spawn_child(&self.session_key, &principal, manifest, task_req.task.clone()).await {
+                Ok(h) => handles.push((task_req.agent.clone(), h)),
+                Err(e) => {
+                    warn!(
+                        agent = %task_req.agent,
+                        error = %e,
+                        "failed to spawn parallel agent"
+                    );
+                }
+            }
+        }
+
+        let mut results = Vec::new();
+        for (agent_name, handle) in handles {
+            let agent_id = handle.session_key;
+            match handle.result_rx.await {
+                Ok(result) => {
+                    results.push(serde_json::json!({
+                        "agent": agent_name,
+                        "agent_id": agent_id.to_string(),
+                        "output": result.output,
+                        "iterations": result.iterations,
+                        "tool_calls": result.tool_calls,
+                    }));
+                }
+                Err(_) => {
+                    results.push(serde_json::json!({
+                        "agent": agent_name,
+                        "agent_id": agent_id.to_string(),
+                        "error": "agent was dropped without producing a result",
+                    }));
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "results": results,
+            "total": results.len(),
+        }))
+    }
+
+    // ========================================================================
+    // Process queries & signals
+    // ========================================================================
+
+    async fn exec_status(&self, target: &str) -> anyhow::Result<serde_json::Value> {
+        let target_key = parse_session_key(target)?;
+        let info = self
+            .handle
+            .session_status(target_key)
+            .await
+            .map_err(|e| anyhow::anyhow!("status failed: {e}"))?;
+        Ok(serde_json::json!({
+            "agent_id": info.session_key.to_string(),
+            "name": info.name,
+            "state": info.state.to_string(),
+            "parent_id": info.parent_id.map(|id| id.to_string()),
+        }))
+    }
+
+    async fn exec_children(&self) -> anyhow::Result<serde_json::Value> {
+        let children = self.handle.session_children(self.session_key).await;
+        let list: Vec<serde_json::Value> = children
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "agent_id": c.session_key.to_string(),
+                    "name": c.name,
+                    "state": c.state.to_string(),
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "children": list, "count": list.len() }))
+    }
+
+    async fn exec_signal(&self, target: &str, signal: &str) -> anyhow::Result<serde_json::Value> {
+        let target_key = parse_session_key(target)?;
+        let sig = match signal {
+            "kill" => crate::process::Signal::Kill,
+            "pause" => crate::process::Signal::Pause,
+            "resume" => crate::process::Signal::Resume,
+            _ => unreachable!(),
+        };
+        self.handle
+            .send_signal(target_key, sig)
+            .map_err(|e| anyhow::anyhow!("{signal} failed: {e}"))?;
+        Ok(serde_json::json!({ "ok": true, "signal": signal, "target": target }))
+    }
+
+    // ========================================================================
+    // Memory
+    // ========================================================================
+
+    async fn exec_mem_store(
+        &self,
+        key: &str,
+        value: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let principal = self.principal()?;
+        self.handle
+            .mem_store(&self.session_key, &principal, key, value)
+            .await
+            .map_err(|e| anyhow::anyhow!("mem_store failed: {e}"))?;
+        Ok(serde_json::json!({ "ok": true }))
+    }
+
+    async fn exec_mem_recall(&self, key: &str) -> anyhow::Result<serde_json::Value> {
+        let value = self
+            .handle
+            .mem_recall(self.session_key, key)
+            .await
+            .map_err(|e| anyhow::anyhow!("mem_recall failed: {e}"))?;
+        Ok(serde_json::json!({ "key": key, "value": value }))
+    }
+
+    async fn exec_shared_store(
+        &self,
+        scope: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let principal = self.principal()?;
+        let scope = parse_scope(scope)?;
+        self.handle
+            .shared_store(self.session_key, &principal, scope, key, value)
+            .await
+            .map_err(|e| anyhow::anyhow!("shared_store failed: {e}"))?;
+        Ok(serde_json::json!({ "ok": true }))
+    }
+
+    async fn exec_shared_recall(
+        &self,
+        scope: &str,
+        key: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let principal = self.principal()?;
+        let scope = parse_scope(scope)?;
+        let value = self
+            .handle
+            .shared_recall(self.session_key, &principal, scope, key)
+            .await
+            .map_err(|e| anyhow::anyhow!("shared_recall failed: {e}"))?;
+        Ok(serde_json::json!({ "key": key, "value": value }))
+    }
+
+    // ========================================================================
+    // Events
+    // ========================================================================
+
+    async fn exec_publish(
+        &self,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.handle
+            .publish_event(self.session_key, event_type, payload)
+            .await
+            .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
+        Ok(serde_json::json!({ "ok": true }))
+    }
+}
+
+// ============================================================================
+// Parameter types
+// ============================================================================
+
+/// Top-level parameters: `action` selects the kernel operation.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum SyscallParams {
+    // -- Process --
+    Spawn {
+        agent: String,
+        task:  String,
+    },
+    SpawnParallel {
+        parallel:        Vec<SpawnRequest>,
+        #[serde(default)]
+        max_concurrency: Option<usize>,
+    },
+    Status {
+        target: String,
+    },
+    Children,
+    Kill {
+        target: String,
+    },
+    Pause {
+        target: String,
+    },
+    Resume {
+        target: String,
+    },
+    // -- Memory --
+    MemStore {
+        key:   String,
+        value: serde_json::Value,
+    },
+    MemRecall {
+        key: String,
+    },
+    SharedStore {
+        scope: String,
+        key:   String,
+        value: serde_json::Value,
+    },
+    SharedRecall {
+        scope: String,
+        key:   String,
+    },
+    // -- Events --
+    Publish {
+        event_type: String,
+        payload:    serde_json::Value,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct SpawnRequest {
+    agent: String,
+    task:  String,
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+fn parse_session_key(s: &str) -> anyhow::Result<SessionKey> {
+    let uuid =
+        uuid::Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid session key '{s}': {e}"))?;
+    Ok(SessionKey(uuid))
+}
+
+fn parse_scope(scope: &str) -> anyhow::Result<KvScope> {
+    match scope {
+        "global" => Ok(KvScope::Global),
+        s if s.starts_with("team:") => {
+            Ok(KvScope::Team(s.strip_prefix("team:").unwrap().to_string()))
+        }
+        s if s.starts_with("agent:") => {
+            let uuid_str = s.strip_prefix("agent:").unwrap();
+            let uuid = uuid::Uuid::parse_str(uuid_str)
+                .map_err(|e| anyhow::anyhow!("invalid agent UUID in scope: {e}"))?;
+            Ok(KvScope::Agent(uuid))
+        }
+        _ => Err(anyhow::anyhow!(
+            "invalid scope '{scope}'. Expected 'global', 'team:<name>', or 'agent:<uuid>'"
+        )),
+    }
+}
+
+// ============================================================================
+// AgentTool impl
+// ============================================================================
+
+#[async_trait]
+impl crate::tool::AgentTool for SyscallTool {
+    fn name(&self) -> &str { "kernel" }
+
+    fn description(&self) -> &str {
+        "Interact with the kernel: spawn agents, query process status, send signals, manage memory \
+         (private & shared), and publish events. Set the 'action' field to select the operation."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        // FIXME: we should not expose all internal agent for syscall !.
+        let agents = self.available_agents();
+        serde_json::json!({
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "spawn", "spawn_parallel",
+                        "status", "children", "kill", "pause", "resume",
+                        "mem_store", "mem_recall",
+                        "shared_store", "shared_recall",
+                        "publish"
+                    ],
+                    "description": "The kernel operation to perform"
+                },
+                "agent": {
+                    "type": "string",
+                    "description": format!("Agent name for spawn. Available: {:?}", agents),
+                    "enum": agents,
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Task description for spawn"
+                },
+                "parallel": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "agent": { "type": "string" },
+                            "task":  { "type": "string" }
+                        },
+                        "required": ["agent", "task"]
+                    },
+                    "description": "Array of {agent, task} for spawn_parallel"
+                },
+                "max_concurrency": {
+                    "type": "integer",
+                    "description": "Max concurrent agents for spawn_parallel"
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Target agent ID (UUID) for status/kill/pause/resume"
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Memory key for mem_store/mem_recall/shared_store/shared_recall"
+                },
+                "value": {
+                    "description": "Value to store (any JSON) for mem_store/shared_store"
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Scope for shared memory: 'global', 'team:<name>', or 'agent:<uuid>'"
+                },
+                "event_type": {
+                    "type": "string",
+                    "description": "Event type string for publish"
+                },
+                "payload": {
+                    "description": "Event payload (any JSON) for publish"
+                }
+            }
+        })
+    }
+
+    // FIXME: don't write this like match.
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let action: SyscallParams = serde_json::from_value(params)
+            .map_err(|e| anyhow::anyhow!("invalid kernel tool params: {e}"))?;
+
+        match action {
+            SyscallParams::Spawn { agent, task } => self.exec_spawn(&agent, &task).await,
+            SyscallParams::SpawnParallel {
+                parallel,
+                max_concurrency: _,
+            } => self.exec_spawn_parallel(parallel).await,
+            SyscallParams::Status { target } => self.exec_status(&target).await,
+            SyscallParams::Children => self.exec_children().await,
+            SyscallParams::Kill { target } => self.exec_signal(&target, "kill").await,
+            SyscallParams::Pause { target } => self.exec_signal(&target, "pause").await,
+            SyscallParams::Resume { target } => self.exec_signal(&target, "resume").await,
+            SyscallParams::MemStore { key, value } => self.exec_mem_store(&key, value).await,
+            SyscallParams::MemRecall { key } => self.exec_mem_recall(&key).await,
+            SyscallParams::SharedStore { scope, key, value } => {
+                self.exec_shared_store(&scope, &key, value).await
+            }
+            SyscallParams::SharedRecall { scope, key } => {
+                self.exec_shared_recall(&scope, &key).await
+            }
+            SyscallParams::Publish {
+                event_type,
+                payload,
+            } => self.exec_publish(&event_type, payload).await,
+        }
     }
 }

@@ -28,7 +28,7 @@ use std::{
 
 use tokio::sync;
 
-use crate::{event::KernelEventEnvelope, io::types::BusError};
+use crate::{event::KernelEventEnvelope, io::IOError};
 
 /// A single priority shard — 3-tier queue with async notification.
 ///
@@ -62,10 +62,10 @@ impl ShardQueue {
     }
 
     /// Push an event into the queue. Returns `BusError::Full` if at capacity.
-    pub fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError> {
+    pub fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
         let current = self.pending.load(Ordering::Acquire);
         if current >= self.capacity {
-            return Err(BusError::Full);
+            return Err(IOError::Full);
         }
 
         let tier = event.priority() as usize;
@@ -79,7 +79,7 @@ impl ShardQueue {
     }
 
     /// Non-blocking push (same as `push` since we never await).
-    pub fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError> { self.push(event) }
+    pub fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.push(event) }
 
     /// Drain up to `max` events from the queue, in priority order.
     pub fn drain(&self, max: usize) -> Vec<KernelEventEnvelope> {
@@ -148,7 +148,7 @@ mod tests {
                 platform_chat_id:    None,
             },
             user:               UserId("u1".to_string()),
-            session_key:         SessionId::new(),
+            session_key:        SessionId::new(),
             target_session_key: None,
             target_session:     None,
             content:            MessageContent::Text(text.to_string()),

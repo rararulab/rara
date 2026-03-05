@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // SessionError
@@ -194,52 +195,6 @@ pub trait SessionIndex: Send + Sync + 'static {
     async fn get_binding_by_chat(
         &self,
         _channel_type: &str,
-        _chat_id: &str,
-    ) -> Result<Option<ChannelBinding>, SessionError> {
-        Ok(None)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// NoopSessionIndex
-// ---------------------------------------------------------------------------
-
-/// A no-op session index for testing — all operations succeed without
-/// persisting.
-pub struct NoopSessionIndex;
-
-#[async_trait]
-impl SessionIndex for NoopSessionIndex {
-    async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-        Ok(entry.clone())
-    }
-
-    async fn get_session(&self, _key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
-        Ok(None)
-    }
-
-    async fn list_sessions(
-        &self,
-        _limit: i64,
-        _offset: i64,
-    ) -> Result<Vec<SessionEntry>, SessionError> {
-        Ok(vec![])
-    }
-
-    async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-        Ok(entry.clone())
-    }
-
-    async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
-
-    async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
-        Ok(binding.clone())
-    }
-
-    async fn get_channel_binding(
-        &self,
-        _channel_type: &str,
-        _account: &str,
         _chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(None)

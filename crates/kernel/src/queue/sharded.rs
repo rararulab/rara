@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Sharded event queue — routes events to N agent-sharded queues + 1 global
+//! Sharded event queue — routes events to N session-sharded queues + 1 global
 //! queue for parallel processing by
 //! [`EventProcessor`](crate::processor::EventProcessor)s.
 //!
 //! Event classification:
 //! - **Global**: `UserMessage`, `SpawnAgent`, `Shutdown`, `Deliver`
-//! - **Sharded by agent_id**: `Syscall`, `TurnCompleted`, `ChildCompleted`,
+//! - **Sharded by session_key**: `Syscall`, `TurnCompleted`, `ChildCompleted`,
 //!   `SendSignal`
 //!
-//! Shard index is computed as `agent_id.0.as_u128() as usize % num_shards`.
+//! Shard index is computed as `session_key.0.as_u128() as usize % num_shards`.
 
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use smart_default::SmartDefault;
 
 use super::{in_memory::EventQueue, shard::ShardQueue};
-use crate::{event::KernelEventEnvelope, io::types::BusError};
+use crate::{event::KernelEventEnvelope, io::IOError};
 
 /// Shared reference to the [`ShardedEventQueue`].
 pub type ShardedQueueRef = Arc<ShardedEventQueue>;
@@ -81,9 +81,9 @@ fn num_cpus() -> usize {
 /// [`EventProcessor`](crate::processor::EventProcessor) tasks can
 /// hold references to them independently.
 pub struct ShardedEventQueue {
-    /// Per-agent shards. Events are routed by `agent_id % num_shards`.
+    /// Per-session shards. Events are routed by `session_key % num_shards`.
     shards: Vec<Arc<ShardQueue>>,
-    /// Global queue for non-agent-scoped events.
+    /// Global queue for non-session-scoped events.
     global: Arc<ShardQueue>,
 }
 
@@ -102,14 +102,14 @@ impl ShardedEventQueue {
     /// Classify a kernel event into its routing target.
     ///
     /// When `num_shards == 0` (single-queue mode), all events are routed to
-    /// the global queue regardless of `agent_id`.
+    /// the global queue regardless of `session_key`.
     pub(crate) fn classify(&self, event: &KernelEventEnvelope) -> ShardTarget {
         if self.shards.is_empty() {
             return ShardTarget::Global;
         }
-        match event.agent_id() {
-            Some(agent_id) => {
-                let shard_idx = agent_id.0.as_u128() as usize % self.shards.len();
+        match event.shard_key() {
+            Some(session_key) => {
+                let shard_idx = session_key.0.as_u128() as usize % self.shards.len();
                 ShardTarget::Shard(shard_idx)
             }
             None => ShardTarget::Global,
@@ -137,9 +137,9 @@ impl ShardedEventQueue {
 
 #[async_trait]
 impl EventQueue for ShardedEventQueue {
-    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError> { self.try_push(event) }
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.try_push(event) }
 
-    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError> {
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
         match self.classify(&event) {
             ShardTarget::Global => self.global.push(event),
             ShardTarget::Shard(idx) => self.shards[idx].push(event),

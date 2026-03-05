@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 
 use super::types::{AgentPhase, ChannelType};
-use crate::{error::KernelError, handle::kernel_handle::KernelHandle};
+use crate::{error::KernelError, handle::KernelHandle};
 
 /// A pluggable adapter for a single communication channel.
 ///

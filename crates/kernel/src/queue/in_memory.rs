@@ -30,12 +30,12 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use super::shard::ShardQueue;
-use crate::io::types::BusError;
+use crate::io::IOError;
 
 /// Shared reference to an [`EventQueue`] implementation.
 pub type EventQueueRef = Arc<dyn EventQueue>;
 // Re-export the kernel event from the sibling module.
-pub use crate::event::{KernelEvent, EventPriority, KernelEventEnvelope};
+pub use crate::event::{EventPriority, KernelEvent, KernelEventEnvelope};
 
 // ---------------------------------------------------------------------------
 // EventQueue trait
@@ -52,10 +52,10 @@ pub use crate::event::{KernelEvent, EventPriority, KernelEventEnvelope};
 #[async_trait]
 pub trait EventQueue: Send + Sync + 'static {
     /// Push an event into the queue. Returns `BusError::Full` if at capacity.
-    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError>;
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError>;
 
     /// Non-async push (identical to `push` for in-memory queues).
-    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError>;
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError>;
 
     /// Drain up to `max` events from the queue, in priority order.
     fn drain(&self, max: usize) -> Vec<KernelEventEnvelope>;
@@ -102,22 +102,15 @@ impl InMemoryEventQueue {
 
 #[async_trait]
 impl EventQueue for InMemoryEventQueue {
-    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError> { self.inner.push(event) }
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.inner.push(event) }
 
-    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError> { self.inner.try_push(event) }
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
+        self.inner.try_push(event)
+    }
 
     fn drain(&self, max: usize) -> Vec<KernelEventEnvelope> { self.inner.drain(max) }
 
     async fn wait(&self) { self.inner.wait().await }
 
     fn pending_count(&self) -> usize { self.inner.pending_count() }
-}
-
-impl std::fmt::Debug for InMemoryEventQueue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InMemoryEventQueue")
-            .field("pending", &self.pending_count())
-            .field("inner", &self.inner)
-            .finish()
-    }
 }

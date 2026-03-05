@@ -28,7 +28,6 @@
 
 pub mod agent_registry;
 pub mod manifest_loader;
-pub mod noop_user_store;
 pub mod principal;
 pub mod user;
 
@@ -323,7 +322,7 @@ pub struct SessionRuntime {
     /// Per-session runtime metrics (atomic counters for lock-free updates).
     pub metrics:            Arc<RuntimeMetrics>,
     /// Detailed turn traces for observability (most recent 50 turns).
-    pub turn_traces:        Vec<crate::agent_turn::TurnTrace>,
+    pub turn_traces:        Vec<crate::agent_loop::TurnTrace>,
 }
 
 /// Summary info for listing sessions.
@@ -342,7 +341,7 @@ pub struct SessionInfo {
 impl From<&SessionRuntime> for SessionInfo {
     fn from(p: &SessionRuntime) -> Self {
         Self {
-            session_key: p.agent_id,
+            session_key: p.session_key,
             parent_id:   p.parent_id,
             name:        p.manifest.name.clone(),
             state:       p.state,
@@ -499,9 +498,6 @@ pub struct SessionTable {
     total_failed:    AtomicU64,
 }
 
-/// Backwards-compatible alias during migration.
-pub type ProcessTable = SessionTable;
-
 impl SessionTable {
     /// Maximum number of turn traces retained per process.
     const MAX_TURN_TRACES: usize = 50;
@@ -520,13 +516,15 @@ impl SessionTable {
         }
     }
 
+    /// Look up a session runtime by its key.
+    pub fn get(&self, key: SessionKey) -> Option<SessionRuntime> {
+        self.runtimes.get(&key).map(|r| r.value().clone())
+    }
+
     /// Insert a process into the table.
     #[tracing::instrument(skip(self, sr), fields(session_key = %sr.session_key, agent_name = %sr.manifest.name))]
     pub fn insert(&self, sr: SessionRuntime) {
         let session_key = sr.session_key;
-        if let Some(ref channel_sid) = sr.channel_session_id {
-            self.session_index.insert(channel_sid.clone(), session_key);
-        }
         // Children index: register under parent
         if let Some(parent_id) = sr.parent_id {
             self.children_index
@@ -619,7 +617,7 @@ impl SessionTable {
     }
 
     /// Push a turn trace onto a process, evicting the oldest if at capacity.
-    pub fn push_turn_trace(&self, id: SessionKey, trace: crate::agent_turn::TurnTrace) {
+    pub fn push_turn_trace(&self, id: SessionKey, trace: crate::agent_loop::TurnTrace) {
         if let Some(mut entry) = self.runtimes.get_mut(&id) {
             if entry.turn_traces.len() >= Self::MAX_TURN_TRACES {
                 entry.turn_traces.remove(0);
@@ -629,7 +627,7 @@ impl SessionTable {
     }
 
     /// Get the turn traces for a process.
-    pub fn get_turn_traces(&self, key: SessionKey) -> Vec<crate::agent_turn::TurnTrace> {
+    pub fn get_turn_traces(&self, key: SessionKey) -> Vec<crate::agent_loop::TurnTrace> {
         self.runtimes
             .get(&key)
             .map(|p| p.turn_traces.clone())
@@ -650,7 +648,7 @@ impl SessionTable {
     // ----- Session index methods -----
 
     /// Find the active agent process for a session.
-    pub fn find_by_session(&self, session_id: &SessionKey) -> Option<AgentProcess> {
+    pub fn find_by_session(&self, session_id: &SessionKey) -> Option<SessionRuntime> {
         let agent_id = self.session_index.get(session_id)?;
         self.get(*agent_id)
     }
@@ -663,7 +661,7 @@ impl SessionTable {
     }
 
     /// Find all agent processes with the given manifest name.
-    pub fn find_all_by_name(&self, name: &str) -> Vec<AgentProcess> {
+    pub fn find_all_by_name(&self, name: &str) -> Vec<SessionRuntime> {
         self.name_registry
             .get(name)
             .map(|ids| ids.iter().filter_map(|id| self.get(*id)).collect())
@@ -728,7 +726,7 @@ impl SessionTable {
         // Lazy reap: remove stale terminal processes on observation.
         self.reap_terminal(Self::TERMINAL_TTL);
 
-        let ids: Vec<SessionKey> = self.runtimes.iter().map(|p| p.agent_id).collect();
+        let ids: Vec<SessionKey> = self.runtimes.iter().map(|p| p.session_key).collect();
         let mut stats = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(s) = self.stats(id).await {
@@ -763,7 +761,7 @@ impl SessionTable {
                     None => false,
                 }
             })
-            .map(|entry| entry.agent_id)
+            .map(|entry| entry.session_key)
             .collect();
 
         let count = to_remove.len();

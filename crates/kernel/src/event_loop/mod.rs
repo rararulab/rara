@@ -24,21 +24,5 @@
 //! (conversation, turn cancellation, pause buffer) instead of delegating
 //! to per-process tokio tasks.
 
-mod lifecycle;
-mod message;
 pub(crate) mod processor;
 pub(crate) mod runtime;
-mod turn;
-
-use std::sync::Arc;
-
-pub(crate) use runtime::RuntimeTable;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
-
-use crate::{
-    event::{KernelEvent, KernelEventEnvelope},
-    kernel::Kernel,
-};
-
-impl Kernel {}

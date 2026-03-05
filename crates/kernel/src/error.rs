@@ -133,12 +133,14 @@ pub enum KernelError {
     #[snafu(display("memory scope denied: {reason}"))]
     MemoryScopeDenied { reason: String },
 
-    /// Memory quota exceeded for an agent.
-    #[snafu(display("memory quota exceeded: agent {agent_id} has {current} entries (max {max})"))]
+    /// Memory quota exceeded for a session.
+    #[snafu(display(
+        "memory quota exceeded: session {session_key} has {current} entries (max {max})"
+    ))]
     MemoryQuotaExceeded {
-        agent_id: String,
-        current:  usize,
-        max:      usize,
+        session_key: SessionKey,
+        current:     usize,
+        max:         usize,
     },
 
     /// Sandbox: access to a file path was denied.
