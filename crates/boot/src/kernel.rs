@@ -39,8 +39,7 @@ use crate::resolvers::DefaultIdentityResolver;
 // BootConfig
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`boot()`] — everything the kernel needs from the
-/// outside world.
+/// Everything the kernel needs from the outside world.
 ///
 /// Fields with sensible defaults are set via `Default`; callers only need to
 /// supply the truly external deps (driver_registry, tool_registry, etc.).
@@ -90,8 +89,6 @@ pub struct BootConfig {
 // boot()
 // ---------------------------------------------------------------------------
 
-// FIXME: boot 本来就是为了去setup一堆kernel的config
-// 以及kernel需要的组件，结果又创建了一个boot config，何意味？
 /// Assemble a fully-configured [`Kernel`] with I/O subsystem.
 ///
 /// This is the single entry point for creating a production-ready kernel.
@@ -108,7 +105,6 @@ pub fn boot(config: BootConfig) -> Kernel {
                 rara_kernel::process::principal::UserId("root".to_string()),
             ))
         });
-    let _session_index_for_resolver: Arc<dyn SessionIndex> = config.session_index.clone().unwrap();
     let session_resolver: Arc<dyn SessionResolver> = config.session_resolver.unwrap();
 
     // Tape store — falls back to a temporary in-memory-like store if not

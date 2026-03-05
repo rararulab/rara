@@ -185,7 +185,6 @@ impl AppConfig {
         // -- BackendState (domain services) ----------------------------------
 
         let backend = rara_backend_admin::state::BackendState::init(
-            pool.clone(),
             rara.session_index.clone(),
             rara.tape_store.clone(),
             settings_provider.clone(),

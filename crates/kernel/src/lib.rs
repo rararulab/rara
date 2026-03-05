@@ -30,7 +30,6 @@
 
 pub mod agent_loop;
 pub mod channel;
-// TODO: deprecate me
 pub mod compaction;
 pub mod error;
 pub mod event;

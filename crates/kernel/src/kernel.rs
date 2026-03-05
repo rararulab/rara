@@ -232,8 +232,6 @@ impl Kernel {
 
     /// Create a [`TapeService`](rara_memory::tape::TapeService) bound to the
     /// given session.
-    // FIXME: why it is create a tapeService? we should replace the original memory
-    // service as tapeMemory !
     fn tape_for(&self, session_id: &SessionKey) -> rara_memory::tape::TapeService {
         rara_memory::tape::TapeService::new(
             session_id.to_string(),
@@ -543,20 +541,17 @@ impl Kernel {
         let session_key = desired_session_key.unwrap_or_else(SessionKey::new);
         tracing::Span::current().record("session_key", tracing::field::display(&session_key));
 
-        // TODO: fix me
-        let (session_id, initial_messages) = if let Some(session_key) = resume_session_id {
+        let initial_messages = if let Some(resume_key) = resume_session_id {
             // Load previous conversation from the tape store.
-            let tape = self.tape_for(&session_key);
+            let tape = self.tape_for(&resume_key);
             let entries = tape.entries().await.unwrap_or_default();
-            let messages: Vec<crate::channel::types::ChatMessage> = entries
+            entries
                 .into_iter()
                 .filter(|e| e.kind == rara_memory::tape::TapEntryKind::Message)
                 .filter_map(|e| serde_json::from_value(e.payload).ok())
-                .collect();
-            (session_key, messages)
+                .collect()
         } else {
-            let session_id = SessionKey::new();
-            (session_id, vec![])
+            vec![]
         };
 
         // Create process-level cancellation token.
@@ -618,7 +613,6 @@ impl Kernel {
         info!(
             session_key = %session_key,
             manifest = %manifest.name,
-            session_id = %session_id,
             "process spawned via event loop"
         );
 
@@ -994,9 +988,8 @@ impl Kernel {
         }
     }
 
-    /// Resolve a manifest for auto-spawning (when a user message arrives
-    /// with no existing process).
-    /// TODO: what?
+    /// Resolve a manifest for auto-spawning when a user message arrives
+    /// with no existing process and no matching agent in the registry.
     async fn resolve_manifest_for_auto_spawn(&self) -> Option<crate::process::AgentManifest> {
         let model = rara_domain_shared::settings::get_default_model(self.settings.as_ref()).await;
         Some(crate::process::AgentManifest {

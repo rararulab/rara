@@ -15,7 +15,7 @@
 //! Backend domain-service state — holds all HTTP admin services and routes.
 //!
 //! [`BackendState`] is the domain-service half of the old `AppState` god
-//! object.  It wires scheduler, session (chat), and settings.
+//! object.  It wires session (chat) and settings.
 
 use std::sync::Arc;
 
@@ -27,9 +27,8 @@ use tracing::info;
 /// Owns all domain services needed for HTTP admin routes.
 #[derive(Clone)]
 pub struct BackendState {
-    pub scheduler_service: crate::scheduler::service::SchedulerService,
-    pub session_service:   crate::chat::service::SessionService,
-    pub settings_svc:      crate::settings::SettingsSvc,
+    pub session_service: crate::chat::service::SessionService,
+    pub settings_svc:    crate::settings::SettingsSvc,
 }
 
 impl BackendState {
@@ -38,15 +37,12 @@ impl BackendState {
     /// The caller is expected to have loaded `SettingsSvc` already (since the
     /// settings provider is also needed by `RaraState`).
     pub async fn init(
-        pool: sqlx::SqlitePool,
         session_index: Arc<dyn rara_kernel::session::SessionIndex>,
         tape_store: Arc<rara_memory::tape::FileTapeStore>,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
     ) -> Result<Self, Whatever> {
         // -- domain services -------------------------------------------------
-
-        let scheduler_service = crate::scheduler::wire_scheduler_service(pool.clone());
 
         // -- session service (renamed from ChatService) ----------------------
 
@@ -58,7 +54,6 @@ impl BackendState {
         info!("Session service initialized");
 
         Ok(Self {
-            scheduler_service,
             session_service,
             settings_svc,
         })
@@ -79,11 +74,6 @@ impl BackendState {
         let mut api = Self::api_doc();
 
         let mut router = axum::Router::new();
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::scheduler::routes(self.scheduler_service.clone()),
-        );
         merge_openapi_router(
             &mut router,
             &mut api,
@@ -122,7 +112,6 @@ impl BackendState {
             ),
             tags(
                 (name = "chat", description = "Chat sessions and messaging"),
-                (name = "scheduler", description = "Task scheduling"),
                 (name = "settings", description = "Runtime settings"),
                 (name = "system", description = "System utilities")
             )

@@ -15,14 +15,12 @@
 //! # rara-backend-admin
 //!
 //! Unified HTTP admin routes for all backend subsystems: settings,
-//! models, MCP servers, skills, and domain routes
-//! (scheduler, chat).
+//! models, MCP servers, skills, and domain routes (chat).
 
 pub mod agents;
 pub mod chat;
 pub mod kernel;
 pub mod mcp;
-pub mod scheduler;
 pub mod settings;
 pub mod skills;
 pub mod state;
