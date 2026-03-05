@@ -95,3 +95,5 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT leave stale worktrees — clean up after every merge
 - Do NOT modify already-applied migration files — create a new migration instead
 - Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file
+- Do NOT use noop/hollow trait implementations to糊弄编译器 — trait method 有真正实现时不允许默认空体（silently return `Ok(())` / `Ok(None)` / `vec![]`）；可选 UX hook（`typing_indicator`, lifecycle hooks）是唯一例外
+- Do NOT 构造空壳身份对象 — `Principal` 必须通过 `SecuritySubsystem::resolve_principal()` 或 `Principal::from_user()` 从数据库获得完整的 role + permissions，不允许用 placeholder 值存入 Session

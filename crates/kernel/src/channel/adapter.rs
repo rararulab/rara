@@ -22,9 +22,16 @@
 use async_trait::async_trait;
 
 use super::types::{AgentPhase, ChannelType};
-use crate::{error::KernelError, handle::KernelHandle};
+use crate::{
+    error::KernelError,
+    handle::KernelHandle,
+    io::{EgressError, Endpoint, PlatformOutbound},
+};
 
 /// A pluggable adapter for a single communication channel.
+///
+/// Unifies both ingress (listening for inbound messages) and egress
+/// (delivering outbound messages) for a platform.
 ///
 /// # Lifecycle
 ///
@@ -33,25 +40,31 @@ use crate::{error::KernelError, handle::KernelHandle};
 ///    [`KernelHandle::ingest`].
 /// 2. **stop** — Graceful shutdown.
 ///
-/// Outbound delivery is handled by
-/// [`EgressAdapter`](crate::io::egress::EgressAdapter), not by this trait.
+/// # Optional hooks
 ///
-/// # Optional UX hooks
-///
-/// [`typing_indicator`](Self::typing_indicator) and
-/// [`set_phase`](Self::set_phase) have default no-op implementations. Adapters
-/// that support typing indicators or emoji reactions can override them.
+/// [`start`](Self::start), [`stop`](Self::stop),
+/// [`typing_indicator`](Self::typing_indicator), and
+/// [`set_phase`](Self::set_phase) have default no-op implementations.
+/// Egress-only adapters (e.g. CLI) only need to implement
+/// [`channel_type`](Self::channel_type) and [`send`](Self::send).
 #[async_trait]
-pub trait ChannelAdapter: Send + Sync {
+pub trait ChannelAdapter: Send + Sync + 'static {
     /// Which channel type this adapter serves.
     fn channel_type(&self) -> ChannelType;
 
+    /// Deliver an outbound message to a specific endpoint.
+    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError>;
+
     /// Start the adapter with a [`KernelHandle`] for dispatching inbound
     /// messages into the kernel.
-    async fn start(&self, handle: KernelHandle) -> Result<(), KernelError>;
+    ///
+    /// No-op by default; egress-only adapters don't need to override this.
+    async fn start(&self, _handle: KernelHandle) -> Result<(), KernelError> { Ok(()) }
 
     /// Gracefully stop the adapter.
-    async fn stop(&self) -> Result<(), KernelError>;
+    ///
+    /// No-op by default.
+    async fn stop(&self) -> Result<(), KernelError> { Ok(()) }
 
     /// Show a typing indicator in the given session.
     ///
@@ -65,3 +78,6 @@ pub trait ChannelAdapter: Send + Sync {
         Ok(())
     }
 }
+
+/// Shared reference to a [`ChannelAdapter`] implementation.
+pub type ChannelAdapterRef = std::sync::Arc<dyn ChannelAdapter>;

@@ -1,176 +1,131 @@
 # Memory System
 
-Rara's memory system gives the agent persistent, cross-session knowledge about the user. It consists of two layers: a **passive storage layer** (three external services) and an **active recall engine** (agent-configurable rules that decide when to invoke memory).
+Rara uses a **tape-centric** memory architecture: every conversation event is persisted as an append-only JSONL record in a local file-backed tape. The tape module lives directly in the kernel crate (`rara-kernel::memory`) so that context reconstruction can produce typed `llm::Message` values without intermediate serialization.
 
 ## Architecture Overview
 
 ```mermaid
 graph TD
-    A[Agent Conversation] -->|memory_write tool| B[Memos]
-    A -->|memory_add_fact tool| C[mem0 + Hindsight]
-
-    D[Session Inactivity<br/>≥ 30 min] -->|consolidate_session| E[mem0: extract facts]
-    D -->|consolidate_session| F[Hindsight: retain experience]
-
-    subgraph RecallStrategyEngine
-        R1[Trigger Evaluator] -->|match| R2[Action Executor]
-        R2 --> R3[Injector]
+    subgraph Kernel["rara-kernel::memory"]
+        TS[TapeService] --> FS[FileTapeStore]
+        TS --> CTX[context.rs]
+        CTX -->|"Vec&lt;llm::Message&gt;"| AL[Agent Loop]
     end
 
-    G[RecallContext<br/>user_text, events, turn_count] --> R1
-    R3 -->|InjectionPayload| M[System Prompt]
-    R2 -->|search/profile/deep_recall| H[MemoryManager]
+    FS -->|pwrite / pread| JSONL["tape.jsonl<br/>(append-only)"]
+
+    AL -->|append_message| TS
+    AL -->|append_tool_call| TS
+    AL -->|append_tool_result| TS
+
+    SI[SessionIndex] -.->|metadata| TS
 ```
 
-## Passive Layer: Three-Service Memory
+## Core Concepts
 
-| Service | Layer | Role | Write Trigger |
-|---------|-------|------|---------------|
-| **mem0** | State | Structured fact extraction, auto-dedup, conflict resolution | Session-end + `memory_add_fact` tool |
-| **Memos** | Storage | Human-readable Markdown notes with tags | `memory_write` tool only |
-| **Hindsight** | Learning | 4-network retain/recall/reflect | Session-end + `memory_add_fact` tool |
+### Tape
 
-### Write Timing
+A tape is a named, append-only sequence of [`TapEntry`] records persisted as JSONL. Each entry has:
 
-- **mem0 + Hindsight** — fire at session-end (via `consolidate_session`) or explicit `add_fact`. **Never per-turn.**
-- **Memos** — only via the `memory_write` tool. **No automatic writes.**
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `u64` | Monotonic, append-order identifier |
+| `kind` | `TapEntryKind` | Entry category |
+| `payload` | `serde_json::Value` | Arbitrary JSON payload |
+| `timestamp` | `jiff::Timestamp` | Persistence timestamp |
 
-### Session-End Detection
+### Entry Kinds
 
-A session is considered "ended" when the inactivity gap exceeds 30 minutes. When a user sends a new message to an idle session:
+| Kind | Purpose | Example payload |
+|------|---------|-----------------|
+| `Message` | User or assistant chat message | `{"role":"user","content":"..."}` |
+| `ToolCall` | Assistant tool invocation | `{"calls":[{"id":"...","function":{...}}]}` |
+| `ToolResult` | Tool execution output | `{"results":["..."]}` |
+| `Event` | Lifecycle or telemetry event | `{"name":"run","data":{...}}` |
+| `System` | System prompt content | `{"content":"..."}` |
+| `Anchor` | Named checkpoint for windowing | `{"name":"session/start","state":{}}` |
 
-1. All previous (user, assistant) exchange pairs are extracted
-2. `consolidate_session` batches them into one mem0 `add_memories` + one Hindsight `retain`
-3. Runs as fire-and-forget background task
+### Anchors
 
-## Active Layer: Recall Strategy Engine
+Anchors partition a tape into logical windows. The most common anchor is `session/start`, created automatically by `ensure_bootstrap_anchor`. Context queries like `build_llm_context` read entries **from the most recent anchor forward**, keeping the LLM context window bounded without discarding history.
 
-The real intelligence is not in memory storage but in **when to invoke memory**. The `RecallStrategyEngine` is a rule-based engine that agents can configure at runtime.
+## Components
 
-### How It Works
+### `FileTapeStore`
 
-Each conversation turn, the engine:
+Low-level storage engine. All I/O runs on a dedicated blocking thread (`rara-tape-io`) to avoid polluting the async runtime. The async API dispatches work via a channel-based `IoWorker`.
 
-1. **Builds a `RecallContext`** — user_text, turn_count, events (Compaction/NewSession/SessionResume), elapsed time, summary
-2. **Evaluates all enabled rules** — walks each rule's trigger tree recursively
-3. **Executes matched actions** — calls MemoryManager (search, deep_recall, get_profile)
-4. **Returns injection payloads** — content + target (SystemPrompt or ContextMessage)
+- **Storage format**: One JSONL file per tape, namespaced by workspace MD5 hash
+- **File location**: `~/.rara/tapes/{workspace_hash}__{tape_name}.jsonl`
+- **Caching**: Incremental — only new bytes are read on each access via positional `pread`/`pwrite` (rustix)
+- **Concurrency**: Single-writer, serialized through the worker thread
 
-### Trigger Types
+Key operations:
 
-Triggers are composable trees using And/Or/Not combinators:
-
-| Trigger | Description |
-|---------|-------------|
-| `KeywordMatch { keywords }` | User message contains any keyword (case-insensitive) |
-| `Event { kind }` | System event occurred: `Compaction`, `NewSession`, `SessionResume` |
-| `EveryNTurns { n }` | Fires every N turns |
-| `InactivityGt { seconds }` | Session was idle for > N seconds |
-| `Always` | Fires every turn |
-| `And { conditions }` | All conditions must match |
-| `Or { conditions }` | Any condition suffices |
-| `Not { condition }` | Negation |
-
-### Action Types
-
-| Action | Description |
+| Method | Description |
 |--------|-------------|
-| `Search { query_template, limit }` | Semantic search across mem0 + Hindsight (RRF) |
-| `DeepRecall { query_template }` | Hindsight deep reasoning (reflect) |
-| `GetProfile` | Retrieve user profile facts from mem0 |
+| `append(tape, kind, payload)` | Persist one entry |
+| `read(tape)` | Read all entries (incremental cache) |
+| `fork(source)` | Clone a tape for isolated work |
+| `merge(source, target)` | Append fork-local entries back |
+| `archive(tape)` | Move to timestamped `.bak` file |
+| `reset(tape)` | Delete tape and clear cache |
+| `list_tapes()` | List active tapes for workspace |
 
-### Query Templates
+### `TapeService`
 
-Templates support variable interpolation:
-- `{user_text}` — current user message
-- `{summary}` — compaction summary (only on Compaction event)
-- `{session_topic}` — session title/preview
+Higher-level API wrapping `FileTapeStore` with application-specific workflows:
 
-Example: `"resume optimization {user_text}"` → `"resume optimization 我想改简历"`
+| Method | Description |
+|--------|-------------|
+| `build_llm_context(tape_name)` | Reconstruct `Vec<llm::Message>` from entries since last anchor |
+| `ensure_bootstrap_anchor(tape_name)` | Create initial `session/start` anchor if missing |
+| `handoff(tape_name, name, state)` | Append an anchor and return post-anchor entries |
+| `fork_tape(tape_name, func)` | Execute a closure against a forked tape, then auto-merge |
+| `append_message / append_tool_call / append_tool_result` | Typed append helpers |
+| `search(tape_name, query, limit, all_tapes)` | Substring + fuzzy search over message entries |
+| `from_last_anchor(tape_name, kinds)` | Query entries after the most recent anchor |
+| `anchors(tape_name, limit)` | List recent anchors |
+| `info(tape_name)` | Tape statistics (entry count, anchors, token usage) |
 
-### Default Rules
+### `context.rs` — LLM Context Reconstruction
 
-Seeded on first startup — agents can modify or replace them:
+Converts persisted tape entries directly into `Vec<llm::Message>`:
 
-| Name | Trigger | Action | Priority |
-|------|---------|--------|----------|
-| `user-profile` | `Always` | `GetProfile` → SystemPrompt | 0 |
-| `new-session-context` | `Event(NewSession)` | `Search("{user_text}", 5)` → SystemPrompt | 5 |
-| `post-compaction` | `Event(Compaction)` | `Search("{summary}", 5)` → SystemPrompt | 10 |
-| `session-resume` | `Event(SessionResume)` | `Search("{user_text}", 3)` → SystemPrompt | 20 |
-
-### Agent-Created Rules (Examples)
-
-Agents can register custom rules at runtime:
-
-```json
-{
-  "name": "resume-context",
-  "trigger": { "type": "KeywordMatch", "keywords": ["简历", "resume", "CV"] },
-  "action": { "type": "Search", "query_template": "resume optimization {user_text}", "limit": 3 },
-  "inject": "SystemPrompt",
-  "priority": 10
-}
+```mermaid
+graph LR
+    M[Message entry] -->|"serde_json::from_value"| LM["llm::Message"]
+    TC[ToolCall entry] -->|"parse calls → ToolCallRequest"| AM["Message::assistant_with_tool_calls"]
+    TR[ToolResult entry] -->|"pair with pending call IDs"| TRM["Message::tool_result"]
 ```
 
-```json
-{
-  "name": "periodic-deep-recall",
-  "trigger": { "type": "EveryNTurns", "n": 10 },
-  "action": { "type": "DeepRecall", "query_template": "synthesize learnings about {session_topic}" },
-  "inject": "SystemPrompt",
-  "priority": 50
-}
+Because the tape module lives inside `rara-kernel`, `context.rs` constructs `llm::Message` directly — no intermediate `Value` representation or cross-crate type erasure.
+
+## Fork / Merge Workflow
+
+Forks enable isolated tape contexts for sub-agent or branch-and-merge workflows:
+
+```mermaid
+sequenceDiagram
+    participant Parent as parent tape
+    participant Fork as fork tape
+
+    Parent->>Fork: fork() — copy file + cache
+    Note over Fork: fork_start_id = parent.next_id()
+    Fork->>Fork: append entries (isolated)
+    Fork->>Parent: merge() — copy entries where id >= fork_start_id
+    Note over Parent: Fork file deleted
 ```
 
-## Memory Tools
-
-### Storage Tools
-
-| Tool | Purpose | Backends |
-|------|---------|----------|
-| `memory_search` | Hybrid search (RRF fusion) | mem0 + Hindsight |
-| `memory_deep_recall` | Deep reasoning via 4-network reflect | Hindsight |
-| `memory_write` | Write a Markdown note with tags | Memos |
-| `memory_add_fact` | Store a single explicit fact | mem0 + Hindsight |
-
-### Recall Strategy Tools
-
-| Tool | Purpose |
-|------|---------|
-| `recall_strategy_add` | Register a new recall rule (trigger + action + inject target) |
-| `recall_strategy_list` | List all rules with status |
-| `recall_strategy_update` | Update a rule (enable/disable, modify trigger/action/priority) |
-| `recall_strategy_remove` | Delete a rule by ID |
-
-## Search Pipeline
-
-`MemoryManager::search()` queries mem0 and Hindsight **in parallel**, then merges results using Reciprocal Rank Fusion (RRF, k=60). Over-fetches `max(limit * 3, 10)` candidates per backend.
-
-## Configuration
-
-Memory settings via Consul KV or environment variables:
-
-| Key | Default | Purpose |
-|-----|---------|---------|
-| `mem0_base_url` | `http://localhost:8080` | mem0 API server |
-| `memos_base_url` | `http://localhost:5230` | Memos server |
-| `memos_token` | — | Bearer token for Memos authentication |
-| `hindsight_base_url` | `http://localhost:8888` | Hindsight API server |
-| `hindsight_bank_id` | `default` | Hindsight memory bank identifier |
-| `recall_every_turn` | `false` | Legacy: use recall engine rules instead |
+`TapeService::fork_tape` wraps this pattern with a closure and automatic merge on completion.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `crates/memory/src/manager.rs` | `MemoryManager` — search, consolidate_session, add_fact, write_note |
-| `crates/memory/src/recall_engine/` | Recall strategy engine (types, engine, interpolation, defaults) |
-| `crates/memory/src/mem0_client.rs` | mem0 REST client |
-| `crates/memory/src/memos_client.rs` | Memos REST client |
-| `crates/memory/src/hindsight_client.rs` | Hindsight REST client |
-| `crates/memory/src/fusion.rs` | Reciprocal Rank Fusion algorithm |
-| `crates/workers/src/tools/services/memory_tools.rs` | Memory + recall strategy tools |
-| `crates/chat/src/service.rs` | Session-end detection + consolidation trigger |
-| `crates/agents/src/orchestrator/core.rs` | run_recall_engine + spawn_session_consolidation |
-| `crates/agents/src/builtin/chat.rs` | RecallContext assembly + engine invocation |
+| `crates/kernel/src/memory/mod.rs` | Module root, core types (`TapEntry`, `TapEntryKind`) |
+| `crates/kernel/src/memory/store.rs` | `FileTapeStore` — JSONL I/O, caching, fork/merge |
+| `crates/kernel/src/memory/service.rs` | `TapeService` — anchor workflows, search, context building |
+| `crates/kernel/src/memory/context.rs` | `default_tape_context` — tape entries → `Vec<llm::Message>` |
+| `crates/kernel/src/memory/anchors.rs` | `AnchorSummary` type |
+| `crates/kernel/src/memory/error.rs` | `TapError` / `TapResult` |

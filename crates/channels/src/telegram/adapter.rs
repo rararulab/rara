@@ -17,7 +17,7 @@
 //! Implements [`ChannelAdapter`] using the Telegram Bot API via `getUpdates`
 //! long polling. Inbound messages are converted to [`RawPlatformMessage`] and
 //! handed to the [`KernelHandle`] in a fire-and-forget fashion. Outbound
-//! delivery is handled by the [`EgressAdapter`] implementation.
+//! delivery is handled by the [`ChannelAdapter`] implementation.
 //!
 //! ## Architecture
 //!
@@ -52,12 +52,12 @@ use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
         command::{CallbackHandler, CommandHandler},
-        types::{AgentPhase, ChannelType, InlineButton, MessageContent, ReplyMarkup},
+        types::{ChannelType, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
     handle::KernelHandle,
     io::{
-        EgressAdapter, EgressError, Endpoint, EndpointAddress, IOError, InteractionType,
+        EgressError, Endpoint, EndpointAddress, IOError, InteractionType,
         PlatformOutbound, RawPlatformMessage, ReplyContext, StreamHubRef,
     },
 };
@@ -70,7 +70,7 @@ use teloxide::{
     },
 };
 use tokio::sync::{RwLock, watch};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
@@ -160,7 +160,7 @@ impl Default for TelegramConfig {
 ///    spawns a background tokio task that polls for updates.
 /// 2. For each inbound message, the adapter converts the Telegram [`Update`] to
 ///    a [`RawPlatformMessage`] and hands it to the sink. Outbound delivery is
-///    handled separately via [`EgressAdapter::send`].
+///    handled separately via [`ChannelAdapter::send`].
 /// 3. Call [`stop`](ChannelAdapter::stop) to signal the polling loop to exit
 ///    gracefully.
 pub struct TelegramAdapter {
@@ -305,11 +305,6 @@ impl TelegramAdapter {
         }
     }
 
-    /// Inject the kernel's [`StreamHub`] for real-time token streaming.
-    pub async fn set_stream_hub(&self, hub: StreamHubRef) {
-        *self.stream_hub.write().await = Some(hub);
-    }
-
     /// Check whether a chat ID is allowed.
     ///
     /// Returns `true` if the allowed list is empty (all chats permitted) or
@@ -319,12 +314,8 @@ impl TelegramAdapter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// EgressAdapter implementation
-// ---------------------------------------------------------------------------
-
 #[async_trait]
-impl EgressAdapter for TelegramAdapter {
+impl ChannelAdapter for TelegramAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
     async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
@@ -346,19 +337,7 @@ impl EgressAdapter for TelegramAdapter {
                 let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
                 let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
-                // Check if there's an active streaming state to replace.
-                //
-                // Race-condition guard: the stream forwarder may still be
-                // performing its first `flush_edit` (send_message) when the
-                // Reply arrives.  If we remove the entry while message_ids
-                // is still empty we would fall through to the normal send
-                // path, causing a duplicate message.
-                //
-                // Strategy: if the entry exists but has no message IDs yet,
-                // wait briefly for the forwarder to complete its first flush,
-                // then re-check.
                 if self.active_streams.contains_key(&chat_id) {
-                    // Give the forwarder time to flush if it hasn't yet.
                     {
                         let has_msg_id = self
                             .active_streams
@@ -367,8 +346,6 @@ impl EgressAdapter for TelegramAdapter {
                             .unwrap_or(false);
 
                         if !has_msg_id {
-                            // Wait up to 3s (in 100ms steps) for the forwarder
-                            // to complete its first send_message.
                             for _ in 0..30 {
                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                 let ready = self
@@ -377,7 +354,7 @@ impl EgressAdapter for TelegramAdapter {
                                     .map(|s| {
                                         s.message_ids.last().map_or(false, |id| *id != MessageId(0))
                                     })
-                                    .unwrap_or(true); // entry gone → forwarder never ran
+                                    .unwrap_or(true);
                                 if ready {
                                     break;
                                 }
@@ -388,7 +365,6 @@ impl EgressAdapter for TelegramAdapter {
                     if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
                         if let Some(&last_msg_id) = stream_state.message_ids.last() {
                             if last_msg_id != MessageId(0) {
-                                // Edit the last streaming message with the first chunk.
                                 let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
                                 let edit_result = self
                                     .bot
@@ -398,8 +374,6 @@ impl EgressAdapter for TelegramAdapter {
 
                                 let edit_ok = match &edit_result {
                                     Ok(_) => true,
-                                    // "message is not modified" means the stream forwarder
-                                    // already delivered the final content — treat as success.
                                     Err(teloxide::RequestError::Api(api_err))
                                         if format!("{api_err}")
                                             .contains("message is not modified") =>
@@ -410,7 +384,6 @@ impl EgressAdapter for TelegramAdapter {
                                 };
 
                                 if edit_ok {
-                                    // Send remaining chunks as new messages.
                                     for chunk in chunks.iter().skip(1) {
                                         let _ = self
                                             .bot
@@ -420,18 +393,15 @@ impl EgressAdapter for TelegramAdapter {
                                     }
                                     return Ok(());
                                 }
-                                // Edit failed — fall through to normal send path below.
                                 warn!(
                                     chat_id,
                                     "telegram: edit streaming message failed, falling back to send"
                                 );
                             }
                         }
-                        // Fallthrough if no valid message ID after waiting.
                     }
                 }
 
-                // No active stream — normal send path.
                 for (i, chunk) in chunks.iter().enumerate() {
                     let mut req = self
                         .bot
@@ -457,7 +427,6 @@ impl EgressAdapter for TelegramAdapter {
                 delta, edit_target, ..
             } => {
                 if let Some(ref target_id) = edit_target {
-                    // Edit an existing message with accumulated text.
                     if let Ok(msg_id) = parse_message_id(target_id) {
                         let html = crate::telegram::markdown::markdown_to_telegram_html(&delta);
                         let _ = self
@@ -467,13 +436,10 @@ impl EgressAdapter for TelegramAdapter {
                             .await;
                     }
                 } else {
-                    // No edit target — send as a new message.
                     let _ = self.bot.send_message(ChatId(chat_id), &delta).await;
                 }
             }
             PlatformOutbound::Progress { .. } => {
-                // Send a typing indicator only. The `text` field is a stage
-                // label (e.g. "thinking"), not user-visible content.
                 let _ = self
                     .bot
                     .send_chat_action(ChatId(chat_id), ChatAction::Typing)
@@ -483,13 +449,10 @@ impl EgressAdapter for TelegramAdapter {
 
         Ok(())
     }
-}
-
-#[async_trait]
-impl ChannelAdapter for TelegramAdapter {
-    fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
     async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
+        *self.stream_hub.write().await = Some(handle.stream_hub().clone());
+
         // Delete any existing webhook so getUpdates works.
         self.bot
             .delete_webhook()
@@ -558,10 +521,6 @@ impl ChannelAdapter for TelegramAdapter {
         Ok(())
     }
 
-    async fn set_phase(&self, _session_key: &str, _phase: AgentPhase) -> Result<(), KernelError> {
-        // No-op for now. Could be implemented as emoji reactions in the future.
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -573,7 +532,7 @@ impl ChannelAdapter for TelegramAdapter {
 /// Converts each update to a [`RawPlatformMessage`] and hands it to the
 /// [`KernelHandle`] in a fire-and-forget fashion. The adapter does **not**
 /// wait for a response -- egress delivers replies through
-/// [`EgressAdapter::send`].
+/// [`ChannelAdapter::send`].
 ///
 /// Commands and callbacks are routed through the kernel like regular
 /// messages via [`InteractionType`]. The adapter only performs
@@ -768,7 +727,7 @@ async fn handle_update(
     };
     drop(username_guard);
 
-    let msg = match handle.ingress_pipeline().resolve(raw).await {
+    let msg = match handle.resolve(raw).await {
         Ok(msg) => msg,
         Err(IOError::SystemBusy) => {
             let _ = bot
@@ -777,6 +736,10 @@ async fn handle_update(
                     "⚠️ System is busy, please try again later.",
                 )
                 .await;
+            return;
+        }
+        Err(IOError::IdentityResolutionFailed { .. }) => {
+            debug!("telegram adapter: unknown platform user, ignoring");
             return;
         }
         Err(other) => {

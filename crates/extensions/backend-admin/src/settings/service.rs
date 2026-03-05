@@ -101,7 +101,10 @@ impl SettingsSvc {
                 .whatever_context("failed to seed setting")?;
         }
         if !defaults.is_empty() {
-            info!(count = defaults.len(), "config values applied to settings store");
+            info!(
+                count = defaults.len(),
+                "config values applied to settings store"
+            );
         }
         Ok(())
     }

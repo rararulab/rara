@@ -28,12 +28,15 @@ eventsource-stream.workspace = true
 futures.workspace = true
 jiff.workspace = true
 lazy_static.workspace = true
+md5.workspace = true
 opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 prometheus.workspace = true
 rara-domain-shared.workspace = true
-rara-memory = { workspace = true }
+rara-paths.workspace = true
+regex.workspace = true
 reqwest.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -45,6 +48,7 @@ tokio-util = { workspace = true }
 tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true
+urlencoding.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

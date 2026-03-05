@@ -20,10 +20,7 @@
 
 use std::{
     future::Future,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::OnceLock,
 };
 
 use regex::Regex;
@@ -72,81 +69,67 @@ pub fn current_tape() -> String {
 }
 
 /// Tape helper with app-specific operations.
-#[derive(Debug)]
+///
+/// Unlike the low-level [`FileTapeStore`], `TapeService` provides higher-level
+/// workflows (anchors, fork/merge, search, LLM context building). It is **not**
+/// bound to a specific tape — every method accepts a `tape_name` parameter so a
+/// single instance can serve all sessions.
+#[derive(Debug, Clone)]
 pub struct TapeService {
-    tape_name:    String,
-    store:        FileTapeStore,
-    bootstrapped: AtomicBool,
-}
-
-impl Clone for TapeService {
-    fn clone(&self) -> Self {
-        Self {
-            tape_name:    self.tape_name.clone(),
-            store:        self.store.clone(),
-            bootstrapped: AtomicBool::new(self.bootstrapped.load(Ordering::Relaxed)),
-        }
-    }
+    store: FileTapeStore,
 }
 
 impl TapeService {
-    /// Create a service bound to one logical tape name.
-    pub fn new(tape_name: impl Into<String>, store: FileTapeStore) -> Self {
-        Self {
-            tape_name: tape_name.into(),
-            store,
-            bootstrapped: AtomicBool::new(false),
-        }
+    /// Create a service backed by the given store.
+    pub fn new(store: FileTapeStore) -> Self {
+        Self { store }
     }
 
-    /// Return the logical tape name.
-    pub fn name(&self) -> &str { &self.tape_name }
-
-    /// Read all entries for the bound tape.
-    pub async fn entries(&self) -> TapResult<Vec<TapEntry>> {
-        Ok(self.store.read(&self.tape_name).await?.unwrap_or_default())
+    /// Read all entries for the given tape.
+    pub async fn entries(&self, tape_name: &str) -> TapResult<Vec<TapEntry>> {
+        Ok(self.store.read(tape_name).await?.unwrap_or_default())
     }
 
     /// Execute `func` against a forked tape, then merge the fork back into the
     /// parent tape once the closure completes.
-    pub async fn fork_tape<T, F, Fut>(&self, func: F) -> TapResult<T>
+    pub async fn fork_tape<T, F, Fut>(&self, tape_name: &str, func: F) -> TapResult<T>
     where
-        F: FnOnce(TapeService) -> Fut,
+        F: FnOnce(String) -> Fut,
         Fut: Future<Output = TapResult<T>>,
     {
-        let fork_name = self.store.fork(&self.tape_name).await?;
-        let fork_service = TapeService::new(fork_name.clone(), self.store.clone());
+        let fork_name = self.store.fork(tape_name).await?;
 
         let previous = TAPE_CONTEXT.with(|current| current.replace(Some(fork_name.clone())));
-        let result = func(fork_service).await;
+        let result = func(fork_name.clone()).await;
         TAPE_CONTEXT.with(|current| {
             current.replace(previous);
         });
 
-        self.store.merge(&fork_name, &self.tape_name).await?;
+        self.store.merge(&fork_name, tape_name).await?;
         result
     }
 
     /// Ensure the tape has an initial `session/start` anchor.
-    pub async fn ensure_bootstrap_anchor(&self) -> TapResult<()> {
-        if self.bootstrapped.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        self.bootstrapped.store(true, Ordering::Relaxed);
-        if !self.anchors(1).await?.is_empty() {
+    pub async fn ensure_bootstrap_anchor(&self, tape_name: &str) -> TapResult<()> {
+        if !self.anchors(tape_name, 1).await?.is_empty() {
             return Ok(());
         }
         let _ = self
-            .handoff("session/start", Some(json!({"owner": "human"})))
+            .handoff(tape_name, "session/start", Some(json!({"owner": "human"})))
             .await?;
         Ok(())
     }
 
     /// Append an anchor and return entries from the most recent anchor onward.
-    pub async fn handoff(&self, name: &str, state: Option<Value>) -> TapResult<Vec<TapEntry>> {
+    pub async fn handoff(
+        &self,
+        tape_name: &str,
+        name: &str,
+        state: Option<Value>,
+    ) -> TapResult<Vec<TapEntry>> {
         self.store
             .append(
-                &self.tape_name,
+                tape_name,
                 TapEntryKind::Anchor,
                 json!({
                     "name": name,
@@ -154,14 +137,14 @@ impl TapeService {
                 }),
             )
             .await?;
-        self.from_last_anchor(None).await
+        self.from_last_anchor(tape_name, None).await
     }
 
     /// Append an event entry.
-    pub async fn append_event(&self, name: &str, data: Value) -> TapResult<()> {
+    pub async fn append_event(&self, tape_name: &str, name: &str, data: Value) -> TapResult<()> {
         self.store
             .append(
-                &self.tape_name,
+                tape_name,
                 TapEntryKind::Event,
                 json!({"name": name, "data": data}),
             )
@@ -170,10 +153,10 @@ impl TapeService {
     }
 
     /// Append a system entry.
-    pub async fn append_system(&self, content: &str) -> TapResult<()> {
+    pub async fn append_system(&self, tape_name: &str, content: &str) -> TapResult<()> {
         self.store
             .append(
-                &self.tape_name,
+                tape_name,
                 TapEntryKind::System,
                 json!({"content": content}),
             )
@@ -182,29 +165,59 @@ impl TapeService {
     }
 
     /// Append a message entry.
-    pub async fn append_message(&self, payload: Value) -> TapResult<TapEntry> {
+    pub async fn append_message(
+        &self,
+        tape_name: &str,
+        payload: Value,
+    ) -> TapResult<TapEntry> {
         self.store
-            .append(&self.tape_name, TapEntryKind::Message, payload)
+            .append(tape_name, TapEntryKind::Message, payload)
             .await
     }
 
     /// Append a tool-call entry.
-    pub async fn append_tool_call(&self, payload: Value) -> TapResult<TapEntry> {
+    pub async fn append_tool_call(
+        &self,
+        tape_name: &str,
+        payload: Value,
+    ) -> TapResult<TapEntry> {
         self.store
-            .append(&self.tape_name, TapEntryKind::ToolCall, payload)
+            .append(tape_name, TapEntryKind::ToolCall, payload)
             .await
     }
 
     /// Append a tool-result entry.
-    pub async fn append_tool_result(&self, payload: Value) -> TapResult<TapEntry> {
+    pub async fn append_tool_result(
+        &self,
+        tape_name: &str,
+        payload: Value,
+    ) -> TapResult<TapEntry> {
         self.store
-            .append(&self.tape_name, TapEntryKind::ToolResult, payload)
+            .append(tape_name, TapEntryKind::ToolResult, payload)
             .await
     }
 
+    /// Build LLM-ready messages from tape entries since the last anchor.
+    pub async fn build_llm_context(
+        &self,
+        tape_name: &str,
+    ) -> TapResult<Vec<crate::llm::Message>> {
+        let entries = self
+            .from_last_anchor(
+                tape_name,
+                Some(&[
+                    TapEntryKind::Message,
+                    TapEntryKind::ToolCall,
+                    TapEntryKind::ToolResult,
+                ]),
+            )
+            .await?;
+        super::context::default_tape_context(&entries)
+    }
+
     /// Inspect current tape state without mutating it.
-    pub async fn info(&self) -> TapResult<TapeInfo> {
-        let entries = self.entries().await?;
+    pub async fn info(&self, tape_name: &str) -> TapResult<TapeInfo> {
+        let entries = self.entries(tape_name).await?;
         let anchors = entries
             .iter()
             .filter(|entry| entry.kind == TapEntryKind::Anchor)
@@ -238,7 +251,7 @@ impl TapeService {
         });
 
         Ok(TapeInfo {
-            name: self.tape_name.clone(),
+            name: tape_name.to_owned(),
             entries: entries.len(),
             anchors: anchors.len(),
             last_anchor,
@@ -248,14 +261,14 @@ impl TapeService {
     }
 
     /// Reset the tape, optionally archiving the previous file first.
-    pub async fn reset(&self, archive: bool) -> TapResult<String> {
+    pub async fn reset(&self, tape_name: &str, archive: bool) -> TapResult<String> {
         let archive_path = if archive {
-            self.store.archive(&self.tape_name).await?
+            self.store.archive(tape_name).await?
         } else {
             None
         };
 
-        self.store.reset(&self.tape_name).await?;
+        self.store.reset(tape_name).await?;
         let mut state = Map::new();
         state.insert("owner".to_owned(), Value::String("human".to_owned()));
         if let Some(path) = archive_path.as_ref() {
@@ -265,7 +278,7 @@ impl TapeService {
             );
         }
         let _ = self
-            .handoff("session/start", Some(Value::Object(state)))
+            .handoff(tape_name, "session/start", Some(Value::Object(state)))
             .await?;
 
         Ok(if let Some(path) = archive_path {
@@ -277,8 +290,8 @@ impl TapeService {
 
     /// Return the most recent `limit` anchors, oldest-to-newest within the
     /// returned window.
-    pub async fn anchors(&self, limit: usize) -> TapResult<Vec<AnchorSummary>> {
-        let entries = self.entries().await?;
+    pub async fn anchors(&self, tape_name: &str, limit: usize) -> TapResult<Vec<AnchorSummary>> {
+        let entries = self.entries(tape_name).await?;
         let anchor_entries: Vec<_> = entries
             .iter()
             .filter(|entry| entry.kind == TapEntryKind::Anchor)
@@ -307,11 +320,12 @@ impl TapeService {
     /// Return entries strictly between two named anchors.
     pub async fn between_anchors(
         &self,
+        tape_name: &str,
         start: &str,
         end: &str,
         kinds: Option<&[TapEntryKind]>,
     ) -> TapResult<Vec<TapEntry>> {
-        let entries = self.entries().await?;
+        let entries = self.entries(tape_name).await?;
         let start_id = anchor_id(&entries, start);
         let end_id = anchor_id(&entries, end);
         Ok(entries
@@ -325,10 +339,11 @@ impl TapeService {
     /// Return entries after the most recent anchor named `anchor`.
     pub async fn after_anchor(
         &self,
+        tape_name: &str,
         anchor: &str,
         kinds: Option<&[TapEntryKind]>,
     ) -> TapResult<Vec<TapEntry>> {
-        let entries = self.entries().await?;
+        let entries = self.entries(tape_name).await?;
         let anchor_id = anchor_id(&entries, anchor);
         Ok(entries
             .into_iter()
@@ -340,9 +355,10 @@ impl TapeService {
     /// Return entries from the most recent anchor onward.
     pub async fn from_last_anchor(
         &self,
+        tape_name: &str,
         kinds: Option<&[TapEntryKind]>,
     ) -> TapResult<Vec<TapEntry>> {
-        let entries = self.entries().await?;
+        let entries = self.entries(tape_name).await?;
         let last_anchor_id = entries
             .iter()
             .rev()
@@ -359,6 +375,7 @@ impl TapeService {
     /// fuzzy fallback.
     pub async fn search(
         &self,
+        tape_name: &str,
         query: &str,
         limit: usize,
         all_tapes: bool,
@@ -371,13 +388,13 @@ impl TapeService {
         let tape_names = if all_tapes {
             self.store.list_tapes().await?
         } else {
-            vec![self.tape_name.clone()]
+            vec![tape_name.to_owned()]
         };
 
         let mut results = Vec::new();
-        for tape_name in tape_names {
+        for name in tape_names {
             let mut count = 0usize;
-            let entries = self.store.read(&tape_name).await?.unwrap_or_default();
+            let entries = self.store.read(&name).await?.unwrap_or_default();
             for entry in entries.into_iter().rev() {
                 if entry.kind != TapEntryKind::Message {
                     continue;
@@ -396,6 +413,11 @@ impl TapeService {
         }
 
         Ok(results)
+    }
+
+    /// List all tape names known to the underlying store.
+    pub async fn list_tapes(&self) -> TapResult<Vec<String>> {
+        self.store.list_tapes().await
     }
 }
 

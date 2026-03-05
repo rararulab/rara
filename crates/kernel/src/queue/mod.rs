@@ -21,6 +21,8 @@ mod observable;
 pub(crate) mod shard;
 mod sharded;
 
-pub use in_memory::{KernelEvent, EventPriority, EventQueue, EventQueueRef, InMemoryEventQueue, KernelEventEnvelope};
+pub use in_memory::{
+    EventPriority, EventQueue, EventQueueRef, InMemoryEventQueue, KernelEvent, KernelEventEnvelope,
+};
 pub use observable::{ObservableEventQueue, ObservableEventQueueRef, ObservableKernelEvent};
 pub use sharded::{ShardedEventQueue, ShardedEventQueueConfig, ShardedQueueRef};

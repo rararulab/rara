@@ -5,6 +5,7 @@
 # Architecture
 
 - [Configuration](configuration.md)
+- [Identity & User System](identity-system.md)
 - [Agent Tools](agent-tools.md)
 - [Memory System](memory-system.md)
 - [Proactive Agent (Agent Soul)](proactive-agent.md)

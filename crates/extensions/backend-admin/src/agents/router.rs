@@ -19,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rara_kernel::{handle::KernelHandle, process::AgentManifest};
+use rara_kernel::{agent::AgentManifest, handle::KernelHandle};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,7 @@ impl AgentResponse {
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentRequest {
     pub name:           String,
+    pub role:           rara_kernel::identity::Role,
     pub description:    String,
     pub model:          String,
     pub system_prompt:  String,
@@ -172,7 +173,7 @@ async fn create_agent(
     };
 
     registry
-        .register(manifest.clone())
+        .register(manifest.clone(), req.role)
         .map_err(|e| AgentError::Internal(e.to_string()))?;
 
     Ok((

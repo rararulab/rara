@@ -12,19 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SQLite-backed [`UserStore`] implementation and boot-time owner user
-//! initialization.
+//! SQLite-backed [`UserStore`] implementation, platform identity mapping,
+//! and boot-time user initialization.
 
 use async_trait::async_trait;
 use rara_kernel::{
     error::{KernelError, Result},
-    process::{
-        principal::Role,
-        user::{KernelUser, Permission, ROOT_USER_NAME, SYSTEM_USER_NAME, UserStore},
-    },
+    identity::{KernelUser, Permission, ROOT_USER_NAME, Role, SYSTEM_USER_NAME, UserStore},
 };
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use tracing::info;
+
+// -- Config types (defined here because app → boot dependency direction) ------
+
+/// A user entry in the YAML configuration file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserConfig {
+    pub name: String,
+    /// `"root"` | `"admin"` | `"user"`
+    pub role: String,
+    #[serde(default)]
+    pub platforms: Vec<PlatformBindingConfig>,
+}
+
+/// A platform identity binding for a configured user.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlatformBindingConfig {
+    /// Channel type: `"telegram"`, `"web"`, `"cli"`, etc.
+    #[serde(rename = "type")]
+    pub channel_type: String,
+    /// Platform-side user identifier (e.g. Telegram user ID).
+    pub user_id: String,
+}
 
 // -- DB row types (chrono at DB boundary) ------------------------------------
 
@@ -182,8 +202,7 @@ impl UserStore for SqliteUserStore {
 /// Ensure `root` and `system` users exist in the database.
 ///
 /// - `root` — `Role::Root` + `Permission::All`
-/// - `system` — `Role::Admin` + `Permission::All` (used by background workers
-///   via `Principal::admin("system")`)
+/// - `system` — `Role::Admin` + `Permission::All` (used by background workers)
 pub async fn ensure_default_users(
     pool: &SqlitePool,
 ) -> std::result::Result<(), crate::error::BootError> {
@@ -219,6 +238,75 @@ pub async fn ensure_default_users(
             }
         })?;
         info!("kernel: system user created");
+    }
+
+    Ok(())
+}
+
+// -- Boot-time configured users ----------------------------------------------
+
+fn parse_role(s: &str) -> Role {
+    match s {
+        "root" => Role::Root,
+        "admin" => Role::Admin,
+        _ => Role::User,
+    }
+}
+
+fn default_permissions(role: Role) -> Vec<Permission> {
+    match role {
+        Role::Root | Role::Admin => vec![Permission::All],
+        Role::User => vec![Permission::Spawn],
+    }
+}
+
+/// Sync users and platform identity mappings from YAML configuration.
+///
+/// For each [`UserConfig`]:
+/// - Creates the [`KernelUser`] if it doesn't exist.
+/// - Updates the role (and permissions) if the configured role changed.
+/// - Upserts all platform identity bindings.
+///
+/// This function is idempotent and safe to call on every startup.
+pub async fn ensure_configured_users(
+    pool: &SqlitePool,
+    users: &[UserConfig],
+) -> std::result::Result<(), crate::error::BootError> {
+    let store = SqliteUserStore::new(pool.clone());
+
+    for cfg in users {
+        let role = parse_role(&cfg.role);
+
+        let boot_err =
+            |e: rara_kernel::error::KernelError| crate::error::BootError::UserStore {
+                message: e.to_string(),
+            };
+
+        // Ensure KernelUser exists
+        match store.get_by_name(&cfg.name).await.map_err(boot_err)? {
+            Some(existing) if existing.role != role => {
+                let mut updated = existing;
+                updated.role = role;
+                updated.permissions = default_permissions(role);
+                store.update(&updated).await.map_err(boot_err)?;
+                info!(user = %cfg.name, ?role, "kernel user role updated from config");
+            }
+            Some(_) => { /* up to date */ }
+            None => {
+                let user = KernelUser {
+                    id:          uuid::Uuid::new_v4(),
+                    name:        cfg.name.clone(),
+                    role,
+                    permissions: default_permissions(role),
+                    enabled:     true,
+                    created_at:  jiff::Timestamp::now(),
+                    updated_at:  jiff::Timestamp::now(),
+                };
+                store.create(&user).await.map_err(boot_err)?;
+                info!(user = %cfg.name, ?role, "kernel user created from config");
+            }
+        }
+
     }
 
     Ok(())

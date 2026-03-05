@@ -14,16 +14,15 @@
 
 //! Terminal channel adapter — CLI interactive chat implementation.
 //!
-//! Unlike the Telegram and Web adapters, the `TerminalAdapter` does NOT
-//! implement [`ChannelAdapter`] (no start/stop lifecycle needed). It only
-//! implements [`EgressAdapter`] to receive outbound messages from the
-//! egress pipeline and forward them as [`CliEvent`]s through an mpsc
+//! Unlike the Telegram and Web adapters, the `TerminalAdapter` is
+//! egress-only — it implements [`ChannelAdapter`] with only `send()`,
+//! forwarding outbound messages as [`CliEvent`]s through an mpsc
 //! channel for the REPL loop to render.
 
 use async_trait::async_trait;
 use rara_kernel::{
-    channel::types::ChannelType,
-    io::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound},
+    channel::{adapter::ChannelAdapter, types::ChannelType},
+    io::{EgressError, Endpoint, EndpointAddress, PlatformOutbound},
 };
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -100,11 +99,11 @@ impl TerminalAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// EgressAdapter trait implementation
+// ChannelAdapter trait implementation
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-impl EgressAdapter for TerminalAdapter {
+impl ChannelAdapter for TerminalAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Cli }
 
     async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
@@ -117,7 +116,7 @@ impl EgressAdapter for TerminalAdapter {
         let event = match msg {
             PlatformOutbound::Reply { content, .. } => CliEvent::Reply { content },
             PlatformOutbound::StreamChunk { delta, .. } => CliEvent::TextDelta { text: delta },
-            PlatformOutbound::Progress { text, .. } => CliEvent::Progress { text },
+            PlatformOutbound::Progress { text } => CliEvent::Progress { text },
         };
 
         self.send_event(event);

@@ -37,11 +37,12 @@ pub struct RaraState {
     pub credential_store:  rara_keyring_store::KeyringStoreRef,
     pub driver_registry:   Arc<rara_kernel::llm::DriverRegistry>,
     pub tool_registry:     Arc<rara_kernel::tool::ToolRegistry>,
-    pub user_store:        Arc<dyn rara_kernel::process::user::UserStore>,
-    /// Lightweight file-based session metadata index (tape-centric replacement).
+    pub user_store:        Arc<dyn rara_kernel::identity::UserStore>,
+    /// Lightweight file-based session metadata index (tape-centric
+    /// replacement).
     pub session_index:     Arc<dyn rara_kernel::session::SessionIndex>,
-    /// File-backed tape store for append-only conversation history.
-    pub tape_store:        Arc<rara_memory::tape::FileTapeStore>,
+    /// Tape service for append-only conversation history.
+    pub tape_service:      rara_kernel::memory::TapeService,
     pub skill_registry:    rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:       rara_mcp::manager::mgr::McpManager,
     pub settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -108,17 +109,14 @@ impl RaraState {
 
         // -- tape store -------------------------------------------------------
 
-        let workspace_path = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let tape_store = Arc::new(
-            rara_memory::tape::FileTapeStore::new(
-                rara_paths::home_dir(),
-                &workspace_path,
-            )
-            .await
-            .whatever_context("Failed to initialize FileTapeStore")?,
+        let workspace_path =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let tape_service = rara_kernel::memory::TapeService::new(
+            rara_kernel::memory::FileTapeStore::new(rara_paths::home_dir(), &workspace_path)
+                .await
+                .whatever_context("Failed to initialize FileTapeStore")?,
         );
-        info!("FileTapeStore initialized");
+        info!("TapeService initialized");
 
         // -- Composio auth provider -------------------------------------------
 
@@ -152,7 +150,7 @@ impl RaraState {
             &mut tool_registry,
             crate::tools::ServiceToolDeps {
                 skill_registry: skill_registry.clone(),
-                mcp_manager: mcp_manager.clone(),
+                mcp_manager:    mcp_manager.clone(),
             },
         );
 
@@ -160,7 +158,7 @@ impl RaraState {
 
         // -- user store -------------------------------------------------------
 
-        let user_store: Arc<dyn rara_kernel::process::user::UserStore> =
+        let user_store: Arc<dyn rara_kernel::identity::UserStore> =
             Arc::new(crate::user_store::SqliteUserStore::new(pool.clone()));
         crate::user_store::ensure_default_users(&pool)
             .await
@@ -174,7 +172,7 @@ impl RaraState {
             tool_registry: tools,
             user_store,
             session_index,
-            tape_store,
+            tape_service,
             skill_registry,
             mcp_manager,
             settings_provider,

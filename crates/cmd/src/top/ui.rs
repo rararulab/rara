@@ -22,8 +22,10 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
-use crate::top::app::{App, Tab};
-use crate::top::types::{PanelFocus, SessionView};
+use crate::top::{
+    app::{App, Tab},
+    types::{PanelFocus, SessionView},
+};
 
 /// Render the full TUI.
 pub fn render(frame: &mut Frame, app: &App) {
@@ -340,20 +342,15 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
 // ---------------------------------------------------------------------------
 
 fn render_session_details_tab(frame: &mut Frame, area: Rect, app: &App) {
-    let [list_area, detail_area] = Layout::horizontal([
-        Constraint::Percentage(20),
-        Constraint::Percentage(80),
-    ])
-    .areas(area);
+    let [list_area, detail_area] =
+        Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(80)]).areas(area);
 
     render_session_list(frame, list_area, app);
 
     if let Some(session_view) = app.session_state.selected_session_view() {
-        let [gantt_area, tree_area] = Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
-        .areas(detail_area);
+        let [gantt_area, tree_area] =
+            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(detail_area);
 
         render_gantt(
             frame,
@@ -509,7 +506,10 @@ fn render_gantt(
         // Separator.
         let sep_area = Rect::new(inner.x + label_width, y, 1, 1);
         frame.render_widget(
-            Paragraph::new(Span::styled("\u{2502}", Style::default().fg(Color::DarkGray))),
+            Paragraph::new(Span::styled(
+                "\u{2502}",
+                Style::default().fg(Color::DarkGray),
+            )),
             sep_area,
         );
 
@@ -569,10 +569,7 @@ fn render_gantt(
         };
 
         let bar_area = Rect::new(inner.x + label_width + 1, y, bar_width as u16, 1);
-        frame.render_widget(
-            Paragraph::new(Span::styled(bar_chars, bar_style)),
-            bar_area,
-        );
+        frame.render_widget(Paragraph::new(Span::styled(bar_chars, bar_style)), bar_area);
     }
 
     // Time axis on the last row.
@@ -700,9 +697,7 @@ fn render_session_tree(
                     .map(|s| {
                         Span::styled(
                             s.content,
-                            s.style
-                                .bg(Color::DarkGray)
-                                .add_modifier(Modifier::BOLD),
+                            s.style.bg(Color::DarkGray).add_modifier(Modifier::BOLD),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -757,8 +752,7 @@ fn depth_first_agents(session_view: &SessionView) -> Vec<String> {
     let roots: Vec<String> = agents
         .values()
         .filter(|a| {
-            a.parent_id.is_none()
-                || !agents.contains_key(a.parent_id.as_deref().unwrap_or(""))
+            a.parent_id.is_none() || !agents.contains_key(a.parent_id.as_deref().unwrap_or(""))
         })
         .map(|a| a.agent_id.clone())
         .collect();

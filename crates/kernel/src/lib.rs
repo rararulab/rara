@@ -28,19 +28,19 @@
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Notification Bus | [`NotificationBus`] | Inter-component notification broadcasting |
 
-pub mod agent_loop;
+pub mod agent;
 pub mod channel;
-pub mod compaction;
 pub mod error;
 pub mod event;
 pub mod handle;
+pub mod identity;
 pub mod io;
 pub mod kernel;
 pub mod kv;
 pub mod llm;
+pub mod memory;
 pub mod metrics;
 pub mod notification;
-pub mod process;
 pub mod queue;
 pub mod security;
 pub mod session;

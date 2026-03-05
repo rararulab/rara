@@ -72,6 +72,47 @@ pub struct DriverRegistry {
 }
 
 impl DriverRegistry {
+    /// Create an empty registry with the given default driver name.
+    pub fn new(default_driver: impl Into<String>) -> Self {
+        Self {
+            state: RwLock::new(DriverRegistryState {
+                drivers: HashMap::new(),
+                default_driver: default_driver.into(),
+                provider_models: HashMap::new(),
+                agent_overrides: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Register or replace a named driver instance.
+    pub fn register_driver(&self, name: impl Into<String>, driver: LlmDriverRef) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.drivers.insert(name.into(), driver);
+    }
+
+    /// Set model configuration for a provider.
+    pub fn set_provider_model(
+        &self,
+        name: impl Into<String>,
+        default_model: impl Into<String>,
+        fallback_models: Vec<String>,
+    ) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.provider_models.insert(
+            name.into(),
+            ProviderModelConfig {
+                default_model: default_model.into(),
+                fallback_models,
+            },
+        );
+    }
+
+    /// Set a per-agent override.
+    pub fn set_agent_override(&self, agent_name: impl Into<String>, config: AgentDriverConfig) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.agent_overrides.insert(agent_name.into(), config);
+    }
+
     /// Resolve a driver + model for a given agent.
     ///
     /// Resolution priority:
@@ -171,70 +212,5 @@ impl DriverRegistry {
         let next_state = next.state.read().unwrap_or_else(|e| e.into_inner()).clone();
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         *state = next_state;
-    }
-}
-
-/// Builder for constructing a [`DriverRegistry`].
-pub struct DriverRegistryBuilder {
-    drivers:         HashMap<String, LlmDriverRef>,
-    default_driver:  String,
-    provider_models: HashMap<String, ProviderModelConfig>,
-    agent_overrides: HashMap<String, AgentDriverConfig>,
-}
-
-impl DriverRegistryBuilder {
-    /// Create a new builder with the given default driver name.
-    pub fn new(default_driver: impl Into<String>) -> Self {
-        Self {
-            drivers:         HashMap::new(),
-            default_driver:  default_driver.into(),
-            provider_models: HashMap::new(),
-            agent_overrides: HashMap::new(),
-        }
-    }
-
-    /// Register a named driver instance.
-    pub fn driver(mut self, name: impl Into<String>, driver: LlmDriverRef) -> Self {
-        self.drivers.insert(name.into(), driver);
-        self
-    }
-
-    /// Register model configuration for a specific provider.
-    pub fn provider_model(
-        mut self,
-        name: impl Into<String>,
-        default_model: impl Into<String>,
-        fallback_models: Vec<String>,
-    ) -> Self {
-        self.provider_models.insert(
-            name.into(),
-            ProviderModelConfig {
-                default_model: default_model.into(),
-                fallback_models,
-            },
-        );
-        self
-    }
-
-    /// Register a per-agent driver override.
-    pub fn agent_override(
-        mut self,
-        agent_name: impl Into<String>,
-        config: AgentDriverConfig,
-    ) -> Self {
-        self.agent_overrides.insert(agent_name.into(), config);
-        self
-    }
-
-    /// Build the [`DriverRegistry`].
-    pub fn build(self) -> DriverRegistry {
-        DriverRegistry {
-            state: RwLock::new(DriverRegistryState {
-                drivers:         self.drivers,
-                default_driver:  self.default_driver,
-                provider_models: self.provider_models,
-                agent_overrides: self.agent_overrides,
-            }),
-        }
     }
 }

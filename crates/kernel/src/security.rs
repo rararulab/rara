@@ -30,10 +30,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{KernelError, Result},
-    process::{
-        principal::{Principal, Role, UserId},
-        user::{Permission, UserStore, UserStoreRef},
-    },
+    identity::{Permission, Principal, Role, UserId, UserStore, UserStoreRef},
     session::SessionKey,
 };
 
@@ -276,9 +273,12 @@ impl SecuritySubsystem {
         }
     }
 
-    /// Validate that the principal's user exists, is enabled, and has Spawn
-    /// permission.
-    pub async fn validate_principal(&self, principal: &Principal) -> Result<()> {
+    /// Resolve a [`Principal`] from the user store, validating that the user
+    /// exists, is enabled, and has Spawn permission.
+    ///
+    /// Returns a fully-populated `Principal` with the correct role and
+    /// permissions from the database — never a hollow placeholder.
+    pub async fn resolve_principal(&self, principal: &Principal) -> Result<Principal> {
         let user = self
             .user_store
             .get_by_name(&principal.user_id.0)
@@ -294,7 +294,7 @@ impl SecuritySubsystem {
                 reason: format!("user '{}' lacks Spawn permission", user.name),
             });
         }
-        Ok(())
+        Ok(Principal::from_user(&user))
     }
 
     /// Resolve a user's role for agent routing.

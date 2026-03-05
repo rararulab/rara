@@ -35,7 +35,7 @@ pub async fn build_driver_registry(
     credential_store: &dyn rara_keyring_store::KeyringStore,
 ) -> anyhow::Result<Arc<rara_kernel::llm::DriverRegistry>> {
     use rara_domain_shared::settings::keys;
-    use rara_kernel::llm::{DriverRegistryBuilder, OpenAiDriver};
+    use rara_kernel::llm::{DriverRegistry, OpenAiDriver};
 
     let default_provider = settings
         .as_ref()
@@ -49,7 +49,7 @@ pub async fn build_driver_registry(
             )
         })?;
 
-    let mut builder = DriverRegistryBuilder::new(&default_provider);
+    let registry = Arc::new(DriverRegistry::new(&default_provider));
 
     // -- auto-discover providers from settings --------------------------------
 
@@ -61,7 +61,7 @@ pub async fn build_driver_registry(
         .collect();
 
     for &name in &provider_names {
-        builder = builder.driver(
+        registry.register_driver(
             name,
             Arc::new(OpenAiDriver::from_settings(settings.clone(), name)),
         );
@@ -83,7 +83,7 @@ pub async fn build_driver_registry(
                 })
                 .unwrap_or_default();
 
-            builder = builder.provider_model(name, default_model, fallback_models);
+            registry.set_provider_model(name, default_model, fallback_models);
         }
     }
 
@@ -103,7 +103,7 @@ pub async fn build_driver_registry(
 
     match rara_codex_oauth::load_tokens(credential_store).await {
         Ok(Some(tokens)) => {
-            builder = builder.driver(
+            registry.register_driver(
                 "codex",
                 Arc::new(OpenAiDriver::new(
                     "https://api.openai.com/v1",
@@ -119,5 +119,5 @@ pub async fn build_driver_registry(
         providers = ?provider_names,
         "driver registry: default_driver={default_provider}, default_model={default_model}",
     );
-    Ok(Arc::new(builder.build()))
+    Ok(registry)
 }

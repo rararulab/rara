@@ -38,7 +38,7 @@ impl BackendState {
     /// settings provider is also needed by `RaraState`).
     pub async fn init(
         session_index: Arc<dyn rara_kernel::session::SessionIndex>,
-        tape_store: Arc<rara_memory::tape::FileTapeStore>,
+        tape_service: rara_kernel::memory::TapeService,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
     ) -> Result<Self, Whatever> {
@@ -46,11 +46,8 @@ impl BackendState {
 
         // -- session service (renamed from ChatService) ----------------------
 
-        let session_service = crate::chat::service::SessionService::new(
-            session_index,
-            tape_store,
-            settings_provider,
-        );
+        let session_service =
+            crate::chat::service::SessionService::new(session_index, tape_service, settings_provider);
         info!("Session service initialized");
 
         Ok(Self {

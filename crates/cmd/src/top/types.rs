@@ -131,7 +131,9 @@ impl SessionState {
 
     /// Return the currently selected session (if any).
     pub fn selected_session_view(&self) -> Option<&SessionView> {
-        self.sessions.get_index(self.selected_session).map(|(_, v)| v)
+        self.sessions
+            .get_index(self.selected_session)
+            .map(|(_, v)| v)
     }
 }
 

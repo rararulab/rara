@@ -24,21 +24,19 @@ use jiff::Timestamp;
 use tokio::sync::Semaphore;
 
 use crate::{
+    agent::{AgentManifest, AgentRegistryRef, TurnTrace},
     error::{KernelError, Result},
     event::{KernelEventEnvelope, Syscall},
+    identity::Principal,
     io::{
-        AgentHandle, EndpointRegistryRef, IOError, InboundMessage, IngressPipelineRef, PipeReader,
+        AgentHandle, EndpointRegistryRef, IOError, IOSubsystem, InboundMessage, PipeReader,
         PipeWriter, RawPlatformMessage, StreamHubRef,
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
-    process::{
-        AgentManifest, SessionState, SessionStats, SessionTable, Signal,
-        agent_registry::AgentRegistryRef, principal::Principal,
-    },
     queue::EventQueueRef,
     security::SecurityRef,
-    session::SessionKey,
+    session::{SessionKey, SessionState, SessionStats, SessionTable, Signal, SystemStats},
     tool::{ToolRegistry, ToolRegistryRef},
 };
 /// Public entry point for interacting with the kernel.
@@ -63,29 +61,27 @@ use crate::{
 #[derive(Clone)]
 pub struct KernelHandle {
     /// Core: the unified event queue sender.
-    event_queue:       EventQueueRef,
+    event_queue:      EventQueueRef,
     /// Agent registry for resolving named agents to manifests.
-    agent_registry:    AgentRegistryRef,
+    agent_registry:   AgentRegistryRef,
     /// The session table tracking all running sessions.
-    process_table:     Arc<SessionTable>,
-    /// Ingress pipeline for adapters to push inbound messages.
-    ingress_pipeline:  IngressPipelineRef,
-    /// Ephemeral stream hub for real-time token deltas.
-    stream_hub:        StreamHubRef,
-    /// Per-user endpoint registry (tracks connected channels).
-    endpoint_registry: EndpointRegistryRef,
+    process_table:    Arc<SessionTable>,
+    /// Bundled I/O subsystem (ingress resolution, streaming, delivery).
+    io:               Arc<IOSubsystem>,
     /// Flat KV settings provider for runtime configuration.
-    settings:          SettingsRef,
+    settings:         SettingsRef,
     /// Unified security subsystem (auth + authz + approval + guard).
-    security:          SecurityRef,
+    security:         SecurityRef,
     /// Kernel configuration.
-    config:            KernelConfig,
+    config:           KernelConfig,
+    /// Multi-driver LLM registry for resolving drivers per-agent.
+    driver_registry:  crate::llm::DriverRegistryRef,
     /// Global tool registry.
-    tool_registry:     ToolRegistryRef,
+    tool_registry:    ToolRegistryRef,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore:  Arc<Semaphore>,
+    global_semaphore: Arc<Semaphore>,
     /// When the kernel was created (for uptime calculation).
-    started_at:        Timestamp,
+    started_at:       Timestamp,
 }
 
 impl KernelHandle {
@@ -95,12 +91,11 @@ impl KernelHandle {
         event_queue: EventQueueRef,
         agent_registry: AgentRegistryRef,
         process_table: Arc<SessionTable>,
-        ingress_pipeline: IngressPipelineRef,
-        stream_hub: StreamHubRef,
-        endpoint_registry: EndpointRegistryRef,
+        io: Arc<IOSubsystem>,
         settings: SettingsRef,
         security: SecurityRef,
         config: KernelConfig,
+        driver_registry: crate::llm::DriverRegistryRef,
         tool_registry: ToolRegistryRef,
         global_semaphore: Arc<Semaphore>,
         started_at: Timestamp,
@@ -109,14 +104,12 @@ impl KernelHandle {
             event_queue,
             agent_registry,
             process_table,
-            ingress_pipeline,
-            stream_hub,
-            endpoint_registry,
+            io,
             settings,
             security,
             config,
+            driver_registry,
             tool_registry,
-
             global_semaphore,
             started_at,
         }
@@ -188,7 +181,7 @@ impl KernelHandle {
     ///
     /// This is the primary entry point for channel adapters.
     pub async fn ingest(&self, raw: RawPlatformMessage) -> std::result::Result<(), IOError> {
-        let msg = self.ingress_pipeline.resolve(raw).await?;
+        let msg = self.io.resolve(raw).await?;
         let channel_label = format!("{:?}", msg.source.channel_type);
 
         self.submit_message(msg).map_err(|_| IOError::SystemBusy)?;
@@ -229,19 +222,29 @@ impl KernelHandle {
     /// Access the process table for querying.
     pub fn process_table(&self) -> &Arc<SessionTable> { &self.process_table }
 
-    /// Access the ingress pipeline (resolution layer).
-    pub fn ingress_pipeline(&self) -> &IngressPipelineRef { &self.ingress_pipeline }
+    /// Resolve identity and session for a raw platform message.
+    ///
+    /// Delegates to [`IOSubsystem::resolve`].
+    pub async fn resolve(
+        &self,
+        raw: RawPlatformMessage,
+    ) -> std::result::Result<InboundMessage, IOError> {
+        self.io.resolve(raw).await
+    }
 
     /// Access the ephemeral stream hub (WebAdapter needs this for token
     /// deltas).
-    pub fn stream_hub(&self) -> &StreamHubRef { &self.stream_hub }
+    pub fn stream_hub(&self) -> &StreamHubRef { self.io.stream_hub() }
 
     /// Access the endpoint registry (WebAdapter needs this for connection
     /// tracking).
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
+    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { self.io.endpoint_registry() }
 
     /// Access the agent registry for looking up named manifests.
     pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }
+
+    /// Access the LLM driver registry.
+    pub fn driver_registry(&self) -> &crate::llm::DriverRegistryRef { &self.driver_registry }
 
     /// Access the tool registry.
     pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
@@ -263,17 +266,20 @@ impl KernelHandle {
     /// Get detailed runtime statistics for a single session.
     ///
     /// Returns `None` if the session does not exist.
-    pub async fn session_stats(&self, session_key: &SessionKey) -> Option<crate::process::SessionStats> {
+    pub async fn session_stats(
+        &self,
+        session_key: &SessionKey,
+    ) -> Option<crate::session::SessionStats> {
         self.process_table.stats(*session_key)
     }
 
     /// List detailed runtime statistics for all sessions.
-    pub async fn list_processes(&self) -> Vec<crate::process::SessionStats> {
+    pub async fn list_processes(&self) -> Vec<crate::session::SessionStats> {
         self.process_table.all_process_stats()
     }
 
     /// Get kernel-wide aggregate statistics.
-    pub fn system_stats(&self) -> crate::process::SystemStats {
+    pub fn system_stats(&self) -> SystemStats {
         let pt = &self.process_table;
         let active = pt
             .list()
@@ -287,7 +293,7 @@ impl KernelHandle {
             .map(|span| span.get_milliseconds().unsigned_abs())
             .unwrap_or(0);
 
-        crate::process::SystemStats {
+        SystemStats {
             active_sessions: active,
             total_spawned: pt.total_spawned(),
             total_completed: pt.total_completed(),
@@ -299,7 +305,7 @@ impl KernelHandle {
     }
 
     /// Get the detailed turn traces for a specific agent process.
-    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<crate::agent_loop::TurnTrace> {
+    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<TurnTrace> {
         self.process_table.get_turn_traces(session_key)
     }
 
@@ -354,37 +360,18 @@ impl KernelHandle {
         })
     }
 
-    /// Query session state.
-    pub async fn session_status(
-        &self,
-        session_key: SessionKey,
-    ) -> Result<SessionStats> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEventEnvelope::syscall(
-            session_key,
-            Syscall::QueryStatus { reply_tx },
-        ))
-        .await?;
-        Self::await_reply(reply_rx).await?
+    /// Query session state (direct access — no event queue roundtrip).
+    pub async fn session_status(&self, session_key: SessionKey) -> Result<SessionStats> {
+        self.process_table
+            .stats(session_key)
+            .ok_or(KernelError::ProcessNotFound {
+                id: session_key.to_string(),
+            })
     }
 
-    /// List child sessions.
-    pub async fn session_children(
-        &self,
-        session_key: SessionKey,
-    ) -> Vec<SessionStats> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        if self
-            .syscall_push(KernelEventEnvelope::syscall(
-                session_key,
-                Syscall::QueryChildren { reply_tx },
-            ))
-            .await
-            .is_err()
-        {
-            return vec![];
-        }
-        reply_rx.await.unwrap_or_default()
+    /// List child sessions (direct access — no event queue roundtrip).
+    pub async fn session_children(&self, session_key: SessionKey) -> Vec<SessionStats> {
+        self.process_table.children_of(session_key)
     }
 
     // -- Memory operations --
@@ -512,11 +499,7 @@ impl KernelHandle {
     }
 
     /// Connect to a named pipe as a reader.
-    pub async fn connect_pipe(
-        &self,
-        session_key: SessionKey,
-        name: &str,
-    ) -> Result<PipeReader> {
+    pub async fn connect_pipe(&self, session_key: SessionKey, name: &str) -> Result<PipeReader> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEventEnvelope::syscall(
             session_key,
@@ -531,27 +514,10 @@ impl KernelHandle {
 
     // -- Guard operations --
 
-    /// Check whether a tool requires approval before execution.
-    pub async fn requires_approval(
-        &self,
-        session_key: SessionKey,
-        tool_name: &str,
-    ) -> bool {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        if self
-            .syscall_push(KernelEventEnvelope::syscall(
-                session_key,
-                Syscall::RequiresApproval {
-                    tool_name: tool_name.to_string(),
-                    reply_tx,
-                },
-            ))
-            .await
-            .is_err()
-        {
-            return false;
-        }
-        reply_rx.await.unwrap_or(false)
+    /// Check whether a tool requires approval before execution
+    /// (direct access — no event queue roundtrip).
+    pub async fn requires_approval(&self, _session_key: SessionKey, tool_name: &str) -> bool {
+        self.security.requires_approval(tool_name)
     }
 
     /// Request approval for a tool execution.
@@ -578,21 +544,13 @@ impl KernelHandle {
 
     // -- Context queries (used by agent_loop) --
 
-    /// Get the manifest for a session.
-    pub async fn session_manifest(
-        &self,
-        session_key: &SessionKey,
-    ) -> Result<AgentManifest> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEventEnvelope::syscall(
-            *session_key,
-            Syscall::GetManifest {
-                session_key: *session_key,
-                reply_tx,
-            },
-        ))
-        .await?;
-        Self::await_reply(reply_rx).await?
+    /// Get the manifest for a session (direct access — no event queue roundtrip).
+    pub async fn session_manifest(&self, session_key: &SessionKey) -> Result<AgentManifest> {
+        self.process_table
+            .with(session_key, |p| p.manifest.clone())
+            .ok_or(KernelError::ProcessNotFound {
+                id: session_key.to_string(),
+            })
     }
 
     /// Get the tool registry, enriched with per-session tools (e.g.
@@ -611,18 +569,28 @@ impl KernelHandle {
     }
 
     /// Resolve an [`LlmDriver`](crate::llm::LlmDriver) + model for this
-    /// session via the kernel's `DriverRegistry`.
+    /// session via the kernel's `DriverRegistry`
+    /// (direct access — no event queue roundtrip).
     pub async fn session_resolve_driver(
         &self,
         session_key: SessionKey,
     ) -> Result<(crate::llm::LlmDriverRef, String)> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEventEnvelope::syscall(
-            session_key,
-            Syscall::ResolveDriver { reply_tx },
-        ))
-        .await?;
-        Self::await_reply(reply_rx).await?
+        let driver_info = self.process_table.with(&session_key, |p| {
+            (
+                p.manifest.name.clone(),
+                p.manifest.provider_hint.clone(),
+                p.manifest.model.clone(),
+            )
+        });
+        match driver_info {
+            Some((name, hint, model)) => {
+                self.driver_registry
+                    .resolve(&name, hint.as_deref(), model.as_deref())
+            }
+            None => Err(KernelError::ProcessNotFound {
+                id: session_key.to_string(),
+            }),
+        }
     }
 
     // -- Event publishing --
@@ -643,5 +611,4 @@ impl KernelHandle {
         ))
         .await
     }
-
 }

@@ -1,61 +1,335 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
+
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, warn};
 
 use crate::{
-    error::KernelError,
+    error::{IoSnafu, KernelError, Result},
     handle::KernelHandle,
+    identity::Role,
     io::{StreamEvent, StreamHandle},
     llm,
     llm::ModelCapabilities,
     session::SessionKey,
 };
 
-/// Convert persisted chat history into [`llm::Message`] format.
+/// Classification of an agent's functional role.
 ///
-/// This is the `LlmDriver`-native equivalent of the legacy
-/// `runner::build_history_messages` which returns async-openai types.
-pub(crate) fn build_llm_history(
-    history: &[crate::channel::types::ChatMessage],
-) -> Vec<llm::Message> {
-    history
-        .iter()
-        .filter_map(|msg| {
-            use crate::channel::types::MessageRole;
-            match msg.role {
-                MessageRole::System => Some(llm::Message::system(msg.content.as_text())),
-                MessageRole::User => Some(llm::Message::user(msg.content.as_text())),
-                MessageRole::Assistant => {
-                    if msg.tool_calls.is_empty() {
-                        Some(llm::Message::assistant(msg.content.as_text()))
-                    } else {
-                        let tool_calls: Vec<llm::ToolCallRequest> = msg
-                            .tool_calls
-                            .iter()
-                            .map(|tc| llm::ToolCallRequest {
-                                id:        tc.id.to_string(),
-                                name:      tc.name.to_string(),
-                                arguments: tc.arguments.to_string(),
-                            })
-                            .collect();
-                        Some(llm::Message::assistant_with_tool_calls(
-                            msg.content.as_text(),
-                            tool_calls,
-                        ))
+/// Roles enable callers to look up agents by function rather than by name.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display, Default,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum AgentRole {
+    /// User-facing conversational agent (default chat entry point).
+    #[default]
+    Chat,
+    /// Codebase recon / investigation agent.
+    Scout,
+    /// Task planning agent.
+    Planner,
+    /// Execution / coding agent.
+    Worker,
+}
+
+/// Dispatch priority for agent messages.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum Priority {
+    /// Background tasks, batch jobs.
+    Low = 0,
+    /// Default priority for interactive messages.
+    #[default]
+    Normal = 1,
+    /// Elevated priority (e.g., admin requests).
+    High = 2,
+    /// System-critical messages (bypass rate limiting).
+    Critical = 3,
+}
+
+/// Configuration for agent file-system sandboxing.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SandboxConfig {
+    /// Allowed file paths (read/write). Path-prefix matching.
+    #[serde(default)]
+    pub allowed_paths:      Vec<String>,
+    /// Read-only paths (reads allowed, writes denied). Path-prefix matching.
+    #[serde(default)]
+    pub read_only_paths:    Vec<String>,
+    /// Denied paths (takes precedence over allowed and read-only).
+    #[serde(default)]
+    pub denied_paths:       Vec<String>,
+    /// Whether to create an isolated temp workspace for this agent.
+    #[serde(default)]
+    pub isolated_workspace: bool,
+}
+
+/// Agent "binary" — static definition, loadable from YAML or constructed
+/// dynamically.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentManifest {
+    /// Unique name identifying this agent definition.
+    pub name:               String,
+    /// Agent's functional role (chat, scout, planner, worker).
+    #[serde(default)]
+    pub role:               AgentRole,
+    /// Human-readable description.
+    pub description:        String,
+    /// LLM model identifier.
+    #[serde(default)]
+    pub model:              Option<String>,
+    /// System prompt defining agent behavior.
+    pub system_prompt:      String,
+    /// Optional personality/mood/voice prompt.
+    #[serde(default)]
+    pub soul_prompt:        Option<String>,
+    /// Optional hint for provider selection.
+    #[serde(default)]
+    pub provider_hint:      Option<String>,
+    /// Maximum LLM iterations before forced completion.
+    #[serde(default)]
+    pub max_iterations:     Option<usize>,
+    /// Tool names this agent is allowed to use (empty = inherit parent's
+    /// tools).
+    #[serde(default)]
+    pub tools:              Vec<String>,
+    /// Maximum number of concurrent child agents this agent can spawn.
+    #[serde(default)]
+    pub max_children:       Option<usize>,
+    /// Maximum context window size in tokens.
+    #[serde(default)]
+    pub max_context_tokens: Option<usize>,
+    /// Dispatch priority for scheduling.
+    #[serde(default)]
+    pub priority:           Priority,
+    /// Arbitrary metadata for extension.
+    #[serde(default)]
+    pub metadata:           serde_json::Value,
+    /// Optional sandbox configuration for file access control.
+    #[serde(default)]
+    pub sandbox:            Option<SandboxConfig>,
+}
+
+/// Process environment — isolated per-agent context.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AgentEnv {
+    /// Optional workspace directory for file operations.
+    pub workspace: Option<String>,
+    /// Key-value environment variables.
+    pub vars:      HashMap<String, String>,
+}
+
+/// Shared reference to the [`AgentRegistry`].
+pub type AgentRegistryRef = Arc<AgentRegistry>;
+
+pub struct AgentRegistry {
+    builtin:       HashMap<String, AgentManifest>,
+    custom:        DashMap<String, AgentManifest>,
+    agents_dir:    PathBuf,
+    /// Role → agent name mapping for default agent resolution.
+    role_defaults: DashMap<Role, String>,
+}
+
+impl AgentRegistry {
+    /// Build a registry from builtin agents, user-defined manifests, and an
+    /// agents directory for persistence.
+    ///
+    /// Every agent must declare a [`Role`] — this determines which user role
+    /// routes to it by default. The **first** agent registered for a given
+    /// role wins the default slot; subsequent agents with the same role are
+    /// still accessible by name but don't override the default.
+    pub fn init(
+        builtin: Vec<(AgentManifest, Role)>,
+        loader: &ManifestLoader,
+        agents_dir: PathBuf,
+    ) -> Self {
+        let role_defaults = DashMap::new();
+        let builtin = builtin
+            .into_iter()
+            .map(|(m, role)| {
+                // First agent registered for a role becomes the default.
+                role_defaults.entry(role).or_insert_with(|| m.name.clone());
+                (m.name.clone(), m)
+            })
+            .collect();
+        let registry = Self {
+            builtin,
+            custom: DashMap::new(),
+            agents_dir,
+            role_defaults,
+        };
+        for manifest in loader.list() {
+            let name = manifest.name.clone();
+            if !registry.builtin.contains_key(&name) {
+                registry.custom.insert(name, manifest.clone());
+            }
+        }
+        registry
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn get(&self, name: &str) -> Option<AgentManifest> {
+        // Custom first (shadow), then builtin.
+        if let Some(m) = self.custom.get(name) {
+            return Some(m.value().clone());
+        }
+        self.builtin.get(name).cloned()
+    }
+
+    pub fn list(&self) -> Vec<AgentManifest> {
+        let mut result: HashMap<String, AgentManifest> = self.builtin.clone();
+        for entry in &self.custom {
+            result.insert(entry.key().clone(), entry.value().clone());
+        }
+        result.into_values().collect()
+    }
+
+    #[tracing::instrument(skip(self, manifest), fields(agent_name = %manifest.name))]
+    pub fn register(&self, manifest: AgentManifest, role: Role) -> Result<()> {
+        let name = manifest.name.clone();
+        // Persist to YAML.
+        let path = self.agents_dir.join(format!("{}.yaml", name));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let yaml = serde_yaml::to_string(&manifest)
+            .whatever_context::<_, KernelError>("failed to serialize manifest")?;
+        std::fs::write(&path, yaml).context(IoSnafu)?;
+        self.role_defaults
+            .entry(role)
+            .or_insert_with(|| name.clone());
+        self.custom.insert(name, manifest);
+        Ok(())
+    }
+
+    pub fn unregister(&self, name: &str) -> Result<()> {
+        if self.builtin.contains_key(name) {
+            return Err(KernelError::Other {
+                message: format!("cannot unregister builtin agent: {name}").into(),
+            });
+        }
+        self.custom.remove(name);
+        let path = self.agents_dir.join(format!("{}.yaml", name));
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(())
+    }
+
+    /// Find the default agent for a given user role.
+    pub fn agent_for_role(&self, role: Role) -> Option<AgentManifest> {
+        let name = self.role_defaults.get(&role)?;
+        self.get(name.value())
+    }
+
+    pub fn is_builtin(&self, name: &str) -> bool { self.builtin.contains_key(name) }
+
+    pub fn agents_dir(&self) -> &Path { &self.agents_dir }
+}
+
+/// Loads [`AgentManifest`] definitions.
+pub struct ManifestLoader {
+    manifests: Vec<AgentManifest>,
+}
+
+impl ManifestLoader {
+    /// Create an empty loader.
+    pub fn new() -> Self {
+        Self {
+            manifests: Vec::new(),
+        }
+    }
+
+    /// Load user-defined manifests from a directory.
+    ///
+    /// Returns the number of manifests successfully loaded.
+    pub fn load_dir(&mut self, dir: &Path) -> Result<usize> {
+        if !dir.is_dir() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        let entries = std::fs::read_dir(dir).context(IoSnafu)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+            {
+                let content = std::fs::read_to_string(&path).context(IoSnafu)?;
+                match serde_yaml::from_str::<AgentManifest>(&content) {
+                    Ok(m) => {
+                        self.manifests.retain(|existing| existing.name != m.name);
+                        self.manifests.push(m);
+                        count += 1;
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "skipping invalid agent manifest"
+                        );
                     }
                 }
-                MessageRole::Tool | MessageRole::ToolResult => {
-                    let tool_call_id = msg.tool_call_id.as_deref().unwrap_or("");
-                    Some(llm::Message::tool_result(
-                        tool_call_id,
-                        msg.content.as_text(),
-                    ))
-                }
             }
-        })
-        .collect()
+        }
+        Ok(count)
+    }
+
+    /// Load manifests from code-defined sources.
+    pub fn load_manifests(&mut self, manifests: impl IntoIterator<Item = AgentManifest>) {
+        for manifest in manifests {
+            self.manifests.retain(|m| m.name != manifest.name);
+            self.manifests.push(manifest);
+        }
+    }
+
+    /// Get a manifest by name.
+    pub fn get(&self, name: &str) -> Option<&AgentManifest> {
+        self.manifests.iter().find(|m| m.name == name)
+    }
+
+    /// List all loaded manifests.
+    pub fn list(&self) -> &[AgentManifest] { &self.manifests }
+}
+
+impl Default for ManifestLoader {
+    fn default() -> Self { Self::new() }
 }
 
 /// Maximum byte length for result preview strings.
@@ -131,7 +405,7 @@ pub struct AgentTurnResult {
     pub trace:      TurnTrace,
 }
 
-fn parse_tool_call_arguments(arguments: &str) -> Result<serde_json::Value, String> {
+fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json::Value, String> {
     let args = serde_json::from_str::<serde_json::Value>(arguments)
         .map_err(|err| format!("invalid tool arguments: {err}"))?;
     if !args.is_object() {
@@ -169,18 +443,20 @@ fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
 /// Respects `turn_cancel` at every `tokio::select!` point — both before the
 /// stream starts and during delta consumption.
 #[tracing::instrument(
-    skip(handle, history, stream_handle, turn_cancel),
+    skip(handle, history, stream_handle, turn_cancel, tape, tape_name),
     fields(
         session_key = %session_key,
     )
 )]
-pub(crate) async fn run_inline_agent_loop(
+pub(crate) async fn run_agent_loop(
     handle: &KernelHandle,
     session_key: SessionKey,
     user_text: String,
     history: Option<Vec<llm::Message>>,
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
+    tape: crate::memory::TapeService,
+    tape_name: &str,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -233,18 +509,16 @@ pub(crate) async fn run_inline_agent_loop(
     // Check model tool support
     let mut tool_defs = if tools.is_empty() {
         vec![]
+    } else if capabilities.supports_tools {
+        tools.to_llm_tool_definitions()
     } else {
-        if !capabilities.supports_tools {
-            warn!(
-                model_name = %model,
-                provider_hint = ?provider_hint,
-                reason = capabilities.tools_disabled_reason.unwrap_or("unknown"),
-                "disabling tool calling for model without tool support"
-            );
-            vec![]
-        } else {
-            tools.to_llm_tool_definitions()
-        }
+        warn!(
+            model_name = %model,
+            provider_hint = ?provider_hint,
+            reason = capabilities.tools_disabled_reason.unwrap_or("unknown"),
+            "disabling tool calling for model without tool support"
+        );
+        vec![]
     };
 
     let mut tool_calls_made = 0usize;
@@ -421,6 +695,17 @@ pub(crate) async fn run_inline_agent_loop(
 
         // Terminal response (no tool calls, or recovery iteration must exit)
         if !has_tool_calls || llm_error_recovery_used {
+            // Persist final assistant message to tape.
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": &accumulated_text,
+                    }),
+                )
+                .await;
+
             let first_token_ms =
                 first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
             let stream_ms = stream_start.elapsed().as_millis() as u64;
@@ -503,8 +788,24 @@ pub(crate) async fn run_inline_agent_loop(
         } else {
             messages.push(llm::Message::assistant_with_tool_calls(
                 accumulated_text.clone(),
-                assistant_tool_calls,
+                assistant_tool_calls.clone(),
             ));
+        }
+
+        // Persist assistant message with tool calls to tape.
+        if !assistant_tool_calls.is_empty() {
+            let calls_json: Vec<serde_json::Value> = assistant_tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "function": { "name": tc.name, "arguments": tc.arguments }
+                    })
+                })
+                .collect();
+            let _ = tape
+                .append_tool_call(tape_name, serde_json::json!({ "calls": calls_json }))
+                .await;
         }
 
         iter_span.record("tool_count", valid_tool_calls.len());
@@ -554,31 +855,42 @@ pub(crate) async fn run_inline_agent_loop(
 
         let results = futures::future::join_all(tool_futures).await;
 
+        // Persist tool results to tape.
+        if !results.is_empty() {
+            let results_json: Vec<serde_json::Value> = results
+                .iter()
+                .map(|(_success, result, _err, _dur)| result.clone())
+                .collect();
+            let _ = tape
+                .append_tool_result(tape_name, serde_json::json!({ "results": results_json }))
+                .await;
+        }
+
         // Build tool call traces from results
         let mut tool_call_traces: Vec<ToolCallTrace> = Vec::with_capacity(results.len());
 
         // Emit ToolCallEnd events and append tool response messages
         for ((id, name, args), (success, result, err, duration_ms)) in
-            valid_tool_calls.iter().zip(results)
+            valid_tool_calls.iter().zip(results.iter())
         {
             let result_str = result.to_string();
             let result_preview = truncate_preview(&result_str, RESULT_PREVIEW_MAX_BYTES);
 
             stream_handle.emit(StreamEvent::ToolCallEnd {
-                id: id.clone(),
+                id:             id.clone(),
                 result_preview: result_preview.clone(),
-                success,
-                error: err.clone(),
+                success:        *success,
+                error:          err.clone(),
             });
 
             tool_call_traces.push(ToolCallTrace {
                 name: name.clone(),
                 id: id.clone(),
-                duration_ms,
-                success,
+                duration_ms: *duration_ms,
+                success: *success,
                 arguments: args.clone(),
                 result_preview,
-                error: err,
+                error: err.clone(),
             });
 
             messages.push(llm::Message::tool_result(id, result_str));

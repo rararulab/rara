@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Default identity and session resolvers for the I/O Bus pipeline.
+//! Identity and session resolvers for the I/O Bus pipeline.
 //!
-//! The [`DefaultIdentityResolver`] always resolves to the single owner
-//! user, regardless of channel or platform identity.
+//! - [`DefaultIdentityResolver`] — single-owner mode (all channels → one user).
+//! - [`PlatformIdentityResolver`] — config-driven mode (platform identity → kernel user via DB).
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use rara_kernel::{
     channel::types::ChannelType,
+    identity::UserId,
     io::{IOError, IdentityResolver, SessionResolver},
-    process::principal::UserId,
     session::{SessionIndex, SessionKey},
 };
 use tracing::debug;
+
+use crate::user_store::UserConfig;
 
 // ---------------------------------------------------------------------------
 // DefaultIdentityResolver
@@ -60,6 +62,64 @@ impl IdentityResolver for DefaultIdentityResolver {
             "identity resolved to owner"
         );
         Ok(self.owner_user_id.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PlatformIdentityResolver
+// ---------------------------------------------------------------------------
+
+/// Config-driven identity resolver that maps platform identities to kernel
+/// users via an in-memory lookup table built from YAML configuration.
+///
+/// All channels must have their platform mappings explicitly configured.
+/// Unknown platform users are rejected with
+/// [`IOError::IdentityResolutionFailed`].
+pub struct PlatformIdentityResolver {
+    /// `(channel_type, platform_uid)` → kernel user name.
+    mappings: HashMap<(String, String), String>,
+}
+
+impl PlatformIdentityResolver {
+    /// Build the resolver from the configured user list.
+    pub fn new(users: &[UserConfig]) -> Self {
+        let mut mappings = HashMap::new();
+        for user in users {
+            for platform in &user.platforms {
+                mappings.insert(
+                    (platform.channel_type.clone(), platform.user_id.clone()),
+                    user.name.clone(),
+                );
+            }
+        }
+        Self { mappings }
+    }
+}
+
+#[async_trait]
+impl IdentityResolver for PlatformIdentityResolver {
+    async fn resolve(
+        &self,
+        channel_type: ChannelType,
+        platform_user_id: &str,
+        _platform_chat_id: Option<&str>,
+    ) -> Result<UserId, IOError> {
+        let key = (channel_type.to_string(), platform_user_id.to_string());
+
+        match self.mappings.get(&key) {
+            Some(user_name) => {
+                debug!(
+                    channel = %channel_type,
+                    platform_user_id,
+                    resolved = %user_name,
+                    "identity resolved via platform mapping"
+                );
+                Ok(UserId(user_name.clone()))
+            }
+            None => Err(IOError::IdentityResolutionFailed {
+                message: format!("unknown platform identity: {channel_type}:{platform_user_id}"),
+            }),
+        }
     }
 }
 

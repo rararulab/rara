@@ -25,7 +25,7 @@
 
 use std::sync::LazyLock;
 
-use rara_kernel::process::{AgentManifest, AgentRole, Priority};
+use rara_kernel::agent::{AgentManifest, AgentRole, Priority};
 
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:               "rara".to_string(),

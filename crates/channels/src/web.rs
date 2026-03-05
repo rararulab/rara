@@ -24,7 +24,7 @@
 //!
 //! Inbound messages are handed to the kernel via [`KernelHandle`] in a
 //! fire-and-forget fashion. Outbound delivery is handled separately via
-//! [`EgressAdapter`].
+//! [`ChannelAdapter`].
 //!
 //! # Endpoints
 //!
@@ -58,11 +58,11 @@ use rara_kernel::{
     },
     error::KernelError,
     handle::KernelHandle,
+    identity::UserId,
     io::{
-        EgressAdapter, EgressError, Endpoint, EndpointAddress, EndpointRegistry, InteractionType,
+        EgressError, Endpoint, EndpointAddress, EndpointRegistry, InteractionType,
         PlatformOutbound, RawPlatformMessage, ReplyContext,
     },
-    process::principal::UserId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, watch};
@@ -177,7 +177,7 @@ pub struct WebAdapter {
     /// EndpointRegistry for tracking connected users (set during startup).
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     /// Owner token for verifying WebSocket auth tokens.
-    owner_token:       Arc<RwLock<Option<String>>>,
+    owner_token:       Option<String>,
     /// Shutdown signal sender.
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -186,35 +186,17 @@ pub struct WebAdapter {
 
 impl WebAdapter {
     /// Create a new `WebAdapter`.
-    pub fn new() -> Self {
+    pub fn new(owner_token: Option<String>) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             sessions: Arc::new(DashMap::new()),
             sink: Arc::new(RwLock::new(None)),
             stream_hub: Arc::new(RwLock::new(None)),
             endpoint_registry: Arc::new(RwLock::new(None)),
-            owner_token: Arc::new(RwLock::new(None)),
+            owner_token,
             shutdown_tx,
             shutdown_rx,
         }
-    }
-
-    /// Set the StreamHub for real-time token streaming.
-    pub async fn set_stream_hub(&self, hub: Arc<rara_kernel::io::StreamHub>) {
-        let mut guard = self.stream_hub.write().await;
-        *guard = Some(hub);
-    }
-
-    /// Set the EndpointRegistry for tracking connected users.
-    pub async fn set_endpoint_registry(&self, registry: Arc<EndpointRegistry>) {
-        let mut guard = self.endpoint_registry.write().await;
-        *guard = Some(registry);
-    }
-
-    /// Set the owner token for verifying WebSocket auth tokens.
-    pub async fn set_owner_token(&self, token: String) {
-        let mut guard = self.owner_token.write().await;
-        *guard = Some(token);
     }
 
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
@@ -229,7 +211,7 @@ impl WebAdapter {
             sink:              Arc::clone(&self.sink),
             stream_hub:        Arc::clone(&self.stream_hub),
             endpoint_registry: Arc::clone(&self.endpoint_registry),
-            owner_token:       Arc::clone(&self.owner_token),
+            owner_token:       self.owner_token.clone(),
             shutdown_rx:       self.shutdown_rx.clone(),
         };
 
@@ -285,7 +267,7 @@ struct WebAdapterState {
     sink:              Arc<RwLock<Option<KernelHandle>>>,
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    owner_token:       Arc<RwLock<Option<String>>>,
+    owner_token:       Option<String>,
     shutdown_rx:       watch::Receiver<bool>,
 }
 
@@ -374,8 +356,7 @@ async fn ws_handler(
     // If an owner token is provided, verify it.
     if let Some(ref token) = params.token {
         if !token.is_empty() {
-            let guard = state.owner_token.read().await;
-            if let Some(ref expected) = *guard {
+            if let Some(ref expected) = state.owner_token {
                 if verify_owner_token(expected, token) {
                     info!(session_key = %params.session_key, "WebSocket auth via owner token");
                 } else {
@@ -769,21 +750,36 @@ async fn send_message_handler(
 impl ChannelAdapter for WebAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Web }
 
+    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
+        let broadcast_key = match &endpoint.address {
+            EndpointAddress::Web { connection_id } => connection_id.as_str(),
+            _ => return Ok(()),
+        };
+
+        let event = match msg {
+            PlatformOutbound::Reply { content, .. } => WebEvent::Message { content },
+            PlatformOutbound::StreamChunk { delta, .. } => WebEvent::TextDelta { text: delta },
+            PlatformOutbound::Progress { text } => WebEvent::Progress { stage: text },
+        };
+
+        WebAdapter::broadcast_event(&self.sessions, broadcast_key, &event);
+        Ok(())
+    }
+
     async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
-        info!("WebAdapter started — KernelHandle registered");
+        *self.stream_hub.write().await = Some(handle.stream_hub().clone());
+        *self.endpoint_registry.write().await = Some(handle.endpoint_registry().clone());
         let mut guard = self.sink.write().await;
         *guard = Some(handle);
+        info!("WebAdapter started");
         Ok(())
     }
 
     async fn stop(&self) -> Result<(), KernelError> {
         info!("WebAdapter stopping — clearing sessions");
-        // Signal shutdown to all SSE/WS connections.
         let _ = self.shutdown_tx.send(true);
-        // Clear sink reference.
         let mut guard = self.sink.write().await;
         *guard = None;
-        // Clear session map.
         self.sessions.clear();
         Ok(())
     }
@@ -801,34 +797,6 @@ impl ChannelAdapter for WebAdapter {
                 phase: phase.to_string(),
             },
         );
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EgressAdapter trait implementation
-// ---------------------------------------------------------------------------
-
-#[async_trait]
-impl EgressAdapter for WebAdapter {
-    fn channel_type(&self) -> ChannelType { ChannelType::Web }
-
-    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
-        // Extract the broadcast key from the endpoint's connection_id (the
-        // original session_key the client connected with). This avoids the
-        // double-prefix issue with PlatformOutbound::session_key.
-        let broadcast_key = match &endpoint.address {
-            EndpointAddress::Web { connection_id } => connection_id.as_str(),
-            _ => return Ok(()),
-        };
-
-        let event = match msg {
-            PlatformOutbound::Reply { content, .. } => WebEvent::Message { content },
-            PlatformOutbound::StreamChunk { delta, .. } => WebEvent::TextDelta { text: delta },
-            PlatformOutbound::Progress { text, .. } => WebEvent::Progress { stage: text },
-        };
-
-        WebAdapter::broadcast_event(&self.sessions, broadcast_key, &event);
         Ok(())
     }
 }

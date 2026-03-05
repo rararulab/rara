@@ -117,7 +117,6 @@ members = [
     "crates/server",
     "crates/paths",
     "crates/sessions",
-    "crates/memory",
     "crates/skills",
     "crates/integrations/mcp",
     "crates/integrations/codex-oauth",
@@ -154,8 +153,8 @@ dirs = "^6"
 eventsource-stream = "0.2"
 futures = "^0.3"
 http = "^1"
-indexmap = "2"
 hyper = { version = "1", features = ["full"] }
+indexmap = "2"
 jiff = { version = "^0.2", features = ["serde"] }
 jsonwebtoken = "9"
 lazy_static = "^1.4"
@@ -242,7 +241,6 @@ rara-git = { path = "crates/extensions/rara-git" }
 rara-kernel = { path = "crates/kernel" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
-rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-pg-credential-store = { path = "crates/integrations/pg-credential-store" }

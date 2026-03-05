@@ -20,7 +20,7 @@
 //!   [`IngressPipeline`](ingress::IngressPipeline) into the unified
 //!   [`EventQueue`](crate::queue::EventQueue).
 //! - **Egress**: the kernel event loop delivers outbound envelopes via
-//!   [`Egress::deliver`](egress::Egress::deliver) to registered adapters.
+//!   [`IOSubsystem::deliver`] to registered adapters.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)
 //!   flow through the [`StreamHub`](stream::StreamHub) for connected frontends.
 //!
@@ -29,7 +29,7 @@
 //! ```text
 //! Adapters → IngressPipeline → EventQueue → Kernel Event Loop
 //!                                                   ↓
-//!                                         Egress::deliver + StreamHub
+//!                                         IOSubsystem::deliver + StreamHub
 //!                                                   ↓
 //!                                         Channel Adapters (Web, Telegram, ...)
 //! ```
@@ -41,19 +41,19 @@ use std::{
 
 use async_trait::async_trait;
 use base::define_id;
-use tracing::Instrument;
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::{
     channel::types::{ChannelType, MessageContent},
-    process::{AgentRunLoopResult, principal::UserId},
-    session::SessionKey,
+    identity::UserId,
+    session::{AgentRunLoopResult, SessionKey},
 };
 
 /// Well-known progress stage names used by `OutboundPayload::Progress` and
@@ -261,7 +261,7 @@ pub struct OutboundEnvelope {
     /// Target user.
     pub user:        UserId,
     /// Session context.
-    pub session_id:  SessionKey,
+    pub session_key: SessionKey,
     /// How to route this envelope.
     pub routing:     OutboundRouting,
     /// The payload to deliver.
@@ -284,7 +284,7 @@ impl OutboundEnvelope {
             id: MessageId::new(),
             in_reply_to,
             user,
-            session_id,
+            session_key: session_id,
             routing: OutboundRouting::BroadcastAll,
             payload: OutboundPayload::Error {
                 code:    code.into(),
@@ -306,7 +306,7 @@ impl OutboundEnvelope {
             id: MessageId::new(),
             in_reply_to,
             user,
-            session_id,
+            session_key: session_id,
             routing: OutboundRouting::BroadcastAll,
             payload: OutboundPayload::Reply {
                 content,
@@ -320,7 +320,7 @@ impl OutboundEnvelope {
     pub fn progress(
         in_reply_to: MessageId,
         user: UserId,
-        session_id: SessionKey,
+        session_key: SessionKey,
         stage: impl Into<String>,
         detail: Option<String>,
     ) -> Self {
@@ -328,7 +328,7 @@ impl OutboundEnvelope {
             id: MessageId::new(),
             in_reply_to,
             user,
-            session_id,
+            session_key,
             routing: OutboundRouting::BroadcastAll,
             payload: OutboundPayload::Progress {
                 stage: stage.into(),
@@ -350,13 +350,38 @@ impl OutboundEnvelope {
             id: MessageId::new(),
             in_reply_to,
             user,
-            session_id,
+            session_key: session_id,
             routing: OutboundRouting::BroadcastAll,
             payload: OutboundPayload::StateChange {
                 event_type: event_type.into(),
                 data,
             },
             timestamp: jiff::Timestamp::now(),
+        }
+    }
+
+    /// Format this envelope as a [`PlatformOutbound`] for delivery.
+    pub fn to_platform_outbound(&self) -> PlatformOutbound {
+        match &self.payload {
+            OutboundPayload::Reply {
+                content,
+                attachments,
+            } => PlatformOutbound::Reply {
+                content:       content.as_text(),
+                attachments:   attachments.clone(),
+                reply_context: None,
+            },
+            OutboundPayload::Progress { stage, detail } => PlatformOutbound::Progress {
+                text: detail.as_deref().unwrap_or(stage).to_string(),
+            },
+            OutboundPayload::Error { code, message } => PlatformOutbound::Reply {
+                content:       format!("Error [{}]: {}", code, message),
+                attachments:   vec![],
+                reply_context: None,
+            },
+            OutboundPayload::StateChange { .. } => PlatformOutbound::Progress {
+                text: String::new(),
+            },
         }
     }
 }
@@ -843,9 +868,6 @@ pub type IdentityResolverRef = Arc<dyn IdentityResolver>;
 /// Shared reference to a [`SessionResolver`] implementation.
 pub type SessionResolverRef = Arc<dyn SessionResolver>;
 
-/// Shared reference to the [`IngressPipeline`].
-pub type IngressPipelineRef = Arc<IngressPipeline>;
-
 // ---------------------------------------------------------------------------
 // RawPlatformMessage
 // ---------------------------------------------------------------------------
@@ -909,185 +931,6 @@ pub trait SessionResolver: Send + Sync + 'static {
         channel_type: ChannelType,
         platform_chat_id: Option<&str>,
     ) -> Result<SessionKey, IOError>;
-}
-
-// ---------------------------------------------------------------------------
-// IngressPipeline
-// ---------------------------------------------------------------------------
-
-/// Resolves identity and session for raw platform messages.
-///
-/// This is a pure resolution layer — it does not push events or interact
-/// with the event queue.
-/// [`KernelHandle::ingest`](crate::handle::KernelHandle::ingest)
-/// calls [`resolve`](Self::resolve) and then pushes the resulting
-/// [`InboundMessage`] through the event queue.
-pub struct IngressPipeline {
-    identity_resolver: Arc<dyn IdentityResolver>,
-    session_resolver:  Arc<dyn SessionResolver>,
-}
-
-impl IngressPipeline {
-    /// Create a new ingress pipeline.
-    pub fn new(
-        identity_resolver: Arc<dyn IdentityResolver>,
-        session_resolver: Arc<dyn SessionResolver>,
-    ) -> Self {
-        Self {
-            identity_resolver,
-            session_resolver,
-        }
-    }
-
-    /// Resolve identity and session for a raw platform message.
-    ///
-    /// Returns a fully-formed [`InboundMessage`] ready for the event queue.
-    pub async fn resolve(&self, raw: RawPlatformMessage) -> Result<InboundMessage, IOError> {
-        let span = tracing::info_span!(
-            "ingress",
-            channel = ?raw.channel_type,
-            platform_user = %raw.platform_user_id,
-            session_id = tracing::field::Empty,
-            user_id = tracing::field::Empty,
-        );
-        let _guard = span.enter();
-
-        // 1. Resolve identity
-        let user_id = self
-            .identity_resolver
-            .resolve(
-                raw.channel_type,
-                &raw.platform_user_id,
-                raw.platform_chat_id.as_deref(),
-            )
-            .await?;
-        span.record("user_id", tracing::field::display(&user_id.0));
-
-        // 2. Resolve session
-        let session_id = self
-            .session_resolver
-            .resolve(&user_id, raw.channel_type, raw.platform_chat_id.as_deref())
-            .await?;
-        span.record("session_id", tracing::field::display(&session_id));
-
-        // 3. Build InboundMessage
-        let msg = InboundMessage {
-            id:                 MessageId::new(),
-            source:             ChannelSource {
-                channel_type:        raw.channel_type,
-                platform_message_id: raw.platform_message_id,
-                platform_user_id:    raw.platform_user_id,
-                platform_chat_id:    raw.platform_chat_id,
-            },
-            user:               user_id,
-            session_key:        SessionKey::new(),
-            target_session_key: None,
-            content:            raw.content,
-            reply_context:      raw.reply_context,
-            timestamp:          jiff::Timestamp::now(),
-            metadata:           raw.metadata,
-        };
-
-        tracing::info!(
-            channel = ?msg.source.channel_type,
-            user_id = %msg.user.0,
-            session_id = %msg.session_key,
-            content = %msg.content.as_text(),
-            "resolved inbound message",
-        );
-
-        Ok(msg)
-    }
-}
-
-/// Manages egress adapters and the endpoint registry for outbound message
-/// delivery.
-///
-/// Owns the `egress_adapters` map (previously on `Kernel`) and the
-/// `endpoint_registry`. Provides `deliver()` for fire-and-forget outbound
-/// delivery and `register_endpoint()` for stateless channel registration.
-pub(crate) struct DeliverySubsystem {
-    /// Registered egress adapters keyed by channel type.
-    egress_adapters:   HashMap<ChannelType, EgressAdapterRef>,
-    /// Per-user endpoint registry (tracks connected channels).
-    endpoint_registry: EndpointRegistryRef,
-}
-
-impl DeliverySubsystem {
-    /// Create a new delivery subsystem.
-    pub fn new(endpoint_registry: EndpointRegistryRef) -> Self {
-        Self {
-            egress_adapters: HashMap::new(),
-            endpoint_registry,
-        }
-    }
-
-    /// Register an egress adapter for a channel type.
-    ///
-    /// Must be called **before** the kernel event loop starts.
-    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: EgressAdapterRef) {
-        self.egress_adapters.insert(channel_type, adapter);
-    }
-
-    /// Access the egress adapters map.
-    pub fn egress_adapters(&self) -> &HashMap<ChannelType, EgressAdapterRef> {
-        &self.egress_adapters
-    }
-
-    /// Access the endpoint registry.
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
-
-    /// Spawn a Deliver event as an independent task so that egress I/O
-    /// (Telegram API, WebSocket send, etc.) does not block the event loop.
-    pub fn deliver(&self, envelope: OutboundEnvelope) {
-        let adapters = self.egress_adapters.clone();
-        let endpoints = Arc::clone(&self.endpoint_registry);
-        let payload_type = match &envelope.payload {
-            OutboundPayload::Reply { .. } => "reply",
-            OutboundPayload::Progress { .. } => "progress",
-            OutboundPayload::StateChange { .. } => "state_change",
-            OutboundPayload::Error { .. } => "error",
-        };
-        let span = tracing::info_span!(
-            "deliver",
-            session_id = %envelope.session_id,
-            payload_type,
-        );
-
-        tokio::spawn(
-            async move {
-                crate::io::Egress::deliver(&adapters, &endpoints, envelope).await;
-            }
-            .instrument(span),
-        );
-    }
-
-    /// Register egress endpoint for stateless channels (e.g. Telegram).
-    ///
-    /// Connection-oriented channels (Web) register on WS/SSE connect.
-    /// Stateless channels have no persistent connection, so we register on
-    /// every inbound message (idempotent — EndpointRegistry uses a HashSet).
-    pub fn register_stateless_endpoint(&self, msg: &InboundMessage) {
-        if msg.source.channel_type != ChannelType::Telegram {
-            return;
-        }
-        let Some(ref chat_id_str) = msg.source.platform_chat_id else {
-            return;
-        };
-        let Ok(chat_id) = chat_id_str.parse::<i64>() else {
-            return;
-        };
-        self.endpoint_registry.register(
-            &msg.user,
-            crate::io::Endpoint {
-                channel_type: ChannelType::Telegram,
-                address:      crate::io::EndpointAddress::Telegram {
-                    chat_id,
-                    thread_id: None,
-                },
-            },
-        );
-    }
 }
 
 /// Handle returned from spawn — allows waiting for agent completion.
@@ -1182,7 +1025,7 @@ impl EndpointRegistry {
     }
 
     /// Get all active endpoints for a user.
-    pub fn get_endpoints(&self, user: &UserId) -> Vec<Endpoint> {
+    fn get_endpoints(&self, user: &UserId) -> Vec<Endpoint> {
         self.connections
             .get(user)
             .map(|set| set.iter().cloned().collect())
@@ -1190,7 +1033,7 @@ impl EndpointRegistry {
     }
 
     /// Check whether a user has any active endpoints.
-    pub fn is_online(&self, user: &UserId) -> bool {
+    fn is_online(&self, user: &UserId) -> bool {
         self.connections
             .get(user)
             .map(|set| !set.is_empty())
@@ -1202,7 +1045,8 @@ impl EndpointRegistry {
 // PlatformOutbound
 // ---------------------------------------------------------------------------
 
-/// What an [`EgressAdapter::send`] receives for delivery.
+/// What [`ChannelAdapter::send`](crate::channel::adapter::ChannelAdapter::send)
+/// receives for delivery.
 ///
 /// This is the adapter-facing message type — already formatted and ready
 /// for the specific platform.
@@ -1210,8 +1054,6 @@ impl EndpointRegistry {
 pub enum PlatformOutbound {
     /// A complete reply message.
     Reply {
-        /// Session key for routing (e.g. "telegram:chat-123").
-        session_key:   String,
         /// Text content to deliver.
         content:       String,
         /// Binary attachments.
@@ -1221,8 +1063,6 @@ pub enum PlatformOutbound {
     },
     /// An incremental streaming chunk.
     StreamChunk {
-        /// Session key for routing.
-        session_key: String,
         /// Incremental text delta.
         delta:       String,
         /// Platform message ID to edit (for progressive updates).
@@ -1230,28 +1070,9 @@ pub enum PlatformOutbound {
     },
     /// A progress/status update.
     Progress {
-        /// Session key for routing.
-        session_key: String,
         /// Progress text.
-        text:        String,
+        text: String,
     },
-}
-
-// ---------------------------------------------------------------------------
-// EgressAdapter
-// ---------------------------------------------------------------------------
-
-/// Simplified adapter interface for egress (send-only).
-///
-/// Each platform channel implements this trait. The egress loop calls
-/// [`send`](Self::send) for each target endpoint.
-#[async_trait]
-pub trait EgressAdapter: Send + Sync + 'static {
-    /// Which channel type this adapter handles.
-    fn channel_type(&self) -> ChannelType;
-
-    /// Deliver a message to a specific endpoint.
-    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,51 +1091,208 @@ pub enum EgressError {
     Timeout,
 }
 
-// ---------------------------------------------------------------------------
-// Egress
-// ---------------------------------------------------------------------------
-
-/// Outbound delivery engine.
-///
-/// Provides static delivery methods for routing [`OutboundEnvelope`]s to
-/// the appropriate [`EgressAdapter`]s based on the user's connected
-/// endpoints and routing rules.
-///
-/// Called by `Kernel::spawn_deliver()` in the unified event loop.
-pub struct Egress;
-
-/// Shared reference to an [`EgressAdapter`] implementation.
-pub type EgressAdapterRef = Arc<dyn EgressAdapter>;
+/// Shared reference to a [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter).
+pub type ChannelAdapterRef = crate::channel::adapter::ChannelAdapterRef;
 
 /// Shared reference to the [`EndpointRegistry`].
 pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 
-impl Egress {
-    /// Deliver a single outbound envelope to all resolved targets.
+// ---------------------------------------------------------------------------
+// IOSubsystem
+// ---------------------------------------------------------------------------
+
+/// Bundled I/O subsystem for the kernel.
+///
+/// Owns all ingress/egress components: identity + session resolution,
+/// real-time token streaming ([`StreamHub`]), egress adapters, and
+/// endpoint registry.
+///
+/// Constructed at the app/boot layer and injected into
+/// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
+pub struct IOSubsystem {
+    identity_resolver: IdentityResolverRef,
+    session_resolver:  SessionResolverRef,
+    stream_hub:        StreamHubRef,
+    adapters:   HashMap<ChannelType, ChannelAdapterRef>,
+    endpoint_registry: EndpointRegistryRef,
+}
+
+impl IOSubsystem {
+    /// Create a new I/O subsystem.
     ///
-    /// This is a free function over the needed fields so that the
-    /// `outbound_sub` is never borrowed immutably across an `.await`.
+    /// Internally creates a [`StreamHub`] and [`EndpointRegistry`].
+    /// Call [`register_adapter`](Self::register_adapter) to add egress
+    /// adapters before passing to the kernel.
+    pub fn new(
+        identity_resolver: IdentityResolverRef,
+        session_resolver: SessionResolverRef,
+    ) -> Self {
+        Self {
+            identity_resolver,
+            session_resolver,
+            stream_hub: Arc::new(StreamHub::new(256)),
+            adapters: HashMap::new(),
+            endpoint_registry: Arc::new(EndpointRegistry::new()),
+        }
+    }
+
+    // -- Ingress --------------------------------------------------------------
+
+    /// Resolve identity and session for a raw platform message.
     ///
-    /// Also used directly by `Kernel::spawn_deliver()` in the unified
-    /// event loop, bypassing the outbound bus subscribe loop.
+    /// Returns a fully-formed [`InboundMessage`] ready for the event queue.
     #[tracing::instrument(
-        skip(adapters, endpoints, envelope),
+        skip(self, raw),
         fields(
-            user_id = %envelope.user.0,
-            session_id = %envelope.session_id,
+            channel = ?raw.channel_type,
+            platform_user = %raw.platform_user_id,
+            session_id,
+            user_id,
         )
     )]
-    pub async fn deliver(
-        adapters: &HashMap<ChannelType, Arc<dyn EgressAdapter>>,
-        endpoints: &Arc<EndpointRegistry>,
-        envelope: OutboundEnvelope,
-    ) {
-        let targets = Self::resolve_targets(endpoints, &envelope);
+    pub async fn resolve(&self, raw: RawPlatformMessage) -> Result<InboundMessage, IOError> {
+        let span = tracing::Span::current();
 
-        // Parallel delivery with per-endpoint timeout
+        // 1. Resolve identity
+        let user_id = self
+            .identity_resolver
+            .resolve(
+                raw.channel_type,
+                &raw.platform_user_id,
+                raw.platform_chat_id.as_deref(),
+            )
+            .await?;
+        span.record("user_id", tracing::field::display(&user_id.0));
+
+        // 2. Resolve session
+        let session_id = self
+            .session_resolver
+            .resolve(&user_id, raw.channel_type, raw.platform_chat_id.as_deref())
+            .await?;
+        span.record("session_id", tracing::field::display(&session_id));
+
+        // 3. Build InboundMessage
+        let msg = InboundMessage {
+            id:                 MessageId::new(),
+            source:             ChannelSource {
+                channel_type:        raw.channel_type,
+                platform_message_id: raw.platform_message_id,
+                platform_user_id:    raw.platform_user_id,
+                platform_chat_id:    raw.platform_chat_id,
+            },
+            user:               user_id,
+            session_key:        session_id,
+            target_session_key: None,
+            content:            raw.content,
+            reply_context:      raw.reply_context,
+            timestamp:          jiff::Timestamp::now(),
+            metadata:           raw.metadata,
+        };
+
+        tracing::info!(
+            channel = ?msg.source.channel_type,
+            user_id = %msg.user.0,
+            session_id = %msg.session_key,
+            content = %msg.content.as_text(),
+            "resolved inbound message",
+        );
+
+        Ok(msg)
+    }
+
+    // -- Egress ---------------------------------------------------------------
+
+    /// Register an egress adapter for a channel type.
+    ///
+    /// Must be called **before** passing to the kernel.
+    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: ChannelAdapterRef) {
+        self.adapters.insert(channel_type, adapter);
+    }
+
+    /// Spawn a deliver task so that egress I/O (Telegram API, WebSocket
+    /// send, etc.) does not block the kernel event loop.
+    pub fn deliver(self: &Arc<Self>, envelope: OutboundEnvelope) {
+        let this = Arc::clone(self);
+        let payload_type = match &envelope.payload {
+            OutboundPayload::Reply { .. } => "reply",
+            OutboundPayload::Progress { .. } => "progress",
+            OutboundPayload::StateChange { .. } => "state_change",
+            OutboundPayload::Error { .. } => "error",
+        };
+        let span = tracing::info_span!(
+            "deliver",
+            session_id = %envelope.session_key,
+            payload_type,
+        );
+
+        tokio::spawn(
+            async move {
+                this.deliver_to_endpoints(envelope).await;
+            }
+            .instrument(span),
+        );
+    }
+
+    /// Register egress endpoint for stateless channels (e.g. Telegram).
+    ///
+    /// Connection-oriented channels (Web) register on WS/SSE connect.
+    /// Stateless channels have no persistent connection, so we register on
+    /// every inbound message (idempotent — EndpointRegistry uses a HashSet).
+    pub fn register_stateless_endpoint(&self, msg: &InboundMessage) {
+        if msg.source.channel_type != ChannelType::Telegram {
+            return;
+        }
+        let Some(ref chat_id_str) = msg.source.platform_chat_id else {
+            return;
+        };
+        let Ok(chat_id) = chat_id_str.parse::<i64>() else {
+            return;
+        };
+        self.endpoint_registry.register(
+            &msg.user,
+            Endpoint {
+                channel_type: ChannelType::Telegram,
+                address:      EndpointAddress::Telegram {
+                    chat_id,
+                    thread_id: None,
+                },
+            },
+        );
+    }
+
+    // -- Accessors (external consumers) ---------------------------------------
+
+    /// Access the stream hub.
+    pub fn stream_hub(&self) -> &StreamHubRef { &self.stream_hub }
+
+    /// Access the endpoint registry.
+    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
+
+    /// Deliver a single outbound envelope to all resolved targets.
+    #[tracing::instrument(
+        skip(self, envelope),
+        fields(
+            user_id = %envelope.user.0,
+            session_id = %envelope.session_key,
+        )
+    )]
+    async fn deliver_to_endpoints(&self, envelope: OutboundEnvelope) {
+        let connected = self.endpoint_registry.get_endpoints(&envelope.user);
+        let targets = match &envelope.routing {
+            OutboundRouting::BroadcastAll => connected,
+            OutboundRouting::BroadcastExcept { exclude } => connected
+                .into_iter()
+                .filter(|e| &e.channel_type != exclude)
+                .collect(),
+            OutboundRouting::Targeted { channels } => connected
+                .into_iter()
+                .filter(|e| channels.contains(&e.channel_type))
+                .collect(),
+        };
+
         let futs = targets.into_iter().map(|endpoint| {
-            let adapter = adapters.get(&endpoint.channel_type).cloned();
-            let outbound = Self::format_for_endpoint(&endpoint, &envelope);
+            let adapter = self.adapters.get(&endpoint.channel_type).cloned();
+            let outbound = envelope.to_platform_outbound();
             async move {
                 if let Some(adapter) = adapter {
                     match tokio::time::timeout(
@@ -1339,58 +1317,5 @@ impl Egress {
             }
         });
         futures::future::join_all(futs).await;
-    }
-
-    /// Resolve which endpoints should receive this envelope.
-    fn resolve_targets(endpoints: &EndpointRegistry, envelope: &OutboundEnvelope) -> Vec<Endpoint> {
-        let connected = endpoints.get_endpoints(&envelope.user);
-
-        match &envelope.routing {
-            OutboundRouting::BroadcastAll => connected,
-            OutboundRouting::BroadcastExcept { exclude } => connected
-                .into_iter()
-                .filter(|e| &e.channel_type != exclude)
-                .collect(),
-            OutboundRouting::Targeted { channels } => connected
-                .into_iter()
-                .filter(|e| channels.contains(&e.channel_type))
-                .collect(),
-        }
-    }
-
-    /// Convert an [`OutboundPayload`] into a [`PlatformOutbound`] for
-    /// a specific endpoint.
-    fn format_for_endpoint(endpoint: &Endpoint, envelope: &OutboundEnvelope) -> PlatformOutbound {
-        let session_key = format!("{}:{}", endpoint.channel_type, envelope.session_id);
-
-        match &envelope.payload {
-            OutboundPayload::Reply {
-                content,
-                attachments,
-            } => PlatformOutbound::Reply {
-                session_key,
-                content: content.as_text(),
-                attachments: attachments.clone(),
-                reply_context: None,
-            },
-            OutboundPayload::Progress { stage, detail } => PlatformOutbound::Progress {
-                session_key,
-                text: detail.as_deref().unwrap_or(stage).to_string(),
-            },
-            OutboundPayload::Error { code, message } => PlatformOutbound::Reply {
-                session_key,
-                content: format!("Error [{}]: {}", code, message),
-                attachments: vec![],
-                reply_context: None,
-            },
-            OutboundPayload::StateChange { .. } => {
-                // State changes are not directly sent to platforms.
-                // They could be used for Web UI updates via SSE.
-                PlatformOutbound::Progress {
-                    session_key,
-                    text: String::new(),
-                }
-            }
-        }
     }
 }

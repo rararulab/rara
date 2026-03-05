@@ -28,7 +28,6 @@ rara-composio = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
 rara-kernel = { workspace = true }
-rara-memory = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
 rara-sessions = { workspace = true }

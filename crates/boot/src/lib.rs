@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — assembles a production-ready `Kernel` from external
-//! dependencies.
+//! Kernel-side bootstrap helpers (state, registries, resolvers) used by
+//! `rara-app`.
 //!
-//! The primary entry point is [`kernel::boot()`], which creates a
-//! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
-//! endpoint registry, ingress pipeline).
+//! Kernel construction now lives in `rara-kernel::kernel::Kernel::builder()`.
 
 pub mod bus;
 pub mod components;
@@ -31,6 +29,5 @@ pub mod outbox;
 pub mod resolvers;
 pub mod skills;
 pub mod state;
-pub mod tape_convert;
 pub mod tools;
 pub mod user_store;

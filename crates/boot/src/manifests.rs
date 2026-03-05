@@ -16,7 +16,8 @@
 
 use std::path::Path;
 
-use rara_kernel::process::{agent_registry::AgentRegistry, manifest_loader::ManifestLoader};
+use rara_kernel::agent::{AgentRegistry, ManifestLoader};
+use rara_kernel::identity::Role;
 use tracing::info;
 
 /// Load agent manifests and build an AgentRegistry.
@@ -26,9 +27,10 @@ use tracing::info;
 /// ManifestLoader and fed into the registry as custom agents.
 pub fn load_default_registry() -> AgentRegistry {
     let builtin = vec![
-        rara_agents::rara().clone(),
-        rara_agents::nana().clone(),
-        rara_agents::worker().clone(),
+        (rara_agents::rara().clone(), Role::Root),
+        (rara_agents::rara().clone(), Role::Admin),
+        (rara_agents::nana().clone(), Role::User),
+        (rara_agents::worker().clone(), Role::User),
     ];
     let agents_dir = rara_paths::data_dir().join("agents");
     let mut loader = ManifestLoader::new();
@@ -41,9 +43,10 @@ pub fn load_default_registry() -> AgentRegistry {
 /// Load agent manifests from code-defined agents and a custom directory.
 pub fn load_registry_from(dir: &Path) -> AgentRegistry {
     let builtin = vec![
-        rara_agents::rara().clone(),
-        rara_agents::nana().clone(),
-        rara_agents::worker().clone(),
+        (rara_agents::rara().clone(), Role::Root),
+        (rara_agents::rara().clone(), Role::Admin),
+        (rara_agents::nana().clone(), Role::User),
+        (rara_agents::worker().clone(), Role::User),
     ];
     let mut loader = ManifestLoader::new();
     let _ = loader.load_dir(dir);

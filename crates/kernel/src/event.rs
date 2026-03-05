@@ -26,14 +26,11 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{
-    agent_loop::AgentTurnResult,
+    agent::{AgentManifest, AgentTurnResult},
+    identity::{Principal, UserId},
     io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter},
     kv::KvScope,
-    process::{
-        AgentManifest, AgentRunLoopResult, SessionStats, Signal,
-        principal::{Principal, UserId},
-    },
-    session::SessionKey,
+    session::{AgentRunLoopResult, SessionKey, Signal},
     tool::ToolRegistry,
 };
 
@@ -101,21 +98,6 @@ impl SyscallEnvelope {
 #[derive(derive_more::Debug, Serialize, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum Syscall {
-    // -- Process queries --
-    /// Query the status of a target agent process.
-    QueryStatus {
-        #[debug(skip)]
-        #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<crate::error::Result<SessionStats>>,
-    },
-
-    /// Query children of a parent agent process.
-    QueryChildren {
-        #[debug(skip)]
-        #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<Vec<SessionStats>>,
-    },
-
     // -- Memory --
     /// Store a value in the agent's private memory namespace.
     MemStore {
@@ -183,14 +165,6 @@ pub enum Syscall {
     },
 
     // -- Guard --
-    /// Check whether a tool requires approval before execution.
-    RequiresApproval {
-        tool_name: String,
-        #[debug(skip)]
-        #[serde(skip_serializing)]
-        reply_tx:  oneshot::Sender<bool>,
-    },
-
     /// Request approval for a tool execution.
     RequestApproval {
         principal: Principal,
@@ -202,28 +176,12 @@ pub enum Syscall {
     },
 
     // -- Context queries (used by agent_turn) --
-    /// Get the manifest for an agent process.
-    GetManifest {
-        session_key: SessionKey,
-        #[debug(skip)]
-        #[serde(skip_serializing)]
-        reply_tx:    oneshot::Sender<crate::error::Result<AgentManifest>>,
-    },
-
     /// Get the tool registry, enriched with per-process tools (e.g.
     /// SyscallTool).
     GetToolRegistry {
         #[debug(skip)]
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
-    },
-
-    /// Resolve an [`LlmDriver`](crate::llm::LlmDriver) + model for a
-    /// specific agent via `DriverRegistry::resolve()`.
-    ResolveDriver {
-        #[debug(skip)]
-        #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<crate::error::Result<(crate::llm::LlmDriverRef, String)>>,
     },
 
     // -- Event publishing --
@@ -304,7 +262,7 @@ pub enum KernelEvent {
 
     // === Output ===
     /// Deliver an outbound envelope to egress.
-    #[debug("Deliver(session={})", _0.session_id)]
+    #[debug("Deliver(session={})", _0.session_key)]
     Deliver(OutboundEnvelope),
 
     // === SessionCommand: SessionHandle → kernel event loop ===
@@ -461,7 +419,7 @@ impl KernelEventEnvelope {
 
     /// Create a `Deliver` event.
     pub fn deliver(envelope: OutboundEnvelope) -> Self {
-        let session_key = envelope.session_id.clone();
+        let session_key = envelope.session_key.clone();
         Self {
             base: EventBase::from(session_key),
             kind: KernelEvent::Deliver(envelope),
@@ -539,7 +497,7 @@ impl KernelEventEnvelope {
             KernelEvent::Deliver(envelope) => {
                 format!(
                     "deliver outbound message for session {}",
-                    envelope.session_id
+                    envelope.session_key
                 )
             }
             KernelEvent::SessionCommand(envelope) => envelope.payload.summary(),

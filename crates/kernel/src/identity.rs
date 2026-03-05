@@ -12,21 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel user management — user records, permissions, and platform identity
-//! bindings.
-//!
-//! This module defines the OS-level user model for the kernel:
-//! - [`KernelUser`] — a user record (like `/etc/passwd`)
-//! - [`Permission`] — fine-grained capabilities
-//! - [`UserStore`] — persistence trait for user CRUD
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::principal::Role;
 use crate::error::Result;
+
+/// User identity (stores user **name**, not UUID).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct UserId(pub String);
+
+impl std::fmt::Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+
+/// User role determining permission level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Role {
+    Root,
+    Admin,
+    User,
+}
 
 /// Fine-grained permission granted to a kernel user.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -48,9 +55,6 @@ pub enum Permission {
 }
 
 /// Kernel user — analogous to a record in `/etc/passwd`.
-///
-/// Each user has a unique name, a role, and a set of fine-grained permissions.
-/// The `name` field is the primary lookup key used by [`Principal::from_user`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelUser {
     pub id:          uuid::Uuid,
@@ -82,8 +86,6 @@ impl KernelUser {
     }
 
     /// Create the system service account — `Role::Admin` + `Permission::All`.
-    ///
-    /// Used by background workers via `Principal::admin("system")`.
     pub fn system() -> Self {
         Self {
             id:          uuid::Uuid::new_v4(),
@@ -97,8 +99,6 @@ impl KernelUser {
     }
 
     /// Check whether this user has the given permission.
-    ///
-    /// Users with `Permission::All` automatically have every permission.
     pub fn has_permission(&self, perm: &Permission) -> bool {
         self.permissions.contains(&Permission::All) || self.permissions.contains(perm)
     }
@@ -109,6 +109,49 @@ impl KernelUser {
             || self.has_permission(&Permission::UseAllTools)
             || self.has_permission(&Permission::UseTool(tool_name.to_string()))
     }
+}
+
+/// The identity under which an agent process runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Principal {
+    pub user_id:     UserId,
+    pub role:        Role,
+    pub permissions: Vec<Permission>,
+}
+
+impl Principal {
+    /// Create a principal from a [`KernelUser`].
+    pub fn from_user(user: &KernelUser) -> Self {
+        Self {
+            user_id:     UserId(user.name.clone()),
+            role:        user.role,
+            permissions: user.permissions.clone(),
+        }
+    }
+
+    /// Check whether this principal has the given permission.
+    pub fn has_permission(&self, perm: &Permission) -> bool {
+        self.role == Role::Root
+            || self.permissions.contains(&Permission::All)
+            || self.permissions.contains(perm)
+    }
+
+    /// Create a lookup-key principal for identity resolution.
+    ///
+    /// The returned `Principal` only carries the user id — role and
+    /// permissions are placeholders. Call
+    /// [`SecuritySubsystem::resolve_principal`] to obtain a fully-populated
+    /// principal before storing it in a session.
+    pub fn lookup(user_id: impl Into<String>) -> Self {
+        Self {
+            user_id:     UserId(user_id.into()),
+            role:        Role::User,
+            permissions: vec![],
+        }
+    }
+
+    /// Whether this principal has admin privileges.
+    pub fn is_admin(&self) -> bool { self.role == Role::Admin || self.role == Role::Root }
 }
 
 pub type UserStoreRef = Arc<dyn UserStore>;

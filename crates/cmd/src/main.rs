@@ -20,15 +20,15 @@ use snafu::{ResultExt, Whatever, whatever};
 mod build_info;
 mod top;
 
-use rara_app::{AppConfig, StartOptions};
+use rara_app::{AppConfig, StartOptions, run as run_app, start_with_options};
 use rara_channels::terminal::{CliEvent, TerminalAdapter};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
+    identity::UserId,
     io::{
-        Endpoint, EndpointAddress, RawPlatformMessage, StreamEvent,
-        InteractionType, ReplyContext as IoReplyContext,
+        Endpoint, EndpointAddress, InteractionType, RawPlatformMessage,
+        ReplyContext as IoReplyContext, StreamEvent,
     },
-    process::principal::UserId,
     session::SessionKey,
 };
 
@@ -102,7 +102,7 @@ impl ServerArgs {
             None,
         );
 
-        config.run().await
+        run_app(config).await
     }
 }
 
@@ -139,12 +139,14 @@ impl ChatArgs {
         let adapter = Arc::new(adapter);
 
         // Start the app with the CLI adapter injected.
-        let mut app_handle = config
-            .start_with_options(StartOptions {
+        let mut app_handle = start_with_options(
+            config,
+            StartOptions {
                 cli_adapter: Some(adapter.clone()),
-            })
-            .await
-            .whatever_context("Failed to start application")?;
+            },
+        )
+        .await
+        .whatever_context("Failed to start application")?;
 
         let kernel_handle = match app_handle.kernel_handle.take() {
             Some(h) => h,

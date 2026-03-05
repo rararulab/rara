@@ -27,7 +27,6 @@ rara-domain-shared.workspace = true
 rara-kernel.workspace = true
 rara-keyring-store.workspace = true
 rara-mcp.workspace = true
-rara-memory = { workspace = true }
 rara-paths.workspace = true
 rara-pg-credential-store.workspace = true
 rara-sessions.workspace = true

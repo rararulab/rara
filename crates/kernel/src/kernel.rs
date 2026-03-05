@@ -44,29 +44,27 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use futures::future::join_all;
 use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     KernelError,
-    channel::types::{ChannelType, ChatMessage},
-    compaction::DEFAULT_MAX_CONTEXT_TOKENS,
-    event::{KernelEvent, KernelEventEnvelope},
-    io::{
-        EgressAdapterRef, EndpointRegistry, IdentityResolverRef,
-        InboundMessage, IngressPipeline, IngressPipelineRef, MessageId, OutboundEnvelope,
-        PipeRegistry, SessionResolverRef, StreamHubRef, StreamId,
+    agent::{
+        AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, run_agent_loop,
     },
+    event::{KernelEvent, KernelEventEnvelope},
+    identity::Principal,
+    io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
     kv::SharedKv,
     llm::DriverRegistryRef,
-    notification::NotificationBusRef,
-    process::{
-        AgentEnv, AgentManifest, AgentRole, AgentRunLoopResult, Session, SessionState, SessionTable,
-        Signal,
-        agent_registry::AgentRegistryRef, principal::Principal,
-    },
+    memory::TapeService,
+    notification::{BroadcastNotificationBus, NotificationBusRef},
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
-    session::{SessionIndexRef, SessionKey},
+    session::{
+        AgentRunLoopResult, Session, SessionIndexRef, SessionKey, SessionState, SessionTable,
+        Signal,
+    },
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
@@ -125,8 +123,8 @@ pub struct Kernel {
     security:         SecurityRef,
     /// Agent registry for looking up named agent definitions.
     agent_registry:   AgentRegistryRef,
-    /// File-backed tape store for session message persistence.
-    tape_store:       Arc<rara_memory::tape::FileTapeStore>,
+    /// Tape service for session message persistence.
+    tape_service:     TapeService,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
     session_index:    SessionIndexRef,
@@ -136,10 +134,8 @@ pub struct Kernel {
     /// tool_registry, event_bus).
     syscall:          SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
-    /// Ephemeral stream hub for real-time token deltas.
-    stream_hub:       StreamHubRef,
-    /// Ingress pipeline for adapters to push inbound messages.
-    ingress_pipeline: IngressPipelineRef,
+    /// Bundled I/O subsystem (ingress, stream hub, delivery).
+    io:               Arc<IOSubsystem>,
     /// Unified event queue for all kernel interactions.
     event_queue:      EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
@@ -149,39 +145,27 @@ pub struct Kernel {
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
     sharded_queue:    ShardedQueueRef,
-    /// Egress delivery subsystem (adapters + endpoint registry).
-    delivery:         crate::io::DeliverySubsystem,
     /// When this kernel was created (for uptime calculation).
     started_at:       Timestamp,
 }
 
 impl Kernel {
-    /// Default agent name for admin/root users.
-    const ADMIN_AGENT_NAME: &'static str = "nana";
-    /// Default agent name for regular users.
-    const USER_AGENT_NAME: &'static str = "nana";
-
-    /// Create a new Kernel with the given configuration, components, and I/O
-    /// subsystem.
+    /// Construct a kernel from core infrastructure dependencies.
     ///
-    /// The I/O subsystem is fully assembled at construction time. Call
-    /// [`start()`](Self::start) to spawn the unified event loop.
-    #[allow(clippy::too_many_arguments)]
+    /// Registries are loaded separately via `load_*` methods before `start()`.
     pub fn new(
         config: KernelConfig,
         driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
-        tape_store: Arc<rara_memory::tape::FileTapeStore>,
-        event_bus: NotificationBusRef,
-        security: SecurityRef,
         agent_registry: AgentRegistryRef,
         session_index: SessionIndexRef,
+        tape_service: TapeService,
         settings: SettingsRef,
-        stream_hub: StreamHubRef,
-        identity_resolver: IdentityResolverRef,
-        session_resolver: SessionResolverRef,
-        kv_operator: opendal::Operator,
+        security: SecurityRef,
+        io: IOSubsystem,
     ) -> Self {
+        let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
+
         info!(
             max_concurrency = config.max_concurrency,
             default_child_limit = config.default_child_limit,
@@ -189,21 +173,20 @@ impl Kernel {
             "booting kernel"
         );
 
-        let endpoint_registry = Arc::new(EndpointRegistry::new());
-        let delivery = crate::io::DeliverySubsystem::new(endpoint_registry);
-
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
             config.event_queue.clone(),
         ));
         let event_queue: EventQueueRef =
             Arc::new(ObservableEventQueue::new(sharded_queue.clone(), 512));
 
-        let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
-
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
 
         let syscall = SyscallDispatcher::new(
-            SharedKv::new(kv_operator),
+            SharedKv::new(
+                opendal::Operator::new(opendal::services::Memory::default())
+                    .expect("memory operator")
+                    .finish(),
+            ),
             PipeRegistry::new(),
             driver_registry,
             tool_registry,
@@ -217,35 +200,24 @@ impl Kernel {
             global_semaphore,
             security,
             agent_registry,
-            tape_store,
+            tape_service,
             session_index,
             settings,
             syscall,
-            stream_hub,
-            ingress_pipeline,
+            io: Arc::new(io),
             event_queue,
             sharded_queue,
-            delivery,
             started_at: Timestamp::now(),
         }
     }
 
-    /// Create a [`TapeService`](rara_memory::tape::TapeService) bound to the
-    /// given session.
-    fn tape_for(&self, session_id: &SessionKey) -> rara_memory::tape::TapeService {
-        rara_memory::tape::TapeService::new(
-            session_id.to_string(),
-            self.tape_store.as_ref().clone(),
-        )
-    }
-
     /// List detailed runtime statistics for all processes.
-    pub async fn list_processes(&self) -> Vec<crate::process::SessionStats> {
+    pub async fn list_processes(&self) -> Vec<crate::session::SessionStats> {
         self.process_table.all_process_stats()
     }
 
     /// Get kernel-wide aggregate statistics.
-    pub fn system_stats(&self) -> crate::process::SystemStats {
+    pub fn system_stats(&self) -> crate::session::SystemStats {
         let pt = &self.process_table;
         let active = pt
             .list()
@@ -259,7 +231,7 @@ impl Kernel {
             .map(|span| span.get_milliseconds().unsigned_abs())
             .unwrap_or(0);
 
-        crate::process::SystemStats {
+        crate::session::SystemStats {
             active_sessions: active,
             total_spawned: pt.total_spawned(),
             total_completed: pt.total_completed(),
@@ -268,11 +240,6 @@ impl Kernel {
             total_tokens_consumed: pt.total_tokens_consumed(),
             uptime_ms,
         }
-    }
-
-    /// Get the detailed turn traces for a specific agent process.
-    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<crate::agent_loop::TurnTrace> {
-        self.process_table.get_turn_traces(session_key)
     }
 
     /// Create a [`KernelHandle`] for external callers.
@@ -285,29 +252,15 @@ impl Kernel {
             self.event_queue.clone(),
             Arc::clone(&self.agent_registry),
             Arc::clone(&self.process_table),
-            Arc::clone(&self.ingress_pipeline),
-            Arc::clone(&self.stream_hub),
-            Arc::clone(self.delivery.endpoint_registry()),
+            Arc::clone(&self.io),
             Arc::clone(&self.settings),
             Arc::clone(&self.security),
             self.config.clone(),
+            Arc::clone(self.syscall.driver_registry()),
             Arc::clone(self.syscall.tool_registry()),
             Arc::clone(&self.global_semaphore),
             self.started_at,
         )
-    }
-
-    /// Access the unified event queue.
-    pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
-
-    /// Access the sharded event queue.
-    fn sharded_queue(&self) -> &ShardedQueueRef { &self.sharded_queue }
-
-    /// Register an egress adapter for a channel type.
-    ///
-    /// Must be called **before** [`start()`](Self::start).
-    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: EgressAdapterRef) {
-        self.delivery.register_adapter(channel_type, adapter);
     }
 
     /// Start the unified event loop as a background task.
@@ -333,7 +286,7 @@ impl Kernel {
             let k = kernel.clone();
             let token = cancel_token;
             async move {
-                Kernel::run_event_loop_arc(k, token).await;
+                Kernel::run(k, token).await;
             }
         });
 
@@ -350,8 +303,8 @@ impl Kernel {
     ///
     /// Called from [`start()`](Kernel::start) which already wraps Kernel in
     /// Arc.
-    async fn run_event_loop_arc(kernel: Arc<Kernel>, shutdown: CancellationToken) {
-        let sq = kernel.sharded_queue().clone();
+    async fn run(kernel: Arc<Kernel>, shutdown: CancellationToken) {
+        let sq = kernel.sharded_queue.clone();
         let num_shards = sq.num_shards();
 
         info!(
@@ -409,17 +362,16 @@ impl Kernel {
                     loop {
                         let events = queue.drain(32);
                         if events.is_empty() { break; }
-                        for event in events {
+                        let futs = events.into_iter().map(|event| {
                             let event_type: &'static str = (&event.kind).into();
                             let span = info_span!(
                                 "handle_event",
                                 processor_id = id,
                                 event_type,
                             );
-                            self.handle_event(event)
-                                .instrument(span)
-                                .await;
-                        }
+                            self.handle_event(event).instrument(span)
+                        });
+                        join_all(futs).await;
                     }
                 }
                 _ = shutdown.cancelled() => {
@@ -445,7 +397,7 @@ impl Kernel {
     }
 
     /// Dispatch a single event to its handler.
-    pub(crate) async fn handle_event(&self, event: KernelEventEnvelope) {
+    async fn handle_event(&self, event: KernelEventEnvelope) {
         let event_type: &'static str = (&event.kind).into();
         crate::metrics::EVENT_PROCESSED
             .with_label_values(&[event_type])
@@ -486,7 +438,7 @@ impl Kernel {
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
-                self.delivery.deliver(envelope);
+                self.io.deliver(envelope);
             }
             KernelEvent::SessionCommand(syscall) => {
                 let kernel_handle = self.handle();
@@ -523,11 +475,16 @@ impl Kernel {
         input: String,
         principal: Principal,
         parent_id: Option<SessionKey>,
-        resume_session_id: Option<SessionKey>,
+        // TODO: not yet implemented — intended for restoring a previous
+        // session's tape/history so the agent can resume where it left off.
+        _resume_session_id: Option<SessionKey>,
+        // If provided, the spawned session will use this key instead of
+        // generating a fresh one (used when routing a message to an
+        // already-known session identity).
         desired_session_key: Option<SessionKey>,
     ) -> crate::Result<SessionKey> {
         // Validate principal.
-        self.security.validate_principal(&principal).await?;
+        let principal = self.security.resolve_principal(&principal).await?;
 
         // Acquire global semaphore.
         let global_permit = self
@@ -538,21 +495,8 @@ impl Kernel {
                 message: "global concurrency limit reached".to_string(),
             })?;
 
-        let session_key = desired_session_key.unwrap_or_else(SessionKey::new);
+        let session_key = desired_session_key.unwrap_or_default();
         tracing::Span::current().record("session_key", tracing::field::display(&session_key));
-
-        let initial_messages = if let Some(resume_key) = resume_session_id {
-            // Load previous conversation from the tape store.
-            let tape = self.tape_for(&resume_key);
-            let entries = tape.entries().await.unwrap_or_default();
-            entries
-                .into_iter()
-                .filter(|e| e.kind == rara_memory::tape::TapEntryKind::Message)
-                .filter_map(|e| serde_json::from_value(e.payload).ok())
-                .collect()
-        } else {
-            vec![]
-        };
 
         // Create process-level cancellation token.
         // Child processes derive their token from the parent's, so cancelling
@@ -569,14 +513,10 @@ impl Kernel {
             .max_children
             .unwrap_or(self.config.default_child_limit);
 
-        let max_context_tokens = manifest
-            .max_context_tokens
-            .unwrap_or(DEFAULT_MAX_CONTEXT_TOKENS);
-
         // Register unified session in table. The global permit is stored here
         // so it lives as long as the session — dropping the session
         // automatically releases the semaphore slot.
-        let metrics = std::sync::Arc::new(crate::process::RuntimeMetrics::new());
+        let metrics = std::sync::Arc::new(crate::session::RuntimeMetrics::new());
         let process = Session {
             // -- identity & metadata --
             session_key,
@@ -591,14 +531,12 @@ impl Kernel {
             created_files: vec![],
             metrics,
             turn_traces: vec![],
-            // -- conversation & cancellation --
-            conversation: initial_messages,
+            // -- cancellation --
             turn_cancel: CancellationToken::new(),
             process_cancel,
             paused: false,
             pause_buffer: Vec::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            max_context_tokens,
             _global_permit: global_permit,
         };
         self.process_table.insert(process);
@@ -620,13 +558,9 @@ impl Kernel {
         // The synthetic UserMessage uses session_key so that
         // handle_user_message finds this process via direct table lookup.
         let msg_session = session_key;
-        let inbound = InboundMessage::synthetic(
-            input,
-            principal.user_id.clone(),
-            msg_session,
-        );
-        if let Err(e) = self
-            .event_queue()
+        let inbound = InboundMessage::synthetic(input, principal.user_id.clone(), msg_session);
+        if let Err(e) = &self
+            .event_queue
             .try_push(KernelEventEnvelope::user_message(inbound))
         {
             error!(%e, "failed to push initial UserMessage for spawned agent");
@@ -653,7 +587,7 @@ impl Kernel {
                 }
                 let envelope = OutboundEnvelope::state_change(
                     MessageId::new(),
-                    crate::process::principal::UserId("system".to_string()),
+                    crate::identity::UserId("system".to_string()),
                     target.clone(),
                     "interrupted",
                     serde_json::json!({
@@ -661,8 +595,8 @@ impl Kernel {
                         "message": "Agent interrupted by user",
                     }),
                 );
-                if let Err(e) = self
-                    .event_queue()
+                if let Err(e) = &self
+                    .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
                 {
                     error!(%e, "failed to push interrupt notification");
@@ -679,7 +613,7 @@ impl Kernel {
                 let buffered = self.process_table.drain_pause_buffer(&target);
                 let _ = self.process_table.set_state(target, SessionState::Ready);
                 for event in buffered {
-                    if let Err(e) = self.event_queue().try_push(event) {
+                    if let Err(e) = &self.event_queue.try_push(event) {
                         warn!(%e, "failed to re-inject buffered event on resume");
                     }
                 }
@@ -741,25 +675,24 @@ impl Kernel {
             "[child_agent_result] child_id={child_id} iterations={} tool_calls={}\n\n{}",
             result.iterations, result.tool_calls, result.output,
         );
-        let child_msg = crate::channel::types::ChatMessage::system(&child_result_text);
-
-        self.process_table.with_mut(&parent_id, |rt| {
-            rt.conversation.push(child_msg.clone());
-        });
-
         let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
             error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
             return;
         };
 
+        let tape_name = session_id.to_string();
+        if let Err(e) = &self
+            .tape_service
+            .append_message(
+                &tape_name,
+                serde_json::json!({
+                    "role": "user",
+                    "content": &child_result_text,
+                }),
+            )
+            .await
         {
-            let tape = self.tape_for(&session_id);
-            if let Err(e) = tape
-                .append_message(serde_json::to_value(&child_msg).unwrap_or_default())
-                .await
-            {
-                warn!(%e, "failed to persist child result message to tape");
-            }
+            warn!(%e, "failed to persist child result message to tape");
         }
     }
 
@@ -788,7 +721,7 @@ impl Kernel {
                     tool_calls: 0,
                 });
                 let event = KernelEventEnvelope::child_session_done(parent_id, session_key, result);
-                if let Err(e) = self.event_queue().try_push(event) {
+                if let Err(e) = &self.event_queue.try_push(event) {
                     warn!(%e, "failed to push ChildSessionDone event");
                 }
             }
@@ -801,22 +734,24 @@ impl Kernel {
     ///    session — error if terminal or not found (A2A Protocol pattern).
     /// 2. **Session addressing** (direct process table lookup): deliver to
     ///    existing session — if terminal, respawn transparently.
-    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, spawn
-    ///    a new session keyed by the incoming session_key.
-    async fn handle_user_message(&self, msg: InboundMessage) {
-        let span = info_span!(
-            "handle_user_message",
+    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, spawn a
+    ///    new session keyed by the incoming session_key.
+    #[tracing::instrument(
+        skip(self, msg),
+        fields(
             session_id = %msg.session_key,
             user_id = %msg.user.0,
             channel = ?msg.source.channel_type,
-            routing_path = tracing::field::Empty,
-        );
-        let _guard = span.enter();
+            routing_path,
+        )
+    )]
+    async fn handle_user_message(&self, msg: InboundMessage) {
+        let span = tracing::Span::current();
 
         let session_id = msg.session_key.clone();
         let user = msg.user.clone();
 
-        self.delivery.register_stateless_endpoint(&msg);
+        self.io.register_stateless_endpoint(&msg);
 
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_session_key {
@@ -831,8 +766,8 @@ impl Kernel {
                         "process_terminal",
                         format!("process {} is {}", target_id, state),
                     );
-                    if let Err(e) = self
-                        .event_queue()
+                    if let Err(e) = &self
+                        .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
                     {
                         error!(%e, "failed to push process-terminal error Deliver");
@@ -851,8 +786,8 @@ impl Kernel {
                         "process_not_found",
                         format!("process not found: {target_id}"),
                     );
-                    if let Err(e) = self
-                        .event_queue()
+                    if let Err(e) = &self
+                        .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
                     {
                         error!(%e, "failed to push process-not-found error Deliver");
@@ -885,47 +820,26 @@ impl Kernel {
             }
         }
 
-        // ----- Path 3: Name addressing (always spawn new) -----
-        span.record("routing_path", "name_addressing");
-        let target_name = self.default_agent_for_user(&msg.user).await;
+        // ----- Path 3: Role-based default agent (always spawn new) -----
+        span.record("routing_path", "role_default");
 
-        let manifest = if let Some(m) = self.agent_registry.get(&target_name) {
-            m
-        } else if target_name == Self::ADMIN_AGENT_NAME {
-            match self.resolve_manifest_for_auto_spawn().await {
-                Some(m) => m,
-                None => {
-                    error!(
-                        session_id = %session_id,
-                        "no model configured — cannot spawn root agent"
-                    );
-                    return;
-                }
+        let manifest = match self
+            .agent_registry
+            .agent_for_role(self.security.resolve_user_role(&user).await)
+        {
+            Some(m) => m,
+            None => {
+                error!(
+                    session_id = %session_id,
+                    user = %user,
+                    "no default agent registered for user role — check agent registry configuration"
+                );
+                return;
             }
-        } else {
-            warn!(
-                target_name = %target_name,
-                session_id = %session_id,
-                "unknown target agent"
-            );
-            let envelope = OutboundEnvelope::error(
-                msg.id.clone(),
-                user.clone(),
-                session_id.clone(),
-                "unknown_agent",
-                format!("unknown target agent: {target_name}"),
-            );
-            if let Err(e) = self
-                .event_queue()
-                .try_push(KernelEventEnvelope::deliver(envelope))
-            {
-                error!(%e, "failed to push unknown-agent error Deliver");
-            }
-            return;
         };
 
-        let principal = Principal::user(user.0.clone());
-        match self
+        let principal = Principal::lookup(user.0.clone());
+        let spawn_result = self
             .handle_spawn_agent(
                 manifest,
                 msg.content.as_text(),
@@ -934,8 +848,8 @@ impl Kernel {
                 resume_session_id,
                 Some(session_id.clone()),
             )
-            .await
-        {
+            .await;
+        match spawn_result {
             Ok(_aid) => {
                 // handle_spawn_agent pushes a synthetic UserMessage that will
                 // re-enter handle_user_message and be routed via Path 2.
@@ -974,42 +888,6 @@ impl Kernel {
         self.start_llm_turn(session_key, msg).await;
     }
 
-    /// Determine the default agent name for a user based on their role.
-    ///
-    /// - Root / Admin users -> "rara" (full-capability agent)
-    /// - Regular users -> "nana" (chat-only companion)
-    /// - Unknown users -> "nana" (safe default)
-    async fn default_agent_for_user(&self, user: &crate::process::principal::UserId) -> String {
-        use crate::process::principal::Role;
-
-        match self.security.resolve_user_role(user).await {
-            Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
-            Role::User => Self::USER_AGENT_NAME.to_string(),
-        }
-    }
-
-    /// Resolve a manifest for auto-spawning when a user message arrives
-    /// with no existing process and no matching agent in the registry.
-    async fn resolve_manifest_for_auto_spawn(&self) -> Option<crate::process::AgentManifest> {
-        let model = rara_domain_shared::settings::get_default_model(self.settings.as_ref()).await;
-        Some(crate::process::AgentManifest {
-            name: "io-agent".to_string(),
-            role: AgentRole::default(),
-            description: "I/O bus agent".to_string(),
-            model,
-            system_prompt: "You are a helpful assistant.".to_string(),
-            soul_prompt: None,
-            provider_hint: None,
-            max_iterations: Some(25),
-            tools: vec![],
-            max_children: None,
-            max_context_tokens: None,
-            priority: crate::process::Priority::default(),
-            metadata: serde_json::Value::Null,
-            sandbox: None,
-        })
-    }
-
     /// Start an LLM turn for the given agent, spawning the work as an async
     /// task that pushes `TurnCompleted` back into the EventQueue when done.
     #[tracing::instrument(skip_all, fields(session_key = %session_key, session_key = %msg.session_key))]
@@ -1028,7 +906,7 @@ impl Kernel {
             typing_refresh: Option<tokio::task::JoinHandle<()>>,
             session_key:    SessionKey,
             msg_id:         MessageId,
-            user:           crate::process::principal::UserId,
+            user:           crate::identity::UserId,
             completed:      bool,
         }
 
@@ -1076,8 +954,8 @@ impl Kernel {
                 "runtime_not_found",
                 format!("agent runtime not found: {session_key}"),
             );
-            if let Err(e) = self
-                .event_queue()
+            if let Err(e) = &self
+                .event_queue
                 .try_push(KernelEventEnvelope::deliver(envelope))
             {
                 error!(%e, "failed to push runtime-not-found error Deliver");
@@ -1098,7 +976,8 @@ impl Kernel {
         // while the LLM is thinking (e.g. Telegram "typing..." bubble).
         let egress_session_key = session_key;
         let _ =
-            self.event_queue()
+            &self
+                .event_queue
                 .try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
                     msg_id.clone(),
                     user.clone(),
@@ -1112,75 +991,54 @@ impl Kernel {
             metrics.record_message();
         }
 
-        // Apply context compaction + build history + append user message
-        // inside a single `with_mut` closure to minimize lock duration.
+        // Build tape-backed context and append user message to tape first.
         let user_text = msg.content.as_text();
-        let user_msg = ChatMessage::user(&user_text);
+        let turn_data = self
+            .process_table
+            .with(&session_key, |rt| (rt.session_key, rt.turn_cancel.clone()));
 
-        let turn_data = self.process_table.with_mut(&session_key, |rt| {
-            // Swap out the conversation for async compaction, then put it
-            // back after compaction completes.
-            let conversation = std::mem::take(&mut rt.conversation);
-            (
-                conversation,
-                rt.max_context_tokens,
-                rt.session_key,
-                rt.principal.clone(),
-                rt.turn_cancel.clone(),
-            )
-        });
-
-        let Some((conversation, max_context_tokens, rt_session_key, _rt_principal, turn_cancel)) =
-            turn_data
-        else {
+        let Some((rt_session_key, turn_cancel)) = turn_data else {
             warn!(session_key = %session_key, "runtime disappeared during LLM turn setup");
             return;
         };
 
-        // Apply context compaction (async).
-        let compaction_strategy = crate::compaction::SlidingWindowCompaction;
-        let compacted = crate::compaction::maybe_compact(
-            conversation,
-            max_context_tokens,
-            &compaction_strategy,
-        )
-        .await;
+        let tape_name = session_key.to_string();
+        if let Err(e) = &self
+            .tape_service
+            .append_message(
+                &tape_name,
+                // TODO: why ?
+                serde_json::json!({
+                    "role": "user",
+                    "content": &user_text,
+                }),
+            )
+            .await
+        {
+            warn!(%e, "failed to persist user message to tape");
+        }
 
-        // Convert history to LLM format.
+        // Build LLM context from tape.
         let history = {
-            let msgs = crate::agent_loop::build_llm_history(&compacted);
+            let msgs = self
+                .tape_service
+                .clone()
+                .build_llm_context(&tape_name)
+                .await
+                .unwrap_or_default();
             if msgs.is_empty() { None } else { Some(msgs) }
         };
 
-        // Put compacted conversation back and append user message.
-        self.process_table.with_mut(&session_key, |rt| {
-            rt.conversation = compacted;
-            rt.conversation.push(user_msg.clone());
-        });
-
-        // Persist in background to avoid blocking event loop.
-        {
-            let tape = self.tape_for(&session_key);
-            let user_msg = user_msg.clone();
-            tokio::spawn(async move {
-                if let Err(e) = tape
-                    .append_message(serde_json::to_value(&user_msg).unwrap_or_default())
-                    .await
-                {
-                    warn!(%e, "failed to persist user message to tape");
-                }
-            });
-        }
-
         // Open stream.
-        let stream_handle = self.stream_hub.open(session_key.clone());
+        let stream_handle = self.io.stream_hub().open(session_key.clone());
 
         // Clone what we need for the spawned task.
+        let tape_service = self.tape_service.clone();
         let kernel_handle = self.handle();
-        let event_queue = self.event_queue().clone();
+        let event_queue = self.event_queue.clone();
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
-        let stream_hub_ref = Arc::clone(&self.stream_hub);
+        let stream_hub_ref = Arc::clone(&self.io.stream_hub());
 
         // Capture parent span for the spawned task.
         let parent_span = tracing::Span::current();
@@ -1227,23 +1085,25 @@ impl Kernel {
 
             // TurnGuard ensures cleanup on panic or cancellation.
             let mut turn_guard = TurnGuard {
-                event_queue: event_queue.clone(),
-                stream_hub: Arc::clone(&stream_hub_ref),
-                stream_id: stream_id.clone(),
+                event_queue:    event_queue.clone(),
+                stream_hub:     Arc::clone(&stream_hub_ref),
+                stream_id:      stream_id.clone(),
                 typing_refresh: Some(typing_refresh),
-                session_key: session_key.clone(),
-                msg_id: msg_id.clone(),
-                user: user.clone(),
-                completed: false,
+                session_key:    session_key.clone(),
+                msg_id:         msg_id.clone(),
+                user:           user.clone(),
+                completed:      false,
             };
 
-            let turn_result = crate::agent_loop::run_inline_agent_loop(
+            let turn_result = run_agent_loop(
                 &kernel_handle,
                 rt_session_key,
                 user_text,
                 history,
                 &stream_handle,
                 &turn_cancel,
+                tape_service,
+                &tape_name,
             )
             .await;
 
@@ -1298,9 +1158,9 @@ impl Kernel {
     async fn handle_turn_completed(
         &self,
         session_key: SessionKey,
-        result: std::result::Result<crate::agent_loop::AgentTurnResult, String>,
+        result: std::result::Result<AgentTurnResult, String>,
         in_reply_to: MessageId,
-        user: crate::process::principal::UserId,
+        user: crate::identity::UserId,
     ) {
         let span = tracing::Span::current();
 
@@ -1370,21 +1230,6 @@ impl Kernel {
                     metrics.record_tokens(estimated_tokens);
                 }
 
-                // Persist assistant reply to the process's own session.
-                let assistant_msg = ChatMessage::assistant(&turn.text);
-                self.process_table.with_mut(&session_key, |rt| {
-                    rt.conversation.push(assistant_msg.clone());
-                });
-                {
-                    let tape = self.tape_for(&session_key);
-                    if let Err(e) = tape
-                        .append_message(serde_json::to_value(&assistant_msg).unwrap_or_default())
-                        .await
-                    {
-                        warn!(%e, "failed to persist assistant message to tape");
-                    }
-                }
-
                 let result = AgentRunLoopResult {
                     output:     turn.text.clone(),
                     iterations: turn.iterations,
@@ -1400,8 +1245,8 @@ impl Kernel {
                     crate::channel::types::MessageContent::Text(turn.text),
                     vec![],
                 );
-                if let Err(e) = self
-                    .event_queue()
+                if let Err(e) = &self
+                    .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
                 {
                     error!(%e, "failed to push Deliver event");
@@ -1449,8 +1294,8 @@ impl Kernel {
                     "agent_error",
                     err_msg,
                 );
-                if let Err(e) = self
-                    .event_queue()
+                if let Err(e) = &self
+                    .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
                 {
                     error!(%e, "failed to push error Deliver event");
@@ -1473,7 +1318,7 @@ impl Kernel {
 
         // Re-inject buffered events so they trigger a new turn on this session.
         for event in buffered {
-            if let Err(e) = self.event_queue().try_push(event) {
+            if let Err(e) = &self.event_queue.try_push(event) {
                 warn!(%e, "failed to re-inject buffered event");
             }
         }

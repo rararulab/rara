@@ -54,20 +54,20 @@ pub fn kernel_routes(handle: KernelHandle) -> Router {
 
 async fn get_stats(
     State(handle): State<KernelHandle>,
-) -> Result<Json<rara_kernel::process::SystemStats>, ProblemDetails> {
+) -> Result<Json<rara_kernel::session::SystemStats>, ProblemDetails> {
     Ok(Json(handle.system_stats()))
 }
 
 async fn list_sessions(
     State(handle): State<KernelHandle>,
-) -> Result<Json<Vec<rara_kernel::process::SessionStats>>, ProblemDetails> {
+) -> Result<Json<Vec<rara_kernel::session::SessionStats>>, ProblemDetails> {
     Ok(Json(handle.list_processes().await))
 }
 
 async fn get_session_turns(
     State(handle): State<KernelHandle>,
     Path(session_key): Path<String>,
-) -> Result<Json<Vec<rara_kernel::agent_loop::TurnTrace>>, ProblemDetails> {
+) -> Result<Json<Vec<rara_kernel::agent::TurnTrace>>, ProblemDetails> {
     let key = SessionKey::try_from_raw(&session_key)
         .map_err(|e| ProblemDetails::bad_request(format!("invalid session_key: {e}")))?;
     // Verify the session exists before returning traces.

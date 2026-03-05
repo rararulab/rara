@@ -28,21 +28,18 @@ use snafu::ResultExt;
 use tracing::{debug_span, info, warn};
 
 use crate::{
+    agent::{AgentManifest, AgentRegistryRef},
     error::KernelError,
     event::{Syscall, SyscallEnvelope},
     handle::KernelHandle,
+    identity::Principal,
     io::{AgentHandle, PipeEntry, PipeRegistry, pipe},
     kernel::KernelConfig,
     kv::{KvScope, SharedKv},
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
-    process::{
-        AgentManifest, SessionTable,
-        agent_registry::AgentRegistryRef,
-        principal::Principal,
-    },
     security::SecurityRef,
-    session::SessionKey,
+    session::{SessionKey, SessionTable},
     tool::ToolRegistryRef,
 };
 
@@ -91,6 +88,8 @@ impl SyscallDispatcher {
     /// Access the global tool registry.
     pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
 
+    pub fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
+
     // -- Dispatch -----------------------------------------------------------
 
     /// Handle a syscall from a session.
@@ -121,18 +120,6 @@ impl SyscallDispatcher {
         let _guard = span.enter();
 
         match syscall {
-            Syscall::QueryStatus { reply_tx } => {
-                let result = process_table
-                    .stats(syscall_sender)
-                    .ok_or(KernelError::ProcessNotFound {
-                        id: syscall_sender.to_string(),
-                    });
-                let _ = reply_tx.send(result);
-            }
-            Syscall::QueryChildren { reply_tx } => {
-                let children = process_table.children_of(syscall_sender);
-                let _ = reply_tx.send(children);
-            }
             Syscall::MemStore {
                 session_key,
                 principal,
@@ -232,13 +219,6 @@ impl SyscallDispatcher {
                 };
                 let _ = reply_tx.send(result);
             }
-            Syscall::RequiresApproval {
-                tool_name,
-                reply_tx,
-            } => {
-                let result = security.requires_approval(&tool_name);
-                let _ = reply_tx.send(result);
-            }
             Syscall::RequestApproval {
                 principal: _,
                 tool_name,
@@ -266,47 +246,13 @@ impl SyscallDispatcher {
                     let _ = reply_tx.send(Ok(approved));
                 });
             }
-            Syscall::GetManifest {
-                session_key,
-                reply_tx,
-            } => {
-                let result = process_table
-                    .with(&session_key, |p| p.manifest.clone())
-                    .ok_or(KernelError::ProcessNotFound {
-                        id: session_key.to_string(),
-                    });
-                let _ = reply_tx.send(result);
-            }
             Syscall::GetToolRegistry { reply_tx } => {
                 let mut registry = self.tool_registry.as_ref().clone();
                 if process_table.contains(&syscall_sender) {
-                    let syscall_tool = SyscallTool::new(
-                        kernel_handle.clone(),
-                        syscall_sender,
-                    );
+                    let syscall_tool = SyscallTool::new(kernel_handle.clone(), syscall_sender);
                     registry.register_builtin(Arc::new(syscall_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));
-            }
-            Syscall::ResolveDriver { reply_tx } => {
-                let driver_info = process_table.with(&syscall_sender, |p| {
-                    (
-                        p.manifest.name.clone(),
-                        p.manifest.provider_hint.clone(),
-                        p.manifest.model.clone(),
-                    )
-                });
-                let result = match driver_info {
-                    Some((name, hint, model)) => self.driver_registry.resolve(
-                        &name,
-                        hint.as_deref(),
-                        model.as_deref(),
-                    ),
-                    None => Err(KernelError::ProcessNotFound {
-                        id: syscall_sender.to_string(),
-                    }),
-                };
-                let _ = reply_tx.send(result);
             }
             Syscall::PublishEvent {
                 event_type,
@@ -519,10 +465,7 @@ impl SyscallTool {
         let child_key = agent_handle.session_key;
 
         let result = agent_handle.result_rx.await.map_err(|_| {
-            anyhow::anyhow!(
-                "agent {} was dropped without producing a result",
-                child_key
-            )
+            anyhow::anyhow!("agent {} was dropped without producing a result", child_key)
         })?;
 
         Ok(serde_json::json!({
@@ -543,7 +486,16 @@ impl SyscallTool {
         let mut handles: Vec<(String, AgentHandle)> = Vec::new();
         for task_req in &tasks {
             let manifest = self.resolve_manifest(&task_req.agent)?;
-            match self.handle.spawn_child(&self.session_key, &principal, manifest, task_req.task.clone()).await {
+            match self
+                .handle
+                .spawn_child(
+                    &self.session_key,
+                    &principal,
+                    manifest,
+                    task_req.task.clone(),
+                )
+                .await
+            {
                 Ok(h) => handles.push((task_req.agent.clone(), h)),
                 Err(e) => {
                     warn!(
@@ -621,9 +573,9 @@ impl SyscallTool {
     async fn exec_signal(&self, target: &str, signal: &str) -> anyhow::Result<serde_json::Value> {
         let target_key = parse_session_key(target)?;
         let sig = match signal {
-            "kill" => crate::process::Signal::Kill,
-            "pause" => crate::process::Signal::Pause,
-            "resume" => crate::process::Signal::Resume,
+            "kill" => crate::session::Signal::Kill,
+            "pause" => crate::session::Signal::Pause,
+            "resume" => crate::session::Signal::Resume,
             _ => unreachable!(),
         };
         self.handle

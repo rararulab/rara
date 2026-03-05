@@ -20,14 +20,14 @@
 //! channel bindings.
 //!
 //! Session metadata is managed by [`SessionIndex`]. Message persistence has
-//! moved to the tape subsystem via [`FileTapeStore`].
+//! moved to the tape subsystem via [`TapeService`].
 
 use std::sync::Arc;
 
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
 use rara_kernel::session::SessionIndexRef;
-use rara_memory::tape::FileTapeStore;
+use rara_kernel::memory::TapeService;
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
 use tracing::{info, instrument};
 
@@ -45,7 +45,7 @@ use crate::chat::{
 /// 2. **Channel routing** — Mapping external messaging channels to internal
 ///    session keys via channel bindings.
 ///
-/// Message persistence is handled by the tape subsystem ([`FileTapeStore`]).
+/// Message persistence is handled by the tape subsystem ([`TapeService`]).
 /// LLM execution has moved to the kernel path (`process_loop`).
 ///
 /// The service is cheaply cloneable (`Arc`-wrapped internals) and safe to
@@ -54,8 +54,8 @@ use crate::chat::{
 pub struct SessionService {
     /// Tape-based session index for metadata.
     session_index:     SessionIndexRef,
-    /// Tape store for append-only session recording.
-    tape_store:        Arc<FileTapeStore>,
+    /// Tape service for append-only session recording.
+    tape_service:      TapeService,
     /// Cached catalog of models fetched from OpenRouter.
     model_catalog:     ModelCatalog,
     /// Settings provider for reading and writing flat KV settings.
@@ -67,12 +67,12 @@ impl SessionService {
     #[must_use]
     pub fn new(
         session_index: SessionIndexRef,
-        tape_store: Arc<FileTapeStore>,
+        tape_service: TapeService,
         settings_provider: Arc<dyn SettingsProvider>,
     ) -> Self {
         Self {
             session_index,
-            tape_store,
+            tape_service,
             model_catalog: ModelCatalog::new(),
             settings_provider,
         }
