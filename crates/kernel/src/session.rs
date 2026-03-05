@@ -134,15 +134,12 @@ pub struct SessionEntry {
 /// to route incoming messages to the correct session without the caller
 /// needing to know the internal session key.
 ///
-/// The composite key `(channel_type, account, chat_id)` is unique; upserting
+/// The composite key `(channel_type, chat_id)` is unique; upserting
 /// a binding with the same composite key will update the target session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelBinding {
     /// Channel type identifier, e.g. `"telegram"`, `"slack"`, `"web"`.
     pub channel_type: String,
-    /// External account or bot identifier within the channel
-    /// (e.g. Telegram bot token hash, Slack workspace id).
-    pub account:      String,
     /// External chat or conversation identifier within the channel
     /// (e.g. Telegram chat id, Slack channel id).
     pub chat_id:      String,
@@ -189,17 +186,8 @@ pub trait SessionIndex: Send + Sync + 'static {
     /// Upsert a channel binding.
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError>;
 
-    /// Resolve a channel binding by `(channel_type, account, chat_id)`.
+    /// Resolve a channel binding by `(channel_type, chat_id)`.
     async fn get_channel_binding(
-        &self,
-        channel_type: &str,
-        account: &str,
-        chat_id: &str,
-    ) -> Result<Option<ChannelBinding>, SessionError>;
-
-    /// Resolve a channel binding by `(channel_type, chat_id)` only, ignoring
-    /// the account dimension.
-    async fn get_binding_by_chat(
         &self,
         channel_type: &str,
         chat_id: &str,

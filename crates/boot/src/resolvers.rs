@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Identity and session resolvers for the I/O Bus pipeline.
+//! Identity resolvers for the I/O Bus pipeline.
 //!
 //! - [`PlatformIdentityResolver`] — config-driven identity resolver (platform
 //!   identity → kernel user via in-memory mapping).
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use rara_kernel::{
     channel::types::ChannelType,
     identity::UserId,
-    io::{IOError, IdentityResolver, SessionResolver},
-    session::{SessionIndex, SessionKey},
+    io::{IOError, IdentityResolver},
 };
 use tracing::debug;
 
@@ -88,100 +87,3 @@ impl IdentityResolver for PlatformIdentityResolver {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DefaultSessionResolver
-// ---------------------------------------------------------------------------
-
-/// Session resolver that first consults [`ChannelBinding`]s in the session
-/// index and falls back to the raw `platform_chat_id` when no binding exists.
-///
-/// This allows the Telegram `/new` and `/sessions` commands to redirect
-/// subsequent messages to the correct session after re-binding.
-pub struct DefaultSessionResolver {
-    session_index: Arc<dyn SessionIndex>,
-}
-
-impl DefaultSessionResolver {
-    /// Create a new resolver backed by the given session index.
-    pub fn new(session_index: Arc<dyn SessionIndex>) -> Self { Self { session_index } }
-}
-
-#[async_trait]
-impl SessionResolver for DefaultSessionResolver {
-    async fn resolve(
-        &self,
-        _user: &UserId,
-        channel_type: ChannelType,
-        platform_chat_id: Option<&str>,
-    ) -> Result<SessionKey, IOError> {
-        let chat_id = platform_chat_id.unwrap_or("default");
-
-        // Try channel binding lookup first (honours /new and /sessions switch).
-        if let Some(chat_id_str) = platform_chat_id {
-            let ch_label = channel_type.to_string();
-            match self
-                .session_index
-                .get_binding_by_chat(&ch_label, chat_id_str)
-                .await
-            {
-                Ok(Some(binding)) => {
-                    debug!(
-                        channel = %channel_type,
-                        chat_id = chat_id_str,
-                        bound_session = %binding.session_key,
-                        "session resolved via channel binding"
-                    );
-                    return Ok(binding.session_key);
-                }
-                Ok(None) => {
-                    // No binding — fall through to raw chat_id.
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        channel = %channel_type,
-                        chat_id = chat_id_str,
-                        "channel binding lookup failed, falling back to raw chat_id"
-                    );
-                }
-            }
-        }
-
-        // No binding found — create a new session and bind it.
-        let now = chrono::Utc::now();
-        let entry = rara_kernel::session::SessionEntry {
-            key:           rara_kernel::session::SessionKey::new(),
-            title:         None,
-            model:         None,
-            system_prompt: None,
-            message_count: 0,
-            preview:       None,
-            metadata:      None,
-            created_at:    now,
-            updated_at:    now,
-        };
-        let session = self
-            .session_index
-            .create_session(&entry)
-            .await
-            .map_err(|e| IOError::Internal {
-                message: format!("failed to create session: {e}"),
-            })?;
-        let ch_label = channel_type.to_string();
-        if let Err(e) = self
-            .session_index
-            .bind_channel(&rara_kernel::session::ChannelBinding {
-                channel_type: ch_label,
-                account:      String::new(),
-                chat_id:      chat_id.to_string(),
-                session_key:  session.key,
-                created_at:   now,
-                updated_at:   now,
-            })
-            .await
-        {
-            tracing::warn!(error = %e, "failed to bind new session to channel");
-        }
-        Ok(session.key)
-    }
-}

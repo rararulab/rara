@@ -238,14 +238,12 @@ impl SessionService {
     pub async fn bind_channel(
         &self,
         channel_type: String,
-        account: String,
         chat_id: String,
         session_key: SessionKey,
     ) -> Result<ChannelBinding, ChatError> {
         let now = Utc::now();
         let binding = ChannelBinding {
             channel_type,
-            account,
             chat_id,
             session_key,
             created_at: now,
@@ -260,12 +258,11 @@ impl SessionService {
     pub async fn get_channel_session(
         &self,
         channel_type: &str,
-        account: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, ChatError> {
         let binding = self
             .session_index
-            .get_channel_binding(channel_type, account, chat_id)
+            .get_channel_binding(channel_type, chat_id)
             .await?;
         Ok(binding)
     }

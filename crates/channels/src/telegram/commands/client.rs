@@ -109,7 +109,6 @@ pub trait BotServiceClient: Send + Sync {
     /// Look up the session bound to a Telegram channel.
     async fn get_channel_session(
         &self,
-        account: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, BotServiceError>;
 
@@ -117,7 +116,6 @@ pub trait BotServiceClient: Send + Sync {
     async fn bind_channel(
         &self,
         channel_type: &str,
-        account: &str,
         chat_id: &str,
         session_key: &str,
     ) -> Result<ChannelBinding, BotServiceError>;

@@ -30,7 +30,7 @@
 //! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
 //! | `PUT`    | `/api/v1/chat/channel-bindings`                      | Bind a channel         |
-//! | `GET`    | `/api/v1/chat/channel-bindings/{type}/{account}/{id}`| Get channel binding    |
+//! | `GET`    | `/api/v1/chat/channel-bindings/{type}/{id}`           | Get channel binding    |
 
 use axum::{
     Json,
@@ -99,8 +99,6 @@ pub struct SetFavoritesRequest {
 pub struct BindChannelRequest {
     /// Channel type identifier (e.g. `"telegram"`, `"slack"`).
     pub channel_type: String,
-    /// Account or bot identifier within the channel.
-    pub account:      String,
     /// Chat or conversation identifier within the channel.
     pub chat_id:      String,
     /// Internal session key to bind to.
@@ -305,7 +303,6 @@ async fn bind_channel(
     let binding = service
         .bind_channel(
             req.channel_type,
-            req.account,
             req.chat_id,
             parse_session_key(&req.session_key)?,
         )
@@ -313,15 +310,14 @@ async fn bind_channel(
     Ok(Json(binding))
 }
 
-/// `GET /api/v1/chat/channel-bindings/{type}/{account}/{chat_id}` — resolve
+/// `GET /api/v1/chat/channel-bindings/{type}/{chat_id}` — resolve
 /// a channel binding to its session.
 #[utoipa::path(
     get,
-    path = "/api/v1/chat/channel-bindings/{channel_type}/{account}/{chat_id}",
+    path = "/api/v1/chat/channel-bindings/{channel_type}/{chat_id}",
     tag = "chat",
     params(
         ("channel_type" = String, Path, description = "Channel type (e.g. telegram, slack)"),
-        ("account" = String, Path, description = "Account or bot identifier"),
         ("chat_id" = String, Path, description = "Chat or conversation identifier"),
     ),
     responses(
@@ -331,10 +327,10 @@ async fn bind_channel(
 #[instrument(skip(service))]
 async fn get_channel_binding(
     State(service): State<SessionService>,
-    Path((channel_type, account, chat_id)): Path<(String, String, String)>,
+    Path((channel_type, chat_id)): Path<(String, String)>,
 ) -> Result<Json<Option<ChannelBinding>>, ChatError> {
     let binding = service
-        .get_channel_session(&channel_type, &account, &chat_id)
+        .get_channel_session(&channel_type, &chat_id)
         .await?;
     Ok(Json(binding))
 }

@@ -193,9 +193,6 @@ pub async fn start_with_options(
     let identity_resolver: Arc<dyn rara_kernel::io::IdentityResolver> = Arc::new(
         rara_boot::resolvers::PlatformIdentityResolver::new(&config.users),
     );
-    let session_resolver = Arc::new(rara_boot::resolvers::DefaultSessionResolver::new(
-        rara.session_index.clone(),
-    ));
     let web_adapter = Arc::new(rara_channels::web::WebAdapter::new(
         config.owner_token.clone(),
     ));
@@ -217,7 +214,7 @@ pub async fn start_with_options(
     };
 
     // Build IOSubsystem with all adapters before passing to Kernel.
-    let mut io = rara_kernel::io::IOSubsystem::new(identity_resolver, session_resolver);
+    let mut io = rara_kernel::io::IOSubsystem::new(identity_resolver, rara.session_index.clone());
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
     }

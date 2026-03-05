@@ -759,17 +759,19 @@ async fn handle_update(
         }
     };
 
-    let session_id = msg.session_key;
+    let session_id = msg.session_key.clone();
     match handle.submit_message(msg) {
         Ok(()) => {
             // Spawn stream forwarder for progressive editMessageText.
-            spawn_stream_forwarder(
-                Arc::clone(stream_hub),
-                Arc::clone(active_streams),
-                bot.clone(),
-                chat_id,
-                session_id,
-            );
+            if let Some(sid) = session_id {
+                spawn_stream_forwarder(
+                    Arc::clone(stream_hub),
+                    Arc::clone(active_streams),
+                    bot.clone(),
+                    chat_id,
+                    sid,
+                );
+            }
         }
         Err(_) => {
             let _ = bot

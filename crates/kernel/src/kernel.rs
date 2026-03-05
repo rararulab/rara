@@ -736,7 +736,7 @@ impl Kernel {
     #[tracing::instrument(
         skip(self, msg),
         fields(
-            session_id = %msg.session_key,
+            session_id = ?msg.session_key,
             user_id = %msg.user.0,
             channel = ?msg.source.channel_type,
             routing_path,
@@ -745,7 +745,50 @@ impl Kernel {
     async fn handle_user_message(&self, msg: InboundMessage) {
         let span = tracing::Span::current();
 
-        let session_id = msg.session_key.clone();
+        // Resolve session_key: if None, create a new session + binding.
+        let session_id = match msg.session_key.clone() {
+            Some(key) => key,
+            None => {
+                let now = chrono::Utc::now();
+                let entry = crate::session::SessionEntry {
+                    key:           SessionKey::new(),
+                    title:         None,
+                    model:         None,
+                    system_prompt: None,
+                    message_count: 0,
+                    preview:       None,
+                    metadata:      None,
+                    created_at:    now,
+                    updated_at:    now,
+                };
+                let session = match self.io.session_index().create_session(&entry).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(error = %e, "failed to create session for new binding");
+                        return;
+                    }
+                };
+                // Write binding if we have chat info
+                if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
+                    let binding = crate::session::ChannelBinding {
+                        channel_type: msg.source.channel_type.to_string(),
+                        chat_id:      chat_id.to_string(),
+                        session_key:  session.key.clone(),
+                        created_at:   now,
+                        updated_at:   now,
+                    };
+                    if let Err(e) = self.io.session_index().bind_channel(&binding).await {
+                        warn!(error = %e, "failed to bind channel to new session");
+                    }
+                }
+                session.key
+            }
+        };
+
+        // Patch msg with the resolved session key so downstream code sees it.
+        let mut msg = msg;
+        msg.session_key = Some(session_id.clone());
+
         let user = msg.user.clone();
 
         self.io.register_stateless_endpoint(&msg);
@@ -887,7 +930,7 @@ impl Kernel {
 
     /// Start an LLM turn for the given agent, spawning the work as an async
     /// task that pushes `TurnCompleted` back into the EventQueue when done.
-    #[tracing::instrument(skip_all, fields(session_key = %session_key, session_key = %msg.session_key))]
+    #[tracing::instrument(skip_all, fields(session_key = %session_key, msg_session_key = ?msg.session_key))]
     async fn start_llm_turn(&self, session_key: SessionKey, msg: InboundMessage) {
         /// RAII guard ensuring that `TurnCompleted` is always pushed and the
         /// stream is always closed, even when the spawned turn task
@@ -947,7 +990,7 @@ impl Kernel {
             let envelope = OutboundEnvelope::error(
                 msg.id.clone(),
                 msg.user.clone(),
-                msg.session_key.clone(),
+                session_key.clone(),
                 "runtime_not_found",
                 format!("agent runtime not found: {session_key}"),
             );
@@ -960,7 +1003,8 @@ impl Kernel {
             return;
         }
 
-        let session_key = msg.session_key.clone();
+        // session_key is always resolved by this point (set by handle_user_message or synthetic).
+        let session_key = msg.session_key.clone().unwrap_or(session_key);
         let user = msg.user.clone();
         let msg_id = msg.id.clone();
 

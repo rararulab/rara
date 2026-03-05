@@ -219,7 +219,7 @@ impl Syscall {
 pub enum KernelEvent {
     // === Input: from external sources ===
     /// A new user message from a channel adapter (via IngressPipeline).
-    #[debug("UserMessage(session={})", _0.session_key)]
+    #[debug("UserMessage(session={:?})", _0.session_key)]
     UserMessage(InboundMessage),
 
     // === Session control ===
@@ -334,8 +334,9 @@ pub struct KernelEventEnvelope {
 impl KernelEventEnvelope {
     /// Create a `UserMessage` event.
     pub fn user_message(msg: InboundMessage) -> Self {
+        let base_key = msg.session_key.clone().unwrap_or_else(SessionKey::new);
         Self {
-            base: EventBase::from(msg.session_key.clone()),
+            base: EventBase::from(base_key),
             kind: KernelEvent::UserMessage(msg),
         }
     }
@@ -471,9 +472,10 @@ impl KernelEventEnvelope {
     /// Human-readable summary for observability.
     pub fn summary(&self) -> String {
         match &self.kind {
-            KernelEvent::UserMessage(msg) => {
-                format!("user message queued for session {}", msg.session_key)
-            }
+            KernelEvent::UserMessage(msg) => match &msg.session_key {
+                Some(key) => format!("user message queued for session {key}"),
+                None => "user message queued (no session yet)".to_string(),
+            },
             KernelEvent::CreateSession { manifest, .. } => {
                 format!("create session for {}", manifest.name)
             }
