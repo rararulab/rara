@@ -422,6 +422,7 @@ impl WorkerState {
         tape: &str,
         kind: super::TapEntryKind,
         payload: serde_json::Value,
+        metadata: Option<serde_json::Value>,
     ) -> TapResult<TapEntry> {
         let path = self.tape_path(tape);
         self.tape_files
@@ -432,6 +433,7 @@ impl WorkerState {
                 kind,
                 payload,
                 timestamp: jiff::Timestamp::now(),
+                metadata,
             })
     }
 
@@ -582,10 +584,11 @@ impl FileTapeStore {
         tape: &str,
         kind: super::TapEntryKind,
         payload: serde_json::Value,
+        metadata: Option<serde_json::Value>,
     ) -> TapResult<TapEntry> {
         let tape = tape.to_owned();
         self.worker
-            .call(move |state| state.append(&tape, kind, payload))
+            .call(move |state| state.append(&tape, kind, payload, metadata))
             .await
     }
 

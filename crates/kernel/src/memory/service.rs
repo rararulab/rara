@@ -130,6 +130,7 @@ impl TapeService {
                     "name": name,
                     "state": state.unwrap_or(Value::Object(Map::new())),
                 }),
+                None,
             )
             .await?;
         self.from_last_anchor(tape_name, None).await
@@ -142,6 +143,7 @@ impl TapeService {
                 tape_name,
                 TapEntryKind::Event,
                 json!({"name": name, "data": data}),
+                None,
             )
             .await?;
         Ok(())
@@ -150,29 +152,44 @@ impl TapeService {
     /// Append a system entry.
     pub async fn append_system(&self, tape_name: &str, content: &str) -> TapResult<()> {
         self.store
-            .append(tape_name, TapEntryKind::System, json!({"content": content}))
+            .append(tape_name, TapEntryKind::System, json!({"content": content}), None)
             .await?;
         Ok(())
     }
 
     /// Append a message entry.
-    pub async fn append_message(&self, tape_name: &str, payload: Value) -> TapResult<TapEntry> {
+    pub async fn append_message(
+        &self,
+        tape_name: &str,
+        payload: Value,
+        metadata: Option<Value>,
+    ) -> TapResult<TapEntry> {
         self.store
-            .append(tape_name, TapEntryKind::Message, payload)
+            .append(tape_name, TapEntryKind::Message, payload, metadata)
             .await
     }
 
     /// Append a tool-call entry.
-    pub async fn append_tool_call(&self, tape_name: &str, payload: Value) -> TapResult<TapEntry> {
+    pub async fn append_tool_call(
+        &self,
+        tape_name: &str,
+        payload: Value,
+        metadata: Option<Value>,
+    ) -> TapResult<TapEntry> {
         self.store
-            .append(tape_name, TapEntryKind::ToolCall, payload)
+            .append(tape_name, TapEntryKind::ToolCall, payload, metadata)
             .await
     }
 
     /// Append a tool-result entry.
-    pub async fn append_tool_result(&self, tape_name: &str, payload: Value) -> TapResult<TapEntry> {
+    pub async fn append_tool_result(
+        &self,
+        tape_name: &str,
+        payload: Value,
+        metadata: Option<Value>,
+    ) -> TapResult<TapEntry> {
         self.store
-            .append(tape_name, TapEntryKind::ToolResult, payload)
+            .append(tape_name, TapEntryKind::ToolResult, payload, metadata)
             .await
     }
 

@@ -685,6 +685,7 @@ impl Kernel {
                     "role": "user",
                     "content": &child_result_text,
                 }),
+                None,
             )
             .await
         {
@@ -1008,6 +1009,7 @@ impl Kernel {
                     "role": "user",
                     "content": &user_text,
                 }),
+                None,
             )
             .await
         {

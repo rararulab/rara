@@ -86,4 +86,7 @@ pub struct TapEntry {
     pub payload:   Value,
     /// Timestamp captured when the entry was persisted.
     pub timestamp: Timestamp,
+    /// Optional free-form metadata (token counts, source channel, model, latency, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata:  Option<Value>,
 }

@@ -703,6 +703,7 @@ pub(crate) async fn run_agent_loop(
                         "role": "assistant",
                         "content": &accumulated_text,
                     }),
+                    None,
                 )
                 .await;
 
@@ -804,7 +805,7 @@ pub(crate) async fn run_agent_loop(
                 })
                 .collect();
             let _ = tape
-                .append_tool_call(tape_name, serde_json::json!({ "calls": calls_json }))
+                .append_tool_call(tape_name, serde_json::json!({ "calls": calls_json }), None)
                 .await;
         }
 
@@ -862,7 +863,7 @@ pub(crate) async fn run_agent_loop(
                 .map(|(_success, result, _err, _dur)| result.clone())
                 .collect();
             let _ = tape
-                .append_tool_result(tape_name, serde_json::json!({ "results": results_json }))
+                .append_tool_result(tape_name, serde_json::json!({ "results": results_json }), None)
                 .await;
         }
 
