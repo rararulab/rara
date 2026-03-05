@@ -100,6 +100,8 @@ struct StreamingMessage {
     message_ids: Vec<MessageId>,
     /// Accumulated raw text for the current (latest) message.
     accumulated: String,
+    /// Number of raw characters already finalized into earlier split messages.
+    streamed_prefix_chars: usize,
     /// Last successful `editMessageText` timestamp for throttling.
     last_edit:   Instant,
     /// Whether new text has been appended since the last edit.
@@ -111,6 +113,7 @@ impl StreamingMessage {
         Self {
             message_ids: Vec::new(),
             accumulated: String::new(),
+            streamed_prefix_chars: 0,
             last_edit:   Instant::now(),
             dirty:       false,
         }
@@ -334,6 +337,15 @@ impl ChannelAdapter for TelegramAdapter {
                 reply_context,
                 ..
             } => {
+                let content = if let Some(state) = self.active_streams.get(&chat_id) {
+                    slice_after_char_prefix(&content, state.streamed_prefix_chars)
+                } else {
+                    content
+                };
+                if content.is_empty() {
+                    self.active_streams.remove(&chat_id);
+                    return Ok(());
+                }
                 let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
                 let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
@@ -831,10 +843,12 @@ fn spawn_stream_forwarder(
                                     state.dirty = true;
 
                                     if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
+                                        let split_chars = state.accumulated.chars().count();
                                         let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
                                         Some(FlushRequest {
                                             message_ids: state.message_ids.clone(),
                                             text_html: html,
+                                            split_chars,
                                         })
                                     } else {
                                         None
@@ -847,12 +861,18 @@ fn spawn_stream_forwarder(
 
                             if let Some(req) = flush_req {
                                 let result = flush_edit(&bot, chat_id, &req).await;
+                                let split_applied =
+                                    matches!(result, FlushResult::Sent(_) | FlushResult::Edited);
                                 apply_flush_result(&active_streams, chat_id, result);
                                 // Start a new message for overflow.
-                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
-                                    state.accumulated.clear();
-                                    state.message_ids.push(MessageId(0)); // sentinel
-                                    state.dirty = false;
+                                if split_applied {
+                                    if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                        state.streamed_prefix_chars =
+                                            state.streamed_prefix_chars.saturating_add(req.split_chars);
+                                        state.accumulated.clear();
+                                        state.message_ids.push(MessageId(0)); // sentinel
+                                        state.dirty = false;
+                                    }
                                 }
                             }
                         }
@@ -869,6 +889,7 @@ fn spawn_stream_forwarder(
                                         Some(FlushRequest {
                                             message_ids: state.message_ids.clone(),
                                             text_html: html,
+                                            split_chars: 0,
                                         })
                                     } else {
                                         None
@@ -894,6 +915,7 @@ fn spawn_stream_forwarder(
                                 Some(FlushRequest {
                                     message_ids: state.message_ids.clone(),
                                     text_html: html,
+                                    split_chars: 0,
                                 })
                             } else {
                                 None
@@ -926,11 +948,39 @@ fn spawn_stream_forwarder(
     });
 }
 
+/// Return the suffix after dropping a raw-character prefix.
+///
+/// If `prefix_chars` exceeds the string length, returns the original string to
+/// avoid accidental truncation when the final response diverges from the
+/// streamed content.
+fn slice_after_char_prefix(content: &str, prefix_chars: usize) -> String {
+    if prefix_chars == 0 {
+        return content.to_owned();
+    }
+    let mut boundary = content.len();
+    let mut seen = 0usize;
+    for (idx, _) in content.char_indices() {
+        if seen == prefix_chars {
+            boundary = idx;
+            break;
+        }
+        seen += 1;
+    }
+    if seen < prefix_chars {
+        content.to_owned()
+    } else if seen == prefix_chars && boundary == content.len() {
+        String::new()
+    } else {
+        content[boundary..].to_owned()
+    }
+}
+
 /// Data extracted from [`StreamingMessage`] needed for a flush operation.
 /// Allows dropping the DashMap guard before making async Telegram API calls.
 struct FlushRequest {
     message_ids: Vec<MessageId>,
     text_html:   String,
+    split_chars: usize,
 }
 
 /// Result of a flush operation — what to update back in state.
@@ -1131,6 +1181,27 @@ pub fn telegram_to_raw_platform_message(
         reply_context,
         metadata,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn slice_after_char_prefix_skips_ascii_prefix() {
+        let actual = super::slice_after_char_prefix("abcdef", 2);
+        assert_eq!(actual, "cdef");
+    }
+
+    #[test]
+    fn slice_after_char_prefix_handles_unicode_boundaries() {
+        let actual = super::slice_after_char_prefix("你好abc", 2);
+        assert_eq!(actual, "abc");
+    }
+
+    #[test]
+    fn slice_after_char_prefix_returns_original_when_prefix_too_large() {
+        let actual = super::slice_after_char_prefix("abc", 10);
+        assert_eq!(actual, "abc");
+    }
 }
 
 pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }
