@@ -14,14 +14,118 @@
 
 //! Local file-backed tape memory, modeled after Bub's tape subsystem.
 //!
-//! The tape subsystem is intentionally isolated from the rest of the memory
-//! crate. It provides:
-//! - a persistent append-only JSONL store,
-//! - a higher-level service API for anchor-aware workflows,
-//! - and a small compatibility wrapper (`TapMemory`) for one-tape callers.
+//! # What -- The Tape Model
 //!
-//! The public API is asynchronous so callers can compose tape operations inside
-//! async workflows without introducing synchronous adapter layers later.
+//! A **tape** is an append-only JSONL timeline that records every conversation
+//! event for a single session.  One `.jsonl` file per session, named by the
+//! session key (URL-encoded).  Each line is a self-contained [`TapEntry`]:
+//!
+//! | Field       | Type              | Description                                      |
+//! |-------------|-------------------|--------------------------------------------------|
+//! | `id`        | `u64`             | Monotonic, store-assigned append-order identifier |
+//! | `kind`      | [`TapEntryKind`]  | Category tag (see below)                         |
+//! | `payload`   | `serde_json::Value` | Arbitrary JSON whose schema depends on `kind`  |
+//! | `timestamp` | `jiff::Timestamp` | Wall-clock time captured at persistence          |
+//! | `metadata`  | `Option<Value>`   | Optional free-form data (token counts, model, latency, ...) |
+//!
+//! Six entry kinds cover the full lifecycle of an agent turn:
+//!
+//! | Kind         | Payload semantics                                    |
+//! |--------------|------------------------------------------------------|
+//! | `Message`    | Chat message (user or assistant), deserialized as [`llm::Message`](crate::llm::Message) |
+//! | `ToolCall`   | Assistant tool invocation request (`{"calls": [...]}`) |
+//! | `ToolResult` | Tool execution output (string or structured JSON)    |
+//! | `Event`      | Non-chat lifecycle / telemetry (`{"name": "...", "data": {...}}`) |
+//! | `System`     | System prompt or system-level content (`{"content": "..."}`) |
+//! | `Anchor`     | Named checkpoint (`{"name": "...", "state": {...}}`) |
+//!
+//! # How -- Architecture
+//!
+//! ## Data flow (one agent turn)
+//!
+//! ```text
+//! User msg ──► append(Message) ──► tape.jsonl
+//!                                      │
+//!                              from_last_anchor()
+//!                                      │
+//!                              default_tape_context()
+//!                                      │
+//!                                Vec<llm::Message> ──► LLM
+//!                                      │
+//!                          append(ToolCall / ToolResult / Message)
+//! ```
+//!
+//! ## Component responsibilities
+//!
+//! | File           | Type                | Role |
+//! |----------------|---------------------|------|
+//! | [`store`]      | [`FileTapeStore`]   | Low-level JSONL I/O.  A dedicated `rara-tape-io` worker thread receives [`Job`] closures via `mpsc`.  [`TapeFile`] keeps an in-memory entry cache plus a byte-offset cursor for incremental reads, so repeated reads only parse newly appended bytes. |
+//! | [`service`]    | [`TapeService`]     | High-level async API.  Not bound to a single tape -- every method takes `tape_name`.  Provides: append helpers, anchor queries, fork/merge, substring + fuzzy search, LLM context building (`build_llm_context`), tape info, and reset/archive. |
+//! | [`context`]    | [`default_tape_context()`] | Stateless conversion of `&[TapEntry]` into `Vec<llm::Message>`.  `Message` entries are deserialized directly.  `ToolCall` becomes an assistant message with a `tool_calls` array.  `ToolResult` becomes one or more tool-role messages.  `Event` / `System` / `Anchor` are skipped (they carry metadata, not LLM-visible content). |
+//! | [`anchors`]    | [`AnchorSummary`]   | Lightweight data type pairing an anchor `name` with its captured `state`. |
+//! | [`error`]      | [`TapError`]        | `snafu`-based error enum scoped to the tape subsystem (I/O, JSON encode/decode, internal state). |
+//!
+//! ## Key mechanisms
+//!
+//! ### Anchors
+//!
+//! Anchors are named checkpoints inserted into the tape.
+//! [`TapeService::from_last_anchor()`] returns only entries whose `id` is
+//! greater than or equal to the most recent anchor, giving the LLM a bounded
+//! context window.  Crucially, earlier data is **not** deleted -- methods like
+//! [`TapeService::search()`] can still find entries across all anchors.
+//! Creating an anchor effectively says *"context before this point can be
+//! trimmed from the LLM window"*.
+//!
+//! ### Fork / Merge
+//!
+//! Before each agent turn the kernel forks the tape:
+//!
+//! 1. `FileTapeStore::fork()` clones the file and in-memory cache into a
+//!    new tape named `{parent}__{suffix}`.
+//! 2. The agent loop writes all `ToolCall`, `ToolResult`, and assistant
+//!    `Message` entries to the **fork**.
+//! 3. On success: `FileTapeStore::merge()` copies fork-local entries back to
+//!    the parent tape and deletes the fork file.
+//! 4. On failure: `FileTapeStore::discard()` deletes the fork, leaving the
+//!    parent tape untouched.
+//!
+//! This prevents failed or partial LLM turns (hallucinations, mid-tool-call
+//! errors) from polluting the canonical conversation history.
+//!
+//! ### Search
+//!
+//! [`TapeService::search()`] performs exact substring matching against the
+//! textual content of `Message` entries.  When the query is long enough
+//! (>= 3 chars) and substring matching yields too few results, a lightweight
+//! Levenshtein-distance fuzzy fallback kicks in.  Search can operate on a
+//! single tape or across all tapes in the workspace (cross-session).
+//!
+//! # Why -- Design Decisions
+//!
+//! - **Append-only**: Simple, corruption-resistant, and trivially safe for
+//!   concurrent readers.  No in-place mutations means no torn-write risk.
+//!
+//! - **JSONL**: Human-readable, streamable, and easy to debug with standard
+//!   tools (`cat`, `grep`, `jq`).  Each line is independently parseable, so a
+//!   single corrupt line does not invalidate the rest of the file.
+//!
+//! - **Anchor-based context truncation**: Avoids unbounded context growth
+//!   without losing historical data.  The LLM sees a bounded window;
+//!   `search()` retrieves anything ever recorded.
+//!
+//! - **Fork / merge**: LLM responses can fail, hallucinate, or error
+//!   mid-tool-call.  Forking ensures these partial writes never become
+//!   permanent -- the parent tape only absorbs entries from a successful turn.
+//!
+//! - **Dedicated I/O thread** (`rara-tape-io`): Keeps the async Tokio runtime
+//!   free from blocking file-system calls.  All reads and writes funnel
+//!   through one thread, eliminating lock contention on the file cache.
+//!
+//! - **In-memory cache (`TapeFile`)**: After initial load, reads are pure
+//!   memory lookups.  Incremental file reads only parse bytes appended since
+//!   the last read, keeping per-turn I/O proportional to new entries rather
+//!   than total tape size.
 
 mod anchors;
 mod context;

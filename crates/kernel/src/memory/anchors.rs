@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Anchor summary data type.
+//!
+//! [`AnchorSummary`] is a lightweight view of a persisted
+//! [`Anchor`](super::TapEntryKind::Anchor) entry, pairing the anchor's name
+//! (e.g. `session/start`) with the arbitrary structured state captured at that
+//! checkpoint.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
