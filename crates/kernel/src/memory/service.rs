@@ -80,13 +80,18 @@ impl TapeService {
     /// Create a service backed by the given store.
     pub fn new(store: FileTapeStore) -> Self { Self { store } }
 
+    /// Access the underlying [`FileTapeStore`] for low-level operations such as
+    /// fork/merge/discard that require direct store access.
+    pub fn store(&self) -> &FileTapeStore { &self.store }
+
     /// Read all entries for the given tape.
     pub async fn entries(&self, tape_name: &str) -> TapResult<Vec<TapEntry>> {
         Ok(self.store.read(tape_name).await?.unwrap_or_default())
     }
 
-    /// Execute `func` against a forked tape, then merge the fork back into the
-    /// parent tape once the closure completes.
+    /// Execute `func` against a forked tape. On success, merge the fork back
+    /// into the parent tape. On failure, discard the fork so failed turns do
+    /// not pollute the main tape.
     pub async fn fork_tape<T, F, Fut>(&self, tape_name: &str, func: F) -> TapResult<T>
     where
         F: FnOnce(String) -> Fut,
@@ -100,7 +105,10 @@ impl TapeService {
             current.replace(previous);
         });
 
-        self.store.merge(&fork_name, tape_name).await?;
+        match &result {
+            Ok(_) => self.store.merge(&fork_name, tape_name).await?,
+            Err(_) => self.store.discard(&fork_name).await?,
+        }
         result
     }
 
