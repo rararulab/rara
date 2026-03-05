@@ -1,0 +1,1847 @@
+<!DOCTYPE HTML>
+<html lang="en" class="ayu sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Rara</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for Rara — Personal AI assistant platform">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "ayu";
+            const default_dark_theme = "ayu";
+            window.path_to_searchindex_js = "searchindex-7ec5bd55.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-c5ffbd9d.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('ayu')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Rara</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/rararulab/rara" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
+<p>Welcome to the job documentation! This is a Rust project template that includes modern tooling for gRPC API development and multi-language code generation.</p>
+<h2 id="whats-included"><a class="header" href="#whats-included">What’s Included</a></h2>
+<ul>
+<li><strong>Rust Workspace</strong>: Organized crate structure with API, server, command-line, and common utilities</li>
+<li><strong>gRPC/Protobuf</strong>: Protocol Buffer definitions with <a href="https://buf.build/">Buf</a> integration</li>
+<li><strong>Multi-language Code Generation</strong>: Generate gRPC stubs for Go, Java, C++, Python, TypeScript, and more</li>
+<li><strong>Development Tools</strong>: Just recipes, automated formatting, linting, and testing</li>
+<li><strong>CI/CD</strong>: GitHub Actions with comprehensive testing and documentation deployment</li>
+<li><strong>Documentation</strong>: MDBook-based documentation with automatic deployment</li>
+</ul>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<ol>
+<li>
+<p><strong>Clone and Setup</strong>:</p>
+<pre><code class="language-bash">git clone &lt;your-repo&gt;
+cd job
+</code></pre>
+</li>
+<li>
+<p><strong>Install Dependencies</strong>:</p>
+<pre><code class="language-bash"># Install Rust if you haven't already
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install additional tools
+cargo install just mdbook
+
+# Install buf for protobuf
+# See: https://docs.buf.build/installation
+</code></pre>
+</li>
+<li>
+<p><strong>Build and Test</strong>:</p>
+<pre><code class="language-bash">just build
+just test
+</code></pre>
+</li>
+<li>
+<p><strong>Generate Multi-language Code</strong>:</p>
+<pre><code class="language-bash">just proto-generate        # All languages
+just proto-generate-go     # Go only
+just proto-generate-java   # Java only
+</code></pre>
+</li>
+</ol>
+<h2 id="project-structure"><a class="header" href="#project-structure">Project Structure</a></h2>
+<pre><code>job/
+├── api/                    # Protocol Buffer definitions and generated code
+├── crates/                 # Rust workspace crates
+│   ├── cmd/               # Command-line interface
+│   ├── common/            # Shared utilities
+│   └── server/            # gRPC server implementation
+├── docs/                  # Documentation (this site)
+└── examples/              # Usage examples
+</code></pre>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next Steps</a></h2>
+<ul>
+<li><a href="#api-module">API Guide</a> - Learn about the gRPC API structure</li>
+<li><a href="#buf-integration-guide">Buf Integration</a> - Multi-language code generation setup</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="configuration"><a class="header" href="#configuration">Configuration</a></h1>
+<p>Rara uses a two-tier configuration model:</p>
+<ul>
+<li><strong>Static config</strong> (<code>AppConfig</code>) — immutable after startup, loaded from Consul KV or environment variables</li>
+<li><strong>Runtime settings</strong> (<code>Settings</code>) — mutable at runtime via REST API, persisted in PostgreSQL KV store</li>
+</ul>
+<h2 id="static-configuration"><a class="header" href="#static-configuration">Static Configuration</a></h2>
+<h3 id="source-priority"><a class="header" href="#source-priority">Source Priority</a></h3>
+<p>When <code>CONSUL_HTTP_ADDR</code> is set, Consul KV is used as the sole config source (env vars are <strong>not</strong> read):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Priority</th><th>Source</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>1 (highest)</td><td>Consul KV</td><td>Entries under <code>rara/config/</code> prefix, path segments map to nested keys</td></tr>
+<tr><td>2 (lowest)</td><td>Code defaults</td><td>Hardcoded default values</td></tr>
+</tbody>
+</table>
+</div>
+<p>When Consul is <strong>not</strong> configured (local dev fallback):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Priority</th><th>Source</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>1 (highest)</td><td><code>RARA__</code> environment variables</td><td>Direct env vars with <code>__</code> as nesting separator</td></tr>
+<tr><td>2 (lowest)</td><td>Code defaults</td><td>Hardcoded default values</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="consul-kv-integration"><a class="header" href="#consul-kv-integration">Consul KV Integration</a></h3>
+<p><a href="https://www.consul.io/">Consul</a> KV is the recommended way to manage static configuration. Rara fetches config entries from the Consul HTTP API at startup.</p>
+<h4 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h4>
+<pre class="mermaid">sequenceDiagram
+    participant App as Rara App
+    participant Consul as Consul KV
+    participant Env as Environment
+
+    App-&gt;&gt;Env: Check CONSUL_HTTP_ADDR
+    alt Consul configured
+        App-&gt;&gt;Consul: GET /v1/kv/rara/config/?recurse
+        Consul--&gt;&gt;App: Base64-encoded KV entries
+        App-&gt;&gt;App: Decode + map paths to config keys
+        App-&gt;&gt;App: Merge: Consul KV &gt; defaults
+    else Not configured
+        App-&gt;&gt;App: Use RARA__ env vars + defaults only
+    end
+    App-&gt;&gt;App: Deserialize into AppConfig
+</pre>
+
+<p>At startup, <code>AppConfig::new()</code> checks for <code>CONSUL_HTTP_ADDR</code>. If set, all config is loaded from Consul KV. Otherwise, <code>RARA__</code>-prefixed environment variables are used.</p>
+<h4 id="key-mapping"><a class="header" href="#key-mapping">Key Mapping</a></h4>
+<p>Consul KV paths (after stripping the prefix) are converted to nested config keys using <code>/</code> as separator:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Consul KV Path</th><th>Config Field</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rara/config/database/database_url</code></td><td><code>database.database_url</code></td></tr>
+<tr><td><code>rara/config/http/bind_address</code></td><td><code>http.bind_address</code></td></tr>
+<tr><td><code>rara/config/object_store/endpoint</code></td><td><code>object_store.endpoint</code></td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="setup"><a class="header" href="#setup">Setup</a></h4>
+<ol>
+<li><strong>Deploy Consul</strong> via <code>rara-infra</code> Helm chart (included by default)</li>
+<li><strong>Set bootstrap env vars</strong> for the rara app:</li>
+</ol>
+<pre><code class="language-bash"># Required — presence of CONSUL_HTTP_ADDR activates Consul loading
+# In-cluster (Consul chart uses global.name, not release name):
+CONSUL_HTTP_ADDR=http://consul-server:8500
+# From host machine (via port-forward or Traefik):
+# CONSUL_HTTP_ADDR=https://consul.rara.local
+
+</code></pre>
+<ol start="3">
+<li><strong>Seed config</strong> into Consul KV (the <code>consul-kv-seed</code> Helm hook does this automatically):</li>
+</ol>
+<pre><code>rara/config/database/database_url          = postgres://postgres:postgres@rara-infra-postgresql:5432/rara
+rara/config/object_store/endpoint          = http://rara-infra-minio:9000
+rara/config/object_store/access_key_id     = minioadmin
+rara/config/object_store/secret_access_key = minioadmin
+rara/config/object_store/bucket            = rara
+rara/config/memory/chroma_url              = http://rara-infra-chromadb:8000
+rara/config/crawl4ai/base_url              = http://rara-infra-crawl4ai:11235
+</code></pre>
+<h4 id="fail-open-behavior"><a class="header" href="#fail-open-behavior">Fail-Open Behavior</a></h4>
+<ul>
+<li>If <code>CONSUL_HTTP_ADDR</code> is <strong>not set</strong>, Consul is silently skipped and env vars are used</li>
+<li>If the Consul KV prefix has <strong>no entries</strong> (404), an empty config is returned and code defaults apply</li>
+<li>This ensures local development works with just <code>.env</code> or env vars, no Consul required</li>
+</ul>
+<h4 id="kubernetes-deployment"><a class="header" href="#kubernetes-deployment">Kubernetes Deployment</a></h4>
+<p>In Kubernetes, the <code>consul-kv-seed</code> Helm post-install/post-upgrade hook automatically writes all infrastructure connection info to Consul KV. The rara app only needs <code>CONSUL_HTTP_ADDR</code> set as an environment variable to discover every dependency.</p>
+<p>Manual seed/verify:</p>
+<pre><code class="language-bash">cd deploy/helm
+just seed-consul   # seed all keys from Helm values
+just consul-keys   # list current keys
+</code></pre>
+<h3 id="all-config-keys"><a class="header" href="#all-config-keys">All Config Keys</a></h3>
+<h4 id="database-database"><a class="header" href="#database-database">Database (<code>database.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>database_url</code></td><td><code>RARA__DATABASE__DATABASE_URL</code></td><td><code>postgres://postgres:postgres@localhost:5432/rara</code></td><td>PostgreSQL connection string</td></tr>
+<tr><td><code>migration_dir</code></td><td><code>RARA__DATABASE__MIGRATION_DIR</code></td><td><code>crates/rara-model/migrations</code></td><td>SQLx migration directory</td></tr>
+<tr><td><code>max_connections</code></td><td><code>RARA__DATABASE__MAX_CONNECTIONS</code></td><td><code>10</code></td><td>Connection pool max size</td></tr>
+<tr><td><code>min_connections</code></td><td><code>RARA__DATABASE__MIN_CONNECTIONS</code></td><td><code>1</code></td><td>Connection pool min idle</td></tr>
+<tr><td><code>connect_timeout</code></td><td><code>RARA__DATABASE__CONNECT_TIMEOUT</code></td><td><code>30s</code></td><td>Connection timeout</td></tr>
+<tr><td><code>max_lifetime</code></td><td><code>RARA__DATABASE__MAX_LIFETIME</code></td><td><code>1800s</code></td><td>Max connection lifetime</td></tr>
+<tr><td><code>idle_timeout</code></td><td><code>RARA__DATABASE__IDLE_TIMEOUT</code></td><td><code>600s</code></td><td>Idle connection timeout</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="http-server-http"><a class="header" href="#http-server-http">HTTP Server (<code>http.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bind_address</code></td><td><code>RARA__HTTP__BIND_ADDRESS</code></td><td><code>127.0.0.1:25555</code></td><td>HTTP listen address</td></tr>
+<tr><td><code>max_body_size</code></td><td><code>RARA__HTTP__MAX_BODY_SIZE</code></td><td><code>100MB</code></td><td>Max request body</td></tr>
+<tr><td><code>enable_cors</code></td><td><code>RARA__HTTP__ENABLE_CORS</code></td><td><code>true</code></td><td>CORS headers</td></tr>
+<tr><td><code>request_timeout</code></td><td><code>RARA__HTTP__REQUEST_TIMEOUT</code></td><td><code>60</code></td><td>Timeout in seconds</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="grpc-server-grpc"><a class="header" href="#grpc-server-grpc">gRPC Server (<code>grpc.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bind_address</code></td><td><code>RARA__GRPC__BIND_ADDRESS</code></td><td><code>127.0.0.1:50051</code></td><td>gRPC listen address</td></tr>
+<tr><td><code>server_address</code></td><td><code>RARA__GRPC__SERVER_ADDRESS</code></td><td><code>127.0.0.1:50051</code></td><td>Advertised address</td></tr>
+<tr><td><code>max_recv_message_size</code></td><td><code>RARA__GRPC__MAX_RECV_MESSAGE_SIZE</code></td><td><code>512MB</code></td><td>Max receive message</td></tr>
+<tr><td><code>max_send_message_size</code></td><td><code>RARA__GRPC__MAX_SEND_MESSAGE_SIZE</code></td><td><code>512MB</code></td><td>Max send message</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="object-store--minio-object_store"><a class="header" href="#object-store--minio-object_store">Object Store / MinIO (<code>object_store.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>endpoint</code></td><td><code>RARA__OBJECT_STORE__ENDPOINT</code></td><td><code>http://localhost:9000</code></td><td>S3 endpoint</td></tr>
+<tr><td><code>bucket</code></td><td><code>RARA__OBJECT_STORE__BUCKET</code></td><td><code>rara</code></td><td>Bucket name</td></tr>
+<tr><td><code>access_key</code></td><td><code>RARA__OBJECT_STORE__ACCESS_KEY</code></td><td><code>minioadmin</code></td><td>Access key ID</td></tr>
+<tr><td><code>secret_key</code></td><td><code>RARA__OBJECT_STORE__SECRET_KEY</code></td><td><code>minioadmin</code></td><td>Secret access key</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="memory--chromadb-memory"><a class="header" href="#memory--chromadb-memory">Memory / ChromaDB (<code>memory.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>chroma_url</code></td><td><code>RARA__MEMORY__CHROMA_URL</code></td><td><code>http://localhost:8000</code></td><td>ChromaDB base URL</td></tr>
+<tr><td><code>chroma_collection</code></td><td><code>RARA__MEMORY__CHROMA_COLLECTION</code></td><td><code>job-memory</code></td><td>ChromaDB collection name</td></tr>
+<tr><td><code>chroma_api_key</code></td><td><code>RARA__MEMORY__CHROMA_API_KEY</code></td><td>—</td><td>ChromaDB API key (optional)</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="crawl4ai-crawl4ai"><a class="header" href="#crawl4ai-crawl4ai">Crawl4AI (<code>crawl4ai.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>base_url</code></td><td><code>RARA__CRAWL4AI__BASE_URL</code></td><td><code>http://localhost:11235</code></td><td>Crawl4AI service URL</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="telemetry--otlp-telemetry"><a class="header" href="#telemetry--otlp-telemetry">Telemetry / OTLP (<code>telemetry.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>otlp_endpoint</code></td><td><code>RARA__TELEMETRY__OTLP_ENDPOINT</code></td><td>—</td><td>Generic OTLP endpoint (e.g. <code>http://alloy:4318/v1/traces</code>)</td></tr>
+<tr><td><code>otlp_protocol</code></td><td><code>RARA__TELEMETRY__OTLP_PROTOCOL</code></td><td><code>http</code></td><td>Export protocol: <code>http</code> or <code>grpc</code></td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="other"><a class="header" href="#other">Other</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>main_service_http_base</code></td><td><code>RARA__MAIN_SERVICE_HTTP_BASE</code></td><td><code>http://127.0.0.1:25555</code></td><td>Base URL for internal service calls</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="runtime-settings"><a class="header" href="#runtime-settings">Runtime Settings</a></h2>
+<p>Runtime settings are stored in PostgreSQL (KV store) and can be changed at any time via the REST API without restarting the service.</p>
+<p><strong>Endpoint</strong>: <code>GET/PATCH /api/v1/settings</code></p>
+<p>Changes are broadcast to all subscribers in-process via a <code>watch</code> channel, taking effect immediately.</p>
+<h3 id="settings-groups"><a class="header" href="#settings-groups">Settings Groups</a></h3>
+<h4 id="ai-ai"><a class="header" href="#ai-ai">AI (<code>ai.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>openrouter_api_key</code></td><td>OpenRouter API key</td></tr>
+<tr><td><code>provider</code></td><td><code>"openrouter"</code> or <code>"ollama"</code></td></tr>
+<tr><td><code>ollama_base_url</code></td><td>Ollama API URL (default: <code>http://localhost:11434</code>)</td></tr>
+<tr><td><code>default_model</code></td><td>Default model for all scenarios</td></tr>
+<tr><td><code>job_model</code></td><td>Model for job analysis tasks</td></tr>
+<tr><td><code>chat_model</code></td><td>Model for chat conversations</td></tr>
+<tr><td><code>favorite_models</code></td><td>Pinned model IDs for UI</td></tr>
+<tr><td><code>chat_model_fallbacks</code></td><td>Fallback chain for chat</td></tr>
+<tr><td><code>job_model_fallbacks</code></td><td>Fallback chain for jobs</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="telegram-telegram"><a class="header" href="#telegram-telegram">Telegram (<code>telegram.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bot_token</code></td><td>Telegram bot token</td></tr>
+<tr><td><code>chat_id</code></td><td>Primary chat ID</td></tr>
+<tr><td><code>allowed_group_chat_id</code></td><td>Allowed group chat</td></tr>
+<tr><td><code>notification_channel_id</code></td><td>Channel for automated notifications</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="agent-agent"><a class="header" href="#agent-agent">Agent (<code>agent.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>soul</code></td><td>Agent personality prompt</td></tr>
+<tr><td><code>chat_system_prompt</code></td><td>Custom system prompt for chat</td></tr>
+<tr><td><code>proactive_enabled</code></td><td>Enable proactive messaging</td></tr>
+<tr><td><code>proactive_cron</code></td><td>Cron schedule for proactive checks</td></tr>
+<tr><td><code>memory.chroma_url</code></td><td>Chroma vector DB URL</td></tr>
+<tr><td><code>memory.chroma_collection</code></td><td>Collection name</td></tr>
+<tr><td><code>memory.chroma_api_key</code></td><td>Chroma API key</td></tr>
+<tr><td><code>composio.api_key</code></td><td>Composio API key</td></tr>
+<tr><td><code>composio.entity_id</code></td><td>Composio entity ID</td></tr>
+<tr><td><code>gmail.address</code></td><td>Gmail sender address</td></tr>
+<tr><td><code>gmail.app_password</code></td><td>Gmail app password</td></tr>
+<tr><td><code>gmail.auto_send_enabled</code></td><td>Allow automatic email sending</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="job-pipeline-job_pipeline"><a class="header" href="#job-pipeline-job_pipeline">Job Pipeline (<code>job_pipeline.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>job_preferences</code></td><td>Target roles, tech stack (markdown)</td></tr>
+<tr><td><code>score_threshold_auto</code></td><td>Auto-apply score threshold (default: 85)</td></tr>
+<tr><td><code>score_threshold_notify</code></td><td>Notification threshold (default: 60)</td></tr>
+<tr><td><code>resume_project_path</code></td><td>Local path to typst resume project</td></tr>
+<tr><td><code>pipeline_cron</code></td><td>Cron for automatic pipeline runs</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="bootstrap-from-environment"><a class="header" href="#bootstrap-from-environment">Bootstrap from Environment</a></h3>
+<p>Some runtime settings can be bootstrapped from environment variables on first startup:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Env Var</th><th>Settings Field</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td><code>telegram.bot_token</code></td></tr>
+<tr><td><code>OPENROUTER_API_KEY</code></td><td><code>ai.openrouter_api_key</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>These are only used if the KV store has no existing value. After that, changes are made via the API.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="identity--user-system"><a class="header" href="#identity--user-system">Identity &amp; User System</a></h1>
+<p>Rara uses a config-driven identity system that maps external platform accounts (Telegram, Web, CLI) to internal kernel users.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<pre class="mermaid">flowchart LR
+    subgraph Platform
+        TG["Telegram user 123"]
+        WEB["Web user ryan"]
+    end
+    subgraph "IngressPipeline"
+        IR["IdentityResolver"]
+    end
+    subgraph Kernel
+        KU["KernelUser 'ryan'"]
+        SR["SessionResolver"]
+        S["Session"]
+    end
+
+    TG --&gt; IR
+    WEB --&gt; IR
+    IR --&gt;|"in-memory mapping"| KU
+    KU --&gt; SR --&gt; S
+</pre>
+
+<p>The identity resolution flow has two stages:</p>
+<ol>
+<li><strong>IdentityResolver</strong> — maps <code>(channel_type, platform_user_id)</code> to a kernel <code>UserId</code></li>
+<li><strong>SessionResolver</strong> — maps <code>(user, channel_type, chat_id)</code> to a <code>SessionKey</code></li>
+</ol>
+<h2 id="configuration-1"><a class="header" href="#configuration-1">Configuration</a></h2>
+<p>Users and their platform bindings are defined in the YAML config file:</p>
+<pre><code class="language-yaml">users:
+  - name: "ryan"
+    role: root
+    platforms:
+      - type: telegram
+        user_id: "123456789"
+      - type: web
+        user_id: "ryan"
+  - name: "alice"
+    role: user
+    platforms:
+      - type: telegram
+        user_id: "987654321"
+</code></pre>
+<h3 id="fields"><a class="header" href="#fields">Fields</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td>string</td><td>yes</td><td>Kernel user name (must be unique)</td></tr>
+<tr><td><code>role</code></td><td>string</td><td>yes</td><td><code>"root"</code>, <code>"admin"</code>, or <code>"user"</code></td></tr>
+<tr><td><code>platforms</code></td><td>array</td><td>no</td><td>Platform identity bindings</td></tr>
+<tr><td><code>platforms[].type</code></td><td>string</td><td>yes</td><td>Channel type: <code>"telegram"</code>, <code>"web"</code>, <code>"cli"</code>, etc.</td></tr>
+<tr><td><code>platforms[].user_id</code></td><td>string</td><td>yes</td><td>Platform-side user identifier</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="roles-and-permissions"><a class="header" href="#roles-and-permissions">Roles and Permissions</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Role</th><th>Permissions</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>root</code></td><td><code>All</code></td><td>Superuser, bypasses all checks</td></tr>
+<tr><td><code>admin</code></td><td><code>All</code></td><td>Full access, used for service accounts</td></tr>
+<tr><td><code>user</code></td><td><code>Spawn</code></td><td>Can spawn agent processes</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="boot-sequence"><a class="header" href="#boot-sequence">Boot Sequence</a></h2>
+<p>At startup, Rara builds the identity system entirely from the <code>users</code> config (no database):</p>
+<ol>
+<li><strong><code>InMemoryUserStore</code></strong> — built from <code>users</code> config entries into a <code>HashMap&lt;name, KernelUser&gt;</code></li>
+<li><strong><code>PlatformIdentityResolver</code></strong> — built from the <code>users</code> config as an in-memory <code>HashMap&lt;(channel_type, platform_uid), user_name&gt;</code></li>
+</ol>
+<p>Users are never persisted to the database — the YAML config is the single source of truth.</p>
+<h2 id="identity-resolution"><a class="header" href="#identity-resolution">Identity Resolution</a></h2>
+<p><code>PlatformIdentityResolver</code> maps <code>(channel_type, platform_user_id)</code> to a kernel user name via an in-memory <code>HashMap</code> built from the <code>users</code> config.</p>
+<p>If a message arrives from a platform user not listed in the config, the message is <strong>rejected</strong> with <code>IOError::IdentityResolutionFailed</code>. The event is logged at <code>debug</code> level.</p>
+<h2 id="architecture"><a class="header" href="#architecture">Architecture</a></h2>
+<h3 id="key-types"><a class="header" href="#key-types">Key Types</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Location</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>UserId(String)</code></td><td><code>rara-kernel</code></td><td>Runtime identity (user name)</td></tr>
+<tr><td><code>KernelUser</code></td><td><code>rara-kernel</code></td><td>In-memory user record (UUID, role, permissions)</td></tr>
+<tr><td><code>Principal</code></td><td><code>rara-kernel</code></td><td>Runtime security context derived from <code>KernelUser</code></td></tr>
+<tr><td><code>UserConfig</code></td><td><code>rara-boot</code></td><td>YAML config entry for a user</td></tr>
+<tr><td><code>PlatformBindingConfig</code></td><td><code>rara-boot</code></td><td>YAML config entry for a platform binding</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="key-components"><a class="header" href="#key-components">Key Components</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Component</th><th>Location</th><th>Responsibility</th></tr>
+</thead>
+<tbody>
+<tr><td><code>IdentityResolver</code> trait</td><td><code>crates/kernel/src/io.rs</code></td><td>Maps platform identity to <code>UserId</code></td></tr>
+<tr><td><code>PlatformIdentityResolver</code></td><td><code>crates/boot/src/resolvers.rs</code></td><td>Config-driven identity resolver (in-memory HashMap lookup)</td></tr>
+<tr><td><code>InMemoryUserStore</code></td><td><code>crates/boot/src/user_store.rs</code></td><td>Config-driven in-memory user store</td></tr>
+<tr><td><code>SecuritySubsystem</code></td><td><code>crates/kernel/src/security.rs</code></td><td>Validates user exists, is enabled, has permissions</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="agent-tools"><a class="header" href="#agent-tools">Agent Tools</a></h1>
+<p>The agent tool system is organized into two layers registered in the <code>ToolRegistry</code>:</p>
+<ul>
+<li><strong>Layer 1 — Primitives</strong>: low-level database, notification, and storage operations.</li>
+<li><strong>Layer 2 — Services</strong>: higher-level tools built on top of primitives (memory, recall strategy, resume, job pipeline, typst).</li>
+</ul>
+<p>Tools are wired in <code>AppState::init</code> (<code>crates/workers/src/worker_state.rs</code>) and made available to the <code>AgentRunner</code> during chat.</p>
+<h2 id="primitive-tools"><a class="header" href="#primitive-tools">Primitive Tools</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>db_query</code></td><td>Read-only SQL query against whitelisted tables</td></tr>
+<tr><td><code>db_mutate</code></td><td>INSERT/UPDATE/DELETE against whitelisted tables</td></tr>
+<tr><td><code>notify</code></td><td>Send Telegram notifications</td></tr>
+<tr><td><code>storage_read</code></td><td>Read files from object storage (S3/local)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="service-tools"><a class="header" href="#service-tools">Service Tools</a></h2>
+<h3 id="memory-tools"><a class="header" href="#memory-tools">Memory Tools</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>memory_search</code></td><td>Hybrid search across mem0 + Hindsight (RRF fusion)</td></tr>
+<tr><td><code>memory_deep_recall</code></td><td>Deep reasoning via Hindsight’s 4-network reflect</td></tr>
+<tr><td><code>memory_write</code></td><td>Write a Markdown note with tags to Memos</td></tr>
+<tr><td><code>memory_add_fact</code></td><td>Store an explicit fact in mem0 + Hindsight</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="recall-strategy-tools"><a class="header" href="#recall-strategy-tools">Recall Strategy Tools</a></h3>
+<p>Agents can configure their own memory recall rules at runtime. See <a href="#memory-system">Memory System</a> for the full architecture.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>recall_strategy_add</code></td><td>Register a new recall rule (trigger + action + inject target)</td></tr>
+<tr><td><code>recall_strategy_list</code></td><td>List all rules with enabled/disabled status</td></tr>
+<tr><td><code>recall_strategy_update</code></td><td>Update a rule (enable/disable, modify trigger/action/priority)</td></tr>
+<tr><td><code>recall_strategy_remove</code></td><td>Delete a rule by ID</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="resume--job-tools"><a class="header" href="#resume--job-tools">Resume &amp; Job Tools</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>list_resumes</code></td><td>List all resumes</td></tr>
+<tr><td><code>get_resume_content</code></td><td>Get resume text content</td></tr>
+<tr><td><code>analyze_resume</code></td><td>AI-powered resume analysis against a job description</td></tr>
+<tr><td><code>job_pipeline</code></td><td>Create and manage job applications</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="typst-tools"><a class="header" href="#typst-tools">Typst Tools</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>list_typst_projects</code></td><td>List Typst document projects</td></tr>
+<tr><td><code>list_typst_files</code></td><td>List files in a Typst project</td></tr>
+<tr><td><code>read_typst_file</code></td><td>Read a Typst source file</td></tr>
+<tr><td><code>update_typst_file</code></td><td>Update a Typst source file</td></tr>
+<tr><td><code>compile_typst_project</code></td><td>Compile a Typst project to PDF</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="tool-registration"><a class="header" href="#tool-registration">Tool Registration</a></h2>
+<p>Tools are registered in <code>AppState::init</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Layer 1: Primitives
+tool_registry.register_primitive(Arc::new(DbQueryTool::new(pool.clone())));
+tool_registry.register_primitive(Arc::new(DbMutateTool::new(pool.clone())));
+tool_registry.register_primitive(Arc::new(NotifyTool::new(notify_client, settings_svc)));
+tool_registry.register_primitive(Arc::new(StorageReadTool::new(object_store)));
+
+// Layer 2: Memory + Recall Strategy
+tool_registry.register_service(Arc::new(MemorySearchTool::new(mm.clone())));
+tool_registry.register_service(Arc::new(MemoryDeepRecallTool::new(mm.clone())));
+tool_registry.register_service(Arc::new(MemoryWriteTool::new(mm.clone())));
+tool_registry.register_service(Arc::new(MemoryAddFactTool::new(mm.clone())));
+tool_registry.register_service(Arc::new(RecallStrategyAddTool::new(engine.clone())));
+tool_registry.register_service(Arc::new(RecallStrategyListTool::new(engine.clone())));
+tool_registry.register_service(Arc::new(RecallStrategyUpdateTool::new(engine.clone())));
+tool_registry.register_service(Arc::new(RecallStrategyRemoveTool::new(engine.clone())));
+<span class="boring">}</span></code></pre>
+<h2 id="relevant-files"><a class="header" href="#relevant-files">Relevant Files</a></h2>
+<ul>
+<li><code>crates/workers/src/worker_state.rs</code> — tool registration and <code>AppState</code></li>
+<li><code>crates/workers/src/tools/primitives/</code> — primitive tool implementations</li>
+<li><code>crates/workers/src/tools/services/</code> — service tool implementations</li>
+<li><code>crates/workers/src/tools/services/memory_tools.rs</code> — memory + recall strategy tools</li>
+<li><code>crates/agents/src/tool_registry.rs</code> — <code>ToolRegistry</code> and <code>AgentTool</code> trait</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="memory-system"><a class="header" href="#memory-system">Memory System</a></h1>
+<p>Rara uses a <strong>tape-centric</strong> memory architecture: every conversation event is persisted as an append-only JSONL record in a local file-backed tape. The tape module lives directly in the kernel crate (<code>rara-kernel::memory</code>) so that context reconstruction can produce typed <code>llm::Message</code> values without intermediate serialization.</p>
+<h2 id="architecture-overview"><a class="header" href="#architecture-overview">Architecture Overview</a></h2>
+<pre class="mermaid">graph TD
+    subgraph Kernel["rara-kernel::memory"]
+        TS[TapeService] --&gt; FS[FileTapeStore]
+        TS --&gt; CTX[context.rs]
+        CTX --&gt;|"Vec&amp;lt;llm::Message&amp;gt;"| AL[Agent Loop]
+    end
+
+    FS --&gt;|pwrite / pread| JSONL["tape.jsonl&lt;br/&gt;(append-only)"]
+
+    AL --&gt;|append_message| TS
+    AL --&gt;|append_tool_call| TS
+    AL --&gt;|append_tool_result| TS
+
+    SI[SessionIndex] -.-&gt;|metadata| TS
+</pre>
+
+<h2 id="core-concepts"><a class="header" href="#core-concepts">Core Concepts</a></h2>
+<h3 id="tape"><a class="header" href="#tape">Tape</a></h3>
+<p>A tape is a named, append-only sequence of [<code>TapEntry</code>] records persisted as JSONL. Each entry has:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>id</code></td><td><code>u64</code></td><td>Monotonic, append-order identifier</td></tr>
+<tr><td><code>kind</code></td><td><code>TapEntryKind</code></td><td>Entry category</td></tr>
+<tr><td><code>payload</code></td><td><code>serde_json::Value</code></td><td>Arbitrary JSON payload</td></tr>
+<tr><td><code>timestamp</code></td><td><code>jiff::Timestamp</code></td><td>Persistence timestamp</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="entry-kinds"><a class="header" href="#entry-kinds">Entry Kinds</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Kind</th><th>Purpose</th><th>Example payload</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Message</code></td><td>User or assistant chat message</td><td><code>{"role":"user","content":"..."}</code></td></tr>
+<tr><td><code>ToolCall</code></td><td>Assistant tool invocation</td><td><code>{"calls":[{"id":"...","function":{...}}]}</code></td></tr>
+<tr><td><code>ToolResult</code></td><td>Tool execution output</td><td><code>{"results":["..."]}</code></td></tr>
+<tr><td><code>Event</code></td><td>Lifecycle or telemetry event</td><td><code>{"name":"run","data":{...}}</code></td></tr>
+<tr><td><code>System</code></td><td>System prompt content</td><td><code>{"content":"..."}</code></td></tr>
+<tr><td><code>Anchor</code></td><td>Named checkpoint for windowing</td><td><code>{"name":"session/start","state":{}}</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="anchors"><a class="header" href="#anchors">Anchors</a></h3>
+<p>Anchors partition a tape into logical windows. The most common anchor is <code>session/start</code>, created automatically by <code>ensure_bootstrap_anchor</code>. Context queries like <code>build_llm_context</code> read entries <strong>from the most recent anchor forward</strong>, keeping the LLM context window bounded without discarding history.</p>
+<h2 id="components"><a class="header" href="#components">Components</a></h2>
+<h3 id="filetapestore"><a class="header" href="#filetapestore"><code>FileTapeStore</code></a></h3>
+<p>Low-level storage engine. All I/O runs on a dedicated blocking thread (<code>rara-tape-io</code>) to avoid polluting the async runtime. The async API dispatches work via a channel-based <code>IoWorker</code>.</p>
+<ul>
+<li><strong>Storage format</strong>: One JSONL file per tape, namespaced by workspace MD5 hash</li>
+<li><strong>File location</strong>: <code>~/.rara/tapes/{workspace_hash}__{tape_name}.jsonl</code></li>
+<li><strong>Caching</strong>: Incremental — only new bytes are read on each access via positional <code>pread</code>/<code>pwrite</code> (rustix)</li>
+<li><strong>Concurrency</strong>: Single-writer, serialized through the worker thread</li>
+</ul>
+<p>Key operations:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>append(tape, kind, payload)</code></td><td>Persist one entry</td></tr>
+<tr><td><code>read(tape)</code></td><td>Read all entries (incremental cache)</td></tr>
+<tr><td><code>fork(source)</code></td><td>Clone a tape for isolated work</td></tr>
+<tr><td><code>merge(source, target)</code></td><td>Append fork-local entries back</td></tr>
+<tr><td><code>archive(tape)</code></td><td>Move to timestamped <code>.bak</code> file</td></tr>
+<tr><td><code>reset(tape)</code></td><td>Delete tape and clear cache</td></tr>
+<tr><td><code>list_tapes()</code></td><td>List active tapes for workspace</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tapeservice"><a class="header" href="#tapeservice"><code>TapeService</code></a></h3>
+<p>Higher-level API wrapping <code>FileTapeStore</code> with application-specific workflows:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>build_llm_context(tape_name)</code></td><td>Reconstruct <code>Vec&lt;llm::Message&gt;</code> from entries since last anchor</td></tr>
+<tr><td><code>ensure_bootstrap_anchor(tape_name)</code></td><td>Create initial <code>session/start</code> anchor if missing</td></tr>
+<tr><td><code>handoff(tape_name, name, state)</code></td><td>Append an anchor and return post-anchor entries</td></tr>
+<tr><td><code>fork_tape(tape_name, func)</code></td><td>Execute a closure against a forked tape, then auto-merge</td></tr>
+<tr><td><code>append_message / append_tool_call / append_tool_result</code></td><td>Typed append helpers</td></tr>
+<tr><td><code>search(tape_name, query, limit, all_tapes)</code></td><td>Substring + fuzzy search over message entries</td></tr>
+<tr><td><code>from_last_anchor(tape_name, kinds)</code></td><td>Query entries after the most recent anchor</td></tr>
+<tr><td><code>anchors(tape_name, limit)</code></td><td>List recent anchors</td></tr>
+<tr><td><code>info(tape_name)</code></td><td>Tape statistics (entry count, anchors, token usage)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="contextrs--llm-context-reconstruction"><a class="header" href="#contextrs--llm-context-reconstruction"><code>context.rs</code> — LLM Context Reconstruction</a></h3>
+<p>Converts persisted tape entries directly into <code>Vec&lt;llm::Message&gt;</code>:</p>
+<pre class="mermaid">graph LR
+    M[Message entry] --&gt;|"serde_json::from_value"| LM["llm::Message"]
+    TC[ToolCall entry] --&gt;|"parse calls → ToolCallRequest"| AM["Message::assistant_with_tool_calls"]
+    TR[ToolResult entry] --&gt;|"pair with pending call IDs"| TRM["Message::tool_result"]
+</pre>
+
+<p>Because the tape module lives inside <code>rara-kernel</code>, <code>context.rs</code> constructs <code>llm::Message</code> directly — no intermediate <code>Value</code> representation or cross-crate type erasure.</p>
+<h2 id="fork--merge-workflow"><a class="header" href="#fork--merge-workflow">Fork / Merge Workflow</a></h2>
+<p>Forks enable isolated tape contexts for sub-agent or branch-and-merge workflows:</p>
+<pre class="mermaid">sequenceDiagram
+    participant Parent as parent tape
+    participant Fork as fork tape
+
+    Parent-&gt;&gt;Fork: fork() — copy file + cache
+    Note over Fork: fork_start_id = parent.next_id()
+    Fork-&gt;&gt;Fork: append entries (isolated)
+    Fork-&gt;&gt;Parent: merge() — copy entries where id &gt;= fork_start_id
+    Note over Parent: Fork file deleted
+</pre>
+
+<p><code>TapeService::fork_tape</code> wraps this pattern with a closure and automatic merge on completion.</p>
+<h2 id="key-files"><a class="header" href="#key-files">Key Files</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crates/kernel/src/memory/mod.rs</code></td><td>Module root, core types (<code>TapEntry</code>, <code>TapEntryKind</code>)</td></tr>
+<tr><td><code>crates/kernel/src/memory/store.rs</code></td><td><code>FileTapeStore</code> — JSONL I/O, caching, fork/merge</td></tr>
+<tr><td><code>crates/kernel/src/memory/service.rs</code></td><td><code>TapeService</code> — anchor workflows, search, context building</td></tr>
+<tr><td><code>crates/kernel/src/memory/context.rs</code></td><td><code>default_tape_context</code> — tape entries → <code>Vec&lt;llm::Message&gt;</code></td></tr>
+<tr><td><code>crates/kernel/src/memory/anchors.rs</code></td><td><code>AnchorSummary</code> type</td></tr>
+<tr><td><code>crates/kernel/src/memory/error.rs</code></td><td><code>TapError</code> / <code>TapResult</code></td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="proactive-agent-agent-soul"><a class="header" href="#proactive-agent-agent-soul">Proactive Agent (Agent Soul)</a></h1>
+<p>Proactive Agent 是一个 cron 驱动的后台 worker，周期性回顾用户最近的聊天活动，通过 LLM 判断是否需要主动发送 Telegram 消息。</p>
+<p><strong>核心理念：</strong> 让 AI 代理拥有可配置的“灵魂“（personality prompt），在用户不主动提问时也能提供帮助。</p>
+<p><strong>示例场景：</strong> 用户白天分享了几个 JD 并提了一些问题，晚上代理主动发送：“嘿，我注意到你之前在看 Stripe 那个 Senior Backend 岗位，还感兴趣吗？我可以帮你准备简历。”</p>
+<h2 id="architecture-1"><a class="header" href="#architecture-1">Architecture</a></h2>
+<pre><code>Cron trigger (default: 9am, 6pm, 9pm daily)
+  │
+  ▼
+ProactiveAgentWorker.work()
+  │
+  ├── settings_svc.current() ─── agent.proactive_enabled? ──► false → skip
+  ├── ai.openrouter_api_key? ──► None → skip
+  ├── telegram.chat_id? ────────► None → skip
+  │
+  ├── chat_service.list_sessions(20)
+  │     └── filter: updated_at &gt; now - 24h
+  │
+  ├── for each session:
+  │     └── chat_service.get_messages(last 20)
+  │           └── build activity summary text
+  │
+  ├── AgentRunner (no tools, max_iterations=1)
+  │     ├── system_prompt: agent.soul (or DEFAULT_SOUL_PROMPT)
+  │     └── user_content: activity summary + instructions
+  │
+  └── LLM response
+        ├── "SKIP" or empty → done
+        └── message text → notify_client.send_telegram()
+</code></pre>
+<h3 id="components-1"><a class="header" href="#components-1">Components</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Component</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ProactiveAgentWorker</code></td><td>Cron-triggered <code>FallibleWorker&lt;AppState&gt;</code></td></tr>
+<tr><td><code>AgentSettings</code></td><td>soul prompt、enabled 开关、cron 表达式</td></tr>
+<tr><td><code>SettingsSvc</code></td><td>运行时设置热读取</td></tr>
+<tr><td><code>ChatService</code></td><td>读取最近 sessions 和 messages</td></tr>
+<tr><td><code>AgentRunner</code></td><td>单轮 LLM 调用（无 tool-calling）</td></tr>
+<tr><td><code>NotifyClient</code></td><td>通过 PGMQ 队列发送 Telegram 通知</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="settings"><a class="header" href="#settings">Settings</a></h2>
+<h3 id="agentsettings"><a class="header" href="#agentsettings">AgentSettings</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct AgentSettings {
+    pub soul: Option&lt;String&gt;,         // LLM 人格 prompt，None 使用内置默认
+    pub proactive_enabled: bool,      // 是否启用，支持运行时热切换
+    pub proactive_cron: Option&lt;String&gt;, // Cron 表达式，修改需重启
+}
+<span class="boring">}</span></code></pre>
+<p><code>AgentSettings</code> 作为 <code>Settings.agent</code> 嵌入，使用 <code>#[serde(default)]</code> 向后兼容。</p>
+<h3 id="api"><a class="header" href="#api">API</a></h3>
+<p>通过 <code>POST /api/v1/settings</code> 更新：</p>
+<pre><code class="language-json">{
+  "agent": {
+    "soul": "You are a friendly career coach...",
+    "proactive_enabled": true,
+    "proactive_cron": "0 9,21 * * *"
+  }
+}
+</code></pre>
+<p>所有字段可选，partial update 语义。<code>soul</code> 和 <code>proactive_cron</code> 发送空字符串表示清空（恢复默认）。</p>
+<h3 id="hot-reload"><a class="header" href="#hot-reload">Hot Reload</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Setting</th><th>Hot Reload</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>proactive_enabled</code></td><td>Yes</td><td>每次 tick 检查</td></tr>
+<tr><td><code>soul</code></td><td>Yes</td><td>每次 tick 读取</td></tr>
+<tr><td><code>proactive_cron</code></td><td>No</td><td>启动时固定，修改需重启</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="worker-flow"><a class="header" href="#worker-flow">Worker Flow</a></h2>
+<h3 id="guard-checks"><a class="header" href="#guard-checks">Guard Checks</a></h3>
+<p>每次 tick 依次检查，任一不满足则 early return：</p>
+<ol>
+<li><code>agent.proactive_enabled</code> — 运行时热读取</li>
+<li><code>ai.openrouter_api_key</code> — 必须配置 AI 服务</li>
+<li><code>telegram.chat_id</code> — 必须配置 Telegram 接收方</li>
+</ol>
+<h3 id="activity-collection"><a class="header" href="#activity-collection">Activity Collection</a></h3>
+<ol>
+<li>列出最近 20 个 sessions（按 <code>updated_at</code> 降序）</li>
+<li>过滤 <code>updated_at &gt; now - 24h</code></li>
+<li>对每个 session 读取最后 20 条消息</li>
+<li>构建文本摘要，每条消息截断到 200 字符（UTF-8 char boundary safe）</li>
+</ol>
+<h3 id="llm-reflection"><a class="header" href="#llm-reflection">LLM Reflection</a></h3>
+<p>使用 <code>AgentRunner</code> 单轮调用：</p>
+<ul>
+<li><strong>System prompt:</strong> 用户自定义 soul 或内置默认</li>
+<li><strong>User content:</strong> 活动摘要 + 指令</li>
+<li><strong>Tools:</strong> 空（纯文本生成）</li>
+<li><strong>Max iterations:</strong> 1</li>
+<li><strong>Model:</strong> <code>settings.ai.model_for(ModelScenario::Chat)</code></li>
+</ul>
+<h3 id="message-delivery"><a class="header" href="#message-delivery">Message Delivery</a></h3>
+<p>LLM 回复不是 “SKIP” 时，通过 <code>NotifyClient.send_telegram()</code> 入队 PGMQ，由 Telegram bot 异步发送。</p>
+<h2 id="default-soul-prompt"><a class="header" href="#default-soul-prompt">Default Soul Prompt</a></h2>
+<pre><code>You are a proactive job search companion. You're encouraging, data-driven, and concise.
+When reviewing recent user activity, consider:
+- Did they share JDs but not follow up?
+- Are they stuck on applications without progress?
+- Did they ask questions that suggest uncertainty?
+If you spot something worth mentioning, craft a brief, warm Telegram message (max 300 chars).
+If nothing stands out, respond with exactly "SKIP".
+</code></pre>
+<h2 id="cron-scheduling"><a class="header" href="#cron-scheduling">Cron Scheduling</a></h2>
+<p>默认 <code>0 9,18,21 * * *</code>（每天 9:00、18:00、21:00）。</p>
+<p>无效 cron 表达式在启动时<strong>自动降级</strong>到默认值并输出 warn 日志，不会 panic。</p>
+<h2 id="frontend"><a class="header" href="#frontend">Frontend</a></h2>
+<p>Settings 页面 “Agent Personality” 卡片：</p>
+<ul>
+<li><strong>Soul Prompt</strong> — 多行文本域，placeholder 显示默认 prompt</li>
+<li><strong>Proactive Messaging</strong> — Switch 开关</li>
+<li><strong>Cron Schedule</strong> — 文本输入，附常用值说明</li>
+</ul>
+<h2 id="source-files"><a class="header" href="#source-files">Source Files</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crates/domain/shared/src/settings/model.rs</code></td><td><code>AgentSettings</code> + patch + normalize</td></tr>
+<tr><td><code>crates/domain/shared/src/settings/router.rs</code></td><td><code>AgentSettingsView</code> + API</td></tr>
+<tr><td><code>crates/workers/src/proactive.rs</code></td><td><code>ProactiveAgentWorker</code></td></tr>
+<tr><td><code>crates/workers/src/worker_state.rs</code></td><td><code>llm_provider</code> in <code>AppState</code></td></tr>
+<tr><td><code>crates/app/src/lib.rs</code></td><td>Worker 注册 + cron 降级</td></tr>
+<tr><td><code>web/src/pages/Settings.tsx</code></td><td>Agent Personality UI</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="typst-resume-system"><a class="header" href="#typst-resume-system">Typst Resume System</a></h1>
+<p>The Typst Resume System enables AI-driven resume management. Users register their local Typst resume project folders (or clone from Git), and the AI agent reads, analyzes, modifies, and recompiles resumes directly on the local filesystem.</p>
+<h2 id="architecture-2"><a class="header" href="#architecture-2">Architecture</a></h2>
+<p>This application runs locally on the user’s machine. The backend accesses the user’s filesystem directly — no file content is stored in the database.</p>
+<pre class="mermaid">graph TD
+    User[User] --&gt;|Register local folder / Git clone| TypstService[TypstService]
+    User --&gt;|Upload PDF| ResumeService[ResumeService]
+
+    TypstService --&gt;|read/write .typ files| Disk[(Local Filesystem)]
+    TypstService --&gt;|compile → PDF| Compiler[Typst Compiler]
+    Compiler --&gt;|store PDF| S3[(S3 / MinIO)]
+    TypstService --&gt;|project metadata| DB[(PostgreSQL)]
+
+    ResumeService --&gt; DB
+    ResumeService --&gt; S3
+
+    Agent[AI Agent] --&gt;|read/write/compile| TypstService
+    Agent --&gt;|analyze| ResumeService
+
+    Frontend[Frontend Editor] --&gt;|view/edit via API| TypstService
+    Frontend --&gt;|PDF preview| S3
+</pre>
+
+<h3 id="data-flow"><a class="header" href="#data-flow">Data Flow</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Data</th><th>Storage</th></tr>
+</thead>
+<tbody>
+<tr><td><code>.typ</code> source files</td><td>User’s local filesystem (never copied to DB)</td></tr>
+<tr><td>Project metadata (id, name, local_path)</td><td>PostgreSQL</td></tr>
+<tr><td>Compiled PDFs</td><td>S3 / MinIO</td></tr>
+<tr><td>Render history</td><td>PostgreSQL</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="domain-crates"><a class="header" href="#domain-crates">Domain Crates</a></h2>
+<h3 id="rara-domain-typst"><a class="header" href="#rara-domain-typst"><code>rara-domain-typst</code></a></h3>
+<p>Manages Typst projects, local file access, and compilation.</p>
+<p><strong>Location:</strong> <code>crates/domain/typst/</code></p>
+<p><strong>Key modules:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Module</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>types.rs</code></td><td><code>TypstProject</code>, <code>RenderResult</code>, <code>FileEntry</code></td></tr>
+<tr><td><code>fs.rs</code></td><td>Local filesystem operations: scan, read, write, path validation</td></tr>
+<tr><td><code>compiler.rs</code></td><td>Typst-to-PDF compilation via <code>typst-as-lib</code></td></tr>
+<tr><td><code>git.rs</code></td><td>Git repository clone via <code>git2</code></td></tr>
+<tr><td><code>service.rs</code></td><td>Business logic: register, compile, file access</td></tr>
+<tr><td><code>router.rs</code></td><td>REST API endpoints</td></tr>
+<tr><td><code>pg_repository.rs</code></td><td>PostgreSQL persistence (project metadata + renders only)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Database tables:</strong></p>
+<ul>
+<li><code>typst_project</code> — project metadata: <code>id</code>, <code>name</code>, <code>local_path</code>, <code>main_file</code>, <code>git_url</code></li>
+<li><code>typst_render</code> — compilation results, references S3 PDF object</li>
+</ul>
+<p>Note: There is no <code>typst_file</code> table. File content lives on disk only.</p>
+<h3 id="rara-domain-resume-extended"><a class="header" href="#rara-domain-resume-extended"><code>rara-domain-resume</code> (extended)</a></h3>
+<p>Extended with PDF upload/download capability.</p>
+<p><strong>New fields on <code>resume</code> table:</strong></p>
+<ul>
+<li><code>pdf_object_key TEXT</code> — S3 object key for uploaded PDF</li>
+<li><code>pdf_file_size BIGINT</code> — file size in bytes</li>
+</ul>
+<h2 id="filesystem-module-fsrs"><a class="header" href="#filesystem-module-fsrs">Filesystem Module (<code>fs.rs</code>)</a></h2>
+<p>The <code>fs</code> module provides safe local filesystem operations.</p>
+<h3 id="path-traversal-protection"><a class="header" href="#path-traversal-protection">Path Traversal Protection</a></h3>
+<p>All file operations validate that the resolved path stays within the project root directory:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn validate_path(root: &amp;Path, relative: &amp;str) -&gt; Result&lt;PathBuf, TypstError&gt;
+<span class="boring">}</span></code></pre>
+<p>Rejects paths containing <code>..</code> or symlinks that escape the root. Returns <code>PathTraversal</code> error on violation.</p>
+<h3 id="key-functions"><a class="header" href="#key-functions">Key Functions</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Function</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>scan_directory(root)</code></td><td>Recursively scan directory, return <code>Vec&lt;FileEntry&gt;</code> tree</td></tr>
+<tr><td><code>read_file(root, relative)</code></td><td>Read file content as string</td></tr>
+<tr><td><code>write_file(root, relative, content)</code></td><td>Write content to file</td></tr>
+<tr><td><code>collect_typ_files(root)</code></td><td>Collect all <code>.typ</code> files as <code>HashMap&lt;path, content&gt;</code> for compilation</td></tr>
+</tbody>
+</table>
+</div>
+<p>Hidden directories (<code>.git</code>, <code>.github</code>, etc.) are automatically excluded from scans.</p>
+<h2 id="api-reference"><a class="header" href="#api-reference">API Reference</a></h2>
+<h3 id="typst-projects"><a class="header" href="#typst-projects">Typst Projects</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>POST</code></td><td><code>/api/v1/typst/projects</code></td><td>Register local project (accepts <code>local_path</code>)</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/v1/typst/projects</code></td><td>List projects</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/v1/typst/projects/{id}</code></td><td>Get project</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/api/v1/typst/projects/{id}</code></td><td>Unregister project (does not delete local files)</td></tr>
+<tr><td><code>POST</code></td><td><code>/api/v1/typst/projects/import-git</code></td><td>Clone Git repo to local dir, then register</td></tr>
+<tr><td><code>POST</code></td><td><code>/api/v1/typst/projects/{id}/git-sync</code></td><td>Pull latest changes from Git</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="typst-files-local-filesystem"><a class="header" href="#typst-files-local-filesystem">Typst Files (Local Filesystem)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GET</code></td><td><code>/api/v1/typst/projects/{id}/files</code></td><td>Scan directory, return file tree</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/v1/typst/projects/{id}/files/{path}</code></td><td>Read file from disk</td></tr>
+<tr><td><code>PUT</code></td><td><code>/api/v1/typst/projects/{id}/files/{path}</code></td><td>Write file to disk</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="compilation--rendering"><a class="header" href="#compilation--rendering">Compilation &amp; Rendering</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>POST</code></td><td><code>/api/v1/typst/projects/{id}/compile</code></td><td>Compile from disk to PDF</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/v1/typst/projects/{id}/renders</code></td><td>List render history</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/v1/typst/renders/{id}/pdf</code></td><td>Download rendered PDF</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="resume-pdf"><a class="header" href="#resume-pdf">Resume PDF</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>POST</code></td><td><code>/api/v1/resumes/upload</code></td><td>Upload PDF (multipart)</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/v1/resumes/{id}/pdf</code></td><td>Download resume PDF</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="compilation-engine"><a class="header" href="#compilation-engine">Compilation Engine</a></h2>
+<p>The compiler is built on <code>typst-as-lib</code>, which wraps the official Typst compiler.</p>
+<p><strong>Flow:</strong></p>
+<ol>
+<li><code>fs::collect_typ_files()</code> reads all <code>.typ</code> files from the project directory on disk</li>
+<li>Files are assembled into an in-memory file map</li>
+<li><code>TypstCompiler::compile()</code> invokes <code>typst-as-lib</code> with the file map</li>
+<li>On success, PDF bytes are uploaded to S3 (<code>typst/renders/{render_id}.pdf</code>)</li>
+<li>A <code>RenderResult</code> record is created with metadata (page count, file size, source hash)</li>
+</ol>
+<p><strong>Source hash caching:</strong> The compiler hashes all source files before compiling. If the hash matches the latest render, compilation is skipped and the existing result is returned.</p>
+<h2 id="git-integration"><a class="header" href="#git-integration">Git Integration</a></h2>
+<p>The <code>GitImporter</code> clones repositories to a user-specified local directory, then registers the directory as a Typst project.</p>
+<p><strong>Constraints:</strong></p>
+<ul>
+<li>HTTPS URLs only (no SSH, no local paths)</li>
+<li>Shallow clone (depth=1) for efficiency</li>
+<li>60-second timeout</li>
+</ul>
+<p><strong>Import flow:</strong></p>
+<ol>
+<li>Validate URL format</li>
+<li>Clone to user-specified target directory via <code>git2</code></li>
+<li>Register the target directory as a local Typst project</li>
+<li>Auto-detect main file (<code>main.typ</code> preferred)</li>
+</ol>
+<p><strong>Sync:</strong> Re-clones the repository into the same local directory.</p>
+<h2 id="pdf-upload"><a class="header" href="#pdf-upload">PDF Upload</a></h2>
+<p>Resume PDF upload uses <code>axum::extract::Multipart</code> with the following validations:</p>
+<ul>
+<li>File size limit: 10MB</li>
+<li>Content validation: PDF magic bytes (<code>%PDF</code>)</li>
+<li>Storage path: <code>resumes/{resume_id}/original.pdf</code></li>
+<li>Creates a <code>Resume</code> record with <code>source = Manual</code></li>
+</ul>
+<h2 id="frontend-1"><a class="header" href="#frontend-1">Frontend</a></h2>
+<h3 id="typst-projects-page-typst"><a class="header" href="#typst-projects-page-typst">Typst Projects Page (<code>/typst</code>)</a></h3>
+<ul>
+<li>Project list with local path display</li>
+<li>“Add Project” button — register an existing local folder by path</li>
+<li>“Import from Git” dialog — clone to a local directory then register</li>
+<li>Git projects show sync button with last-synced timestamp</li>
+<li>Delete removes the database record only (local files are untouched)</li>
+</ul>
+<h3 id="typst-editor-page-typstprojectid"><a class="header" href="#typst-editor-page-typstprojectid">Typst Editor Page (<code>/typst/:projectId</code>)</a></h3>
+<p>Three-panel layout:</p>
+<pre><code>+------------+--------------------+------------------+
+| File Tree  | CodeMirror Editor  | PDF Preview      |
+|            |                    |                  |
+| src/       | [Typst code...]    | [Rendered PDF]   |
+|  main.typ  |                    |                  |
+|  style.typ |                    | [Compile]        |
+| assets/    |                    | [History]        |
++------------+--------------------+------------------+
+</code></pre>
+<p><strong>File tree:</strong> Recursive tree component with expand/collapse for directories. Files are read from disk via the backend API.</p>
+<p><strong>Editor features:</strong></p>
+<ul>
+<li>CodeMirror 6 with markdown language support and one-dark theme</li>
+<li>Auto-save with 1-second debounce (writes to local disk via API)</li>
+<li>Manual save with Ctrl+S</li>
+</ul>
+<p><strong>Preview features:</strong></p>
+<ul>
+<li>PDF rendered via iframe with blob URL</li>
+<li>Compile button with loading indicator</li>
+<li>Expandable render history list</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="resume-ai-agent"><a class="header" href="#resume-ai-agent">Resume AI Agent</a></h1>
+<p>The AI agent can analyze, modify, and compile user resumes through a set of specialized tools. All file operations happen directly on the user’s local filesystem — the agent reads and writes <code>.typ</code> files on disk, then triggers compilation to generate updated PDFs.</p>
+<h2 id="agent-tools-1"><a class="header" href="#agent-tools-1">Agent Tools</a></h2>
+<h3 id="resume-tools"><a class="header" href="#resume-tools">Resume Tools</a></h3>
+<p>Registered in <code>crates/workers/src/tools/services/resume_tools.rs</code>.</p>
+<h4 id="list_resumes"><a class="header" href="#list_resumes"><code>list_resumes</code></a></h4>
+<p>List all resumes with optional source filter.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>source</code></td><td>string</td><td>No</td><td>Filter: <code>manual</code>, <code>ai_generated</code>, or <code>optimized</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> Array of resume summaries (id, title, source, tags, version_tag).</p>
+<h4 id="get_resume_content"><a class="header" href="#get_resume_content"><code>get_resume_content</code></a></h4>
+<p>Retrieve full resume content by ID.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>resume_id</code></td><td>string</td><td>Yes</td><td>UUID of the resume</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> Complete resume fields including content text.</p>
+<h4 id="analyze_resume"><a class="header" href="#analyze_resume"><code>analyze_resume</code></a></h4>
+<p>Analyze a resume and produce an optimization report. Uses <code>ResumeAnalyzerAgent</code> with a specialized system prompt for professional resume consulting.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>resume_id</code></td><td>string</td><td>Yes</td><td>UUID of the resume to analyze</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Analysis dimensions:</strong></p>
+<ol>
+<li><strong>Content completeness</strong> — contact info, work experience, education, skills</li>
+<li><strong>Wording quality</strong> — action verbs, quantified achievements, clarity</li>
+<li><strong>Structure and format</strong> — section organization, length, readability</li>
+<li><strong>ATS compatibility</strong> — keyword coverage, format simplicity</li>
+<li><strong>Job match</strong> — skill alignment with target job (when <code>target_job_id</code> is set)</li>
+</ol>
+<h3 id="typst-tools-1"><a class="header" href="#typst-tools-1">Typst Tools</a></h3>
+<p>Registered in <code>crates/workers/src/tools/services/typst_tools.rs</code>. All file operations go through <code>TypstService</code> which reads/writes directly from the user’s local filesystem.</p>
+<h4 id="list_typst_projects"><a class="header" href="#list_typst_projects"><code>list_typst_projects</code></a></h4>
+<p>List all registered Typst projects.</p>
+<p><strong>Parameters:</strong> None.</p>
+<p><strong>Returns:</strong> Array of projects (id, name, local_path, main_file, git_url).</p>
+<h4 id="list_typst_files"><a class="header" href="#list_typst_files"><code>list_typst_files</code></a></h4>
+<p>Scan the project directory on disk and list all files.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>project_id</code></td><td>string</td><td>Yes</td><td>UUID of the project</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> File tree with nested directory structure.</p>
+<h4 id="read_typst_file"><a class="header" href="#read_typst_file"><code>read_typst_file</code></a></h4>
+<p>Read file content directly from disk.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>project_id</code></td><td>string</td><td>Yes</td><td>UUID of the project</td></tr>
+<tr><td><code>file_path</code></td><td>string</td><td>Yes</td><td>Relative file path (e.g., <code>main.typ</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> Full file text content from the local filesystem.</p>
+<h4 id="update_typst_file"><a class="header" href="#update_typst_file"><code>update_typst_file</code></a></h4>
+<p>Write file content directly to disk.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>project_id</code></td><td>string</td><td>Yes</td><td>UUID of the project</td></tr>
+<tr><td><code>file_path</code></td><td>string</td><td>Yes</td><td>Relative file path</td></tr>
+<tr><td><code>content</code></td><td>string</td><td>Yes</td><td>New file content</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> Write confirmation. The file is immediately updated on the user’s filesystem.</p>
+<h4 id="compile_typst_project"><a class="header" href="#compile_typst_project"><code>compile_typst_project</code></a></h4>
+<p>Read all <code>.typ</code> files from disk and compile to PDF.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>project_id</code></td><td>string</td><td>Yes</td><td>UUID of the project</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> Compilation result (render_id, page_count, file_size, source_hash).</p>
+<h2 id="ai-driven-workflow"><a class="header" href="#ai-driven-workflow">AI-Driven Workflow</a></h2>
+<p>The agent operates directly on the user’s local files:</p>
+<pre class="mermaid">sequenceDiagram
+    participant User
+    participant Agent as AI Agent
+    participant FS as Local Filesystem
+    participant Compiler as Typst Compiler
+    participant S3
+
+    User-&gt;&gt;Agent: "Optimize my resume for the SWE role at Google"
+    Agent-&gt;&gt;Agent: list_typst_projects (find project + local_path)
+    Agent-&gt;&gt;FS: list_typst_files (scan directory)
+    Agent-&gt;&gt;FS: read_typst_file (read main.typ from disk)
+    Agent-&gt;&gt;Agent: analyze content, plan improvements
+    Agent-&gt;&gt;FS: update_typst_file (write modified main.typ to disk)
+    Agent-&gt;&gt;Compiler: compile_typst_project (read all .typ from disk)
+    Compiler-&gt;&gt;S3: Upload compiled PDF
+    Compiler--&gt;&gt;Agent: render result (pages, size)
+    Agent--&gt;&gt;User: "Done. Changed X, Y, Z. New PDF ready."
+    User-&gt;&gt;User: Review changes in editor / download PDF
+</pre>
+
+<h3 id="example-conversation"><a class="header" href="#example-conversation">Example Conversation</a></h3>
+<pre><code>User: 帮我优化简历中的工作经验部分，加上量化数据
+
+Agent: 让我先查看你的简历项目。
+→ [calls list_typst_projects]
+  Found: "my-resume" at ~/projects/resume/
+
+→ [calls list_typst_files]
+  Files: main.typ, sections/experience.typ, sections/skills.typ
+
+→ [calls read_typst_file for "sections/experience.typ"]
+  Reading from disk: ~/projects/resume/sections/experience.typ
+
+Agent: 我已经阅读了你的简历，发现以下可优化的点：
+1. "负责后端开发" → 缺少量化成果
+2. "优化系统性能" → 未指明提升幅度
+3. "参与项目管理" → 缺少团队规模和项目范围
+
+让我帮你修改：
+→ [calls update_typst_file for "sections/experience.typ"]
+  Writing to disk: ~/projects/resume/sections/experience.typ
+→ [calls compile_typst_project]
+  Compiling from: ~/projects/resume/
+
+Agent: 已完成修改并重新编译。主要改动：
+- "负责后端开发" → "主导后端微服务架构设计，支撑日均 500 万请求"
+- "优化系统性能" → "将 API 响应时间从 800ms 降至 120ms（提升 85%）"
+- "参与项目管理" → "带领 6 人团队交付 3 个季度 OKR 项目"
+
+新 PDF 已生成（2 页，42KB），可在编辑器中预览。
+文件已直接保存到你的本地项目目录。
+</code></pre>
+<h2 id="security"><a class="header" href="#security">Security</a></h2>
+<h3 id="path-traversal-protection-1"><a class="header" href="#path-traversal-protection-1">Path Traversal Protection</a></h3>
+<p>All file operations validate that resolved paths stay within the project root:</p>
+<ul>
+<li>Paths containing <code>..</code> are rejected</li>
+<li>Symlinks escaping the root directory are blocked</li>
+<li>Returns <code>PathTraversal</code> error on violation</li>
+</ul>
+<p>This prevents the AI agent (or any API caller) from reading/writing files outside the registered project directory.</p>
+<h2 id="implementation-files"><a class="header" href="#implementation-files">Implementation Files</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crates/domain/typst/src/fs.rs</code></td><td>Local filesystem operations with path safety</td></tr>
+<tr><td><code>crates/workers/src/tools/services/resume_tools.rs</code></td><td>Resume agent tools</td></tr>
+<tr><td><code>crates/workers/src/tools/services/typst_tools.rs</code></td><td>Typst agent tools (disk-based)</td></tr>
+<tr><td><code>crates/ai/src/agents/resume_analyzer.rs</code></td><td>Resume analysis AI agent</td></tr>
+<tr><td><code>crates/workers/src/worker_state.rs</code></td><td>Tool registration</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="codex-oauth-integration"><a class="header" href="#codex-oauth-integration">Codex OAuth Integration</a></h1>
+<p>This document describes how Codex OAuth is layered in the codebase and why.</p>
+<h2 id="layering"><a class="header" href="#layering">Layering</a></h2>
+<ul>
+<li>
+<p><code>crates/integrations/codex-oauth</code></p>
+<ul>
+<li>Owns Codex provider-specific behavior.</li>
+<li>Builds OAuth URLs and PKCE values.</li>
+<li>Exchanges authorization code and refresh token at OpenAI token endpoint.</li>
+<li>Stores/loads tokens using keyring.</li>
+<li>Stores pending OAuth state in short-lived in-process memory.</li>
+<li>Implements token refresh policy (<code>should_refresh_token</code>).</li>
+<li><strong>Runs ephemeral callback server on <code>localhost:1455</code></strong> — the only
+redirect URI accepted by the Codex public OAuth client.</li>
+</ul>
+</li>
+<li>
+<p><code>crates/extensions/backend-admin/src/settings/codex_oauth.rs</code></p>
+<ul>
+<li>Owns HTTP route wiring only (<code>/start</code>, <code>/status</code>, <code>/disconnect</code>).</li>
+<li>Translates API requests to integration calls.</li>
+<li>Must not re-implement token exchange/refresh rules.</li>
+<li>Does NOT handle the OAuth callback — that lives on port 1455.</li>
+</ul>
+</li>
+<li>
+<p><code>crates/workers/src/worker_state.rs</code></p>
+<ul>
+<li>Owns runtime orchestration only.</li>
+<li>Loads tokens, checks refresh window, refreshes through integration crate, saves refreshed tokens, then builds provider client.</li>
+<li>Must not embed OAuth endpoint details.</li>
+</ul>
+</li>
+</ul>
+<h2 id="oauth-flow"><a class="header" href="#oauth-flow">OAuth Flow</a></h2>
+<ol>
+<li>Frontend calls <code>POST /api/v1/ai/codex/oauth/start</code>.</li>
+<li>Backend creates <code>state</code> + PKCE verifier/challenge via integration crate.</li>
+<li>Backend starts ephemeral callback server on <code>localhost:1455</code>.</li>
+<li>Backend returns <code>auth_url</code> — frontend opens it in a new browser tab.</li>
+<li>User authenticates at OpenAI and is redirected to
+<code>http://localhost:1455/auth/callback</code> (pre-registered redirect URI).</li>
+<li>Ephemeral server validates <code>state</code>, exchanges <code>code</code> for tokens via
+integration crate, persists tokens in keyring, then redirects the
+browser to the frontend settings page (<code>/settings?codex_oauth=success</code>).</li>
+<li>Ephemeral server shuts itself down.</li>
+</ol>
+<h2 id="token-refresh-flow"><a class="header" href="#token-refresh-flow">Token Refresh Flow</a></h2>
+<ol>
+<li>Worker selects provider <code>codex</code> from runtime settings.</li>
+<li>Worker loads persisted tokens via integration crate.</li>
+<li>If <code>should_refresh_token(expires_at_unix)</code> is true, worker acquires refresh lock.</li>
+<li>Worker re-loads token (double-check) and refreshes via integration crate.</li>
+<li>Worker persists refreshed token and constructs OpenAI provider with latest access token.</li>
+</ol>
+<h2 id="why-localhost1455"><a class="header" href="#why-localhost1455">Why localhost:1455?</a></h2>
+<p>The Codex public OAuth client (<code>app_EMoamEEZ73f0CkXaXp7hrann</code>) only
+accepts <code>http://localhost:1455/auth/callback</code> as its redirect URI.
+This is the same approach used by the official Codex CLI and other
+third-party tools (Roo Code, OpenCode, etc.).</p>
+<h2 id="rationale"><a class="header" href="#rationale">Rationale</a></h2>
+<ul>
+<li>Avoids boundary leakage from integration concerns into <code>backend-admin</code> and worker internals.</li>
+<li>Keeps provider-specific behavior in one place for easier maintenance and testing.</li>
+<li>Prevents duplicated OAuth logic and constant drift.</li>
+</ul>
+<h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
+<ul>
+<li><code>RARA_FRONTEND_URL</code>
+<ul>
+<li>Frontend base URL used for post-OAuth redirects.</li>
+<li>Defaults to <code>http://localhost:5173</code>.</li>
+<li>In production (shared domain), set to your public URL.</li>
+</ul>
+</li>
+<li><code>RARA_CODEX_CLIENT_ID</code>
+<ul>
+<li>Optional override for Codex OAuth client id.</li>
+<li>Use this when default client id is not accepted in your environment/account.</li>
+</ul>
+</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="api-module"><a class="header" href="#api-module">API Module</a></h1>
+<p>This directory contains all Protocol Buffer definitions and generated gRPC stubs for the job project.</p>
+<h2 id="architecture-3"><a class="header" href="#architecture-3">Architecture</a></h2>
+<p>This project uses a <strong>client-server architecture</strong>:</p>
+<ul>
+<li><strong>Rust</strong>: Implements the gRPC server with both client and server code generated</li>
+<li><strong>Other languages</strong>: Generate client-only code to consume the Rust gRPC API</li>
+</ul>
+<p>This approach allows you to:</p>
+<ul>
+<li>Build the main service in Rust (performance, safety)</li>
+<li>Create client libraries for multiple languages (ecosystem integration)</li>
+<li>Maintain a single source of truth for the API definition</li>
+</ul>
+<h2 id="directory-structure"><a class="header" href="#directory-structure">Directory Structure</a></h2>
+<pre><code>api/
+├── proto/                    # Protocol Buffer definitions
+│   └── hello/
+│       └── v1/
+│           └── hello.proto
+├── gen/                      # Generated code (git-ignored)
+│   ├── go/                   # Go client libraries
+│   ├── java/                 # Java client libraries
+│   ├── cpp/                  # C++ client libraries
+│   ├── c/                    # C client libraries (requires local setup)
+│   ├── python/               # Python client libraries
+│   ├── typescript/           # TypeScript client libraries
+│   └── rust/                 # Rust server + client code
+├── buf.yaml                  # Main Buf configuration
+├── buf.gen.yaml              # Multi-language generation config
+├── buf.gen.go.yaml           # Go-specific generation
+├── buf.gen.java.yaml         # Java-specific generation
+├── buf.gen.cpp.yaml          # C++-specific generation
+├── buf.gen.c.yaml            # C-specific generation
+├── buf.lock                  # Dependency lock file
+├── build.rs                  # Rust build script (for tonic/prost)
+├── Cargo.toml                # Rust crate configuration
+└── src/                      # Rust API crate source
+    └── lib.rs
+</code></pre>
+<h2 id="available-commands"><a class="header" href="#available-commands">Available Commands</a></h2>
+<p>All commands should be run from the project root:</p>
+<h3 id="code-generation"><a class="header" href="#code-generation">Code Generation</a></h3>
+<pre><code class="language-bash"># Generate code for all languages
+just proto-generate
+
+# Generate for specific languages
+just proto-generate-go
+just proto-generate-java  
+just proto-generate-cpp
+just proto-generate-c      # Requires local protobuf-c setup
+
+# Generate directly with buf (from api/ directory)
+cd api &amp;&amp; buf generate
+cd api &amp;&amp; buf generate --template buf.gen.go.yaml
+</code></pre>
+<h3 id="validation"><a class="header" href="#validation">Validation</a></h3>
+<pre><code class="language-bash"># Lint proto files
+just proto-lint
+
+# Format proto files
+just proto-format
+
+# Check for breaking changes (in CI/PR)
+just proto-breaking
+</code></pre>
+<h3 id="dependency-management"><a class="header" href="#dependency-management">Dependency Management</a></h3>
+<pre><code class="language-bash"># Update proto dependencies
+just proto-deps-update
+</code></pre>
+<h2 id="language-specific-setup"><a class="header" href="#language-specific-setup">Language-Specific Setup</a></h2>
+<h3 id="go"><a class="header" href="#go">Go</a></h3>
+<p>Generated Go code is in <code>gen/go/</code> with proper go_package options:</p>
+<pre><code class="language-go">import hellov1 "github.com/rararulab/rara/gen/go/hello/v1"
+</code></pre>
+<h3 id="java"><a class="header" href="#java">Java</a></h3>
+<p>Generated Java code is in <code>gen/java/</code> with package <code>com.job.api.hello.v1</code>:</p>
+<pre><code class="language-java">import com.job.api.hello.v1.HelloProto;
+import com.job.api.hello.v1.HelloGrpc;
+</code></pre>
+<h3 id="c"><a class="header" href="#c">C++</a></h3>
+<p>Generated C++ code is in <code>gen/cpp/</code>:</p>
+<pre><code class="language-cpp">#include "hello/v1/hello.grpc.pb.h"
+#include "hello/v1/hello.pb.h"
+</code></pre>
+<h3 id="rust"><a class="header" href="#rust">Rust</a></h3>
+<p>The Rust crate is built with tonic and prost, available as:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use job_api::pb::hello::v1::*;
+<span class="boring">}</span></code></pre>
+<h2 id="adding-new-services"><a class="header" href="#adding-new-services">Adding New Services</a></h2>
+<ol>
+<li>Create a new <code>.proto</code> file in the appropriate directory under <code>proto/</code></li>
+<li>Add language-specific options (go_package, java_package, etc.)</li>
+<li>Update <code>build.rs</code> to include the new proto file for Rust compilation</li>
+<li>Run code generation: <code>just proto-generate</code></li>
+<li>Update your application code to use the new generated stubs</li>
+</ol>
+<h2 id="buf-schema-registry"><a class="header" href="#buf-schema-registry">Buf Schema Registry</a></h2>
+<p>To publish schemas to the Buf Schema Registry:</p>
+<ol>
+<li>Configure your module name in <code>buf.yaml</code></li>
+<li>Authenticate: <code>buf registry login</code></li>
+<li>Push: <code>just proto-push</code></li>
+</ol>
+<p>See the main project documentation for more details on buf integration.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="buf-integration-guide"><a class="header" href="#buf-integration-guide">Buf Integration Guide</a></h1>
+<p>This project uses <a href="https://buf.build/">Buf</a> for proto linting/breaking checks and Python gRPC code generation for the execution worker.</p>
+<h2 id="current-generation-strategy"><a class="header" href="#current-generation-strategy">Current Generation Strategy</a></h2>
+<ul>
+<li>Rust gRPC/proto code is generated by <code>/Users/ryan/code/personal/rust/job/api/build.rs</code> using <code>tonic-prost-build</code> during Cargo builds.</li>
+<li>Buf code generation is used only for Python stubs needed by the execution worker.</li>
+<li>Generated Python files are written to <code>/Users/ryan/code/personal/rust/job/api-generated/python/pb</code>.</li>
+</ul>
+<h2 id="config-files"><a class="header" href="#config-files">Config Files</a></h2>
+<ul>
+<li><code>api/buf.yaml</code>: Buf module + lint/breaking config</li>
+<li><code>api/buf.gen.yaml</code>: Python generation config (execution worker proto only)</li>
+<li><code>api/buf.lock</code>: Buf dependency lockfile</li>
+</ul>
+<h2 id="commands"><a class="header" href="#commands">Commands</a></h2>
+<pre><code class="language-bash"># lint / format / breaking checks
+cd /Users/ryan/code/personal/rust/job/api
+buf lint
+buf format -w
+buf breaking --against .git#branch=main
+
+# generate Python execution worker stubs only
+buf generate
+</code></pre>
+<h2 id="what-buf-generate-produces"><a class="header" href="#what-buf-generate-produces">What <code>buf generate</code> Produces</a></h2>
+<p><code>api/buf.gen.yaml</code> is intentionally scoped to:</p>
+<ul>
+<li><code>proto/execution/v1/worker.proto</code></li>
+<li>Python protobuf + gRPC stubs only</li>
+</ul>
+<p>Output files:</p>
+<pre><code class="language-text">api-generated/
+  python/
+    pb/
+      execution/
+        v1/
+          worker_pb2.py
+          worker_pb2_grpc.py
+</code></pre>
+<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
+<ul>
+<li>If you add new execution worker protos, update <code>api/buf.gen.yaml</code> <code>inputs.paths</code>.</li>
+<li>If you add non-Python generated clients, add a separate template intentionally instead of expanding the default one.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="opentelemetry-integration"><a class="header" href="#opentelemetry-integration">OpenTelemetry Integration</a></h1>
+<p>This document describes how to use the OpenTelemetry integration in <code>job</code> to monitor the performance of the HTTP and gRPC servers.</p>
+<h2 id="configuration-2"><a class="header" href="#configuration-2">Configuration</a></h2>
+<p>The OpenTelemetry integration is configured through environment variables. The following variables are available:</p>
+<ul>
+<li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code>: The endpoint of the OpenTelemetry collector. Defaults to <code>http://localhost:4317</code>.</li>
+<li><code>OTEL_SERVICE_NAME</code>: The name of the service. Defaults to <code>job</code>.</li>
+</ul>
+<h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
+<p>To enable the OpenTelemetry integration, simply start the <code>job</code> server:</p>
+<pre><code class="language-bash">cargo run --bin job -- server
+</code></pre>
+<p>The server will automatically start exporting traces and metrics to the configured OpenTelemetry collector.</p>
+<h2 id="kubernetes-integration"><a class="header" href="#kubernetes-integration">Kubernetes Integration</a></h2>
+<p>To integrate with the Kubernetes infrastructure described in the <code>k8s/</code> directory, you will need to deploy an OpenTelemetry collector to your cluster. The collector can be configured to export data to a variety of backends, such as Jaeger, Prometheus, or a cloud-based observability platform.</p>
+<p>Here is an example of a simple OpenTelemetry collector configuration that exports data to Jaeger:</p>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-conf
+  labels:
+    app: opentelemetry
+    component: otel-collector-conf
+data:
+  otel-collector-config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+          http:
+
+    processors:
+      batch:
+
+    exporters:
+      jaeger:
+        endpoint: jaeger-all-in-one:14250
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [jaeger]
+</code></pre>
+<p>This configuration creates a ConfigMap that contains the OpenTelemetry collector configuration. The collector is configured to receive data over OTLP (gRPC and HTTP) and export it to a Jaeger instance running in the cluster.</p>
+<p>To deploy the collector, you can use the following Kubernetes manifest:</p>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels:
+    app: opentelemetry
+    component: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opentelemetry
+      component: otel-collector
+  template:
+    metadata:
+      labels:
+        app: opentelemetry
+        component: otel-collector
+    spec:
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector:0.84.0
+        command:
+          - "--config=/conf/otel-collector-config.yaml"
+        volumeMounts:
+        - name: otel-collector-config-vol
+          mountPath: /conf
+        ports:
+        - name: otlp-grpc
+          containerPort: 4317
+        - name: otlp-http
+          containerPort: 4318
+      volumes:
+        - name: otel-collector-config-vol
+          configMap:
+            name: otel-collector-conf
+</code></pre>
+<p>This manifest creates a Deployment that runs the OpenTelemetry collector. The collector is configured to use the ConfigMap created in the previous step.</p>
+<p>Once the collector is deployed, you will need to configure the <code>job</code> server to export data to the collector. You can do this by setting the <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> environment variable to the address of the collector’s OTLP gRPC endpoint.</p>
+<p>For example, if the collector is running in the <code>default</code> namespace, you can set the environment variable to <code>http://otel-collector.default:4317</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="raras-diary"><a class="header" href="#raras-diary">Rara’s Diary</a></h1>
+<p>Rara 的个人日记。每天记录工作进展、用户活动摘要和心得感悟。</p>
+<blockquote>
+<p>这些日记由 Proactive Agent 自动撰写。</p>
+</blockquote>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="mermaid-bec0653e.min.js"></script>
+        <script src="mermaid-init-b8faaa87.js"></script>
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>
