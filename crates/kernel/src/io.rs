@@ -53,7 +53,7 @@ use uuid::Uuid;
 use crate::{
     channel::types::{ChannelType, MessageContent},
     identity::UserId,
-    session::{AgentRunLoopResult, SessionKey},
+    session::{AgentRunLoopResult, SessionIndex, SessionKey},
 };
 
 /// Well-known progress stage names used by `OutboundPayload::Progress` and
@@ -139,8 +139,8 @@ pub struct InboundMessage {
     pub source:             ChannelSource,
     /// Unified user identity (resolved by ingress).
     pub user:               UserId,
-    /// Session this message belongs to.
-    pub session_key:        SessionKey,
+    /// Session this message belongs to (None when no channel binding exists yet).
+    pub session_key:        Option<SessionKey>,
     /// Direct process targeting (agent-to-agent communication).
     /// When set, routing bypasses session/name resolution entirely.
     pub target_session_key: Option<SessionKey>,
@@ -167,7 +167,7 @@ impl InboundMessage {
                 platform_chat_id:    None,
             },
             user,
-            session_key: session_id,
+            session_key: Some(session_id),
             target_session_key: None,
             content: MessageContent::Text(text),
             reply_context: None,
@@ -193,7 +193,7 @@ impl InboundMessage {
                 platform_chat_id:    None,
             },
             user,
-            session_key: session_id,
+            session_key: Some(session_id),
             target_session_key: None,
             content: MessageContent::Text(text),
             reply_context: None,
@@ -219,7 +219,7 @@ impl InboundMessage {
                 platform_chat_id:    None,
             },
             user,
-            session_key,
+            session_key: Some(session_key),
             target_session_key: Some(target_id),
             content: MessageContent::Text(text),
             reply_context: None,
@@ -865,9 +865,6 @@ impl StreamHub {
 /// Shared reference to an [`IdentityResolver`] implementation.
 pub type IdentityResolverRef = Arc<dyn IdentityResolver>;
 
-/// Shared reference to a [`SessionResolver`] implementation.
-pub type SessionResolverRef = Arc<dyn SessionResolver>;
-
 // ---------------------------------------------------------------------------
 // RawPlatformMessage
 // ---------------------------------------------------------------------------
@@ -912,25 +909,6 @@ pub trait IdentityResolver: Send + Sync + 'static {
         platform_user_id: &str,
         platform_chat_id: Option<&str>,
     ) -> Result<UserId, IOError>;
-}
-
-// ---------------------------------------------------------------------------
-// SessionResolver
-// ---------------------------------------------------------------------------
-
-/// Resolves or creates a session for a given user + channel context.
-///
-/// Implementations may support cross-channel session sharing (e.g. the same
-/// user on Telegram and Web shares a session) or per-chat isolation.
-#[async_trait]
-pub trait SessionResolver: Send + Sync + 'static {
-    /// Resolve (or create) a session for the given user and channel context.
-    async fn resolve(
-        &self,
-        user: &UserId,
-        channel_type: ChannelType,
-        platform_chat_id: Option<&str>,
-    ) -> Result<SessionKey, IOError>;
 }
 
 /// Handle returned from spawn — allows waiting for agent completion.
@@ -1112,7 +1090,7 @@ pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 /// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
 pub struct IOSubsystem {
     identity_resolver: IdentityResolverRef,
-    session_resolver:  SessionResolverRef,
+    session_index:     Arc<dyn SessionIndex>,
     stream_hub:        StreamHubRef,
     adapters:          HashMap<ChannelType, ChannelAdapterRef>,
     endpoint_registry: EndpointRegistryRef,
@@ -1126,11 +1104,11 @@ impl IOSubsystem {
     /// adapters before passing to the kernel.
     pub fn new(
         identity_resolver: IdentityResolverRef,
-        session_resolver: SessionResolverRef,
+        session_index: Arc<dyn SessionIndex>,
     ) -> Self {
         Self {
             identity_resolver,
-            session_resolver,
+            session_index,
             stream_hub: Arc::new(StreamHub::new(256)),
             adapters: HashMap::new(),
             endpoint_registry: Arc::new(EndpointRegistry::new()),
@@ -1139,9 +1117,11 @@ impl IOSubsystem {
 
     // -- Ingress --------------------------------------------------------------
 
-    /// Resolve identity and session for a raw platform message.
+    /// Resolve identity and channel binding for a raw platform message.
     ///
     /// Returns a fully-formed [`InboundMessage`] ready for the event queue.
+    /// `session_key` will be `None` when no channel binding exists yet;
+    /// the kernel will create a new session on first message.
     #[tracing::instrument(
         skip(self, raw),
         fields(
@@ -1165,12 +1145,30 @@ impl IOSubsystem {
             .await?;
         span.record("user_id", tracing::field::display(&user_id.0));
 
-        // 2. Resolve session
-        let session_id = self
-            .session_resolver
-            .resolve(&user_id, raw.channel_type, raw.platform_chat_id.as_deref())
-            .await?;
-        span.record("session_id", tracing::field::display(&session_id));
+        // 2. Look up channel binding (pure lookup, no creation)
+        let session_key = match raw.platform_chat_id.as_deref() {
+            Some(chat_id) => {
+                match self
+                    .session_index
+                    .get_channel_binding(&raw.channel_type.to_string(), chat_id)
+                    .await
+                {
+                    Ok(Some(binding)) => {
+                        span.record(
+                            "session_id",
+                            tracing::field::display(&binding.session_key),
+                        );
+                        Some(binding.session_key)
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "channel binding lookup failed");
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
 
         // 3. Build InboundMessage
         let msg = InboundMessage {
@@ -1182,7 +1180,7 @@ impl IOSubsystem {
                 platform_chat_id:    raw.platform_chat_id,
             },
             user:               user_id,
-            session_key:        session_id,
+            session_key,
             target_session_key: None,
             content:            raw.content,
             reply_context:      raw.reply_context,
@@ -1193,7 +1191,7 @@ impl IOSubsystem {
         tracing::info!(
             channel = ?msg.source.channel_type,
             user_id = %msg.user.0,
-            session_id = %msg.session_key,
+            session_id = ?msg.session_key,
             content = %msg.content.as_text(),
             "resolved inbound message",
         );
@@ -1262,6 +1260,9 @@ impl IOSubsystem {
     }
 
     // -- Accessors (external consumers) ---------------------------------------
+
+    /// Access the session index.
+    pub fn session_index(&self) -> &Arc<dyn SessionIndex> { &self.session_index }
 
     /// Access the stream hub.
     pub fn stream_hub(&self) -> &StreamHubRef { &self.stream_hub }

@@ -92,13 +92,12 @@ impl SessionCommandHandler {
     /// `/new` — create a new session and bind the channel to it.
     async fn handle_new(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
-        let account = extract_bot_username(context);
 
         match self.client.create_session(Some("Telegram Chat")).await {
             Ok(key) => {
                 let _ = self
                     .client
-                    .bind_channel("telegram", &account, &chat_id, &key)
+                    .bind_channel("telegram", &chat_id, &key)
                     .await;
                 Ok(CommandResult::Text("New chat session started.".to_owned()))
             }
@@ -111,9 +110,8 @@ impl SessionCommandHandler {
     /// `/clear` — clear all messages in the current session.
     async fn handle_clear(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
-        let account = extract_bot_username(context);
 
-        match self.client.get_channel_session(&account, &chat_id).await {
+        match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => {
                 match self
                     .client
@@ -137,10 +135,9 @@ impl SessionCommandHandler {
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
-        let account = extract_bot_username(context);
 
         // Find the currently active session key.
-        let active_key = match self.client.get_channel_session(&account, &chat_id).await {
+        let active_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => Some(binding.session_key),
             Ok(None) => None,
             Err(e) => {
@@ -204,9 +201,8 @@ impl SessionCommandHandler {
     /// `/usage` — show details about the current session.
     async fn handle_usage(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
-        let account = extract_bot_username(context);
 
-        let session_key = match self.client.get_channel_session(&account, &chat_id).await {
+        let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -263,9 +259,8 @@ impl SessionCommandHandler {
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
-        let account = extract_bot_username(context);
 
-        let session_key = match self.client.get_channel_session(&account, &chat_id).await {
+        let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -333,16 +328,6 @@ fn extract_chat_id(context: &CommandContext) -> String {
                 .or_else(|| v.as_str().map(String::from))
         })
         .unwrap_or_else(|| "0".to_owned())
-}
-
-/// Extract bot username from command context metadata.
-fn extract_bot_username(context: &CommandContext) -> String {
-    context
-        .metadata
-        .get("telegram_bot_username")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_owned()
 }
 
 fn html_escape(s: &str) -> String {

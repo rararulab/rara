@@ -50,11 +50,10 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
     async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
         let session_key = &context.data["switch:".len()..];
         let chat_id = extract_chat_id(context);
-        let account = extract_bot_username(context);
 
         match self
             .client
-            .bind_channel("telegram", &account, &chat_id, session_key)
+            .bind_channel("telegram", &chat_id, session_key)
             .await
         {
             Ok(_) => Ok(CallbackResult::SendMessage {
@@ -84,15 +83,6 @@ fn extract_chat_id(context: &CallbackContext) -> String {
                 .or_else(|| v.as_str().map(String::from))
         })
         .unwrap_or_else(|| "0".to_owned())
-}
-
-fn extract_bot_username(context: &CallbackContext) -> String {
-    context
-        .metadata
-        .get("telegram_bot_username")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_owned()
 }
 
 fn html_escape(s: &str) -> String {

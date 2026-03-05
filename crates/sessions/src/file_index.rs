@@ -200,17 +200,6 @@ impl SessionIndex for FileSessionIndex {
     async fn get_channel_binding(
         &self,
         channel_type: &str,
-        _account: &str,
-        chat_id: &str,
-    ) -> Result<Option<ChannelBinding>, SessionError> {
-        // We store by (channel_type, chat_id), ignoring account for simplicity.
-        let path = self.binding_path(channel_type, chat_id);
-        self.read_json(&path).await
-    }
-
-    async fn get_binding_by_chat(
-        &self,
-        channel_type: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         let path = self.binding_path(channel_type, chat_id);
