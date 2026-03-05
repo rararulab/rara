@@ -18,8 +18,10 @@ This is the standard workflow for all feature/refactor work:
 2. CREATE WORKTREE →  git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
 3. DISPATCH        →  Task subagent works in the worktree
 4. VERIFY          →  cargo check + npm run build on worktree
-5. MERGE           →  git merge issue-{N}-{name} (resolve conflicts if needed)
-6. CLEANUP         →  git worktree remove + git branch -d + gh issue close
+5. REBASE          →  git rebase main (local main) + git push --force-with-lease
+6. PR              →  close old PR (if any) and open a fresh PR
+7. MERGE           →  git merge issue-{N}-{name} (resolve conflicts if needed)
+8. CLEANUP         →  git worktree remove + git branch -d + gh issue close
 ```
 
 #### Step 1: Create Issue
@@ -46,14 +48,28 @@ cargo check -p {crate-name}   # Rust backend
 cd web && npm run build        # Frontend (if touched)
 ```
 
-#### Step 5: Merge to Main
+#### Step 5: Rebase on Local Main (Before PR)
+```bash
+git checkout issue-{N}-{short-name}
+git rebase main
+git push --force-with-lease origin issue-{N}-{short-name}
+```
+
+#### Step 6: Reopen PR After Rebase
+```bash
+# If a PR already exists for this branch, close it and create a new one.
+gh pr close <old-pr-number> --comment "Superseded after rebasing on local main."
+gh pr create --base main --head issue-{N}-{short-name} --title "<title>" --body-file /tmp/pr-body.md
+```
+
+#### Step 7: Merge to Main
 ```bash
 git checkout main
 git merge issue-{N}-{short-name}
 # If conflicts: resolve → git add → git commit --no-edit
 ```
 
-#### Step 6: Cleanup
+#### Step 8: Cleanup
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
 git branch -d issue-{N}-{short-name}
