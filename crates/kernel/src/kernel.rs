@@ -1093,7 +1093,13 @@ impl Kernel {
 
             // Fork the tape so failed turns don't pollute the main tape.
             // On success the fork is merged back; on failure it is discarded.
-            let fork_name = tape_service.store().fork(&tape_name).await.ok();
+            let fork_name = match tape_service.store().fork(&tape_name).await {
+                Ok(name) => Some(name),
+                Err(e) => {
+                    tracing::warn!(tape = %tape_name, error = %e, "tape fork failed, writing directly to main tape");
+                    None
+                }
+            };
             let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
 
             let turn_result = run_agent_loop(
@@ -1111,9 +1117,13 @@ impl Kernel {
             // Merge or discard the fork depending on the turn outcome.
             if let Some(ref fork) = fork_name {
                 if turn_result.is_ok() {
-                    let _ = tape_service.store().merge(fork, &tape_name).await;
+                    if let Err(e) = tape_service.store().merge(fork, &tape_name).await {
+                        tracing::warn!(fork = %fork, tape = %tape_name, error = %e, "tape merge failed, fork entries may be lost");
+                    }
                 } else {
-                    let _ = tape_service.store().discard(fork).await;
+                    if let Err(e) = tape_service.store().discard(fork).await {
+                        tracing::warn!(fork = %fork, error = %e, "tape discard failed, fork file may leak");
+                    }
                 }
             }
 

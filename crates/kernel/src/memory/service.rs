@@ -112,11 +112,6 @@ impl TapeService {
         result
     }
 
-    /// Discard a fork tape without merging it back.
-    pub async fn discard_fork(&self, fork_name: &str) -> TapResult<()> {
-        self.store.discard(fork_name).await
-    }
-
     /// Ensure the tape has an initial `session/start` anchor.
     pub async fn ensure_bootstrap_anchor(&self, tape_name: &str) -> TapResult<()> {
         if !self.anchors(tape_name, 1).await?.is_empty() {
