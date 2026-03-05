@@ -12,6 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! JSONL-backed persistence layer for the tape subsystem.
+//!
+//! [`FileTapeStore`] is the async-facing handle that dispatches all file I/O to
+//! a dedicated blocking thread (`rara-tape-io`).  Internally, each tape is
+//! managed by a `TapeFile` that maintains an in-memory entry cache and a
+//! byte-offset cursor for incremental reads.  Fork, merge, and discard
+//! operations are implemented here as file-level copy / append / delete.
+
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},

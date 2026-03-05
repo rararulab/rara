@@ -12,6 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tape-to-LLM context reconstruction.
+//!
+//! [`default_tape_context()`] converts a slice of [`TapEntry`] values into a
+//! `Vec<llm::Message>` suitable for feeding to the LLM.  `Message` entries are
+//! deserialized directly, `ToolCall` entries become assistant messages with a
+//! `tool_calls` array, and `ToolResult` entries become tool-role messages.
+//! Non-conversational kinds (`Event`, `System`, `Anchor`) are skipped.
+
 use serde_json::Value;
 
 use super::{TapEntry, TapEntryKind, TapResult};

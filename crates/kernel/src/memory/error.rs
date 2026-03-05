@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Error types for the tape subsystem.
+//!
+//! [`TapError`] is intentionally scoped to tape-local concerns (file I/O, JSON
+//! serialization, internal state) so that storage failures do not get flattened
+//! into broader error taxonomies.
+
 use snafu::prelude::*;
 
 /// Errors produced by the local tape subsystem.
