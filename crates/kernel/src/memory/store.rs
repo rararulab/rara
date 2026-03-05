@@ -389,6 +389,16 @@ impl WorkerState {
         Ok(())
     }
 
+    /// Delete a fork tape file and remove it from the cache without merging.
+    fn discard(&mut self, fork_tape: &str) -> TapResult<()> {
+        let mut file = self.take_tape_file(fork_tape);
+        file.close_file();
+        if file.path.exists() {
+            fs::remove_file(&file.path).context(super::error::IoSnafu)?;
+        }
+        Ok(())
+    }
+
     /// Remove one tape and clear any cached state for it.
     fn reset(&mut self, tape: &str) -> TapResult<()> {
         let path = self.tape_path(tape);
@@ -561,6 +571,14 @@ impl FileTapeStore {
         let target = target.to_owned();
         self.worker
             .call(move |state| state.merge(&source, &target))
+            .await
+    }
+
+    /// Discard a fork tape, deleting its file without merging entries back.
+    pub async fn discard(&self, fork_tape: &str) -> TapResult<()> {
+        let fork_tape = fork_tape.to_owned();
+        self.worker
+            .call(move |state| state.discard(&fork_tape))
             .await
     }
 

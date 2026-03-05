@@ -1091,6 +1091,11 @@ impl Kernel {
                 completed:      false,
             };
 
+            // Fork the tape so failed turns don't pollute the main tape.
+            // On success the fork is merged back; on failure it is discarded.
+            let fork_name = tape_service.store().fork(&tape_name).await.ok();
+            let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
+
             let turn_result = run_agent_loop(
                 &kernel_handle,
                 rt_session_key,
@@ -1098,10 +1103,19 @@ impl Kernel {
                 history,
                 &stream_handle,
                 &turn_cancel,
-                tape_service,
-                &tape_name,
+                tape_service.clone(),
+                effective_tape,
             )
             .await;
+
+            // Merge or discard the fork depending on the turn outcome.
+            if let Some(ref fork) = fork_name {
+                if turn_result.is_ok() {
+                    let _ = tape_service.store().merge(fork, &tape_name).await;
+                } else {
+                    let _ = tape_service.store().discard(fork).await;
+                }
+            }
 
             // Stop the typing refresh loop now that the turn is done.
             if let Some(handle) = turn_guard.typing_refresh.take() {
