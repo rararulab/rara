@@ -128,9 +128,19 @@ pub enum InteractionType {
 
 /// A unified inbound message from any channel adapter.
 ///
-/// After ingress resolves identity and session, the raw platform event is
-/// converted into this type and published to the
+/// Produced by [`IOSubsystem::resolve()`] and published to the
 /// [`EventQueue`](crate::queue::EventQueue).
+///
+/// ## `session_key` lifecycle
+///
+/// `session_key` starts as `Option<SessionKey>`:
+/// - **`Some(key)`** — a channel binding already maps this chat to a session.
+/// - **`None`** — first message from a new chat; no binding exists yet.
+///
+/// Before routing, [`Kernel::handle_user_message()`] resolves `None` by
+/// creating a new session + writing a channel binding, then patches
+/// `session_key` to `Some`. All downstream code (routing, LLM turn,
+/// stream forwarder) therefore always sees `Some`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboundMessage {
     /// Unique message identifier (ULID).
@@ -139,7 +149,10 @@ pub struct InboundMessage {
     pub source:             ChannelSource,
     /// Unified user identity (resolved by ingress).
     pub user:               UserId,
-    /// Session this message belongs to (None when no channel binding exists yet).
+    /// Session this message belongs to.
+    ///
+    /// `None` on ingress when no channel binding exists (first message).
+    /// Patched to `Some` by the kernel before routing — see struct-level docs.
     pub session_key:        Option<SessionKey>,
     /// Direct process targeting (agent-to-agent communication).
     /// When set, routing bypasses session/name resolution entirely.
@@ -1082,9 +1095,24 @@ pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 
 /// Bundled I/O subsystem for the kernel.
 ///
-/// Owns all ingress/egress components: identity + session resolution,
-/// real-time token streaming ([`StreamHub`]), egress adapters, and
+/// Owns all ingress/egress components: identity resolution, channel-binding
+/// lookup, real-time token streaming ([`StreamHub`]), egress adapters, and
 /// endpoint registry.
+///
+/// ## Ingress pipeline
+///
+/// [`resolve()`](Self::resolve) is **pure translation** with no side effects:
+///
+/// ```text
+/// RawPlatformMessage
+///   → IdentityResolver:  (channel_type, platform_user_id) → UserId
+///   → SessionIndex:      (channel_type, chat_id)          → Option<SessionKey>
+///   → InboundMessage { session_key: Option<SessionKey> }
+/// ```
+///
+/// When no channel binding exists (first message from a new chat), `session_key`
+/// is `None`. The kernel — not the I/O layer — is responsible for creating the
+/// session and writing the binding. See [`Kernel::handle_user_message()`].
 ///
 /// Constructed at the app/boot layer and injected into
 /// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
@@ -1119,9 +1147,19 @@ impl IOSubsystem {
 
     /// Resolve identity and channel binding for a raw platform message.
     ///
-    /// Returns a fully-formed [`InboundMessage`] ready for the event queue.
-    /// `session_key` will be `None` when no channel binding exists yet;
-    /// the kernel will create a new session on first message.
+    /// This is a **read-only** operation — it never creates sessions or writes
+    /// bindings. Returns a fully-formed [`InboundMessage`] ready for the event
+    /// queue.
+    ///
+    /// ## Session resolution
+    ///
+    /// Looks up `(channel_type, platform_chat_id)` in the [`SessionIndex`]
+    /// binding table:
+    /// - **Found** → `session_key = Some(bound_key)`
+    /// - **Not found / no chat_id** → `session_key = None`
+    ///
+    /// The kernel handles the `None` case by creating a session on demand.
+    /// See [`Kernel::handle_user_message()`].
     #[tracing::instrument(
         skip(self, raw),
         fields(

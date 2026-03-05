@@ -725,14 +725,27 @@ impl Kernel {
         }
     }
 
-    /// Handle a user message with 3-path routing:
+    /// Handle a user message: resolve session, then route.
+    ///
+    /// ## Session resolution (before routing)
+    ///
+    /// `msg.session_key` arrives as `Option<SessionKey>` from the I/O layer:
+    /// - `Some` — channel binding already exists, reuse the session.
+    /// - `None` — first message from this chat. Creates a new
+    ///   [`SessionEntry`] + [`ChannelBinding`] so future messages are routed
+    ///   automatically, then patches `msg.session_key = Some(new_key)`.
+    ///
+    /// After resolution, `session_id` is always a valid key and all
+    /// downstream code sees `Some`.
+    ///
+    /// ## 3-path routing
     ///
     /// 1. **ID addressing** (`target_session_key` set): deliver to specific
     ///    session — error if terminal or not found (A2A Protocol pattern).
     /// 2. **Session addressing** (direct process table lookup): deliver to
     ///    existing session — if terminal, respawn transparently.
-    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, spawn a
-    ///    new session keyed by the incoming session_key.
+    /// 3. **Role-based default** (fallback): lookup AgentRegistry by user
+    ///    role, spawn a new agent process keyed by `session_id`.
     #[tracing::instrument(
         skip(self, msg),
         fields(
@@ -745,7 +758,18 @@ impl Kernel {
     async fn handle_user_message(&self, msg: InboundMessage) {
         let span = tracing::Span::current();
 
-        // Resolve session_key: if None, create a new session + binding.
+        // -- Session resolution --------------------------------------------------
+        //
+        // IOSubsystem::resolve() is read-only: it looks up the channel binding
+        // but never creates sessions. When a message arrives from a chat with
+        // no binding yet (first message), session_key is None.
+        //
+        // Here we resolve that None by:
+        //   1. Creating a new SessionEntry (UUID key, empty metadata).
+        //   2. Writing a ChannelBinding so subsequent messages from the same
+        //      chat are routed to this session automatically.
+        //
+        // After this block, `session_id` is always a valid SessionKey.
         let session_id = match msg.session_key.clone() {
             Some(key) => key,
             None => {
@@ -768,7 +792,8 @@ impl Kernel {
                         return;
                     }
                 };
-                // Write binding if we have chat info
+                // Write a (channel_type, chat_id) → session_key binding so
+                // IOSubsystem can resolve future messages from this chat.
                 if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
                     let binding = crate::session::ChannelBinding {
                         channel_type: msg.source.channel_type.to_string(),
@@ -785,7 +810,8 @@ impl Kernel {
             }
         };
 
-        // Patch msg with the resolved session key so downstream code sees it.
+        // Patch msg so downstream code (routing, LLM turn, stream forwarder)
+        // always sees Some(session_key). See InboundMessage doc for lifecycle.
         let mut msg = msg;
         msg.session_key = Some(session_id.clone());
 
