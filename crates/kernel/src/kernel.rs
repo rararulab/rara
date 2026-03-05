@@ -1137,7 +1137,7 @@ impl Kernel {
             )
         });
 
-        let Some((conversation, max_context_tokens, rt_session_key, rt_principal, turn_cancel)) =
+        let Some((conversation, max_context_tokens, rt_session_key, _rt_principal, turn_cancel)) =
             turn_data
         else {
             warn!(session_key = %session_key, "runtime disappeared during LLM turn setup");
@@ -1336,7 +1336,7 @@ impl Kernel {
 
         // Track whether the turn errored so we can choose the right terminal
         // state below (Completed vs Failed).
-        let mut turn_failed = false;
+        let mut _turn_failed = false;
 
         let agent_name = self
             .process_table
@@ -1445,7 +1445,7 @@ impl Kernel {
             }
             Err(err_msg) => {
                 span.record("success", false);
-                turn_failed = err_msg != "interrupted by user";
+                _turn_failed = err_msg != "interrupted by user";
                 warn!(session_key = %session_key, error = %err_msg, "turn completed (error)");
 
                 // Deliver error — use egress session for routing.

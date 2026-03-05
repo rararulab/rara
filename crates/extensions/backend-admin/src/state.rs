@@ -72,7 +72,7 @@ impl BackendState {
     /// handles from [`RaraState`](rara_boot::state::RaraState).
     pub fn routes(
         &self,
-        kernel_handle: &rara_kernel::KernelHandle,
+        kernel_handle: &rara_kernel::handle::KernelHandle,
         skill_registry: &rara_skills::registry::InMemoryRegistry,
         mcp_manager: &rara_mcp::manager::mgr::McpManager,
     ) -> (axum::Router, utoipa::openapi::OpenApi) {

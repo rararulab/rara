@@ -25,12 +25,11 @@ use rara_channels::terminal::{CliEvent, TerminalAdapter};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     io::{
-        egress::{Endpoint, EndpointAddress},
-        ingress::RawPlatformMessage,
-        stream::StreamEvent,
-        types::{InteractionType, ReplyContext as IoReplyContext},
+        Endpoint, EndpointAddress, RawPlatformMessage, StreamEvent,
+        InteractionType, ReplyContext as IoReplyContext,
     },
-    process::{SessionId, principal::UserId},
+    process::principal::UserId,
+    session::SessionKey,
 };
 
 #[derive(Debug, Parser)]
@@ -159,7 +158,7 @@ impl ChatArgs {
         let session_key = self.session.clone();
         let user_id_str = self.user_id.clone();
         let resolved_user_id = UserId(format!("cli:{}", user_id_str));
-        let resolved_session_id = SessionId::new();
+        let resolved_session_id = SessionKey::new();
 
         // Register CLI endpoint in the EndpointRegistry.
         let cli_endpoint = Endpoint {
@@ -176,7 +175,7 @@ impl ChatArgs {
         let forwarder_hub = stream_hub.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(100));
-            let mut active_streams: std::collections::HashSet<rara_kernel::io::stream::StreamId> =
+            let mut active_streams: std::collections::HashSet<rara_kernel::io::StreamId> =
                 std::collections::HashSet::new();
             loop {
                 interval.tick().await;
@@ -268,7 +267,7 @@ fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> Raw
 /// Run the interactive REPL loop.
 async fn run_repl(
     mut event_rx: tokio::sync::mpsc::UnboundedReceiver<CliEvent>,
-    kernel_handle: rara_kernel::handle::kernel_handle::KernelHandle,
+    kernel_handle: rara_kernel::handle::KernelHandle,
     session_key: String,
     user_id: String,
 ) {

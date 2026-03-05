@@ -11,6 +11,7 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
+base = { workspace = true }
 bon = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true }

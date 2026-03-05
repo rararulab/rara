@@ -201,60 +201,22 @@ impl AppConfig {
             .await
             .whatever_context("Failed to ensure default kernel users")?;
 
-        // PathGuard wraps NoopGuard with file-system access control.
-        let workspace_path = std::env::current_dir()
-            .whatever_context("Failed to determine current working directory")?;
-        let sandbox_config =
-            rara_boot::guard::sandbox_config_from_settings(settings_provider.as_ref()).await;
-        let path_guard = Arc::new(rara_kernel::guard::path_guard::PathGuard::new(
-            sandbox_config,
-            workspace_path,
-            Box::new(rara_kernel::guard::noop::NoopGuard),
-        ));
-
-        // Hot-reload: subscribe to settings changes and update PathGuard
-        {
-            let guard_ref = path_guard.clone();
-            let settings_ref = settings_provider.clone();
-            tokio::spawn(async move {
-                let mut rx = settings_ref.subscribe();
-                while rx.changed().await.is_ok() {
-                    let new_config =
-                        rara_boot::guard::sandbox_config_from_settings(settings_ref.as_ref()).await;
-                    guard_ref.update_config(new_config);
-                    tracing::info!("PathGuard sandbox config reloaded from settings");
-                }
-            });
-        }
-
-        // -- AgentFS for tool call audit --------------------------------------
-
-        let data_dir = rara_paths::data_dir();
-        let tool_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>> =
-            match rara_boot::agentfs::init_agentfs(&data_dir).await {
-                Ok(agentfs) => {
-                    let agentfs = Arc::new(agentfs);
-                    let agentfs_path = data_dir.join("agentfs");
-                    info!("AgentFS initialized at {}", agentfs_path.display());
-                    Some(Arc::new(rara_boot::agentfs::AgentFsToolCallRecorder::new(
-                        agentfs,
-                    )))
-                }
-                Err(e) => {
-                    warn!(error = %e, "AgentFS init failed, falling back to in-memory defaults");
-                    None
-                }
-            };
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
+            kernel_config: Default::default(),
             driver_registry: rara.driver_registry.clone(),
             tool_registry: rara.tool_registry.clone(),
             agent_registry: Arc::new(rara_boot::manifests::load_default_registry()),
             user_store: rara.user_store.clone(),
             session_index: Some(rara.session_index.clone()),
+            tape_store: Some(rara.tape_store.clone()),
             settings: settings_provider.clone(),
-            guard: Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
-            tool_call_recorder: tool_recorder,
-            ..Default::default()
+            stream_capacity: 256,
+            identity_resolver: None,
+            session_resolver: None,
+            event_bus: None,
+            approval: None,
+            event_queue_config: None,
+            kv_operator: None,
         });
 
         // -- HTTP routes (need kernel Arc for agent/kernel routes) -----------
@@ -282,38 +244,38 @@ impl AppConfig {
 
         // Register egress adapters.
         if let Some(ref tg) = telegram_adapter {
-            use rara_kernel::{channel::types::ChannelType, io::egress::EgressAdapter};
+            use rara_kernel::{channel::types::ChannelType, io::EgressAdapter};
             kernel.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn EgressAdapter>);
         }
         {
-            use rara_kernel::{channel::types::ChannelType, io::egress::EgressAdapter};
+            use rara_kernel::{channel::types::ChannelType, io::EgressAdapter};
             kernel.register_adapter(
                 ChannelType::Web,
                 web_adapter.clone() as Arc<dyn EgressAdapter>,
             );
         }
         if let Some(ref cli) = options.cli_adapter {
-            use rara_kernel::{channel::types::ChannelType, io::egress::EgressAdapter};
+            use rara_kernel::{channel::types::ChannelType, io::EgressAdapter};
             kernel.register_adapter(ChannelType::Cli, cli.clone() as Arc<dyn EgressAdapter>);
-        }
-
-        // Inject StreamHub / EndpointRegistry into WebAdapter before start.
-        web_adapter
-            .set_stream_hub(kernel.stream_hub().clone())
-            .await;
-        web_adapter
-            .set_endpoint_registry(kernel.endpoint_registry().clone())
-            .await;
-
-        // Inject StreamHub into TelegramAdapter for streaming.
-        if let Some(ref tg) = telegram_adapter {
-            tg.set_stream_hub(kernel.stream_hub().clone()).await;
         }
 
         // Start kernel I/O subsystem (TickLoop + Egress).
         // start() consumes self and returns (Arc<Kernel>, KernelHandle).
         let cancellation_token = CancellationToken::new();
         let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
+
+        // Inject StreamHub / EndpointRegistry into WebAdapter after start.
+        web_adapter
+            .set_stream_hub(kernel_handle.stream_hub().clone())
+            .await;
+        web_adapter
+            .set_endpoint_registry(kernel_handle.endpoint_registry().clone())
+            .await;
+
+        // Inject StreamHub into TelegramAdapter for streaming.
+        if let Some(ref tg) = telegram_adapter {
+            tg.set_stream_hub(kernel_handle.stream_hub().clone()).await;
+        }
 
         // Now build routes with the KernelHandle.
         let (domain_routes, openapi) =
@@ -564,7 +526,7 @@ pub struct AppHandle {
     cancellation_token: CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:  Option<rara_kernel::handle::kernel_handle::KernelHandle>,
+    pub kernel_handle:  Option<rara_kernel::handle::KernelHandle>,
 }
 
 #[allow(dead_code)]

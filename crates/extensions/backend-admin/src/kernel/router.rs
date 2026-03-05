@@ -15,30 +15,17 @@
 use axum::{
     Json, Router,
     extract::{
-        Path, Query, State,
+        Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::get,
 };
 use futures::StreamExt;
-use rara_kernel::{KernelHandle, audit::AuditFilter};
-use serde::Deserialize;
+use rara_kernel::{handle::KernelHandle, session::SessionKey};
 use tokio_stream::wrappers::BroadcastStream;
 
 use super::problem::ProblemDetails;
-
-// ---------------------------------------------------------------------------
-// Query parameters
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-pub struct AuditQuery {
-    #[serde(default = "default_audit_limit")]
-    pub limit: usize,
-}
-
-fn default_audit_limit() -> usize { 50 }
 
 // ---------------------------------------------------------------------------
 // Router
@@ -49,16 +36,15 @@ pub fn kernel_routes(handle: KernelHandle) -> Router {
         .route("/api/v1/kernel/stats", get(get_stats))
         .route("/api/v1/kernel/sessions", get(list_sessions))
         .route(
-            "/api/v1/kernel/sessions/{agent_id}/turns",
+            "/api/v1/kernel/sessions/{session_key}/turns",
             get(get_session_turns),
         )
         .route(
-            "/api/v1/kernel/sessions/{agent_id}/stream",
+            "/api/v1/kernel/sessions/{session_key}/stream",
             get(stream_session),
         )
         .route("/api/v1/kernel/events/stream", get(stream_kernel_events))
         .route("/api/v1/kernel/approvals", get(list_approvals))
-        .route("/api/v1/kernel/audit", get(query_audit))
         .with_state(handle)
 }
 
@@ -80,20 +66,18 @@ async fn list_sessions(
 
 async fn get_session_turns(
     State(handle): State<KernelHandle>,
-    Path(agent_id): Path<String>,
-) -> Result<Json<Vec<rara_kernel::agent_turn::TurnTrace>>, ProblemDetails> {
-    let aid = rara_kernel::process::AgentId(
-        uuid::Uuid::parse_str(&agent_id)
-            .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
-    );
+    Path(session_key): Path<String>,
+) -> Result<Json<Vec<rara_kernel::agent_loop::TurnTrace>>, ProblemDetails> {
+    let key = SessionKey::try_from_raw(&session_key)
+        .map_err(|e| ProblemDetails::bad_request(format!("invalid session_key: {e}")))?;
     // Verify the session exists before returning traces.
-    if handle.process_table().get(aid).is_none() {
+    if !handle.process_table().contains(&key) {
         return Err(ProblemDetails::not_found(
             "Session Not Found",
-            format!("session not found: {agent_id}"),
+            format!("session not found: {session_key}"),
         ));
     }
-    Ok(Json(handle.get_process_turns(aid)))
+    Ok(Json(handle.get_process_turns(key)))
 }
 
 async fn list_approvals(
@@ -102,37 +86,23 @@ async fn list_approvals(
     Ok(Json(handle.security().approval().list_pending()))
 }
 
-async fn query_audit(
-    State(handle): State<KernelHandle>,
-    Query(params): Query<AuditQuery>,
-) -> Result<Json<Vec<rara_kernel::audit::AuditEvent>>, ProblemDetails> {
-    let filter = AuditFilter {
-        limit: params.limit,
-        ..Default::default()
-    };
-    Ok(Json(handle.audit_query(filter).await))
-}
-
 async fn stream_session(
     State(handle): State<KernelHandle>,
-    Path(agent_id): Path<String>,
+    Path(session_key): Path<String>,
     ws: WebSocketUpgrade,
 ) -> Result<impl axum::response::IntoResponse, ProblemDetails> {
-    let aid = rara_kernel::process::AgentId(
-        uuid::Uuid::parse_str(&agent_id)
-            .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
-    );
+    let key = SessionKey::try_from_raw(&session_key)
+        .map_err(|e| ProblemDetails::bad_request(format!("invalid session_key: {e}")))?;
 
-    let session = handle.process_table().get(aid).ok_or_else(|| {
-        ProblemDetails::not_found(
+    if !handle.process_table().contains(&key) {
+        return Err(ProblemDetails::not_found(
             "Session Not Found",
-            format!("session not found: {agent_id}"),
-        )
-    })?;
-    let session_id = session.session_id.clone();
+            format!("session not found: {session_key}"),
+        ));
+    }
     let stream_hub = handle.stream_hub().clone();
 
-    Ok(ws.on_upgrade(move |socket| handle_session_stream(socket, stream_hub, session_id)))
+    Ok(ws.on_upgrade(move |socket| handle_session_stream(socket, stream_hub, key)))
 }
 
 async fn stream_kernel_events(
@@ -161,19 +131,19 @@ async fn stream_kernel_events(
 
 async fn handle_session_stream(
     mut socket: WebSocket,
-    stream_hub: std::sync::Arc<rara_kernel::io::stream::StreamHub>,
-    session_id: rara_kernel::process::SessionId,
+    stream_hub: std::sync::Arc<rara_kernel::io::StreamHub>,
+    session_key: SessionKey,
 ) {
     use tokio::time::Duration;
 
     let mut poll_interval = tokio::time::interval(Duration::from_millis(200));
-    let mut receivers: Vec<tokio::sync::broadcast::Receiver<rara_kernel::io::stream::StreamEvent>> =
+    let mut receivers: Vec<tokio::sync::broadcast::Receiver<rara_kernel::io::StreamEvent>> =
         Vec::new();
 
     loop {
         // If no active receivers, try to subscribe
         if receivers.is_empty() {
-            let subs = stream_hub.subscribe_session(&session_id);
+            let subs = stream_hub.subscribe_session(&session_key);
             receivers = subs.into_iter().map(|(_, rx)| rx).collect();
             if receivers.is_empty() {
                 // No active stream — wait and retry

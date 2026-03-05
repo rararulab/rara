@@ -19,7 +19,7 @@ use std::fmt::Write;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rara_domain_shared::id::SchedulerTaskId;
+use super::types::SchedulerTaskId;
 use sqlx::SqlitePool;
 
 use super::{

@@ -18,7 +18,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use rara_domain_shared::id::SchedulerTaskId;
+use super::types::SchedulerTaskId;
 use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};

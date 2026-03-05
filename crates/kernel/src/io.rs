@@ -66,11 +66,13 @@ pub mod stages {
 // MessageId
 // ---------------------------------------------------------------------------
 
-/// ULID-based message identifier.
-///
-/// Every inbound and outbound message gets a unique `MessageId` for
-/// correlation, deduplication, and reply threading.
-define_id!(MessageId);
+define_id!(
+    /// ULID-based message identifier.
+    ///
+    /// Every inbound and outbound message gets a unique `MessageId` for
+    /// correlation, deduplication, and reply threading.
+    MessageId
+);
 
 // ---------------------------------------------------------------------------
 // ChannelSource
@@ -180,7 +182,7 @@ impl InboundMessage {
         text: String,
         user: UserId,
         session_id: SessionKey,
-        target_session_key: SessionKey,
+        _target_session_key: SessionKey,
     ) -> Self {
         Self {
             id: MessageId::new(),
@@ -696,11 +698,13 @@ pub type StreamHubRef = Arc<StreamHub>;
 // StreamId
 // ---------------------------------------------------------------------------
 
-/// Unique identifier for a stream (ULID string).
-///
-/// Each agent execution run gets its own `StreamId`, allowing multiple
-/// concurrent streams on the same session.
-define_id!(StreamId);
+define_id!(
+    /// Unique identifier for a stream (ULID string).
+    ///
+    /// Each agent execution run gets its own `StreamId`, allowing multiple
+    /// concurrent streams on the same session.
+    StreamId
+);
 
 // ---------------------------------------------------------------------------
 // StreamEvent

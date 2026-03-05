@@ -3,9 +3,6 @@
 //! Each aggregate root gets its own newtype wrapper around [`uuid::Uuid`] so
 //! that IDs from different domains cannot be accidentally mixed up.
 
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 #[macro_export]
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {

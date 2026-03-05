@@ -33,7 +33,7 @@ use rara_kernel::{
     tool::ToolRegistry,
 };
 
-use crate::resolvers::{DefaultIdentityResolver, DefaultSessionResolver};
+use crate::resolvers::DefaultIdentityResolver;
 
 // ---------------------------------------------------------------------------
 // BootConfig
@@ -108,7 +108,7 @@ pub fn boot(config: BootConfig) -> Kernel {
                 rara_kernel::process::principal::UserId("root".to_string()),
             ))
         });
-    let session_index_for_resolver: Arc<dyn SessionIndex> = config.session_index.clone().unwrap();
+    let _session_index_for_resolver: Arc<dyn SessionIndex> = config.session_index.clone().unwrap();
     let session_resolver: Arc<dyn SessionResolver> = config.session_resolver.unwrap();
 
     // Tape store — falls back to a temporary in-memory-like store if not

@@ -15,10 +15,11 @@
 //! Domain types for scheduler task management.
 
 use jiff::Timestamp;
-use rara_domain_shared::id::SchedulerTaskId;
 use serde::{Deserialize, Serialize};
 use strum_macros::FromRepr;
 use uuid::Uuid;
+
+base::define_id!(SchedulerTaskId);
 
 /// Status of a task run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -37,6 +38,7 @@ pub enum TaskRunStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ScheduledTask {
     /// Unique identifier.
+    #[schema(value_type = String)]
     pub id:            SchedulerTaskId,
     /// Human-readable name.
     pub name:          String,
@@ -69,6 +71,7 @@ pub struct TaskRunRecord {
     /// Unique identifier for this run.
     pub id:          Uuid,
     /// The task that was executed.
+    #[schema(value_type = String)]
     pub task_id:     SchedulerTaskId,
     /// Outcome of the run.
     pub status:      TaskRunStatus,

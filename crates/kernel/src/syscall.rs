@@ -104,7 +104,7 @@ impl SyscallDispatcher {
         syscall: SyscallEnvelope,
         process_table: &SessionTable,
         security: &SecurityRef,
-        agent_registry: &AgentRegistryRef,
+        _agent_registry: &AgentRegistryRef,
         kernel_handle: &KernelHandle,
     ) {
         let syscall_sender = syscall.session_key;
@@ -333,7 +333,7 @@ impl SyscallDispatcher {
         &self,
         memory_quota: usize,
         session_key: SessionKey,
-        principal: &Principal,
+        _principal: &Principal,
         key: &str,
         value: serde_json::Value,
     ) -> crate::error::Result<()> {

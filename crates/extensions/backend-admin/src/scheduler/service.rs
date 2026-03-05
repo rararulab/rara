@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use rara_domain_shared::id::SchedulerTaskId;
+use super::types::SchedulerTaskId;
 use tracing::{info, instrument};
 use uuid::Uuid;
 

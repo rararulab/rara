@@ -19,7 +19,7 @@
 //! Implementations are expected to live in the infrastructure/store
 //! layer.
 
-use rara_domain_shared::id::SchedulerTaskId;
+use super::types::SchedulerTaskId;
 
 use super::{
     error::SchedulerError,

@@ -19,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rara_kernel::{KernelHandle, process::AgentManifest};
+use rara_kernel::{handle::KernelHandle, process::AgentManifest};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ impl AgentResponse {
             name: m.name.clone(),
             description: m.description.clone(),
             model: m.model.clone(),
-            role: m.role.map(|r| format!("{r:?}")),
+            role: Some(format!("{:?}", m.role)),
             provider_hint: m.provider_hint.clone(),
             max_iterations: m.max_iterations,
             tools: m.tools.clone(),
@@ -156,7 +156,7 @@ async fn create_agent(
 
     let manifest = AgentManifest {
         name:               req.name,
-        role:               None,
+        role:               Default::default(),
         description:        req.description,
         model:              Some(req.model),
         system_prompt:      req.system_prompt,
