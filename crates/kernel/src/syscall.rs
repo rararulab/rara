@@ -37,6 +37,7 @@ use crate::{
     kernel::KernelConfig,
     kv::{KvScope, SharedKv},
     llm::DriverRegistryRef,
+    memory::{TapEntryKind, TapeService},
     notification::NotificationBusRef,
     security::SecurityRef,
     session::{SessionKey, SessionTable},
@@ -63,6 +64,8 @@ pub(crate) struct SyscallDispatcher {
     event_bus:       NotificationBusRef,
     /// Kernel configuration.
     config:          KernelConfig,
+    /// Tape service for session message persistence (passed to SyscallTool).
+    tape_service:    TapeService,
 }
 
 impl SyscallDispatcher {
@@ -74,6 +77,7 @@ impl SyscallDispatcher {
         tool_registry: ToolRegistryRef,
         event_bus: NotificationBusRef,
         config: KernelConfig,
+        tape_service: TapeService,
     ) -> Self {
         Self {
             shared_kv,
@@ -82,6 +86,7 @@ impl SyscallDispatcher {
             tool_registry,
             event_bus,
             config,
+            tape_service,
         }
     }
 
@@ -249,7 +254,13 @@ impl SyscallDispatcher {
             Syscall::GetToolRegistry { reply_tx } => {
                 let mut registry = self.tool_registry.as_ref().clone();
                 if process_table.contains(&syscall_sender) {
-                    let syscall_tool = SyscallTool::new(kernel_handle.clone(), syscall_sender);
+                    let tape_name = syscall_sender.to_string();
+                    let syscall_tool = SyscallTool::new(
+                        kernel_handle.clone(),
+                        syscall_sender,
+                        self.tape_service.clone(),
+                        tape_name,
+                    );
                     registry.register_builtin(Arc::new(syscall_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));
@@ -399,15 +410,24 @@ impl SyscallDispatcher {
 /// Unified LLM-callable tool wrapping all session-scoped kernel syscall
 /// operations.
 pub struct SyscallTool {
-    handle:      KernelHandle,
-    session_key: SessionKey,
+    handle:       KernelHandle,
+    session_key:  SessionKey,
+    tape_service: TapeService,
+    tape_name:    String,
 }
 
 impl SyscallTool {
-    pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
+    pub fn new(
+        handle: KernelHandle,
+        session_key: SessionKey,
+        tape_service: TapeService,
+        tape_name: String,
+    ) -> Self {
         Self {
             handle,
             session_key,
+            tape_service,
+            tape_name,
         }
     }
 
@@ -655,6 +675,98 @@ impl SyscallTool {
             .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
         Ok(serde_json::json!({ "ok": true }))
     }
+
+    // ========================================================================
+    // Tape Memory
+    // ========================================================================
+
+    async fn exec_tape_info(&self) -> anyhow::Result<serde_json::Value> {
+        let info = self
+            .tape_service
+            .info(&self.tape_name)
+            .await
+            .map_err(|e| anyhow::anyhow!("tape_info failed: {e}"))?;
+        Ok(serde_json::json!({
+            "tape_name": info.name,
+            "total_entries": info.entries,
+            "anchor_count": info.anchors,
+            "last_anchor": info.last_anchor,
+            "entries_since_last_anchor": info.entries_since_last_anchor,
+            "last_token_usage": info.last_token_usage,
+        }))
+    }
+
+    async fn exec_tape_search(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let results = self
+            .tape_service
+            .search(&self.tape_name, query, limit.unwrap_or(10), false)
+            .await
+            .map_err(|e| anyhow::anyhow!("tape_search failed: {e}"))?;
+        let count = results.len();
+        Ok(serde_json::json!({ "results": results, "count": count }))
+    }
+
+    async fn exec_tape_anchor(
+        &self,
+        name: &str,
+        state: Option<serde_json::Value>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let entries = self
+            .tape_service
+            .handoff(&self.tape_name, name, state)
+            .await
+            .map_err(|e| anyhow::anyhow!("tape_anchor failed: {e}"))?;
+        Ok(serde_json::json!({
+            "ok": true,
+            "anchor_name": name,
+            "entries_after_anchor": entries.len(),
+        }))
+    }
+
+    async fn exec_tape_anchors(
+        &self,
+        limit: Option<usize>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let anchors = self
+            .tape_service
+            .anchors(&self.tape_name, limit.unwrap_or(10))
+            .await
+            .map_err(|e| anyhow::anyhow!("tape_anchors failed: {e}"))?;
+        let count = anchors.len();
+        Ok(serde_json::json!({ "anchors": anchors, "count": count }))
+    }
+
+    async fn exec_tape_entries(
+        &self,
+        after_anchor: Option<&str>,
+        kinds: Option<Vec<String>>,
+    ) -> anyhow::Result<serde_json::Value> {
+        // Convert string kinds to TapEntryKind.
+        let kind_filters: Option<Vec<TapEntryKind>> = kinds.map(|ks| {
+            ks.iter()
+                .filter_map(|k| k.parse::<TapEntryKind>().ok())
+                .collect()
+        });
+        let kind_refs = kind_filters.as_deref();
+
+        let entries = if let Some(anchor) = after_anchor {
+            self.tape_service
+                .after_anchor(&self.tape_name, anchor, kind_refs)
+                .await
+        } else {
+            self.tape_service
+                .from_last_anchor(&self.tape_name, kind_refs)
+                .await
+        }
+        .map_err(|e| anyhow::anyhow!("tape_entries failed: {e}"))?;
+
+        let count = entries.len();
+        Ok(serde_json::json!({ "entries": entries, "count": count }))
+    }
 }
 
 // ============================================================================
@@ -710,6 +822,28 @@ enum SyscallParams {
         event_type: String,
         payload:    serde_json::Value,
     },
+    // -- Tape Memory --
+    TapeInfo,
+    TapeSearch {
+        query: String,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    TapeAnchor {
+        name:  String,
+        #[serde(default)]
+        state: Option<serde_json::Value>,
+    },
+    TapeAnchors {
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    TapeEntries {
+        #[serde(default)]
+        after_anchor: Option<String>,
+        #[serde(default)]
+        kinds:        Option<Vec<String>>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -756,7 +890,9 @@ impl crate::tool::AgentTool for SyscallTool {
 
     fn description(&self) -> &str {
         "Interact with the kernel: spawn agents, query process status, send signals, manage memory \
-         (private & shared), and publish events. Set the 'action' field to select the operation."
+         (private & shared), publish events, and operate on your tape memory (search past \
+         conversations, create anchors, inspect tape state). Set the 'action' field to select the \
+         operation."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -773,9 +909,10 @@ impl crate::tool::AgentTool for SyscallTool {
                         "status", "children", "kill", "pause", "resume",
                         "mem_store", "mem_recall",
                         "shared_store", "shared_recall",
-                        "publish"
+                        "publish",
+                        "tape_info", "tape_search", "tape_anchor", "tape_anchors", "tape_entries"
                     ],
-                    "description": "The kernel operation to perform"
+                    "description": "The kernel operation to perform. Tape actions: tape_info — inspect your tape memory state (the tape is an append-only timeline of your conversation, returns total entries, anchor count, last anchor name, entries since last anchor, token usage); tape_search — search your conversation history by text query, uses substring matching + fuzzy fallback, searches across all anchors and can find information even if it has been forgotten (before the current anchor); tape_anchor — create a named checkpoint in your tape, after this your LLM context window will only include entries from this anchor forward, use when a topic is complete and you want to free up context space or mark a logical boundary (data before the anchor is NOT deleted and tape_search can still find it); tape_anchors — list your recent anchors (context checkpoints), helps you understand your current context boundaries and conversation history structure; tape_entries — read raw tape entries, by default reads entries since the last anchor (your current context window), optionally filter by entry kind (message, tool_call, tool_result, event, system, anchor) or read entries after a specific named anchor"
                 },
                 "agent": {
                     "type": "string",
@@ -823,6 +960,30 @@ impl crate::tool::AgentTool for SyscallTool {
                 },
                 "payload": {
                     "description": "Event payload (any JSON) for publish"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search query string for tape_search"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Anchor name for tape_anchor (e.g. 'topic/done', 'checkpoint/1')"
+                },
+                "state": {
+                    "description": "Optional JSON state to attach to a tape_anchor"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results for tape_search, tape_anchors (default: 10)"
+                },
+                "after_anchor": {
+                    "type": "string",
+                    "description": "Read tape_entries after this named anchor instead of the most recent one"
+                },
+                "kinds": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["message", "tool_call", "tool_result", "event", "system", "anchor"] },
+                    "description": "Filter tape_entries by entry kind"
                 }
             }
         })
@@ -856,6 +1017,21 @@ impl crate::tool::AgentTool for SyscallTool {
                 event_type,
                 payload,
             } => self.exec_publish(&event_type, payload).await,
+            SyscallParams::TapeInfo => self.exec_tape_info().await,
+            SyscallParams::TapeSearch { query, limit } => {
+                self.exec_tape_search(&query, limit).await
+            }
+            SyscallParams::TapeAnchor { name, state } => {
+                self.exec_tape_anchor(&name, state).await
+            }
+            SyscallParams::TapeAnchors { limit } => self.exec_tape_anchors(limit).await,
+            SyscallParams::TapeEntries {
+                after_anchor,
+                kinds,
+            } => {
+                self.exec_tape_entries(after_anchor.as_deref(), kinds)
+                    .await
+            }
         }
     }
 }
