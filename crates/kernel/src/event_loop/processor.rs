@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
-    event::{KernelEvent, KernelEventEnvelope}, event_loop::runtime::RuntimeTable, kernel::Kernel, queue::shard::ShardQueue
+    event::{KernelEvent, KernelEventEnvelope}, kernel::Kernel, queue::shard::ShardQueue
 };
 
 /// A single event processor that drains and processes events from one
@@ -43,7 +43,7 @@ impl EventProcessor {
     ///
     /// Drains events from the shard queue in batches of up to 32 and
     /// dispatches each to `kernel.handle_event()`.
-    pub async fn run(&self, kernel: &Kernel, runtimes: &RuntimeTable, shutdown: CancellationToken) {
+    pub async fn run(&self, kernel: &Kernel, shutdown: CancellationToken) {
         info!(processor_id = self.id, "event processor started");
 
         loop {
@@ -61,7 +61,7 @@ impl EventProcessor {
                                 processor_id = self.id,
                                 event_type,
                             );
-                            kernel.handle_event(event, runtimes)
+                            kernel.handle_event(event)
                                 .instrument(span)
                                 .await;
                         }
@@ -72,7 +72,7 @@ impl EventProcessor {
                     let remaining = self.queue.drain(1024);
                     for event in remaining {
                         if matches!(event.kind, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
-                            kernel.handle_event(event, runtimes).await;
+                            kernel.handle_event(event).await;
                         } else {
                             warn!(
                                 processor_id = self.id,

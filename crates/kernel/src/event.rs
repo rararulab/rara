@@ -31,7 +31,7 @@ use crate::{
     io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter},
     kv::KvScope,
     process::{
-        AgentManifest, AgentRunLoopResult, SessionInfo, Signal,
+        AgentManifest, AgentRunLoopResult, SessionStats, Signal,
         principal::{Principal, UserId},
     },
     session::SessionKey,
@@ -119,14 +119,14 @@ pub enum Syscall {
     QueryStatus {
         #[debug(skip)]
         #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<crate::error::Result<SessionInfo>>,
+        reply_tx: oneshot::Sender<crate::error::Result<SessionStats>>,
     },
 
     /// Query children of a parent agent process.
     QueryChildren {
         #[debug(skip)]
         #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<Vec<SessionInfo>>,
+        reply_tx: oneshot::Sender<Vec<SessionStats>>,
     },
 
     // -- Memory --

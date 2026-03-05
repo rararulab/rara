@@ -25,4 +25,3 @@
 //! to per-process tokio tasks.
 
 pub(crate) mod processor;
-pub(crate) mod runtime;

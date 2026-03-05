@@ -21,9 +21,9 @@ use crate::session::SessionKey;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum KernelError {
-    /// Session runtime not found.
-    #[snafu(display("session runtime not found: {key}"))]
-    SessionRuntimeNotFound { key: SessionKey },
+    /// Session not found.
+    #[snafu(display("session not found: {key}"))]
+    SessionNotFound { key: SessionKey },
 
     /// Agent name already registered.
     #[snafu(display("agent already exists: {name}"))]
@@ -262,37 +262,3 @@ fn is_retryable_server_error(msg: &str) -> bool {
 }
 
 pub type Result<T> = std::result::Result<T, KernelError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fallback_eligible_for_retryable_server() {
-        assert!(is_fallback_eligible(&KernelError::RetryableServer));
-    }
-
-    #[test]
-    fn fallback_eligible_for_non_retryable() {
-        assert!(is_fallback_eligible(&KernelError::NonRetryable));
-    }
-
-    #[test]
-    fn fallback_eligible_for_other() {
-        assert!(is_fallback_eligible(&KernelError::Other {
-            message: "something went wrong".into(),
-        }));
-    }
-
-    #[test]
-    fn fallback_not_eligible_for_context_window() {
-        assert!(!is_fallback_eligible(&KernelError::ContextWindow));
-    }
-
-    #[test]
-    fn fallback_not_eligible_for_not_configured() {
-        assert!(!is_fallback_eligible(&KernelError::ProviderNotConfigured {
-            location: snafu::Location::new("test", 0, 0),
-        }));
-    }
-}

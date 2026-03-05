@@ -33,7 +33,7 @@ use crate::{
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
     process::{
-        AgentManifest, SessionInfo, SessionState, SessionTable, Signal,
+        AgentManifest, SessionState, SessionStats, SessionTable, Signal,
         agent_registry::AgentRegistryRef, principal::Principal,
     },
     queue::EventQueueRef,
@@ -264,12 +264,12 @@ impl KernelHandle {
     ///
     /// Returns `None` if the session does not exist.
     pub async fn session_stats(&self, session_key: &SessionKey) -> Option<crate::process::SessionStats> {
-        self.process_table.stats(*session_key).await
+        self.process_table.stats(*session_key)
     }
 
     /// List detailed runtime statistics for all sessions.
     pub async fn list_processes(&self) -> Vec<crate::process::SessionStats> {
-        self.process_table.all_process_stats().await
+        self.process_table.all_process_stats()
     }
 
     /// Get kernel-wide aggregate statistics.
@@ -358,7 +358,7 @@ impl KernelHandle {
     pub async fn session_status(
         &self,
         session_key: SessionKey,
-    ) -> Result<SessionInfo> {
+    ) -> Result<SessionStats> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEventEnvelope::syscall(
             session_key,
@@ -372,7 +372,7 @@ impl KernelHandle {
     pub async fn session_children(
         &self,
         session_key: SessionKey,
-    ) -> Vec<SessionInfo> {
+    ) -> Vec<SessionStats> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         if self
             .syscall_push(KernelEventEnvelope::syscall(

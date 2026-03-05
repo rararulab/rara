@@ -49,8 +49,8 @@ use tracing::{error, info, info_span, warn};
 use crate::{
     KernelError,
     channel::types::{ChannelType, ChatMessage},
+    compaction::DEFAULT_MAX_CONTEXT_TOKENS,
     event::{KernelEvent, KernelEventEnvelope},
-    event_loop::runtime::{SessionContext, RuntimeTable},
     io::{
         EgressAdapterRef, EndpointRegistry, EndpointRegistryRef, IdentityResolverRef,
         InboundMessage, IngressPipeline, IngressPipelineRef, MessageId, OutboundEnvelope,
@@ -60,8 +60,8 @@ use crate::{
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
     process::{
-        AgentEnv, AgentManifest, AgentRunLoopResult, SessionRuntime, SessionState, SessionTable,
-        Signal, agent_registry::AgentRegistryRef, principal::Principal,
+        AgentEnv, AgentManifest, AgentRunLoopResult, Session, SessionState, SessionTable, Signal,
+        agent_registry::AgentRegistryRef, principal::Principal,
     },
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
@@ -233,7 +233,7 @@ impl Kernel {
 
     /// List detailed runtime statistics for all processes.
     pub async fn list_processes(&self) -> Vec<crate::process::SessionStats> {
-        self.process_table.all_process_stats().await
+        self.process_table.all_process_stats()
     }
 
     /// Get kernel-wide aggregate statistics.
@@ -350,7 +350,6 @@ impl Kernel {
         const USER_AGENT_NAME: &'static str = "nana";
         use crate::event_loop::processor::EventProcessor;
 
-        let runtimes: Arc<RuntimeTable> = Arc::new(RuntimeTable::new());
         let sq = kernel.sharded_queue().clone();
         let num_shards = sq.num_shards();
 
@@ -369,10 +368,9 @@ impl Kernel {
                 queue: Arc::clone(sq.global()),
             };
             let k = Arc::clone(&kernel);
-            let rt = Arc::clone(&runtimes);
             let sd = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                proc.run(&k, &rt, sd).await;
+                proc.run(&k, sd).await;
             }));
         }
 
@@ -383,10 +381,9 @@ impl Kernel {
                 queue: Arc::clone(sq.shard(i)),
             };
             let k = Arc::clone(&kernel);
-            let rt = Arc::clone(&runtimes);
             let sd = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                proc.run(&k, &rt, sd).await;
+                proc.run(&k, sd).await;
             }));
         }
 
@@ -402,7 +399,7 @@ impl Kernel {
     }
 
     /// Dispatch a single event to its handler.
-    pub(crate) async fn handle_event(&self, event: KernelEventEnvelope, runtimes: &RuntimeTable) {
+    pub(crate) async fn handle_event(&self, event: KernelEventEnvelope) {
         let event_type: &'static str = (&event).into();
         crate::metrics::EVENT_PROCESSED
             .with_label_values(&[event_type])
@@ -412,7 +409,7 @@ impl Kernel {
 
         match kind {
             KernelEvent::UserMessage(msg) => {
-                self.handle_user_message(msg, runtimes).await;
+                self.handle_user_message(msg).await;
             }
             KernelEvent::CreateSession {
                 manifest,
@@ -424,33 +421,27 @@ impl Kernel {
                 // CreateSession from SessionHandle::create_child() — subagent,
                 // no channel binding.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, None, parent_id, None, runtimes)
+                    .handle_spawn_agent(manifest, input, principal, None, parent_id, None)
                     .await;
                 let _ = reply_tx.send(result);
             }
             KernelEvent::SendSignal { signal } => {
-                self.handle_signal(base.session_key, signal, runtimes).await;
+                self.handle_signal(base.session_key, signal).await;
             }
             KernelEvent::TurnCompleted {
                 result,
                 in_reply_to,
                 user,
             } => {
-                self.handle_turn_completed(
-                    base.session_key,
-                    result,
-                    in_reply_to,
-                    user,
-                    runtimes,
-                )
-                .await;
+                self.handle_turn_completed(base.session_key, result, in_reply_to, user)
+                    .await;
             }
             KernelEvent::ChildSessionDone { child_id, result } => {
-                self.handle_child_completed(base.session_key, child_id, result, runtimes)
+                self.handle_child_completed(base.session_key, child_id, result)
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
-                self.delivery().deliver(envelope);
+                self.delivery.deliver(envelope);
             }
             KernelEvent::SessionCommand(syscall) => {
                 let kernel_handle = self.handle();
@@ -458,7 +449,6 @@ impl Kernel {
                     .dispatch(
                         syscall,
                         &self.process_table,
-                        runtimes,
                         &self.security,
                         &self.agent_registry,
                         &kernel_handle,
@@ -496,7 +486,6 @@ impl Kernel {
         parent_id: Option<SessionKey>,
         // FIXME: what is this ?
         resume_session_id: Option<SessionKey>,
-        runtimes: &RuntimeTable,
     ) -> Result<SessionKey> {
         // Validate principal.
         self.security().validate_principal(&principal).await?;
@@ -529,9 +518,31 @@ impl Kernel {
             (session_id, vec![])
         };
 
-        // Register process in table.
+        // Create process-level cancellation token.
+        // Child processes derive their token from the parent's, so cancelling
+        // a parent cascades to all children automatically.
+        let process_cancel = if let Some(pid) = parent_id {
+            self.process_table
+                .with(&pid, |parent_rt| parent_rt.process_cancel.child_token())
+                .unwrap_or_default()
+        } else {
+            CancellationToken::new()
+        };
+
+        let child_limit = manifest
+            .max_children
+            .unwrap_or(self.config().default_child_limit);
+
+        let max_context_tokens = manifest
+            .max_context_tokens
+            .unwrap_or(DEFAULT_MAX_CONTEXT_TOKENS);
+
+        // Register unified session in table. The global permit is stored here
+        // so it lives as long as the session — dropping the session
+        // automatically releases the semaphore slot.
         let metrics = std::sync::Arc::new(crate::process::RuntimeMetrics::new());
-        let process = SessionRuntime {
+        let process = Session {
+            // -- identity & metadata --
             session_key,
             parent_id,
             channel_session_id: channel_session_id.clone(),
@@ -545,8 +556,17 @@ impl Kernel {
             created_files: vec![],
             metrics,
             turn_traces: vec![],
+            // -- conversation & cancellation --
+            conversation: initial_messages,
+            turn_cancel: CancellationToken::new(),
+            process_cancel,
+            paused: false,
+            pause_buffer: Vec::new(),
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            max_context_tokens,
+            _global_permit: global_permit,
         };
-        self.process_table().insert(process);
+        self.process_table.insert(process);
 
         crate::metrics::SESSION_CREATED
             .with_label_values(&[&manifest.name])
@@ -554,43 +574,6 @@ impl Kernel {
         crate::metrics::SESSION_ACTIVE
             .with_label_values(&[&manifest.name])
             .inc();
-
-        // Create process-level cancellation token.
-        // Child processes derive their token from the parent's, so cancelling
-        // a parent cascades to all children automatically.
-        let process_cancel = if let Some(pid) = parent_id {
-            runtimes
-                .with(&pid, |parent_rt| parent_rt.process_cancel.child_token())
-                .unwrap_or_default()
-        } else {
-            CancellationToken::new()
-        };
-
-        let child_limit = manifest
-            .max_children
-            .unwrap_or(self.config().default_child_limit);
-
-        let max_context_tokens = manifest
-            .max_context_tokens
-            .unwrap_or(crate::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
-
-        // Create session context. The global permit is stored here so it lives
-        // as long as the session — dropping the context automatically releases
-        // the semaphore slot.
-        let runtime = SessionContext {
-            conversation: initial_messages,
-            turn_cancel: CancellationToken::new(),
-            process_cancel,
-            paused: false,
-            pause_buffer: Vec::new(),
-            session_key,
-            principal: principal.clone(),
-            child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            max_context_tokens,
-            last_result: None,
-            _global_permit: global_permit,
-        };
-        runtimes.insert(session_key, runtime);
 
         info!(
             session_key = %session_key,
@@ -633,16 +616,16 @@ impl Kernel {
 
     /// Handle a control signal sent to a session runtime.
     #[tracing::instrument(skip_all, fields(session_key = %target, signal = ?signal))]
-    async fn handle_signal(&self, target: SessionKey, signal: Signal, runtimes: &RuntimeTable) {
+    async fn handle_signal(&self, target: SessionKey, signal: Signal) {
         match signal {
             Signal::Interrupt => {
                 info!(session_key = %target, "interrupt signal");
-                runtimes.cancel_and_refresh_turn(&target);
+                self.process_table.cancel_and_refresh_turn(&target);
                 // Notify via Deliver event — use channel session for egress.
                 let session_id = self
                     .process_table()
-                    .get(target)
-                    .and_then(|p| p.channel_session_id.clone());
+                    .with(&target, |p| p.channel_session_id.clone())
+                    .flatten();
                 let Some(session_id) = session_id else {
                     error!(session_key = %target, "cannot send interrupt notification: process not found or has no channel session");
                     return;
@@ -666,13 +649,13 @@ impl Kernel {
             }
             Signal::Pause => {
                 info!(session_key = %target, "pause signal");
-                runtimes.set_paused(&target, true);
+                self.process_table.set_paused(&target, true);
                 let _ = self.process_table().set_state(target, SessionState::Paused);
             }
             Signal::Resume => {
                 info!(session_key = %target, "resume signal");
-                runtimes.set_paused(&target, false);
-                let buffered = runtimes.drain_pause_buffer(&target);
+                self.process_table.set_paused(&target, false);
+                let buffered = self.process_table.drain_pause_buffer(&target);
                 let _ = self.process_table().set_state(target, SessionState::Ready);
                 for event in buffered {
                     if let Err(e) = self.event_queue().try_push(event) {
@@ -684,31 +667,30 @@ impl Kernel {
                 info!(session_key = %target, "terminate signal — graceful shutdown");
                 let was_active = self
                     .process_table()
-                    .get(target)
-                    .map(|p| p.state == SessionState::Active)
+                    .with(&target, |p| p.state == SessionState::Active)
                     .unwrap_or(false);
                 let _ = self
                     .process_table()
                     .set_state(target, SessionState::Suspended);
-                runtimes.cancel_turn(&target);
+                self.process_table.cancel_turn(&target);
                 // Grace period then force-kill via process_cancel token.
-                if let Some(token) = runtimes.clone_process_cancel(&target) {
+                if let Some(token) = self.process_table.clone_process_cancel(&target) {
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         token.cancel();
                     });
                 }
                 if !was_active {
-                    self.cleanup_process(target, runtimes).await;
+                    self.cleanup_process(target).await;
                 }
             }
             Signal::Kill => {
                 info!(session_key = %target, "kill signal");
-                runtimes.cancel_process(&target);
+                self.process_table.cancel_process(&target);
                 let _ = self
                     .process_table()
                     .set_state(target, SessionState::Suspended);
-                self.cleanup_process(target, runtimes).await;
+                self.cleanup_process(target).await;
             }
         }
     }
@@ -725,7 +707,6 @@ impl Kernel {
         parent_id: SessionKey,
         child_id: SessionKey,
         result: AgentRunLoopResult,
-        runtimes: &RuntimeTable,
     ) {
         info!(
             parent_id = %parent_id,
@@ -741,15 +722,11 @@ impl Kernel {
         );
         let child_msg = crate::channel::types::ChatMessage::system(&child_result_text);
 
-        runtimes.with_mut(&parent_id, |rt| {
+        self.process_table.with_mut(&parent_id, |rt| {
             rt.conversation.push(child_msg.clone());
         });
 
-        let Some(session_id) = self
-            .process_table()
-            .get(parent_id)
-            .map(|p| p.session_id.clone())
-        else {
+        let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
             error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
             return;
         };
@@ -769,30 +746,29 @@ impl Kernel {
     ///
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
-    async fn cleanup_process(&self, session_key: SessionKey, runtimes: &RuntimeTable) {
-        if let Some((_, rt)) = runtimes.remove(&session_key) {
-            if let Some(process) = self.process_table().get(session_key) {
-                crate::metrics::SESSION_ACTIVE
-                    .with_label_values(&[&process.manifest.name])
-                    .dec();
-                crate::metrics::SESSION_SUSPENDED
-                    .with_label_values(&[&process.manifest.name, &process.state.to_string()])
-                    .inc();
-            }
+    async fn cleanup_process(&self, session_key: SessionKey) {
+        if let Some(rt) = self.process_table.remove(session_key) {
+            let manifest_name = rt.manifest.name.clone();
+            let state = rt.state;
+            let parent_id = rt.parent_id;
+
+            crate::metrics::SESSION_ACTIVE
+                .with_label_values(&[&manifest_name])
+                .dec();
+            crate::metrics::SESSION_SUSPENDED
+                .with_label_values(&[&manifest_name, &state.to_string()])
+                .inc();
 
             // Notify parent if this is a child process.
-            if let Some(process) = self.process_table().get(session_key) {
-                if let Some(parent_id) = process.parent_id {
-                    let result = rt.last_result.unwrap_or(AgentRunLoopResult {
-                        output:     "process ended".to_string(),
-                        iterations: 0,
-                        tool_calls: 0,
-                    });
-                    let event =
-                        KernelEventEnvelope::child_session_done(parent_id, session_key, result);
-                    if let Err(e) = self.event_queue().try_push(event) {
-                        warn!(%e, "failed to push ChildSessionDone event");
-                    }
+            if let Some(parent_id) = parent_id {
+                let result = rt.result.unwrap_or(AgentRunLoopResult {
+                    output:     "process ended".to_string(),
+                    iterations: 0,
+                    tool_calls: 0,
+                });
+                let event = KernelEventEnvelope::child_session_done(parent_id, session_key, result);
+                if let Err(e) = self.event_queue().try_push(event) {
+                    warn!(%e, "failed to push ChildSessionDone event");
                 }
             }
         }
@@ -807,7 +783,7 @@ impl Kernel {
     ///    (AutoGen lazy instantiation pattern).
     /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, always
     ///    spawn a new session (Anthropic spawn-new pattern).
-    async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
+    async fn handle_user_message(&self, msg: InboundMessage) {
         let span = info_span!(
             "handle_user_message",
             session_id = %msg.session_key,
@@ -825,14 +801,15 @@ impl Kernel {
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_session_key {
             span.record("routing_path", "id_addressing");
-            match self.process_table().get(target_id) {
-                Some(process) if process.state.is_terminal() => {
+            let target_state = self.process_table.with(&target_id, |p| p.state);
+            match target_state {
+                Some(state) if state.is_terminal() => {
                     let envelope = OutboundEnvelope::error(
                         msg.id.clone(),
                         user.clone(),
                         session_id.clone(),
                         "process_terminal",
-                        format!("process {} is {}", target_id, process.state),
+                        format!("process {} is {}", target_id, state),
                     );
                     if let Err(e) = self
                         .event_queue()
@@ -843,7 +820,7 @@ impl Kernel {
                     return;
                 }
                 Some(_) => {
-                    self.deliver_to_session(target_id, msg, runtimes).await;
+                    self.deliver_to_session(target_id, msg).await;
                     return;
                 }
                 None => {
@@ -867,29 +844,32 @@ impl Kernel {
 
         // ----- Path 2: Session addressing (external user) -----
         let mut resume_session_id = None;
-        if let Some(process) = self.process_table().find_by_session(&session_id) {
+        let path2_info = self.process_table.with_by_session(&session_id, |p| {
+            (
+                p.session_key,
+                p.state,
+                p.channel_session_id.clone(),
+                p.session_key,
+            )
+        });
+        if let Some((session_key_found, state, channel_sid, p_session_key)) = path2_info {
             span.record("routing_path", "session_addressing");
-            let aid = process.agent_id;
 
-            if process.state.is_terminal() {
-                // Terminal process — clear session binding, fall through to
-                // Path 3 (Name addressing) to spawn a replacement.
-                // We do NOT remove the process from the table here — the
-                // reaper (lazy cleanup in all_process_stats) handles that
-                // after the TTL expires.
+            if state.is_terminal() {
                 info!(
-                    agent_id = %aid,
+                    session_key = %session_key_found,
                     session_id = %session_id,
-                    state = %process.state,
+                    state = %state,
                     "session-bound process terminal — clearing binding, will respawn"
                 );
-                if let Some(ref channel_sid) = process.channel_session_id {
-                    self.process_table().session_index_remove(channel_sid, aid);
+                if let Some(ref channel_sid) = channel_sid {
+                    self.process_table
+                        .session_index_remove(channel_sid, session_key_found);
                 }
-                resume_session_id = Some(process.session_id.clone());
+                resume_session_id = Some(p_session_key);
                 // Fall through to Path 3 below.
             } else {
-                self.deliver_to_session(aid, msg, runtimes).await;
+                self.deliver_to_session(session_key_found, msg).await;
                 return;
             }
         }
@@ -946,7 +926,6 @@ impl Kernel {
                 Some(session_id.clone()),
                 None,
                 resume_session_id,
-                runtimes,
             )
             .await
         {
@@ -962,31 +941,30 @@ impl Kernel {
 
     /// Deliver a message to a live process: buffer if the process is paused
     /// or busy (Running state), otherwise start a new LLM turn.
-    async fn deliver_to_session(
-        &self,
-        session_key: SessionKey,
-        msg: InboundMessage,
-        runtimes: &RuntimeTable,
-    ) {
-        let should_buffer = runtimes.with_mut(&session_key, |rt| {
+    async fn deliver_to_session(&self, session_key: SessionKey, msg: InboundMessage) {
+        // Check process state outside the runtime closure to avoid nested locks.
+        let is_active = self
+            .process_table
+            .with(&session_key, |p| p.state == SessionState::Active)
+            .unwrap_or(false);
+
+        let should_buffer = self.process_table.with_mut(&session_key, |rt| {
             if rt.paused {
                 rt.pause_buffer
                     .push(KernelEventEnvelope::user_message(msg.clone()));
                 return true;
             }
-            if let Some(p) = self.process_table().get(&session_key) {
-                if p.state == SessionState::Active {
-                    rt.pause_buffer
-                        .push(KernelEventEnvelope::user_message(msg.clone()));
-                    return true;
-                }
+            if is_active {
+                rt.pause_buffer
+                    .push(KernelEventEnvelope::user_message(msg.clone()));
+                return true;
             }
             false
         });
         if should_buffer == Some(true) {
             return;
         }
-        self.start_llm_turn(session_key, msg, runtimes).await;
+        self.start_llm_turn(session_key, msg).await;
     }
 
     /// Determine the default agent name for a user based on their role.
@@ -1029,12 +1007,7 @@ impl Kernel {
     /// Start an LLM turn for the given agent, spawning the work as an async
     /// task that pushes `TurnCompleted` back into the EventQueue when done.
     #[tracing::instrument(skip_all, fields(session_key = %session_key, session_key = %msg.session_key))]
-    async fn start_llm_turn(
-        &self,
-        session_key: SessionKey,
-        msg: InboundMessage,
-        runtimes: &RuntimeTable,
-    ) {
+    async fn start_llm_turn(&self, session_key: SessionKey, msg: InboundMessage) {
         /// RAII guard ensuring that `TurnCompleted` is always pushed and the
         /// stream is always closed, even when the spawned turn task
         /// panics or is cancelled.
@@ -1087,7 +1060,7 @@ impl Kernel {
             }
         }
 
-        if !runtimes.contains(&session_key) {
+        if !self.process_table.contains(&session_key) {
             warn!(session_key = %session_key, "runtime not found for LLM turn");
             // Send error back to the user instead of silently dropping.
             let envelope = OutboundEnvelope::error(
@@ -1118,10 +1091,10 @@ impl Kernel {
         // Send a typing / progress indicator so the user sees feedback
         // while the LLM is thinking (e.g. Telegram "typing..." bubble).
         let egress_session_key = self
-            .process_table()
-            .get(session_key)
-            .and_then(|p| p.channel_session_key.clone())
-            .unwrap_or_else(|| session_key.clone());
+            .process_table
+            .with(&session_key, |p| p.channel_session_id.clone())
+            .flatten()
+            .unwrap_or(session_key);
         let _ =
             self.event_queue()
                 .try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
@@ -1142,7 +1115,7 @@ impl Kernel {
         let user_text = msg.content.as_text();
         let user_msg = ChatMessage::user(&user_text);
 
-        let turn_data = runtimes.with_mut(&session_key, |rt| {
+        let turn_data = self.process_table.with_mut(&session_key, |rt| {
             // Swap out the conversation for async compaction, then put it
             // back after compaction completes.
             let conversation = std::mem::take(&mut rt.conversation);
@@ -1155,7 +1128,9 @@ impl Kernel {
             )
         });
 
-        let Some((conversation, max_context_tokens, rt_session_key, rt_principal, turn_cancel)) = turn_data else {
+        let Some((conversation, max_context_tokens, rt_session_key, rt_principal, turn_cancel)) =
+            turn_data
+        else {
             warn!(session_key = %session_key, "runtime disappeared during LLM turn setup");
             return;
         };
@@ -1176,7 +1151,7 @@ impl Kernel {
         };
 
         // Put compacted conversation back and append user message.
-        runtimes.with_mut(&session_key, |rt| {
+        self.process_table.with_mut(&session_key, |rt| {
             rt.conversation = compacted;
             rt.conversation.push(user_msg.clone());
         });
@@ -1302,8 +1277,7 @@ impl Kernel {
             // Convert KernelError -> String at the event boundary because
             // KernelEvent requires Clone but KernelError does not implement it.
             let result = turn_result.map_err(|e| e.to_string());
-            let event =
-                KernelEventEnvelope::turn_completed(session_key, result, msg_id, user);
+            let event = KernelEventEnvelope::turn_completed(session_key, result, msg_id, user);
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, session_key = %session_key, "failed to push TurnCompleted");
             }
@@ -1326,34 +1300,32 @@ impl Kernel {
         result: std::result::Result<crate::agent_loop::AgentTurnResult, String>,
         in_reply_to: MessageId,
         user: crate::process::principal::UserId,
-        runtimes: &RuntimeTable,
     ) {
         let span = tracing::Span::current();
 
         if self
             .process_table
-            .get(session_key)
-            .map(|process| process.state.is_terminal())
+            .with(&session_key, |p| p.state.is_terminal())
             .unwrap_or(false)
         {
             info!(
                 session_key = %session_key,
                 "ignoring turn completion for terminal process"
             );
-            self.cleanup_process(session_key, runtimes).await;
+            self.cleanup_process(session_key).await;
             return;
         }
 
-        // Determine the egress session: use the channel_session_key if this
+        // Determine the egress session: use the channel_session_id if this
         // process has one (root process), otherwise fall back to the
         // process's own session. Subagents without a channel binding won't
         // have egress delivery — their results flow back to the parent via
         // ChildSessionDone.
         let egress_session_key = self
             .process_table
-            .get(session_key)
-            .and_then(|p| p.channel_session_key.clone())
-            .unwrap_or_else(|| session_key.clone());
+            .with(&session_key, |p| p.channel_session_id.clone())
+            .flatten()
+            .unwrap_or(session_key);
 
         // Update metrics.
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
@@ -1366,9 +1338,7 @@ impl Kernel {
 
         let agent_name = self
             .process_table
-            .as_ref()
-            .get(session_key)
-            .map(|p| p.manifest.name.clone())
+            .with(&session_key, |p| p.manifest.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
         match result {
@@ -1407,7 +1377,7 @@ impl Kernel {
 
                 // Persist assistant reply to the process's own session.
                 let assistant_msg = ChatMessage::assistant(&turn.text);
-                runtimes.with_mut(&session_key, |rt| {
+                self.process_table.with_mut(&session_key, |rt| {
                     rt.conversation.push(assistant_msg.clone());
                 });
                 {
@@ -1450,8 +1420,8 @@ impl Kernel {
                     "turn completed"
                 );
 
-                runtimes.with_mut(&session_key, |rt| {
-                    rt.last_result = Some(result);
+                self.process_table.with_mut(&session_key, |rt| {
+                    rt.result = Some(result);
                 });
             }
             Ok(turn) => {
@@ -1499,7 +1469,7 @@ impl Kernel {
 
         // Drain pause buffer — if the user sent messages while the turn was
         // running, re-inject them so they start a new turn on this session.
-        let buffered = runtimes.drain_pause_buffer(&session_key);
+        let buffered = self.process_table.drain_pause_buffer(&session_key);
 
         // Transition to Ready (idle, awaiting next message).
         let _ = self

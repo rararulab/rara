@@ -30,7 +30,6 @@ use tracing::{debug_span, info, warn};
 use crate::{
     error::KernelError,
     event::{Syscall, SyscallEnvelope},
-    event_loop::runtime::RuntimeTable,
     handle::KernelHandle,
     io::{AgentHandle, PipeEntry, PipeRegistry, pipe},
     kernel::KernelConfig,
@@ -38,7 +37,7 @@ use crate::{
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
     process::{
-        AgentManifest, SessionInfo, SessionTable,
+        AgentManifest, SessionTable,
         agent_registry::AgentRegistryRef,
         principal::Principal,
     },
@@ -101,7 +100,6 @@ impl SyscallDispatcher {
         &self,
         syscall: SyscallEnvelope,
         process_table: &SessionTable,
-        runtimes: &RuntimeTable,
         security: &SecurityRef,
         agent_registry: &AgentRegistryRef,
         kernel_handle: &KernelHandle,
@@ -122,8 +120,7 @@ impl SyscallDispatcher {
         match syscall {
             Syscall::QueryStatus { reply_tx } => {
                 let result = process_table
-                    .get(syscall_sender)
-                    .map(|p| SessionInfo::from(&p))
+                    .stats(syscall_sender)
                     .ok_or(KernelError::ProcessNotFound {
                         id: syscall_sender.to_string(),
                     });
@@ -271,8 +268,7 @@ impl SyscallDispatcher {
                 reply_tx,
             } => {
                 let result = process_table
-                    .get(session_key)
-                    .map(|p| p.manifest.clone())
+                    .with(&session_key, |p| p.manifest.clone())
                     .ok_or(KernelError::ProcessNotFound {
                         id: session_key.to_string(),
                     });
@@ -280,7 +276,7 @@ impl SyscallDispatcher {
             }
             Syscall::GetToolRegistry { reply_tx } => {
                 let mut registry = self.tool_registry.as_ref().clone();
-                if runtimes.contains(&syscall_sender) {
+                if process_table.contains(&syscall_sender) {
                     let syscall_tool = SyscallTool::new(
                         kernel_handle.clone(),
                         syscall_sender,
@@ -290,11 +286,18 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(Arc::new(registry));
             }
             Syscall::ResolveDriver { reply_tx } => {
-                let result = match process_table.get(syscall_sender) {
-                    Some(process) => self.driver_registry.resolve(
-                        &process.manifest.name,
-                        process.manifest.provider_hint.as_deref(),
-                        process.manifest.model.as_deref(),
+                let driver_info = process_table.with(&syscall_sender, |p| {
+                    (
+                        p.manifest.name.clone(),
+                        p.manifest.provider_hint.clone(),
+                        p.manifest.model.clone(),
+                    )
+                });
+                let result = match driver_info {
+                    Some((name, hint, model)) => self.driver_registry.resolve(
+                        &name,
+                        hint.as_deref(),
+                        model.as_deref(),
                     ),
                     None => Err(KernelError::ProcessNotFound {
                         id: syscall_sender.to_string(),
@@ -486,8 +489,7 @@ impl SyscallTool {
     fn principal(&self) -> Result<Principal, anyhow::Error> {
         self.handle
             .process_table()
-            .get(self.session_key)
-            .map(|p| p.principal.clone())
+            .with(&self.session_key, |p| p.principal.clone())
             .ok_or_else(|| anyhow::anyhow!("session not found: {}", self.session_key))
     }
 
@@ -592,7 +594,7 @@ impl SyscallTool {
             .map_err(|e| anyhow::anyhow!("status failed: {e}"))?;
         Ok(serde_json::json!({
             "agent_id": info.session_key.to_string(),
-            "name": info.name,
+            "name": info.manifest_name,
             "state": info.state.to_string(),
             "parent_id": info.parent_id.map(|id| id.to_string()),
         }))
@@ -605,7 +607,7 @@ impl SyscallTool {
             .map(|c| {
                 serde_json::json!({
                     "agent_id": c.session_key.to_string(),
-                    "name": c.name,
+                    "name": c.manifest_name,
                     "state": c.state.to_string(),
                 })
             })

@@ -16,7 +16,7 @@
 //!
 //! This module implements a session-centric runtime model where:
 //! - [`AgentManifest`] = the "binary" (static definition, YAML-loadable)
-//! - [`SessionRuntime`] = a running session instance in the [`SessionTable`]
+//! - [`Session`] = a running session instance in the [`SessionTable`]
 //! - [`sessionKey`] = unique per-execution identifier (kept for audit/security
 //!   compatibility)
 //! - [`SessionId`] = persistent conversation identifier (the primary
@@ -43,10 +43,12 @@ use std::{
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-use uuid::Uuid;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_util::sync::CancellationToken;
 
-use crate::{error::Result, session::SessionKey};
+use crate::{
+    channel::types::ChatMessage, error::Result, event::KernelEventEnvelope, session::SessionKey,
+};
 
 // ---------------------------------------------------------------------------
 // AgentRole
@@ -285,14 +287,18 @@ pub enum Signal {
 /// A running session instance in the session table.
 ///
 /// This is the runtime counterpart to [`AgentManifest`]. Each session
-/// is created with a unique [`sessionKey`] (for audit/security compatibility),
+/// is created with a unique [`SessionKey`] (for audit/security compatibility),
 /// the spawning principal, and the manifest that defines its behavior.
 /// Sessions are long-lived — they transition between
 /// Active/Ready/Suspended/Paused rather than being created and destroyed per
 /// message.
-// FIXME: it should not be cloneable!
-#[derive(Debug, Clone)]
-pub struct SessionRuntime {
+///
+/// Non-Clone: contains cancellation tokens, semaphore permits, and
+/// conversation history that must not be duplicated. Use
+/// [`SessionTable::with()`] / [`SessionTable::with_mut()`] for access.
+#[derive(Debug)]
+pub struct Session {
+    // -- Identity & metadata --
     /// The session's conversation storage key.
     pub session_key:        SessionKey,
     /// Parent session (None for root-level sessions).
@@ -323,31 +329,29 @@ pub struct SessionRuntime {
     pub metrics:            Arc<RuntimeMetrics>,
     /// Detailed turn traces for observability (most recent 50 turns).
     pub turn_traces:        Vec<crate::agent_loop::TurnTrace>,
-}
 
-/// Summary info for listing sessions.
-///
-/// A lightweight view of a [`SessionRuntime`] suitable for display in
-/// session listings without exposing full internal state.
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionInfo {
-    pub session_key: SessionKey,
-    pub parent_id:   Option<SessionKey>,
-    pub name:        String,
-    pub state:       SessionState,
-    pub created_at:  Timestamp,
-}
-
-impl From<&SessionRuntime> for SessionInfo {
-    fn from(p: &SessionRuntime) -> Self {
-        Self {
-            session_key: p.session_key,
-            parent_id:   p.parent_id,
-            name:        p.manifest.name.clone(),
-            state:       p.state,
-            created_at:  p.created_at,
-        }
-    }
+    // -- Conversation & cancellation (formerly SessionContext) --
+    /// In-memory conversation history (ChatMessage list).
+    pub conversation:       Vec<ChatMessage>,
+    /// Per-turn cancellation token — cancelled by Signal::Interrupt to abort
+    /// the current LLM call without killing the session.
+    pub turn_cancel:        CancellationToken,
+    /// Session-level cancellation token — cancelled by Signal::Kill or
+    /// Signal::Terminate to shut down the entire session. Child sessions
+    /// use `parent_token.child_token()` so cancelling a parent cascades.
+    pub process_cancel:     CancellationToken,
+    /// Whether this session is paused. When true, incoming messages are
+    /// buffered in `pause_buffer` instead of being processed.
+    pub paused:             bool,
+    /// Buffered events received while the session was paused or busy.
+    pub pause_buffer:       Vec<KernelEventEnvelope>,
+    /// Per-session semaphore limiting concurrent child sessions.
+    pub child_semaphore:    Arc<Semaphore>,
+    /// Maximum context tokens for compaction.
+    pub max_context_tokens: usize,
+    /// Global semaphore permit — dropped when this session is removed,
+    /// automatically releasing one slot for new session spawns.
+    pub _global_permit:     OwnedSemaphorePermit,
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +417,7 @@ pub struct MetricsSnapshot {
 
 /// Extended runtime statistics for a single session.
 ///
-/// Combines static metadata from [`SessionRuntime`] with live counters from
+/// Combines static metadata from [`Session`] with live counters from
 /// [`RuntimeMetrics`]. This is the `/proc/<pid>/status` equivalent.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionStats {
@@ -481,7 +485,7 @@ pub struct SystemStats {
 /// a name index for fast agent name -> `sessionKey` lookups, and
 /// a mailbox registry for sending messages to long-lived sessions.
 pub struct SessionTable {
-    runtimes:        DashMap<SessionKey, SessionRuntime>,
+    runtimes:        DashMap<SessionKey, Session>,
     /// Parent → Children index, O(1) child lookup.
     children_index:  DashMap<SessionKey, Vec<SessionKey>>,
     /// Agent manifest name → Vec<SessionKey> (1:N, observability only).
@@ -516,14 +520,34 @@ impl SessionTable {
         }
     }
 
-    /// Look up a session runtime by its key.
-    pub fn get(&self, key: SessionKey) -> Option<SessionRuntime> {
-        self.runtimes.get(&key).map(|r| r.value().clone())
+    /// Read-only access to a session runtime via closure.
+    pub fn with<F, R>(&self, key: &SessionKey, f: F) -> Option<R>
+    where
+        F: FnOnce(&Session) -> R,
+    {
+        self.runtimes.get(key).map(|r| f(r.value()))
+    }
+
+    /// Mutable access to a session runtime via closure.
+    pub fn with_mut<F, R>(&self, key: &SessionKey, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Session) -> R,
+    {
+        self.runtimes.get_mut(key).map(|mut r| f(r.value_mut()))
+    }
+
+    /// Read-only access to a session runtime by session index lookup.
+    pub fn with_by_session<F, R>(&self, session_id: &SessionKey, f: F) -> Option<R>
+    where
+        F: FnOnce(&Session) -> R,
+    {
+        let agent_id = *self.session_index.get(session_id)?;
+        self.runtimes.get(&agent_id).map(|r| f(r.value()))
     }
 
     /// Insert a process into the table.
     #[tracing::instrument(skip(self, sr), fields(session_key = %sr.session_key, agent_name = %sr.manifest.name))]
-    pub fn insert(&self, sr: SessionRuntime) {
+    pub fn insert(&self, sr: Session) {
         let session_key = sr.session_key;
         // Children index: register under parent
         if let Some(parent_id) = sr.parent_id {
@@ -553,7 +577,7 @@ impl SessionTable {
         let mut entry = self
             .runtimes
             .get_mut(&key)
-            .ok_or(crate::error::KernelError::SessionRuntimeNotFound { key })?;
+            .ok_or(crate::error::KernelError::SessionNotFound { key })?;
         entry.state = state;
         // Sessions are long-lived — no terminal states, no finished_at.
         Ok(())
@@ -564,14 +588,14 @@ impl SessionTable {
         let mut entry = self
             .runtimes
             .get_mut(&key)
-            .ok_or(crate::error::KernelError::SessionRuntimeNotFound { key })?;
+            .ok_or(crate::error::KernelError::SessionNotFound { key })?;
         entry.result = Some(result);
         Ok(())
     }
 
     /// Remove a process from the table, returning it if it existed.
     #[tracing::instrument(skip(self))]
-    pub fn remove(&self, id: SessionKey) -> Option<SessionRuntime> {
+    pub fn remove(&self, id: SessionKey) -> Option<Session> {
         let removed = self.runtimes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
             // Session index cleanup
@@ -596,24 +620,19 @@ impl SessionTable {
     }
 
     /// List all children of a given parent (O(1) lookup via children_index).
-    pub fn children_of(&self, parent_id: SessionKey) -> Vec<SessionInfo> {
+    pub fn children_of(&self, parent_id: SessionKey) -> Vec<SessionStats> {
         let child_ids = self
             .children_index
             .get(&parent_id)
             .map(|ids| ids.clone())
             .unwrap_or_default();
-        child_ids
-            .iter()
-            .filter_map(|id| self.runtimes.get(id).map(|p| SessionInfo::from(p.value())))
-            .collect()
+        child_ids.iter().filter_map(|id| self.stats(*id)).collect()
     }
 
     /// List all processes.
-    pub fn list(&self) -> Vec<SessionInfo> {
-        self.runtimes
-            .iter()
-            .map(|p| SessionInfo::from(p.value()))
-            .collect()
+    pub fn list(&self) -> Vec<SessionStats> {
+        let ids: Vec<SessionKey> = self.runtimes.iter().map(|p| p.session_key).collect();
+        ids.iter().filter_map(|id| self.stats(*id)).collect()
     }
 
     /// Push a turn trace onto a process, evicting the oldest if at capacity.
@@ -647,31 +666,14 @@ impl SessionTable {
 
     // ----- Session index methods -----
 
-    /// Find the active agent process for a session.
-    pub fn find_by_session(&self, session_id: &SessionKey) -> Option<SessionRuntime> {
-        let agent_id = self.session_index.get(session_id)?;
-        self.get(*agent_id)
-    }
-
-    /// Find agent processes by manifest name (returns the most recently
-    /// inserted).
-    pub fn find_by_name(&self, name: &str) -> Option<SessionRuntime> {
+    /// Read-only access to the session bound to a session index entry.
+    pub fn with_by_name<F, R>(&self, name: &str, f: F) -> Option<R>
+    where
+        F: FnOnce(&Session) -> R,
+    {
         let ids = self.name_registry.get(name)?;
-        ids.last().and_then(|id| self.get(*id))
-    }
-
-    /// Find all agent processes with the given manifest name.
-    pub fn find_all_by_name(&self, name: &str) -> Vec<SessionRuntime> {
-        self.name_registry
-            .get(name)
-            .map(|ids| ids.iter().filter_map(|id| self.get(*id)).collect())
-            .unwrap_or_default()
-    }
-
-    /// Bind a session to a specific agent process (overwrites any existing
-    /// binding).
-    pub fn bind_session(&self, session_id: SessionKey, agent_id: SessionKey) {
-        self.session_index.insert(session_id, agent_id);
+        let id = *ids.last()?;
+        self.runtimes.get(&id).map(|r| f(r.value()))
     }
 
     /// Remove a session index entry only if it points to the given agent.
@@ -688,52 +690,51 @@ impl SessionTable {
     }
 
     /// Build a [`SessionStats`] snapshot for a single session.
-    pub async fn stats(&self, id: SessionKey) -> Option<SessionStats> {
-        let process = self.get(id)?;
-        let metrics_snapshot = process.metrics.snapshot().await;
-        let children: Vec<SessionKey> = self
-            .children_index
-            .get(&id)
-            .map(|ids| ids.clone())
-            .unwrap_or_default();
-        let uptime_ms = Timestamp::now()
-            .since(process.created_at)
-            .ok()
-            .map(|span| span.get_milliseconds().unsigned_abs())
-            .unwrap_or(0);
-
-        Some(SessionStats {
-            session_key: process.session_id,
-            manifest_name: process.manifest.name,
-            state: process.state,
-            parent_id: process.parent_id,
-            children,
-            created_at: process.created_at,
-            finished_at: process.finished_at,
-            uptime_ms,
-            messages_received: self.messages_received.load(Ordering::Relaxed),
-            llm_calls: self.llm_calls.load(Ordering::Relaxed),
-            tool_calls: self.tool_calls.load(Ordering::Relaxed),
-            tokens_consumed: self.tokens_consumed.load(Ordering::Relaxed),
-            last_activity: self.last_activity.load(Ordering::Relaxed),
+    pub fn stats(&self, id: SessionKey) -> Option<SessionStats> {
+        self.with(&id, |p| {
+            let children: Vec<SessionKey> = self
+                .children_index
+                .get(&id)
+                .map(|ids| ids.clone())
+                .unwrap_or_default();
+            let uptime_ms = Timestamp::now()
+                .since(p.created_at)
+                .ok()
+                .map(|span| span.get_milliseconds().unsigned_abs())
+                .unwrap_or(0);
+            let m = &p.metrics;
+            let last_ts = m.last_activity.load(Ordering::Relaxed);
+            SessionStats {
+                session_key: p.session_key,
+                manifest_name: p.manifest.name.clone(),
+                state: p.state,
+                parent_id: p.parent_id,
+                children,
+                created_at: p.created_at,
+                finished_at: p.finished_at,
+                uptime_ms,
+                messages_received: m.messages_received.load(Ordering::Relaxed),
+                llm_calls: m.llm_calls.load(Ordering::Relaxed),
+                tool_calls: m.tool_calls.load(Ordering::Relaxed),
+                tokens_consumed: m.tokens_consumed.load(Ordering::Relaxed),
+                last_activity: if last_ts == 0 {
+                    None
+                } else {
+                    Timestamp::from_microsecond(last_ts).ok()
+                },
+            }
         })
     }
 
     /// Build [`SessionStats`] for all sessions currently in the table.
     ///
     /// Also performs lazy reaping of suspended sessions older than the TTL.
-    pub async fn all_process_stats(&self) -> Vec<SessionStats> {
+    pub fn all_process_stats(&self) -> Vec<SessionStats> {
         // Lazy reap: remove stale terminal processes on observation.
         self.reap_terminal(Self::TERMINAL_TTL);
 
         let ids: Vec<SessionKey> = self.runtimes.iter().map(|p| p.session_key).collect();
-        let mut stats = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(s) = self.stats(id).await {
-                stats.push(s);
-            }
-        }
-        stats
+        ids.iter().filter_map(|id| self.stats(*id)).collect()
     }
 
     /// Remove suspended sessions whose last activity is older than `max_age`.
@@ -786,6 +787,63 @@ impl SessionTable {
             .iter()
             .map(|p| p.metrics.tokens_consumed.load(Ordering::Relaxed))
             .sum()
+    }
+
+    // ----- Turn control (formerly RuntimeTable) -----
+
+    /// Check whether a runtime exists for the given session.
+    pub fn contains(&self, key: &SessionKey) -> bool { self.runtimes.contains_key(key) }
+
+    /// Cancel the current LLM turn for the given session.
+    pub fn cancel_turn(&self, id: &SessionKey) {
+        if let Some(rt) = self.runtimes.get(id) {
+            rt.turn_cancel.cancel();
+        }
+    }
+
+    /// Cancel the current turn and replace the token with a fresh one.
+    pub fn cancel_and_refresh_turn(&self, id: &SessionKey) {
+        if let Some(mut rt) = self.runtimes.get_mut(id) {
+            rt.turn_cancel.cancel();
+            rt.turn_cancel = CancellationToken::new();
+        }
+    }
+
+    /// Cancel the session-level token (kills the entire session).
+    pub fn cancel_process(&self, id: &SessionKey) {
+        if let Some(rt) = self.runtimes.get(id) {
+            rt.process_cancel.cancel();
+        }
+    }
+
+    /// Clone the session-level cancellation token for the given session.
+    pub fn clone_process_cancel(&self, id: &SessionKey) -> Option<CancellationToken> {
+        self.runtimes.get(id).map(|rt| rt.process_cancel.clone())
+    }
+
+    // ----- Pause management (formerly RuntimeTable) -----
+
+    /// Set the paused flag for the given session.
+    pub fn set_paused(&self, id: &SessionKey, paused: bool) {
+        if let Some(mut rt) = self.runtimes.get_mut(id) {
+            rt.paused = paused;
+        }
+    }
+
+    /// Buffer an event for a paused session.
+    pub fn buffer_event(&self, id: &SessionKey, event: KernelEventEnvelope) {
+        if let Some(mut rt) = self.runtimes.get_mut(id) {
+            rt.pause_buffer.push(event);
+        }
+    }
+
+    /// Drain the pause buffer, returning all buffered events.
+    pub fn drain_pause_buffer(&self, id: &SessionKey) -> Vec<KernelEventEnvelope> {
+        if let Some(mut rt) = self.runtimes.get_mut(id) {
+            std::mem::take(&mut rt.pause_buffer)
+        } else {
+            vec![]
+        }
     }
 }
 
