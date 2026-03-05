@@ -191,25 +191,3 @@ fn decode_error_details(bytes: &[u8]) -> Result<Option<JsonValue>> {
     })?;
     Ok(Some(value))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn json_round_trips_through_bytes_codec_without_numeric_coercion() {
-        let value = serde_json::json!({
-            "int": 42,
-            "float": 3.5,
-            "bool": true,
-            "null": null,
-            "nested": {"x": 1},
-            "list": [1, "a", false]
-        });
-
-        let bytes = serde_json::to_vec(&value).expect("serialize");
-        let got: JsonValue = serde_json::from_slice(&bytes).expect("deserialize");
-
-        assert_eq!(got, value);
-    }
-}

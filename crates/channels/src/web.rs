@@ -57,14 +57,10 @@ use rara_kernel::{
         types::{AgentPhase, ChannelType, MessageContent},
     },
     error::KernelError,
-    handle::kernel_handle::KernelHandle,
+    handle::KernelHandle,
     io::{
-        egress::{
-            EgressAdapter, EgressError, Endpoint, EndpointAddress, EndpointRegistry,
-            PlatformOutbound,
-        },
-        ingress::RawPlatformMessage,
-        types::{InteractionType, ReplyContext as IoReplyContext},
+        EgressAdapter, EgressError, Endpoint, EndpointAddress, EndpointRegistry, InteractionType,
+        PlatformOutbound, RawPlatformMessage, ReplyContext,
     },
     process::principal::UserId,
 };
@@ -177,7 +173,7 @@ pub struct WebAdapter {
     /// KernelHandle for dispatching inbound messages (set during `start`).
     sink:              Arc<RwLock<Option<KernelHandle>>>,
     /// StreamHub for subscribing to real-time token deltas.
-    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
     /// EndpointRegistry for tracking connected users (set during startup).
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     /// Owner token for verifying WebSocket auth tokens.
@@ -204,7 +200,7 @@ impl WebAdapter {
     }
 
     /// Set the StreamHub for real-time token streaming.
-    pub async fn set_stream_hub(&self, hub: Arc<rara_kernel::io::stream::StreamHub>) {
+    pub async fn set_stream_hub(&self, hub: Arc<rara_kernel::io::StreamHub>) {
         let mut guard = self.stream_hub.write().await;
         *guard = Some(hub);
     }
@@ -287,7 +283,7 @@ impl WebAdapter {
 struct WebAdapterState {
     sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
     sink:              Arc<RwLock<Option<KernelHandle>>>,
-    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     owner_token:       Arc<RwLock<Option<String>>>,
     shutdown_rx:       watch::Receiver<bool>,
@@ -357,7 +353,7 @@ fn build_raw_platform_message(
         platform_user_id:    user_id.to_owned(),
         platform_chat_id:    Some(session_key.to_owned()),
         content:             MessageContent::Text(content.to_owned()),
-        reply_context:       Some(IoReplyContext {
+        reply_context:       Some(ReplyContext {
             thread_id:                None,
             reply_to_platform_msg_id: None,
             interaction_type:         InteractionType::Message,
@@ -529,11 +525,11 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
 /// The session runtime opens streams asynchronously, so we poll
 /// `subscribe_session()` with a short delay until streams appear.
 fn spawn_stream_forwarder(
-    stream_hub: Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    stream_hub: Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
     sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
     session_key: String,
 ) {
-    use rara_kernel::io::stream::StreamEvent;
+    use rara_kernel::io::StreamEvent;
 
     tokio::spawn(async move {
         let hub = {
@@ -544,7 +540,7 @@ fn spawn_stream_forwarder(
             }
         };
 
-        let session_id = match rara_kernel::SessionId::try_from_raw(&session_key) {
+        let session_id = match rara_kernel::session::SessionKey::try_from_raw(&session_key) {
             Ok(id) => id,
             Err(_) => {
                 tracing::warn!(session_key = %session_key, "invalid session key for stream forwarder");

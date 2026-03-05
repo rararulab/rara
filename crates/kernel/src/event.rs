@@ -256,7 +256,7 @@ impl Syscall {
 ///
 /// Each variant carries only its unique business fields. Common metadata
 /// (event id, timestamp, agent id, session id) lives in [`EventBase`].
-#[derive(derive_more::Debug, Serialize, strum::IntoStaticStr, strum::EnumString)]
+#[derive(derive_more::Debug, Serialize, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum KernelEvent {
     // === Input: from external sources ===

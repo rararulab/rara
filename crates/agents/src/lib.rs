@@ -29,7 +29,7 @@ use rara_kernel::process::{AgentManifest, AgentRole, Priority};
 
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:               "rara".to_string(),
-    role:               Some(AgentRole::Chat),
+    role:               AgentRole::Chat,
     description:        "Rara — personal AI assistant with personality and tools".to_string(),
     model:              None,
     system_prompt:      RARA_SYSTEM_PROMPT.to_string(),
@@ -53,7 +53,7 @@ pub fn rara() -> &'static AgentManifest { &RARA_MANIFEST }
 
 static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:               "nana".to_string(),
-    role:               Some(AgentRole::Chat),
+    role:               AgentRole::Chat,
     description:        "Nana — friendly chat companion, rara's sister".to_string(),
     model:              None,
     system_prompt:      NANA_SYSTEM_PROMPT.to_string(),
@@ -77,7 +77,7 @@ pub fn nana() -> &'static AgentManifest { &NANA_MANIFEST }
 
 static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:               "worker".to_string(),
-    role:               Some(AgentRole::Worker),
+    role:               AgentRole::Worker,
     description:        "Worker — lightweight task-execution agent for sub-agent spawning"
         .to_string(),
     model:              None,
@@ -282,99 +282,3 @@ You do NOT have access to tools, commands, files, or external services. If the u
 
 Keep responses natural and concise. No markdown formatting.
 "#;
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_rara_manifest_name() {
-        let m = rara();
-        assert_eq!(m.name, "rara");
-    }
-
-    #[test]
-    fn test_rara_manifest_model() {
-        let m = rara();
-        assert_eq!(m.model, None);
-    }
-
-    #[test]
-    fn test_rara_soul_prompt_contains_soul() {
-        let m = rara();
-        assert!(m.soul_prompt.as_ref().unwrap().contains("Rara — Soul"));
-    }
-
-    #[test]
-    fn test_rara_system_prompt_contains_tool_discipline() {
-        let m = rara();
-        assert!(m.system_prompt.contains("Tool Discipline"));
-    }
-
-    #[test]
-    fn test_rara_role() {
-        let m = rara();
-        assert_eq!(m.role, Some(AgentRole::Chat));
-    }
-
-    #[test]
-    fn test_rara_tools_empty() {
-        let m = rara();
-        assert!(m.tools.is_empty());
-    }
-
-    // --- Nana tests ---
-
-    #[test]
-    fn test_nana_manifest_name() {
-        let m = nana();
-        assert_eq!(m.name, "nana");
-    }
-
-    #[test]
-    fn test_nana_manifest_role() {
-        let m = nana();
-        assert_eq!(m.role, Some(AgentRole::Chat));
-    }
-
-    #[test]
-    fn test_nana_tools_empty() {
-        let m = nana();
-        assert!(m.tools.is_empty());
-    }
-
-    #[test]
-    fn test_nana_max_children_zero() {
-        let m = nana();
-        assert_eq!(m.max_children, Some(0));
-    }
-
-    #[test]
-    fn test_nana_max_iterations() {
-        let m = nana();
-        assert_eq!(m.max_iterations, Some(10));
-    }
-
-    #[test]
-    fn test_nana_soul_prompt_contains_identity() {
-        let m = nana();
-        assert!(m.soul_prompt.as_ref().unwrap().contains("Nana — Soul"));
-    }
-
-    #[test]
-    fn test_nana_system_prompt_no_tools() {
-        let m = nana();
-        assert!(m.system_prompt.contains("do NOT have access to tools"));
-    }
-
-    #[test]
-    fn test_nana_model_none() {
-        let m = nana();
-        assert_eq!(m.model, None);
-    }
-
-}

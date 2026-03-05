@@ -88,6 +88,9 @@ impl SyscallDispatcher {
         }
     }
 
+    /// Access the global tool registry.
+    pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
+
     // -- Dispatch -----------------------------------------------------------
 
     /// Handle a syscall from a session.

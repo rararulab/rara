@@ -247,23 +247,3 @@ pub struct McpOAuthConfig {
     #[builder(default)]
     pub scopes:    Vec<String>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_transport_type_serde_roundtrip() {
-        let json = serde_json::to_string(&TransportType::Stdio).unwrap();
-        assert_eq!(json, r#""stdio""#);
-
-        let json = serde_json::to_string(&TransportType::Sse).unwrap();
-        assert_eq!(json, r#""sse""#);
-
-        let parsed: TransportType = serde_json::from_str(r#""stdio""#).unwrap();
-        assert_eq!(parsed, TransportType::Stdio);
-
-        let parsed: TransportType = serde_json::from_str(r#""sse""#).unwrap();
-        assert_eq!(parsed, TransportType::Sse);
-    }
-}

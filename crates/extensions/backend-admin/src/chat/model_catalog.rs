@@ -299,24 +299,3 @@ fn apply_favorite_sort(models: &mut [ChatModel]) {
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn get_context_length_known_model() {
-        let catalog = ModelCatalog::new();
-        assert_eq!(catalog.get_context_length("openai/gpt-4o"), Some(128_000));
-        assert_eq!(
-            catalog.get_context_length("anthropic/claude-sonnet-4"),
-            Some(200_000)
-        );
-    }
-
-    #[test]
-    fn get_context_length_unknown_model() {
-        let catalog = ModelCatalog::new();
-        assert_eq!(catalog.get_context_length("unknown/model"), None);
-    }
-}

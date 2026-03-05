@@ -19,7 +19,6 @@
 //! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
 //! endpoint registry, ingress pipeline).
 
-pub mod agentfs;
 pub mod bus;
 pub mod components;
 pub mod composio;
@@ -32,7 +31,6 @@ pub mod outbox;
 pub mod resolvers;
 pub mod skills;
 pub mod state;
-pub mod stream;
 pub mod tape_convert;
 pub mod tools;
 pub mod user_store;

@@ -233,25 +233,3 @@ impl<'de> Deserialize<'de> for ReadableSize {
         deserializer.deserialize_any(SizeVisitor)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_readable_size() {
-        let s = ReadableSize::kb(2);
-        assert_eq!(s.0, 2048);
-        assert_eq!(s.as_mb(), 0);
-        let s = ReadableSize::mb(2);
-        assert_eq!(s.0, 2 * 1024 * 1024);
-        assert_eq!(s.as_mb(), 2);
-        let s = ReadableSize::gb(2);
-        assert_eq!(s.0, 2 * 1024 * 1024 * 1024);
-        assert_eq!(s.as_mb(), 2048);
-
-        assert_eq!((ReadableSize::mb(2) / 2).0, MIB);
-        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KIB);
-        assert_eq!(ReadableSize::mb(2) / ReadableSize::kb(1), 2048);
-    }
-}

@@ -4,7 +4,14 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, warn};
 
-use crate::llm;
+use crate::{
+    error::KernelError,
+    handle::KernelHandle,
+    io::{StreamEvent, StreamHandle},
+    llm,
+    llm::ModelCapabilities,
+    session::SessionKey,
+};
 
 /// Convert persisted chat history into [`llm::Message`] format.
 ///
@@ -124,14 +131,6 @@ pub struct AgentTurnResult {
     pub trace:      TurnTrace,
 }
 
-use crate::{
-    error::KernelError,
-    handle::KernelHandle,
-    io::{StreamEvent, StreamHandle},
-    llm::ModelCapabilities,
-    session::SessionKey,
-};
-
 fn parse_tool_call_arguments(arguments: &str) -> Result<serde_json::Value, String> {
     let args = serde_json::from_str::<serde_json::Value>(arguments)
         .map_err(|err| format!("invalid tool arguments: {err}"))?;
@@ -184,12 +183,13 @@ pub(crate) async fn run_inline_agent_loop(
     turn_cancel: &CancellationToken,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
-    let manifest = handle
-        .session_manifest(&session_key)
-        .await
-        .map_err(|e| KernelError::AgentExecution {
-            message: format!("failed to get manifest: {e}"),
-        })?;
+    let manifest =
+        handle
+            .session_manifest(&session_key)
+            .await
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to get manifest: {e}"),
+            })?;
     let full_tools = handle
         .session_tool_registry(session_key)
         .await
@@ -208,13 +208,12 @@ pub(crate) async fn run_inline_agent_loop(
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) =
-        handle
-            .session_resolve_driver(session_key)
-            .await
-            .map_err(|e| KernelError::AgentExecution {
-                message: format!("failed to resolve LLM driver: {e}"),
-            })?;
+    let (driver, model) = handle
+        .session_resolve_driver(session_key)
+        .await
+        .map_err(|e| KernelError::AgentExecution {
+            message: format!("failed to resolve LLM driver: {e}"),
+        })?;
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -513,7 +512,7 @@ pub(crate) async fn run_inline_agent_loop(
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
-            .map(|((_id, name, args), verdict)| {
+            .map(|(_id, name, args)| {
                 let tool = tools.get(name);
                 let args = args.clone();
                 let name = name.clone();

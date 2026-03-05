@@ -26,7 +26,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use smart_default::SmartDefault;
 
 use super::{in_memory::EventQueue, shard::ShardQueue};
 use crate::{event::KernelEventEnvelope, io::IOError};

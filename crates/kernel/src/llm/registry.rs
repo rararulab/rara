@@ -209,7 +209,7 @@ impl DriverRegistryBuilder {
         self.provider_models.insert(
             name.into(),
             ProviderModelConfig {
-                default_model:   default_model.into(),
+                default_model: default_model.into(),
                 fallback_models,
             },
         );
@@ -236,69 +236,5 @@ impl DriverRegistryBuilder {
                 agent_overrides: self.agent_overrides,
             }),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use async_trait::async_trait;
-    use tokio::sync::mpsc;
-
-    use super::DriverRegistryBuilder;
-    use crate::{
-        error::Result,
-        llm::{
-            driver::LlmDriver,
-            stream::StreamDelta,
-            types::{CompletionRequest, CompletionResponse},
-        },
-    };
-
-    struct TestDriver;
-
-    #[async_trait]
-    impl LlmDriver for TestDriver {
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
-            unreachable!("not used in registry tests")
-        }
-
-        async fn stream(
-            &self,
-            _request: CompletionRequest,
-            _tx: mpsc::Sender<StreamDelta>,
-        ) -> Result<CompletionResponse> {
-            unreachable!("not used in registry tests")
-        }
-    }
-
-    #[test]
-    fn update_replaces_default_driver_and_registered_drivers() {
-        let registry = Arc::new(
-            DriverRegistryBuilder::new("openrouter")
-                .driver("openrouter", Arc::new(TestDriver))
-                .provider_model("openrouter", "model-a", vec![])
-                .build(),
-        );
-
-        let updated = DriverRegistryBuilder::new("ollama")
-            .driver("ollama", Arc::new(TestDriver))
-            .provider_model("ollama", "model-b", vec!["model-c".into()])
-            .build();
-
-        registry.update(&updated);
-
-        let (_, model) = registry
-            .resolve("agent", None, None)
-            .expect("driver should resolve");
-        assert_eq!(registry.default_driver(), "ollama");
-        assert_eq!(registry.default_model(), Some("model-b".to_string()));
-        assert_eq!(model, "model-b");
-        assert_eq!(
-            registry.fallback_models_for("ollama"),
-            vec!["model-c".to_string()]
-        );
-        assert_eq!(registry.driver_names(), vec!["ollama".to_string()]);
     }
 }

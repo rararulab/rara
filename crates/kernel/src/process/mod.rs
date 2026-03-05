@@ -57,10 +57,11 @@ use crate::{
 /// Classification of an agent's functional role.
 ///
 /// Roles enable callers to look up agents by function rather than by name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display, Default)]
 #[strum(serialize_all = "snake_case")]
 pub enum AgentRole {
     /// User-facing conversational agent (default chat entry point).
+    #[default]
     Chat,
     /// Codebase recon / investigation agent.
     Scout,
@@ -303,12 +304,6 @@ pub struct Session {
     pub session_key:        SessionKey,
     /// Parent session (None for root-level sessions).
     pub parent_id:          Option<SessionKey>,
-    /// External channel binding (e.g., `web:chat123`). Only set for root
-    /// sessions that entered via an external channel adapter. Used by
-    /// `session_index` for routing inbound messages to the correct session.
-    /// Child sessions have `None` — they are only reachable via
-    /// `SessionHandle`.
-    pub channel_session_id: Option<SessionKey>,
     /// The agent definition driving this session.
     pub manifest:           AgentManifest,
     /// The identity under which this session runs.
@@ -363,7 +358,7 @@ pub struct Session {
 /// These counters are incremented during process execution and read when
 /// building [`ProcessStats`] snapshots. Atomics avoid locking overhead on
 /// the hot path (every LLM call, every tool call, every message).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RuntimeMetrics {
     /// Number of messages received by this process.
     pub messages_received: AtomicU64,
@@ -378,6 +373,17 @@ pub struct RuntimeMetrics {
 }
 
 impl RuntimeMetrics {
+    /// Create a new `RuntimeMetrics` with all counters zeroed.
+    pub fn new() -> Self {
+        Self {
+            messages_received: AtomicU64::new(0),
+            llm_calls:         AtomicU64::new(0),
+            tool_calls:        AtomicU64::new(0),
+            tokens_consumed:   AtomicU64::new(0),
+            last_activity:     AtomicI64::new(0),
+        }
+    }
+
     /// Record a message received event.
     pub fn record_message(&self) { self.messages_received.fetch_add(1, Ordering::Relaxed); }
 
@@ -488,12 +494,6 @@ pub struct SessionTable {
     runtimes:        DashMap<SessionKey, Session>,
     /// Parent → Children index, O(1) child lookup.
     children_index:  DashMap<SessionKey, Vec<SessionKey>>,
-    /// Agent manifest name → Vec<SessionKey> (1:N, observability only).
-    /// TODO: we don't need this i think. since we can have multiple sessions
-    /// with the same manifest, it's not super useful to look up by name. we can
-    /// remove this and just do a full scan of the processes table when we want
-    /// to find all sessions with a given manifest name.
-    name_registry:   DashMap<String, Vec<SessionKey>>,
     /// Monotonically increasing counter of total processes ever spawned.
     total_spawned:   AtomicU64,
     /// Total processes that completed successfully.
@@ -513,7 +513,6 @@ impl SessionTable {
         Self {
             runtimes:        DashMap::new(),
             children_index:  DashMap::new(),
-            name_registry:   DashMap::new(),
             total_spawned:   AtomicU64::new(0),
             total_completed: AtomicU64::new(0),
             total_failed:    AtomicU64::new(0),
@@ -536,15 +535,6 @@ impl SessionTable {
         self.runtimes.get_mut(key).map(|mut r| f(r.value_mut()))
     }
 
-    /// Read-only access to a session runtime by session index lookup.
-    pub fn with_by_session<F, R>(&self, session_id: &SessionKey, f: F) -> Option<R>
-    where
-        F: FnOnce(&Session) -> R,
-    {
-        let agent_id = *self.session_index.get(session_id)?;
-        self.runtimes.get(&agent_id).map(|r| f(r.value()))
-    }
-
     /// Insert a process into the table.
     #[tracing::instrument(skip(self, sr), fields(session_key = %sr.session_key, agent_name = %sr.manifest.name))]
     pub fn insert(&self, sr: Session) {
@@ -558,11 +548,6 @@ impl SessionTable {
         }
         // Initialize empty children list for this process
         self.children_index.entry(session_key).or_default();
-        // Name registry (1:N)
-        self.name_registry
-            .entry(sr.manifest.name.clone())
-            .or_default()
-            .push(session_key);
         self.total_spawned.fetch_add(1, Ordering::Relaxed);
         self.runtimes.insert(session_key, sr);
     }
@@ -598,11 +583,6 @@ impl SessionTable {
     pub fn remove(&self, id: SessionKey) -> Option<Session> {
         let removed = self.runtimes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
-            // Session index cleanup
-            if let Some(ref channel_sid) = process.channel_session_id {
-                self.session_index
-                    .remove_if(channel_sid, |_, agent_id| *agent_id == id);
-            }
             // Children index: remove from parent's children list
             if let Some(parent_id) = process.parent_id {
                 if let Some(mut children) = self.children_index.get_mut(&parent_id) {
@@ -611,10 +591,6 @@ impl SessionTable {
             }
             // Remove own children entry
             self.children_index.remove(&id);
-            // Name registry: remove from vec
-            if let Some(mut ids) = self.name_registry.get_mut(&process.manifest.name) {
-                ids.retain(|aid| *aid != id);
-            }
         }
         removed
     }
@@ -663,24 +639,6 @@ impl SessionTable {
 
     /// Backwards-compatible alias.
     pub fn running_count(&self) -> usize { self.active_count() }
-
-    // ----- Session index methods -----
-
-    /// Read-only access to the session bound to a session index entry.
-    pub fn with_by_name<F, R>(&self, name: &str, f: F) -> Option<R>
-    where
-        F: FnOnce(&Session) -> R,
-    {
-        let ids = self.name_registry.get(name)?;
-        let id = *ids.last()?;
-        self.runtimes.get(&id).map(|r| f(r.value()))
-    }
-
-    /// Remove a session index entry only if it points to the given agent.
-    pub fn session_index_remove(&self, session_id: &SessionKey, agent_id: SessionKey) {
-        self.session_index
-            .remove_if(session_id, |_, aid| *aid == agent_id);
-    }
 
     // ----- Metrics methods -----
 

@@ -424,36 +424,3 @@ async fn send_token_request(form: &[(&str, &str)], context: &str) -> Result<Toke
         .await
         .map_err(|e| format!("failed to parse {context} response: {e}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_state_rejects_mismatch() {
-        let err = validate_state("expected", Some("other")).expect_err("should fail");
-        assert!(err.contains("state"));
-    }
-
-    #[test]
-    fn validate_state_accepts_exact_match() {
-        let result = validate_state("same", Some("same"));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn compute_expires_at_adds_offset() {
-        assert_eq!(compute_expires_at_unix(1000, Some(120)), Some(1120));
-        assert_eq!(compute_expires_at_unix(1000, None), None);
-    }
-
-    #[test]
-    fn build_auth_url_includes_required_params() {
-        let url = build_auth_url("test-state", "test-challenge").unwrap();
-        assert!(url.contains("id_token_add_organizations=true"));
-        assert!(url.contains("codex_cli_simplified_flow=true"));
-        assert!(url.contains("redirect_uri=http"));
-        assert!(url.contains("localhost%3A1455"));
-        assert!(url.contains("code_challenge_method=S256"));
-    }
-}

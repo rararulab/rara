@@ -24,11 +24,7 @@
 use std::sync::Arc;
 
 use rara_kernel::{
-    audit::{AuditLog, InMemoryAuditLog},
-    io::{
-        ingress::{IdentityResolver, SessionResolver},
-        stream::StreamHub,
-    },
+    io::{IdentityResolver, SessionResolver, StreamHub},
     kernel::{Kernel, KernelConfig},
     llm::DriverRegistry,
     process::{agent_registry::AgentRegistry, user::UserStore},
@@ -73,15 +69,12 @@ pub struct BootConfig {
 
     // -- optional overrides for resolvers / components -----------------------
     /// Identity resolver (optional — defaults to `DefaultIdentityResolver`).
-    pub identity_resolver:  Option<Arc<dyn IdentityResolver>>,
+    pub identity_resolver: Option<Arc<dyn IdentityResolver>>,
     /// Session resolver (optional — defaults to `DefaultSessionResolver`).
-    pub session_resolver:   Option<Arc<dyn SessionResolver>>,
+    pub session_resolver:  Option<Arc<dyn SessionResolver>>,
     /// Notification bus (optional — defaults to BroadcastNotificationBus).
-    pub event_bus:          Option<Arc<dyn rara_kernel::notification::NotificationBus>>,
-    /// Guard (optional — defaults to NoopGuard).
-    pub guard:              Option<Arc<dyn rara_kernel::guard::Guard>>,
-    /// Audit log (optional — defaults to InMemoryAuditLog).
-    pub audit_log:          Option<Arc<dyn AuditLog>>,
+    pub event_bus:         Option<Arc<dyn rara_kernel::notification::NotificationBus>>,
+
     /// Approval manager (optional — defaults to ApprovalManager with default
     /// policy).
     pub approval:           Option<Arc<ApprovalManager>>,
@@ -91,52 +84,14 @@ pub struct BootConfig {
     /// OpenDAL operator for the kernel shared KV store (optional — defaults
     /// to in-memory).
     pub kv_operator:        Option<opendal::Operator>,
-    /// Tool call recorder (optional — defaults to NoopToolCallRecorder).
-    pub tool_call_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,
-}
-
-impl Default for BootConfig {
-    fn default() -> Self {
-        use rara_kernel::{
-            kernel::NoopSettingsProvider, llm::DriverRegistryBuilder,
-            process::noop_user_store::NoopUserStore,
-        };
-
-        Self {
-            kernel_config:      KernelConfig::default(),
-            driver_registry:    Arc::new(
-                DriverRegistryBuilder::new("default")
-                    .provider_model("default", "openai/gpt-4o-mini", vec![])
-                    .build(),
-            ),
-            tool_registry:      Arc::new(ToolRegistry::new()),
-            agent_registry:     Arc::new(AgentRegistry::new(
-                vec![],
-                rara_paths::data_dir().join("agents"),
-            )),
-            user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>, // WHY ?
-            session_index:      None,
-            tape_store:         None,
-            settings:           Arc::new(NoopSettingsProvider)
-                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-            stream_capacity:    64,
-            identity_resolver:  None,
-            session_resolver:   None,
-            event_bus:          None,
-            guard:              None,
-            audit_log:          None,
-            approval:           None,
-            event_queue_config: None,
-            kv_operator:        None,
-            tool_call_recorder: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
 // boot()
 // ---------------------------------------------------------------------------
 
+// FIXME: boot 本来就是为了去setup一堆kernel的config
+// 以及kernel需要的组件，结果又创建了一个boot config，何意味？
 /// Assemble a fully-configured [`Kernel`] with I/O subsystem.
 ///
 /// This is the single entry point for creating a production-ready kernel.
@@ -144,7 +99,7 @@ impl Default for BootConfig {
 /// and ingress pipeline. Call [`Kernel::register_adapter`] to add egress
 /// adapters, then [`Kernel::start`] to spawn the unified event loop.
 pub fn boot(config: BootConfig) -> Kernel {
-    let stream_hub: Arc<StreamHub> = crate::stream::default_stream_hub(config.stream_capacity);
+    let stream_hub = Arc::new(StreamHub::new(config.stream_capacity));
 
     // Resolvers
     let identity_resolver: Arc<dyn IdentityResolver> =
@@ -153,13 +108,8 @@ pub fn boot(config: BootConfig) -> Kernel {
                 rara_kernel::process::principal::UserId("root".to_string()),
             ))
         });
-    let session_index_for_resolver: Arc<dyn SessionIndex> = config
-        .session_index
-        .clone()
-        .unwrap_or_else(|| Arc::new(rara_kernel::session::NoopSessionIndex));
-    let session_resolver: Arc<dyn SessionResolver> = config
-        .session_resolver
-        .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(session_index_for_resolver)));
+    let session_index_for_resolver: Arc<dyn SessionIndex> = config.session_index.clone().unwrap();
+    let session_resolver: Arc<dyn SessionResolver> = config.session_resolver.unwrap();
 
     // Tape store — falls back to a temporary in-memory-like store if not
     // provided by the caller (production code always provides one).
@@ -172,19 +122,6 @@ pub fn boot(config: BootConfig) -> Kernel {
     let event_bus = config
         .event_bus
         .unwrap_or_else(crate::components::default_event_bus);
-    let guard = config
-        .guard
-        .unwrap_or_else(crate::components::default_guard);
-    let audit_log: Arc<dyn AuditLog> = config
-        .audit_log
-        .unwrap_or_else(|| Arc::new(InMemoryAuditLog::default()));
-    let tool_call_recorder: Arc<dyn rara_kernel::audit::ToolCallRecorder> = config
-        .tool_call_recorder
-        .unwrap_or_else(|| Arc::new(rara_kernel::audit::NoopToolCallRecorder));
-    let audit = Arc::new(rara_kernel::audit::AuditSubsystem::new(
-        audit_log,
-        tool_call_recorder,
-    ));
     let approval = config
         .approval
         .unwrap_or_else(|| Arc::new(ApprovalManager::new(ApprovalPolicy::default())));
@@ -192,12 +129,8 @@ pub fn boot(config: BootConfig) -> Kernel {
     // Assemble the unified security subsystem.
     let security = Arc::new(rara_kernel::security::SecuritySubsystem::new(
         config.user_store,
-        guard,
         approval,
     ));
-
-    // Eagerly register all Prometheus metrics so /metrics shows them immediately.
-    rara_kernel::metrics::init();
 
     tracing::info!(
         stream_capacity = config.stream_capacity,
@@ -209,9 +142,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         kernel_config.event_queue = eq_config;
     }
 
-    let session_index: Arc<dyn SessionIndex> = config
-        .session_index
-        .unwrap_or_else(|| Arc::new(rara_kernel::session::NoopSessionIndex));
+    let session_index: Arc<dyn SessionIndex> = config.session_index.unwrap();
 
     Kernel::new(
         kernel_config,
@@ -226,52 +157,10 @@ pub fn boot(config: BootConfig) -> Kernel {
         stream_hub,
         identity_resolver,
         session_resolver,
-        audit,
         config.kv_operator.unwrap_or_else(|| {
             opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish()
         }),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_boot_default_config() {
-        let kernel = boot(BootConfig::default());
-        assert_eq!(kernel.config().max_concurrency, 16);
-        assert_eq!(kernel.config().default_child_limit, 8);
-        assert!(!kernel.event_queue().is_sharded());
-    }
-
-    #[test]
-    fn test_boot_custom_config() {
-        let config = BootConfig {
-            kernel_config: KernelConfig {
-                max_concurrency: 4,
-                default_child_limit: 2,
-                default_max_iterations: 10,
-                memory_quota_per_agent: 1000,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let kernel = boot(config);
-        assert_eq!(kernel.config().max_concurrency, 4);
-        assert_eq!(kernel.config().default_child_limit, 2);
-        assert_eq!(kernel.config().default_max_iterations, 10);
-    }
-
-    #[test]
-    fn test_boot_exposes_io_subsystem() {
-        let kernel = boot(BootConfig::default());
-        // These accessors should not panic
-        let _ = kernel.ingress_pipeline();
-        let _ = kernel.stream_hub();
-        let _ = kernel.endpoint_registry();
-        let _ = kernel.event_queue();
-    }
 }

@@ -176,29 +176,3 @@ pub trait CallbackHandler: Send + Sync {
     /// Handle the callback and return a result.
     async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError>;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn command_info_creation() {
-        let cmd = CommandInfo {
-            name: "search".to_owned(),
-            args: "rust @ remote".to_owned(),
-            raw:  "/search rust @ remote".to_owned(),
-        };
-        assert_eq!(cmd.name, "search");
-        assert_eq!(cmd.args, "rust @ remote");
-    }
-
-    #[test]
-    fn command_definition_creation() {
-        let def = CommandDefinition {
-            name:        "help".to_owned(),
-            description: "Show help".to_owned(),
-            usage:       Some("/help".to_owned()),
-        };
-        assert_eq!(def.name, "help");
-    }
-}

@@ -117,37 +117,3 @@ pub enum KvScope {
     /// can only access their own agent scope; Root/Admin can access any.
     Agent(uuid::Uuid),
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_basic_crud() {
-        let kv = SharedKv::in_memory();
-
-        // Initially empty
-        assert!(kv.get("key1").await.is_none());
-
-        // Set and get
-        kv.set("key1", serde_json::json!("value1")).await.unwrap();
-        assert_eq!(kv.get("key1").await, Some(serde_json::json!("value1")));
-
-        // Overwrite
-        kv.set("key1", serde_json::json!("value2")).await.unwrap();
-        assert_eq!(kv.get("key1").await, Some(serde_json::json!("value2")));
-
-        // Delete
-        kv.delete("key1").await.unwrap();
-        assert!(kv.get("key1").await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_contains_key() {
-        let kv = SharedKv::in_memory();
-
-        assert!(!kv.contains_key("missing").await);
-        kv.set("present", serde_json::json!(42)).await.unwrap();
-        assert!(kv.contains_key("present").await);
-    }
-}

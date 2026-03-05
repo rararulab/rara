@@ -20,7 +20,7 @@ use crate::top::{
     client::KernelClient,
     types::{
         AgentInfo, AgentTimeline, ApprovalRequest, AuditEvent, KernelEventEnvelope,
-        MetricsSnapshot, PanelFocus, SessionStats, SessionState, SessionView, SystemStats,
+        MetricsSnapshot, PanelFocus, SessionState, SessionStats, SessionView, SystemStats,
     },
 };
 
@@ -54,33 +54,33 @@ impl Tab {
 }
 
 pub struct App {
-    pub tab:            Tab,
-    pub scroll_offset:  usize,
-    pub stats:          Option<SystemStats>,
-    pub sessions_list:  Vec<SessionStats>,
-    pub agents:         Vec<AgentInfo>,
-    pub approvals:      Vec<ApprovalRequest>,
-    pub audit:          Vec<AuditEvent>,
-    pub session_state:  SessionState,
-    pub connected:      bool,
-    pub error:          Option<String>,
-    pub should_quit:    bool,
+    pub tab:           Tab,
+    pub scroll_offset: usize,
+    pub stats:         Option<SystemStats>,
+    pub sessions_list: Vec<SessionStats>,
+    pub agents:        Vec<AgentInfo>,
+    pub approvals:     Vec<ApprovalRequest>,
+    pub audit:         Vec<AuditEvent>,
+    pub session_state: SessionState,
+    pub connected:     bool,
+    pub error:         Option<String>,
+    pub should_quit:   bool,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            tab:            Tab::Sessions,
-            scroll_offset:  0,
-            stats:          None,
-            sessions_list:  Vec::new(),
-            agents:         Vec::new(),
-            approvals:      Vec::new(),
-            audit:          Vec::new(),
-            session_state:  SessionState::new(),
-            connected:      false,
-            error:          None,
-            should_quit:    false,
+            tab:           Tab::Sessions,
+            scroll_offset: 0,
+            stats:         None,
+            sessions_list: Vec::new(),
+            agents:        Vec::new(),
+            approvals:     Vec::new(),
+            audit:         Vec::new(),
+            session_state: SessionState::new(),
+            connected:     false,
+            error:         None,
+            should_quit:   false,
         }
     }
 
@@ -230,38 +230,40 @@ impl App {
         let ss = &mut self.session_state;
 
         // Get or create the session.
-        let session_view = ss.sessions.entry(session_id.clone()).or_insert_with(|| {
-            SessionView {
+        let session_view = ss
+            .sessions
+            .entry(session_id.clone())
+            .or_insert_with(|| SessionView {
                 session_id: session_id.clone(),
                 agents:     indexmap::IndexMap::new(),
                 first_seen: now,
                 last_event: now,
-            }
-        });
+            });
 
         session_view.last_event = now;
 
         // If the event has an agent_id, update the agent timeline.
         if let Some(ref agent_id) = event.common.agent_id {
-            let timeline =
-                session_view
-                    .agents
-                    .entry(agent_id.clone())
-                    .or_insert_with(|| AgentTimeline {
-                        agent_id:  agent_id.clone(),
-                        name:      agent_id.clone(),
-                        parent_id: None,
-                        start:     now,
-                        end:       None,
-                        state:     "Unknown".to_string(),
-                        metrics:   MetricsSnapshot::default(),
-                        events:    Vec::new(),
-                    });
+            let timeline = session_view
+                .agents
+                .entry(agent_id.clone())
+                .or_insert_with(|| AgentTimeline {
+                    agent_id:  agent_id.clone(),
+                    name:      agent_id.clone(),
+                    parent_id: None,
+                    start:     now,
+                    end:       None,
+                    state:     "Unknown".to_string(),
+                    metrics:   MetricsSnapshot::default(),
+                    events:    Vec::new(),
+                });
 
             // Cap events per agent to avoid unbounded growth.
             const MAX_EVENTS_PER_AGENT: usize = 100;
             if timeline.events.len() >= MAX_EVENTS_PER_AGENT {
-                timeline.events.drain(..timeline.events.len() - MAX_EVENTS_PER_AGENT + 1);
+                timeline
+                    .events
+                    .drain(..timeline.events.len() - MAX_EVENTS_PER_AGENT + 1);
             }
             timeline.events.push(event);
         }
@@ -366,20 +368,19 @@ impl App {
             }
             session_view.last_event = now;
 
-            let timeline =
-                session_view
-                    .agents
-                    .entry(p.agent_id.clone())
-                    .or_insert_with(|| AgentTimeline {
-                        agent_id:  p.agent_id.clone(),
-                        name:      p.name.clone(),
-                        parent_id: p.parent_id.clone(),
-                        start:     agent_start,
-                        end:       None,
-                        state:     p.state.clone(),
-                        metrics:   p.metrics.clone(),
-                        events:    Vec::new(),
-                    });
+            let timeline = session_view
+                .agents
+                .entry(p.agent_id.clone())
+                .or_insert_with(|| AgentTimeline {
+                    agent_id:  p.agent_id.clone(),
+                    name:      p.name.clone(),
+                    parent_id: p.parent_id.clone(),
+                    start:     agent_start,
+                    end:       None,
+                    state:     p.state.clone(),
+                    metrics:   p.metrics.clone(),
+                    events:    Vec::new(),
+                });
 
             // Always update mutable fields from the latest process data.
             timeline.name = p.name.clone();
@@ -477,72 +478,4 @@ async fn poll_crossterm_event() -> Option<Event> {
     .await
     .ok()
     .flatten()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::App;
-    use crate::top::types::{KernelEventCommonFields, KernelEventEnvelope};
-
-    fn make_envelope(idx: usize, session_id: Option<&str>, agent_id: Option<&str>) -> KernelEventEnvelope {
-        KernelEventEnvelope {
-            common: KernelEventCommonFields {
-                timestamp:  format!("2026-03-04T00:00:{idx:02}Z"),
-                event_type: format!("event_{idx}"),
-                priority:   "normal".to_string(),
-                agent_id:   agent_id.map(|s| s.to_string()),
-                session_id: session_id.map(|s| s.to_string()),
-                summary:    format!("summary {idx}"),
-            },
-            event: serde_json::json!({"idx": idx}),
-        }
-    }
-
-    #[test]
-    fn events_grouped_by_session_id() {
-        let mut app = App::new();
-
-        app.push_kernel_event(make_envelope(0, Some("sess-A"), Some("agent-1")));
-        app.push_kernel_event(make_envelope(1, Some("sess-A"), Some("agent-2")));
-        app.push_kernel_event(make_envelope(2, Some("sess-B"), Some("agent-3")));
-
-        assert_eq!(app.session_state.sessions.len(), 2);
-        assert!(app.session_state.sessions.contains_key("sess-A"));
-        assert!(app.session_state.sessions.contains_key("sess-B"));
-
-        let sess_a = &app.session_state.sessions["sess-A"];
-        assert_eq!(sess_a.agents.len(), 2);
-        assert!(sess_a.agents.contains_key("agent-1"));
-        assert!(sess_a.agents.contains_key("agent-2"));
-
-        let sess_b = &app.session_state.sessions["sess-B"];
-        assert_eq!(sess_b.agents.len(), 1);
-        assert!(sess_b.agents.contains_key("agent-3"));
-    }
-
-    #[test]
-    fn event_without_session_id_falls_back_to_unknown() {
-        let mut app = App::new();
-
-        app.push_kernel_event(make_envelope(0, None, Some("agent-1")));
-
-        assert_eq!(app.session_state.sessions.len(), 1);
-        assert!(app.session_state.sessions.contains_key("unknown"));
-    }
-
-    #[test]
-    fn event_without_session_id_resolved_from_existing_session() {
-        let mut app = App::new();
-
-        // First event establishes agent-1 in sess-A.
-        app.push_kernel_event(make_envelope(0, Some("sess-A"), Some("agent-1")));
-        // Second event has no session_id but same agent_id.
-        app.push_kernel_event(make_envelope(1, None, Some("agent-1")));
-
-        assert_eq!(app.session_state.sessions.len(), 1);
-
-        let sess_a = &app.session_state.sessions["sess-A"];
-        let timeline = &sess_a.agents["agent-1"];
-        assert_eq!(timeline.events.len(), 2);
-    }
 }

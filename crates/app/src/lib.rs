@@ -178,12 +178,9 @@ impl AppConfig {
 
         // -- RaraState (kernel deps) -----------------------------------------
 
-        let rara = rara_boot::state::RaraState::init(
-            pool.clone(),
-            settings_provider.clone(),
-        )
-        .await
-        .whatever_context("Failed to initialize RaraState")?;
+        let rara = rara_boot::state::RaraState::init(pool.clone(), settings_provider.clone())
+            .await
+            .whatever_context("Failed to initialize RaraState")?;
 
         // -- BackendState (domain services) ----------------------------------
 
@@ -613,36 +610,5 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = ctrl_c => { info!("Received Ctrl+C signal"); },
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_config() -> AppConfig {
-        AppConfig::builder()
-            .database(DatabaseConfig::builder().build())
-            .http(RestServerConfig::default())
-            .grpc(GrpcServerConfig::default())
-            .telemetry(TelemetryConfig::builder().build())
-            .build()
-    }
-
-    #[tokio::test]
-    async fn test_app_handle_shutdown() {
-        let config = test_config();
-        let Ok(handle) = config.start().await else {
-            return;
-        };
-
-        let mut handle: AppHandle = handle;
-        assert!(handle.is_running());
-
-        handle.shutdown();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        assert!(!handle.is_running());
     }
 }

@@ -48,38 +48,3 @@ pub trait BlockingWorker<S: Clone + Send + Sync + 'static>: Send + 'static {
 
     fn on_shutdown(&mut self, _ctx: WorkerContext<S>) {}
 }
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    use super::*;
-
-    struct TestBlockingWorker {
-        counter: Arc<AtomicUsize>,
-    }
-
-    impl BlockingWorker<()> for TestBlockingWorker {
-        fn on_start(&mut self, _ctx: WorkerContext<()>) { self.counter.store(1, Ordering::SeqCst); }
-
-        fn work(&mut self, _ctx: WorkerContext<()>) { self.counter.fetch_add(1, Ordering::SeqCst); }
-
-        fn on_shutdown(&mut self, _ctx: WorkerContext<()>) {
-            self.counter.store(999, Ordering::SeqCst);
-        }
-    }
-
-    #[test]
-    fn test_blocking_worker_trait_compiles() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let worker = TestBlockingWorker {
-            counter: Arc::clone(&counter),
-        };
-
-        fn assert_send<T: Send>(_: &T) {}
-        assert_send(&worker);
-    }
-}

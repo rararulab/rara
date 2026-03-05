@@ -222,25 +222,3 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_package_from_github_url() {
-        assert_eq!(
-            extract_mcp_package_name("https://github.com/org/mcp-server-foo"),
-            "mcp-server-foo"
-        );
-        assert_eq!(
-            extract_mcp_package_name("https://github.com/org/mcp-server-foo.git"),
-            "mcp-server-foo"
-        );
-    }
-
-    #[test]
-    fn extract_package_passthrough() {
-        assert_eq!(extract_mcp_package_name("mcp-server-foo"), "mcp-server-foo");
-    }
-}

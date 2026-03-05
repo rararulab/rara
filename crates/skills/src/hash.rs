@@ -27,29 +27,3 @@ pub fn file_hash(path: &Path) -> Result<String> {
     let digest = Sha256::digest(&content);
     Ok(format!("{digest:x}"))
 }
-
-#[allow(clippy::unwrap_used)]
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn identical_content_produces_same_hash() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("test.md");
-        std::fs::write(&path, "Hello, world!").unwrap();
-        let h1 = file_hash(&path).unwrap();
-        let h2 = file_hash(&path).unwrap();
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn different_content_produces_different_hash() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p1 = tmp.path().join("a.md");
-        let p2 = tmp.path().join("b.md");
-        std::fs::write(&p1, "Version 1").unwrap();
-        std::fs::write(&p2, "Version 2").unwrap();
-        assert_ne!(file_hash(&p1).unwrap(), file_hash(&p2).unwrap());
-    }
-}

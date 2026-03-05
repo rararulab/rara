@@ -162,10 +162,10 @@ impl ApprovalManager {
         let agent_pending = self
             .pending
             .iter()
-            .filter(|r| r.value().request.agent_id == req.agent_id)
+            .filter(|r| r.value().request.session_key == req.session_key)
             .count();
         if agent_pending >= MAX_PENDING_PER_AGENT {
-            warn!(agent_id = ?req.agent_id, "approval rejected: too many pending");
+            warn!(agent_id = ?req.session_key, "approval rejected: too many pending");
             return ApprovalDecision::Denied;
         }
 

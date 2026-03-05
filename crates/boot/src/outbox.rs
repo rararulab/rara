@@ -25,10 +25,7 @@
 //! human-readable routing label for simple filtering.
 
 use async_trait::async_trait;
-use rara_kernel::io::{
-    bus::OutboxStore,
-    types::{BusError, MessageId, OutboundEnvelope, OutboundRouting},
-};
+use rara_kernel::io::{IOError, MessageId, OutboundEnvelope, OutboundRouting, OutboxStore};
 use sqlx::SqlitePool;
 use tracing::warn;
 
@@ -74,27 +71,27 @@ fn jiff_to_chrono(ts: jiff::Timestamp) -> chrono::DateTime<chrono::Utc> {
 // -- PgOutboxStore ------------------------------------------------------------
 
 /// SQLite-backed durable outbox for [`OutboundEnvelope`]s.
-pub struct PgOutboxStore {
+pub struct PersistentOutboxStore {
     pool: SqlitePool,
 }
 
-impl PgOutboxStore {
+impl PersistentOutboxStore {
     pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 }
 
 #[async_trait]
-impl OutboxStore for PgOutboxStore {
-    async fn append(&self, envelope: OutboundEnvelope) -> Result<(), BusError> {
+impl OutboxStore for PersistentOutboxStore {
+    async fn append(&self, envelope: OutboundEnvelope) -> Result<(), IOError> {
         let id = envelope.id.0.clone();
         let channel_type = routing_label(&envelope.routing);
 
         // Store the *full* envelope in `target` so we can reconstruct it
         // exactly during `drain_pending`. The `payload` column stores just
         // the payload portion for potential ad-hoc queries.
-        let target = serde_json::to_value(&envelope).map_err(|e| BusError::Internal {
+        let target = serde_json::to_value(&envelope).map_err(|e| IOError::Internal {
             message: format!("outbox serialize envelope: {e}"),
         })?;
-        let payload = serde_json::to_value(&envelope.payload).map_err(|e| BusError::Internal {
+        let payload = serde_json::to_value(&envelope.payload).map_err(|e| IOError::Internal {
             message: format!("outbox serialize payload: {e}"),
         })?;
         let created_at = jiff_to_chrono(envelope.timestamp);
@@ -110,7 +107,7 @@ impl OutboxStore for PgOutboxStore {
         .bind(created_at)
         .execute(&self.pool)
         .await
-        .map_err(|e| BusError::Internal {
+        .map_err(|e| IOError::Internal {
             message: format!("outbox append: {e}"),
         })?;
 
@@ -157,14 +154,14 @@ impl OutboxStore for PgOutboxStore {
         }
     }
 
-    async fn mark_delivered(&self, id: &MessageId) -> Result<(), BusError> {
+    async fn mark_delivered(&self, id: &MessageId) -> Result<(), IOError> {
         sqlx::query(
             "UPDATE kernel_outbox SET status = 1, delivered_at = datetime('now') WHERE id = ?1",
         )
         .bind(&id.0)
         .execute(&self.pool)
         .await
-        .map_err(|e| BusError::Internal {
+        .map_err(|e| IOError::Internal {
             message: format!("outbox mark_delivered: {e}"),
         })?;
 

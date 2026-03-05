@@ -52,7 +52,7 @@ use crate::{
     compaction::DEFAULT_MAX_CONTEXT_TOKENS,
     event::{KernelEvent, KernelEventEnvelope},
     io::{
-        EgressAdapterRef, EndpointRegistry, EndpointRegistryRef, IdentityResolverRef,
+        EgressAdapterRef, EndpointRegistry, IdentityResolverRef,
         InboundMessage, IngressPipeline, IngressPipelineRef, MessageId, OutboundEnvelope,
         PipeRegistry, SessionResolverRef, StreamHubRef, StreamId,
     },
@@ -60,12 +60,13 @@ use crate::{
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
     process::{
-        AgentEnv, AgentManifest, AgentRunLoopResult, Session, SessionState, SessionTable, Signal,
+        AgentEnv, AgentManifest, AgentRole, AgentRunLoopResult, Session, SessionState, SessionTable,
+        Signal,
         agent_registry::AgentRegistryRef, principal::Principal,
     },
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
-    session::{self, SessionIndexRef, SessionKey},
+    session::{SessionIndexRef, SessionKey},
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
@@ -148,11 +149,18 @@ pub struct Kernel {
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
     sharded_queue:    ShardedQueueRef,
+    /// Egress delivery subsystem (adapters + endpoint registry).
+    delivery:         crate::io::DeliverySubsystem,
     /// When this kernel was created (for uptime calculation).
     started_at:       Timestamp,
 }
 
 impl Kernel {
+    /// Default agent name for admin/root users.
+    const ADMIN_AGENT_NAME: &'static str = "nana";
+    /// Default agent name for regular users.
+    const USER_AGENT_NAME: &'static str = "nana";
+
     /// Create a new Kernel with the given configuration, components, and I/O
     /// subsystem.
     ///
@@ -182,6 +190,7 @@ impl Kernel {
         );
 
         let endpoint_registry = Arc::new(EndpointRegistry::new());
+        let delivery = crate::io::DeliverySubsystem::new(endpoint_registry);
 
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
             config.event_queue.clone(),
@@ -216,6 +225,7 @@ impl Kernel {
             ingress_pipeline,
             event_queue,
             sharded_queue,
+            delivery,
             started_at: Timestamp::now(),
         }
     }
@@ -284,7 +294,6 @@ impl Kernel {
             Arc::clone(&self.security),
             self.config.clone(),
             Arc::clone(self.syscall.tool_registry()),
-            Arc::clone(&self.device_registry),
             Arc::clone(&self.global_semaphore),
             self.started_at,
         )
@@ -439,7 +448,7 @@ impl Kernel {
 
     /// Dispatch a single event to its handler.
     pub(crate) async fn handle_event(&self, event: KernelEventEnvelope) {
-        let event_type: &'static str = (&event).into();
+        let event_type: &'static str = (&event.kind).into();
         crate::metrics::EVENT_PROCESSED
             .with_label_values(&[event_type])
             .inc();
@@ -457,10 +466,9 @@ impl Kernel {
                 parent_id,
                 reply_tx,
             } => {
-                // CreateSession from SessionHandle::create_child() — subagent,
-                // no channel binding.
+                // CreateSession from SessionHandle::create_child() — subagent.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, None, parent_id, None)
+                    .handle_spawn_agent(manifest, input, principal, parent_id, None, None)
                     .await;
                 let _ = reply_tx.send(result);
             }
@@ -507,38 +515,32 @@ impl Kernel {
 
     /// Handle a SpawnAgent event — create a new process and its runtime.
     ///
-    /// `channel_session_id` is the external channel binding (e.g.,
-    /// `web:chat123`). Set for root processes that entered via a channel
-    /// adapter; `None` for subagents spawned by other agents.
-    ///
-    /// Every process gets its own `agent:{id}` session for conversation
-    /// isolation. Only processes with a `channel_session_id` are inserted
-    /// into the `session_index` for inbound message routing.
-    // FIXME: we should not called it as spawn agent.
+    /// If `desired_session_key` is provided, the process is keyed by that
+    /// session (used by auto-spawn in Path 3 so future messages find the
+    /// process). Otherwise a fresh random key is generated.
     #[tracing::instrument(skip_all, fields(manifest_name = %manifest.name, parent_id = ?parent_id, session_key))]
     async fn handle_spawn_agent(
         &self,
         manifest: AgentManifest,
         input: String,
         principal: Principal,
-        channel_session_id: Option<SessionKey>,
         parent_id: Option<SessionKey>,
-        // FIXME: what is this ?
         resume_session_id: Option<SessionKey>,
-    ) -> Result<SessionKey> {
+        desired_session_key: Option<SessionKey>,
+    ) -> crate::Result<SessionKey> {
         // Validate principal.
-        self.security().validate_principal(&principal).await?;
+        self.security.validate_principal(&principal).await?;
 
         // Acquire global semaphore.
         let global_permit = self
-            .global_semaphore()
+            .global_semaphore
             .clone()
             .try_acquire_owned()
             .map_err(|_| KernelError::SpawnLimitReached {
                 message: "global concurrency limit reached".to_string(),
             })?;
 
-        let session_key = SessionKey::new();
+        let session_key = desired_session_key.unwrap_or_else(SessionKey::new);
         tracing::Span::current().record("session_key", tracing::field::display(&session_key));
 
         // TODO: fix me
@@ -570,7 +572,7 @@ impl Kernel {
 
         let child_limit = manifest
             .max_children
-            .unwrap_or(self.config().default_child_limit);
+            .unwrap_or(self.config.default_child_limit);
 
         let max_context_tokens = manifest
             .max_context_tokens
@@ -584,7 +586,6 @@ impl Kernel {
             // -- identity & metadata --
             session_key,
             parent_id,
-            channel_session_id: channel_session_id.clone(),
             manifest: manifest.clone(),
             principal: principal.clone(),
             env: AgentEnv::default(),
@@ -618,26 +619,17 @@ impl Kernel {
             session_key = %session_key,
             manifest = %manifest.name,
             session_id = %session_id,
-            channel_session_id = ?channel_session_id,
             "process spawned via event loop"
         );
 
         // Deliver the initial input to the spawned process.
-        //
-        // For root processes (channel_session_id.is_some()), push a synthetic
-        // UserMessage — the session-first router finds the process via
-        // session_index (bound to the channel session above).
-        //
-        // For subagents (channel_session_id.is_none()), also push a synthetic
-        // UserMessage using the process's own agent-scoped session and target
-        // the agent by name. handle_user_message will fall through to the
-        // name-based lookup path and find this process.
-        let msg_session = channel_session_id.unwrap_or(session_id);
-        let inbound = InboundMessage::synthetic_to(
+        // The synthetic UserMessage uses session_key so that
+        // handle_user_message finds this process via direct table lookup.
+        let msg_session = session_key;
+        let inbound = InboundMessage::synthetic(
             input,
             principal.user_id.clone(),
             msg_session,
-            manifest.name.clone(),
         );
         if let Err(e) = self
             .event_queue()
@@ -660,19 +652,15 @@ impl Kernel {
             Signal::Interrupt => {
                 info!(session_key = %target, "interrupt signal");
                 self.process_table.cancel_and_refresh_turn(&target);
-                // Notify via Deliver event — use channel session for egress.
-                let session_id = self
-                    .process_table()
-                    .with(&target, |p| p.channel_session_id.clone())
-                    .flatten();
-                let Some(session_id) = session_id else {
-                    error!(session_key = %target, "cannot send interrupt notification: process not found or has no channel session");
+                // Notify via Deliver event — use session key directly for egress.
+                if self.process_table.with(&target, |_| ()).is_none() {
+                    error!(session_key = %target, "cannot send interrupt notification: process not found");
                     return;
-                };
+                }
                 let envelope = OutboundEnvelope::state_change(
                     MessageId::new(),
                     crate::process::principal::UserId("system".to_string()),
-                    session_id,
+                    target.clone(),
                     "interrupted",
                     serde_json::json!({
                         "session_key": target.to_string(),
@@ -689,13 +677,13 @@ impl Kernel {
             Signal::Pause => {
                 info!(session_key = %target, "pause signal");
                 self.process_table.set_paused(&target, true);
-                let _ = self.process_table().set_state(target, SessionState::Paused);
+                let _ = self.process_table.set_state(target, SessionState::Paused);
             }
             Signal::Resume => {
                 info!(session_key = %target, "resume signal");
                 self.process_table.set_paused(&target, false);
                 let buffered = self.process_table.drain_pause_buffer(&target);
-                let _ = self.process_table().set_state(target, SessionState::Ready);
+                let _ = self.process_table.set_state(target, SessionState::Ready);
                 for event in buffered {
                     if let Err(e) = self.event_queue().try_push(event) {
                         warn!(%e, "failed to re-inject buffered event on resume");
@@ -705,11 +693,11 @@ impl Kernel {
             Signal::Terminate => {
                 info!(session_key = %target, "terminate signal — graceful shutdown");
                 let was_active = self
-                    .process_table()
+                    .process_table
                     .with(&target, |p| p.state == SessionState::Active)
                     .unwrap_or(false);
                 let _ = self
-                    .process_table()
+                    .process_table
                     .set_state(target, SessionState::Suspended);
                 self.process_table.cancel_turn(&target);
                 // Grace period then force-kill via process_cancel token.
@@ -727,7 +715,7 @@ impl Kernel {
                 info!(session_key = %target, "kill signal");
                 self.process_table.cancel_process(&target);
                 let _ = self
-                    .process_table()
+                    .process_table
                     .set_state(target, SessionState::Suspended);
                 self.cleanup_process(target).await;
             }
@@ -817,11 +805,10 @@ impl Kernel {
     ///
     /// 1. **ID addressing** (`target_session_key` set): deliver to specific
     ///    session — error if terminal or not found (A2A Protocol pattern).
-    /// 2. **Session addressing** (session_index match): deliver to bound
-    ///    session — if terminal, clear binding and respawn transparently
-    ///    (AutoGen lazy instantiation pattern).
-    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, always
-    ///    spawn a new session (Anthropic spawn-new pattern).
+    /// 2. **Session addressing** (direct process table lookup): deliver to
+    ///    existing session — if terminal, respawn transparently.
+    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, spawn
+    ///    a new session keyed by the incoming session_key.
     async fn handle_user_message(&self, msg: InboundMessage) {
         let span = info_span!(
             "handle_user_message",
@@ -835,7 +822,7 @@ impl Kernel {
         let session_id = msg.session_key.clone();
         let user = msg.user.clone();
 
-        self.delivery().register_stateless_endpoint(&msg);
+        self.delivery.register_stateless_endpoint(&msg);
 
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_session_key {
@@ -883,15 +870,10 @@ impl Kernel {
 
         // ----- Path 2: Session addressing (external user) -----
         let mut resume_session_id = None;
-        let path2_info = self.process_table.with_by_session(&session_id, |p| {
-            (
-                p.session_key,
-                p.state,
-                p.channel_session_id.clone(),
-                p.session_key,
-            )
-        });
-        if let Some((session_key_found, state, channel_sid, p_session_key)) = path2_info {
+        let path2_info = self
+            .process_table
+            .with(&session_id, |p| (p.session_key, p.state));
+        if let Some((session_key_found, state)) = path2_info {
             span.record("routing_path", "session_addressing");
 
             if state.is_terminal() {
@@ -899,13 +881,9 @@ impl Kernel {
                     session_key = %session_key_found,
                     session_id = %session_id,
                     state = %state,
-                    "session-bound process terminal — clearing binding, will respawn"
+                    "process terminal — will respawn"
                 );
-                if let Some(ref channel_sid) = channel_sid {
-                    self.process_table
-                        .session_index_remove(channel_sid, session_key_found);
-                }
-                resume_session_id = Some(p_session_key);
+                resume_session_id = Some(session_key_found);
                 // Fall through to Path 3 below.
             } else {
                 self.deliver_to_session(session_key_found, msg).await;
@@ -915,13 +893,9 @@ impl Kernel {
 
         // ----- Path 3: Name addressing (always spawn new) -----
         span.record("routing_path", "name_addressing");
-        let target_name = if let Some(name) = msg.target_session.as_deref() {
-            name.to_string()
-        } else {
-            self.default_agent_for_user(&msg.user).await
-        };
+        let target_name = self.default_agent_for_user(&msg.user).await;
 
-        let manifest = if let Some(m) = self.agent_registry().get(&target_name) {
+        let manifest = if let Some(m) = self.agent_registry.get(&target_name) {
             m
         } else if target_name == Self::ADMIN_AGENT_NAME {
             match self.resolve_manifest_for_auto_spawn().await {
@@ -962,9 +936,9 @@ impl Kernel {
                 manifest,
                 msg.content.as_text(),
                 principal,
-                Some(session_id.clone()),
                 None,
                 resume_session_id,
+                Some(session_id.clone()),
             )
             .await
         {
@@ -1014,7 +988,7 @@ impl Kernel {
     async fn default_agent_for_user(&self, user: &crate::process::principal::UserId) -> String {
         use crate::process::principal::Role;
 
-        match self.security().resolve_user_role(user).await {
+        match self.security.resolve_user_role(user).await {
             Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
             Role::User => Self::USER_AGENT_NAME.to_string(),
         }
@@ -1024,10 +998,10 @@ impl Kernel {
     /// with no existing process).
     /// TODO: what?
     async fn resolve_manifest_for_auto_spawn(&self) -> Option<crate::process::AgentManifest> {
-        let model = rara_domain_shared::settings::get_default_model(self.settings().as_ref()).await;
+        let model = rara_domain_shared::settings::get_default_model(self.settings.as_ref()).await;
         Some(crate::process::AgentManifest {
             name: "io-agent".to_string(),
-            role: None,
+            role: AgentRole::default(),
             description: "I/O bus agent".to_string(),
             model,
             system_prompt: "You are a helpful assistant.".to_string(),
@@ -1124,16 +1098,12 @@ impl Kernel {
 
         // Set state to Active.
         let _ = self
-            .process_table()
+            .process_table
             .set_state(session_key, SessionState::Active);
 
         // Send a typing / progress indicator so the user sees feedback
         // while the LLM is thinking (e.g. Telegram "typing..." bubble).
-        let egress_session_key = self
-            .process_table
-            .with(&session_key, |p| p.channel_session_id.clone())
-            .flatten()
-            .unwrap_or(session_key);
+        let egress_session_key = session_key;
         let _ =
             self.event_queue()
                 .try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
@@ -1145,7 +1115,7 @@ impl Kernel {
                 )));
 
         // Record metrics.
-        if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+        if let Some(metrics) = self.process_table.get_metrics(&session_key) {
             metrics.record_message();
         }
 
@@ -1210,14 +1180,14 @@ impl Kernel {
         }
 
         // Open stream.
-        let stream_handle = self.stream_hub().open(session_key.clone());
+        let stream_handle = self.stream_hub.open(session_key.clone());
 
         // Clone what we need for the spawned task.
         let kernel_handle = self.handle();
         let event_queue = self.event_queue().clone();
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
-        let stream_hub_ref = Arc::clone(self.stream_hub());
+        let stream_hub_ref = Arc::clone(&self.stream_hub);
 
         // Capture parent span for the spawned task.
         let parent_span = tracing::Span::current();
@@ -1268,7 +1238,6 @@ impl Kernel {
                 stream_hub: Arc::clone(&stream_hub_ref),
                 stream_id: stream_id.clone(),
                 typing_refresh: Some(typing_refresh),
-                session_key,
                 session_key: session_key.clone(),
                 msg_id: msg_id.clone(),
                 user: user.clone(),
@@ -1355,16 +1324,10 @@ impl Kernel {
             return;
         }
 
-        // Determine the egress session: use the channel_session_id if this
-        // process has one (root process), otherwise fall back to the
-        // process's own session. Subagents without a channel binding won't
-        // have egress delivery — their results flow back to the parent via
+        // Egress uses session_key directly. Subagents without external
+        // delivery have their results flow back to the parent via
         // ChildSessionDone.
-        let egress_session_key = self
-            .process_table
-            .with(&session_key, |p| p.channel_session_id.clone())
-            .flatten()
-            .unwrap_or(session_key);
+        let egress_session_key = session_key;
 
         // Update metrics.
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
@@ -1434,7 +1397,7 @@ impl Kernel {
                     iterations: turn.iterations,
                     tool_calls: turn.tool_calls,
                 };
-                let _ = self.process_table().set_result(session_key, result.clone());
+                let _ = self.process_table.set_result(session_key, result.clone());
 
                 // Push Deliver event for the reply — use egress session for routing.
                 let envelope = OutboundEnvelope::reply(
@@ -1471,11 +1434,11 @@ impl Kernel {
                 info!(session_key = %session_key, "turn completed (empty result)");
 
                 // Store turn trace for observability.
-                self.process_table()
+                self.process_table
                     .push_turn_trace(session_key, turn.trace.clone());
 
                 // Empty result — LLM call was made but produced no text.
-                if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+                if let Some(metrics) = self.process_table.get_metrics(&session_key) {
                     metrics.record_llm_call();
                     metrics.record_tool_calls(turn.tool_calls as u64);
                 }
@@ -1512,7 +1475,7 @@ impl Kernel {
 
         // Transition to Ready (idle, awaiting next message).
         let _ = self
-            .process_table()
+            .process_table
             .set_state(session_key, SessionState::Ready);
 
         // Re-inject buffered events so they trigger a new turn on this session.

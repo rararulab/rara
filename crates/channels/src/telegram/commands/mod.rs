@@ -31,13 +31,11 @@
 pub mod basic;
 pub mod callbacks;
 pub mod client;
-pub mod job;
 pub mod mcp;
 pub mod session;
 
 pub use basic::BasicCommandHandler;
-pub use callbacks::{SearchPaginationCallbackHandler, SessionSwitchCallbackHandler};
+pub use callbacks::SessionSwitchCallbackHandler;
 pub use client::BotServiceClient;
-pub use job::JobCommandHandler;
 pub use mcp::McpCommandHandler;
 pub use session::SessionCommandHandler;

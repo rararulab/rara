@@ -118,34 +118,4 @@ impl NotificationBus for BroadcastNotificationBus {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test-only NoopNotificationBus
-// ---------------------------------------------------------------------------
-
-#[cfg(any(test, feature = "testing"))]
-mod noop {
-    use async_trait::async_trait;
-    use tokio::sync::broadcast;
-
-    use super::{KernelNotification, NotificationBus, NotificationFilter, NotificationStream};
-
-    /// A notification bus that silently discards all published notifications.
-    pub struct NoopNotificationBus;
-
-    #[async_trait]
-    impl NotificationBus for NoopNotificationBus {
-        async fn publish(&self, _event: KernelNotification) {
-            // discard
-        }
-
-        async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream {
-            let (_tx, rx) = broadcast::channel(1);
-            rx
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub use noop::NoopNotificationBus;
-
 use crate::session::SessionKey;

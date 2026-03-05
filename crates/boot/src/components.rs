@@ -16,29 +16,10 @@
 
 use std::sync::Arc;
 
-use rara_kernel::{
-    guard::{Guard, noop::NoopGuard},
-    notification::{BroadcastNotificationBus, NotificationBus},
-};
+use rara_kernel::notification::{BroadcastNotificationBus, NotificationBus};
 
 /// Default NotificationBus — `BroadcastNotificationBus` (tokio broadcast
 /// channel).
 pub fn default_event_bus() -> Arc<dyn NotificationBus> {
     Arc::new(BroadcastNotificationBus::default())
-}
-
-/// Default Guard — `NoopGuard` (allows all operations, no approval).
-///
-/// **For testing/development only.** Production code should use `PathGuard`
-/// wrapping `NoopGuard` to enforce file-system sandboxing. See
-/// `rara-app` for the production wiring.
-pub fn default_guard() -> Arc<dyn Guard> { Arc::new(NoopGuard) }
-
-/// Default UserStore — `NoopUserStore` (all users permitted).
-///
-/// **For testing only.** Production code should use
-/// [`PgUserStore`](crate::user_store::PgUserStore) backed by a real
-/// PostgreSQL connection pool. See `rara-app` for the production wiring.
-pub fn default_user_store() -> Arc<dyn rara_kernel::process::user::UserStore> {
-    Arc::new(rara_kernel::process::noop_user_store::NoopUserStore)
 }

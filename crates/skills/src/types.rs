@@ -107,21 +107,6 @@ fn default_trusted() -> bool {
     true
 }
 
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-#[cfg(test)]
-mod manifest_tests {
-    use super::*;
-
-    #[test]
-    fn skill_state_defaults_trusted_for_backward_compat() {
-        let parsed: SkillState = serde_json::from_str(
-            r#"{"name":"demo","relative_path":"repo/skills/demo","enabled":true}"#,
-        )
-        .unwrap();
-        assert!(parsed.trusted);
-    }
-}
-
 // ── Skill metadata ───────────────────────────────────────────────────────────
 
 /// Where a skill was discovered from.

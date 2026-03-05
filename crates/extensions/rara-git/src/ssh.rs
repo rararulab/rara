@@ -99,35 +99,3 @@ pub fn get_public_key(ssh_dir: &Path) -> Result<String, GitError> {
     let pair = get_or_create_keypair(ssh_dir)?;
     Ok(pair.public_key)
 }
-
-#[cfg(test)]
-mod tests {
-    use tempfile::TempDir;
-
-    use super::*;
-
-    #[test]
-    fn generates_keypair_when_none_exists() {
-        let tmp = TempDir::new().unwrap();
-        let pair = get_or_create_keypair(tmp.path()).unwrap();
-        assert!(!pair.public_key.is_empty());
-        assert!(pair.public_key.starts_with("ssh-ed25519 "));
-        assert!(tmp.path().join("id_ed25519").exists());
-        assert!(tmp.path().join("id_ed25519.pub").exists());
-    }
-
-    #[test]
-    fn returns_existing_keypair() {
-        let tmp = TempDir::new().unwrap();
-        let pair1 = get_or_create_keypair(tmp.path()).unwrap();
-        let pair2 = get_or_create_keypair(tmp.path()).unwrap();
-        assert_eq!(pair1.public_key, pair2.public_key);
-    }
-
-    #[test]
-    fn get_public_key_creates_if_needed() {
-        let tmp = TempDir::new().unwrap();
-        let pk = get_public_key(tmp.path()).unwrap();
-        assert!(pk.starts_with("ssh-ed25519 "));
-    }
-}

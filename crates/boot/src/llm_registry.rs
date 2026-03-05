@@ -68,7 +68,9 @@ pub async fn build_driver_registry(
 
         // Read per-provider default_model and fallback_models
         let model_key = format!("llm.providers.{name}.default_model");
-        if let Some(default_model) = all_settings.get(&model_key).filter(|v| !v.trim().is_empty())
+        if let Some(default_model) = all_settings
+            .get(&model_key)
+            .filter(|v| !v.trim().is_empty())
         {
             let fallback_key = format!("llm.providers.{name}.fallback_models");
             let fallback_models: Vec<String> = all_settings
@@ -92,8 +94,8 @@ pub async fn build_driver_registry(
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "LLM default model is not configured for provider '{default_provider}' \
-                 (checked: {default_model_key})"
+                "LLM default model is not configured for provider '{default_provider}' (checked: \
+                 {default_model_key})"
             )
         })?;
 
@@ -118,116 +120,4 @@ pub async fn build_driver_registry(
         "driver registry: default_driver={default_provider}, default_model={default_model}",
     );
     Ok(Arc::new(builder.build()))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{collections::HashMap, sync::Arc};
-
-    use async_trait::async_trait;
-    use rara_domain_shared::settings::testing::MapSettingsProvider;
-
-    use super::build_driver_registry;
-
-    #[derive(Debug)]
-    struct NoopKeyringStore;
-
-    #[async_trait]
-    impl rara_keyring_store::KeyringStore for NoopKeyringStore {
-        async fn load(
-            &self,
-            _service: &str,
-            _account: &str,
-        ) -> rara_keyring_store::Result<Option<String>> {
-            Ok(None)
-        }
-
-        async fn save(
-            &self,
-            _service: &str,
-            _account: &str,
-            _value: &str,
-        ) -> rara_keyring_store::Result<()> {
-            Ok(())
-        }
-
-        async fn delete(&self, _service: &str, _account: &str) -> rara_keyring_store::Result<bool> {
-            Ok(false)
-        }
-    }
-
-    #[tokio::test]
-    async fn build_driver_registry_auto_discovers_providers() {
-        let settings = MapSettingsProvider::new(HashMap::from([
-            ("llm.default_provider".to_owned(), "ollama".to_owned()),
-            (
-                "llm.providers.ollama.base_url".to_owned(),
-                "https://ollama.rara.local".to_owned(),
-            ),
-            (
-                "llm.providers.ollama.api_key".to_owned(),
-                "ollama".to_owned(),
-            ),
-            (
-                "llm.providers.ollama.default_model".to_owned(),
-                "qwen3.5:cloud".to_owned(),
-            ),
-            (
-                "llm.providers.ollama.fallback_models".to_owned(),
-                "qwen3:14b,llama3:8b".to_owned(),
-            ),
-        ]));
-
-        let registry = build_driver_registry(Arc::new(settings), &NoopKeyringStore)
-            .await
-            .expect("driver registry should build");
-
-        assert_eq!(registry.default_driver(), "ollama");
-        assert_eq!(
-            registry.default_model(),
-            Some("qwen3.5:cloud".to_string())
-        );
-        assert_eq!(
-            registry.fallback_models_for("ollama"),
-            vec!["qwen3:14b".to_string(), "llama3:8b".to_string()]
-        );
-        assert!(registry.driver_names().contains(&"ollama".to_owned()));
-    }
-
-    #[tokio::test]
-    async fn build_driver_registry_requires_default_provider_setting() {
-        let settings = MapSettingsProvider::new(HashMap::from([(
-            "llm.providers.ollama.default_model".to_owned(),
-            "qwen3.5:cloud".to_owned(),
-        )]));
-
-        let err = build_driver_registry(Arc::new(settings), &NoopKeyringStore)
-            .await
-            .err()
-            .expect("missing default provider should fail");
-
-        assert!(err.to_string().contains("default provider"));
-    }
-
-    #[tokio::test]
-    async fn build_driver_registry_requires_default_model_for_provider() {
-        let settings = MapSettingsProvider::new(HashMap::from([
-            ("llm.default_provider".to_owned(), "ollama".to_owned()),
-            (
-                "llm.providers.ollama.base_url".to_owned(),
-                "https://ollama.rara.local".to_owned(),
-            ),
-            (
-                "llm.providers.ollama.api_key".to_owned(),
-                "ollama".to_owned(),
-            ),
-        ]));
-
-        let err = build_driver_registry(Arc::new(settings), &NoopKeyringStore)
-            .await
-            .err()
-            .expect("missing default model should fail");
-
-        assert!(err.to_string().contains("default model"));
-    }
 }

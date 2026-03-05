@@ -14,7 +14,6 @@
 
 use base::shared_string::SharedString;
 use snafu::Snafu;
-use uuid::Uuid;
 
 use crate::session::SessionKey;
 

@@ -41,7 +41,7 @@ use std::{
 
 use async_trait::async_trait;
 use base::define_id;
-use chrono::Duration;
+use tracing::Instrument;
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -800,7 +800,7 @@ impl StreamHub {
     #[tracing::instrument(skip(self), fields(stream_id = tracing::field::Empty))]
     pub fn open(&self, session_key: SessionKey) -> StreamHandle {
         let stream_id = StreamId::new();
-        tracing::Span::current().record("stream_id", stream_id.0.as_str());
+        tracing::Span::current().record("stream_id", tracing::field::display(&stream_id.0));
         let (tx, _) = broadcast::channel(self.capacity);
         let entry = StreamEntry {
             session_key,
@@ -827,7 +827,7 @@ impl StreamHub {
     ) -> Vec<(StreamId, broadcast::Receiver<StreamEvent>)> {
         self.streams
             .iter()
-            .filter(|entry| &entry.value().SessionKey == session_key)
+            .filter(|entry| &entry.value().session_key == session_key)
             .map(|entry| (entry.key().clone(), entry.value().tx.subscribe()))
             .collect()
     }
@@ -976,7 +976,7 @@ impl IngressPipeline {
                 platform_chat_id:    raw.platform_chat_id,
             },
             user:               user_id,
-            session_key:        None,
+            session_key:        SessionKey::new(),
             target_session_key: None,
             content:            raw.content,
             reply_context:      raw.reply_context,
@@ -1314,7 +1314,7 @@ impl Egress {
             async move {
                 if let Some(adapter) = adapter {
                     match tokio::time::timeout(
-                        Duration::from_secs(10),
+                        std::time::Duration::from_secs(10),
                         adapter.send(&endpoint, outbound),
                     )
                     .await

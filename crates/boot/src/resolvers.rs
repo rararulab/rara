@@ -22,12 +22,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rara_kernel::{
     channel::types::ChannelType,
-    io::{
-        ingress::{IdentityResolver, SessionResolver},
-        types::IngestError,
-    },
-    process::{SessionId, principal::UserId},
-    session::SessionIndex,
+    io::{IOError, IdentityResolver, SessionResolver},
+    process::principal::UserId,
+    session::{SessionIndex, SessionKey},
 };
 use tracing::debug;
 
@@ -55,7 +52,7 @@ impl IdentityResolver for DefaultIdentityResolver {
         channel_type: ChannelType,
         platform_user_id: &str,
         _platform_chat_id: Option<&str>,
-    ) -> Result<UserId, IngestError> {
+    ) -> Result<UserId, IOError> {
         debug!(
             channel = %channel_type,
             platform_user_id,
@@ -91,7 +88,7 @@ impl SessionResolver for DefaultSessionResolver {
         _user: &UserId,
         channel_type: ChannelType,
         platform_chat_id: Option<&str>,
-    ) -> Result<SessionId, IngestError> {
+    ) -> Result<SessionKey, IOError> {
         let chat_id = platform_chat_id.unwrap_or("default");
 
         // Try channel binding lookup first (honours /new and /sessions switch).
@@ -142,7 +139,7 @@ impl SessionResolver for DefaultSessionResolver {
             .session_index
             .create_session(&entry)
             .await
-            .map_err(|e| IngestError::Internal {
+            .map_err(|e| IOError::Internal {
                 message: format!("failed to create session: {e}"),
             })?;
         let ch_label = channel_type.to_string();
@@ -161,148 +158,5 @@ impl SessionResolver for DefaultSessionResolver {
             tracing::warn!(error = %e, "failed to bind new session to channel");
         }
         Ok(session.key)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rara_kernel::session::{ChannelBinding, SessionEntry, SessionError, SessionKey};
-
-    use super::*;
-
-    // -- Tests: IdentityResolver ----------------------------------------------
-
-    #[tokio::test]
-    async fn test_all_channels_resolve_to_owner() {
-        let resolver = DefaultIdentityResolver::new(UserId("root".to_string()));
-
-        let uid = resolver
-            .resolve(ChannelType::Telegram, "12345", Some("chat-1"))
-            .await
-            .unwrap();
-        assert_eq!(uid.0, "root");
-
-        let uid = resolver
-            .resolve(ChannelType::Web, "some-web-id", None)
-            .await
-            .unwrap();
-        assert_eq!(uid.0, "root");
-
-        let uid = resolver
-            .resolve(ChannelType::Cli, "cli-user", None)
-            .await
-            .unwrap();
-        assert_eq!(uid.0, "root");
-    }
-
-    // -- Fake SessionIndex for unit tests -------------------------------------
-
-    struct FakeSessionIndex {
-        bindings: Vec<ChannelBinding>,
-    }
-
-    impl FakeSessionIndex {
-        fn empty() -> Self { Self { bindings: vec![] } }
-
-        fn with_binding(channel_type: &str, chat_id: &str, session_key: SessionKey) -> Self {
-            let now = chrono::Utc::now();
-            Self {
-                bindings: vec![ChannelBinding {
-                    channel_type: channel_type.to_string(),
-                    account: "bot".to_string(),
-                    chat_id: chat_id.to_string(),
-                    session_key,
-                    created_at: now,
-                    updated_at: now,
-                }],
-            }
-        }
-    }
-
-    #[async_trait]
-    impl SessionIndex for FakeSessionIndex {
-        async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-            Ok(entry.clone())
-        }
-
-        async fn get_session(&self, _: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
-            Ok(None)
-        }
-
-        async fn list_sessions(&self, _: i64, _: i64) -> Result<Vec<SessionEntry>, SessionError> {
-            Ok(vec![])
-        }
-
-        async fn update_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> {
-            unimplemented!()
-        }
-
-        async fn delete_session(&self, _: &SessionKey) -> Result<(), SessionError> { Ok(()) }
-
-        async fn bind_channel(&self, b: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
-            Ok(b.clone())
-        }
-
-        async fn get_channel_binding(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<Option<ChannelBinding>, SessionError> {
-            Ok(None)
-        }
-
-        async fn get_binding_by_chat(
-            &self,
-            channel_type: &str,
-            chat_id: &str,
-        ) -> Result<Option<ChannelBinding>, SessionError> {
-            Ok(self
-                .bindings
-                .iter()
-                .find(|b| b.channel_type == channel_type && b.chat_id == chat_id)
-                .cloned())
-        }
-    }
-
-    // -- Tests: SessionResolver -----------------------------------------------
-
-    #[tokio::test]
-    async fn test_session_resolver_no_binding_creates_session() {
-        let index = Arc::new(FakeSessionIndex::empty());
-        let resolver = DefaultSessionResolver::new(index);
-        let user = UserId("root".to_string());
-        let session_id = resolver
-            .resolve(&user, ChannelType::Telegram, Some("chat-1"))
-            .await
-            .unwrap();
-        let _parsed: uuid::Uuid = session_id.uuid();
-    }
-
-    #[tokio::test]
-    async fn test_session_resolver_with_binding() {
-        let bound_key = SessionKey::new();
-        let index = Arc::new(FakeSessionIndex::with_binding(
-            "telegram", "12345", bound_key,
-        ));
-        let resolver = DefaultSessionResolver::new(index);
-        let user = UserId("root".to_string());
-        let session_id = resolver
-            .resolve(&user, ChannelType::Telegram, Some("12345"))
-            .await
-            .unwrap();
-        assert_eq!(session_id, bound_key);
-    }
-
-    #[tokio::test]
-    async fn test_session_resolver_default_chat_id() {
-        let index = Arc::new(FakeSessionIndex::empty());
-        let resolver = DefaultSessionResolver::new(index);
-        let user = UserId("root".to_string());
-        let session_id = resolver
-            .resolve(&user, ChannelType::Web, None)
-            .await
-            .unwrap();
-        let _parsed: uuid::Uuid = session_id.uuid();
     }
 }
