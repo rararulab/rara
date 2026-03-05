@@ -82,6 +82,26 @@ just fmt
 just clippy
 ```
 
+### Docker Compose (Containerized Agent)
+
+```bash
+# build image
+just docker-agent-build
+
+# start/update rara-agent server
+just docker-agent-up
+
+# run interactive chat mode in container
+just docker-agent-chat
+
+# cleanup compose stack, volumes and local images
+just docker-agent-clean
+```
+
+`docker-compose.agent.yml` does not mount host project directories to the
+`rara-agent` container. The runtime uses a read-only root filesystem + tmpfs
+and resource limits (`cpus`, `mem_limit`, `pids_limit`).
+
 ### Configuration
 
 Copy `env.local.example` to `.env` and configure:

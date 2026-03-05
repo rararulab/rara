@@ -36,7 +36,8 @@ RUN useradd -r -m -s /usr/sbin/nologin appuser
 
 COPY --from=builder /tmp/rara /usr/local/bin/rara
 COPY --from=builder /app/crates/rara-model/migrations /app/migrations
-RUN chown appuser:appuser /usr/local/bin/rara
+COPY docker/config.container.yaml /app/config.yaml
+RUN chown appuser:appuser /usr/local/bin/rara /app/config.yaml
 
 USER appuser
 WORKDIR /app

@@ -1,0 +1,26 @@
+services:
+  rara-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: rara-agent:local
+    container_name: rara-agent
+    command: ["rara", "server"]
+    environment:
+      XDG_DATA_HOME: /tmp/rara-data
+      XDG_CONFIG_HOME: /tmp/rara-config
+    ports:
+      - "25555:25555"
+      - "50051:50051"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /home/appuser:rw,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2.0
+    restart: unless-stopped

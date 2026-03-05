@@ -1,0 +1,23 @@
+http:
+  bind_address: "0.0.0.0:25555"
+
+grpc:
+  bind_address: "0.0.0.0:50051"
+  server_address: "rara-agent:50051"
+
+llm:
+  default_provider: "ollama"
+  providers:
+    ollama:
+      base_url: "http://127.0.0.1:11434/v1"
+      api_key: "ollama"
+      default_model: "qwen3:14b"
+
+users:
+  - name: "container"
+    role: "root"
+    platforms:
+      - type: "cli"
+        user_id: "container"
+      - type: "web"
+        user_id: "container"

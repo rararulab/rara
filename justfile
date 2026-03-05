@@ -132,6 +132,26 @@ build-release:
     @echo "🔨 Building rara (release mode)..."
     cargo build -p rara-cli --release
 
+[doc("build rara-agent docker image")]
+[group("🐳 Container")]
+docker-agent-build:
+    ./scripts/docker-agent-build.sh
+
+[doc("update rara-agent docker compose stack")]
+[group("🐳 Container")]
+docker-agent-up:
+    ./scripts/docker-agent-up.sh
+
+[doc("clean rara-agent docker compose stack (containers, volumes, local images)")]
+[group("🐳 Container")]
+docker-agent-clean:
+    ./scripts/docker-agent-clean.sh
+
+[doc("run rara-agent in interactive chat mode inside container")]
+[group("🐳 Container")]
+docker-agent-chat:
+    docker compose -f docker-compose.agent.yml run --rm rara-agent rara chat --session docker --user-id container
+
 # ========================================================================================
 # Release & Changelog
 # ========================================================================================
