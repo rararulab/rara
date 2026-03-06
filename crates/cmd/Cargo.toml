@@ -34,6 +34,7 @@ indexmap.workspace = true
 rara-app = { workspace = true }
 rara-channels = { workspace = true }
 rara-kernel = { workspace = true }
+rara-paths.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

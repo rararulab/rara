@@ -136,6 +136,7 @@ impl GatewayArgs {
             .next()
             .unwrap_or("25555");
 
+        let logs_dir = rara_paths::logs_dir();
         tracing::info!(
             health_timeout = gateway_config.health_timeout,
             max_restart_attempts = gateway_config.max_restart_attempts,
@@ -143,6 +144,8 @@ impl GatewayArgs {
             admin_bind = %gateway_config.bind_address,
             "Starting gateway supervisor"
         );
+        tracing::info!(path = %logs_dir.display(), "Agent logs directory");
+        tracing::info!("View agent logs: lnav {}", logs_dir.display());
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
