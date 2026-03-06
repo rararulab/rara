@@ -371,6 +371,38 @@ impl TelegramAdapter {
     fn is_allowed(&self, chat_id: i64) -> bool {
         self.allowed_chat_ids.is_empty() || self.allowed_chat_ids.contains(&chat_id)
     }
+
+    /// Send binary attachments (images or documents) to a Telegram chat.
+    async fn send_attachments(
+        &self,
+        chat_id: i64,
+        attachments: &[rara_kernel::io::Attachment],
+    ) {
+        use teloxide::types::InputFile;
+
+        for attachment in attachments {
+            let input_file = InputFile::memory(attachment.data.clone());
+            let input_file = if let Some(ref name) = attachment.filename {
+                input_file.file_name(name.clone())
+            } else {
+                input_file
+            };
+
+            if attachment.mime_type.starts_with("image/") {
+                let _ = self
+                    .bot
+                    .send_photo(ChatId(chat_id), input_file)
+                    .await
+                    .map_err(|e| warn!("failed to send photo: {e}"));
+            } else {
+                let _ = self
+                    .bot
+                    .send_document(ChatId(chat_id), input_file)
+                    .await
+                    .map_err(|e| warn!("failed to send document: {e}"));
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -391,14 +423,14 @@ impl ChannelAdapter for TelegramAdapter {
             PlatformOutbound::Reply {
                 content,
                 reply_context,
-                ..
+                attachments,
             } => {
                 let content = if let Some(state) = self.active_streams.get(&chat_id) {
                     slice_after_char_prefix(&content, state.streamed_prefix_chars)
                 } else {
                     content
                 };
-                if content.is_empty() {
+                if content.is_empty() && attachments.is_empty() {
                     self.active_streams.remove(&chat_id);
                     return Ok(());
                 }
@@ -459,6 +491,7 @@ impl ChannelAdapter for TelegramAdapter {
                                             .parse_mode(ParseMode::Html)
                                             .await;
                                     }
+                                    self.send_attachments(chat_id, &attachments).await;
                                     return Ok(());
                                 }
                                 warn!(
@@ -470,26 +503,31 @@ impl ChannelAdapter for TelegramAdapter {
                     }
                 }
 
-                for (i, chunk) in chunks.iter().enumerate() {
-                    let mut req = self
-                        .bot
-                        .send_message(ChatId(chat_id), chunk)
-                        .parse_mode(ParseMode::Html);
+                if !content.is_empty() {
+                    for (i, chunk) in chunks.iter().enumerate() {
+                        let mut req = self
+                            .bot
+                            .send_message(ChatId(chat_id), chunk)
+                            .parse_mode(ParseMode::Html);
 
-                    if i == 0 {
-                        if let Some(ref ctx) = reply_context {
-                            if let Some(ref reply_id) = ctx.reply_to_platform_msg_id {
-                                if let Ok(msg_id) = parse_message_id(reply_id) {
-                                    req = req.reply_parameters(ReplyParameters::new(msg_id));
+                        if i == 0 {
+                            if let Some(ref ctx) = reply_context {
+                                if let Some(ref reply_id) = ctx.reply_to_platform_msg_id {
+                                    if let Ok(msg_id) = parse_message_id(reply_id) {
+                                        req = req.reply_parameters(ReplyParameters::new(msg_id));
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    req.await.map_err(|e| EgressError::DeliveryFailed {
-                        message: format!("failed to send telegram message: {e}"),
-                    })?;
+                        req.await.map_err(|e| EgressError::DeliveryFailed {
+                            message: format!("failed to send telegram message: {e}"),
+                        })?;
+                    }
                 }
+
+                // Send attachments (images/documents).
+                self.send_attachments(chat_id, &attachments).await;
             }
             PlatformOutbound::StreamChunk {
                 delta, edit_target, ..

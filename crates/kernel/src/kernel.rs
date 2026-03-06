@@ -1442,6 +1442,9 @@ impl Kernel {
                 // tools can access it without relying on LLM-supplied identity.
                 let tool_context = crate::tool::ToolContext {
                     user_id: Some(user.0.clone()),
+                    session_key: Some(session_key.clone()),
+                    origin_endpoint: origin_endpoint.clone(),
+                    event_queue: Some(event_queue.clone()),
                 };
 
                 let turn_result = run_agent_loop(
