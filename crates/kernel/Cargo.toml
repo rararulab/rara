@@ -50,6 +50,7 @@ tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true
 urlencoding.workspace = true
+usearch = "2"
 uuid.workspace = true
 
 [dev-dependencies]
