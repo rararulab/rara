@@ -319,12 +319,17 @@ impl SupervisorService {
     }
 
     /// Spawn `rara server` as a child process.
+    ///
+    /// The child is placed in its own process group (`process_group(0)`)
+    /// so that Ctrl+C (SIGINT) is only delivered to the gateway, not to
+    /// the child. The gateway then decides how to shut the child down.
     async fn spawn_child(&self) -> Result<Child, SupervisorError> {
         let exe = std::env::current_exe().context(SpawnSnafu)?;
         Command::new(&exe)
             .arg("server")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
+            .process_group(0)
             .spawn()
             .context(SpawnSnafu)
     }
@@ -346,24 +351,33 @@ impl SupervisorService {
         let timeout = Duration::from_secs(self.config.health_timeout / 2);
         let mut reader = BufReader::new(stdout).lines();
 
-        let result = tokio::time::timeout(timeout, async {
+        let read_ready = async {
             while let Ok(Some(line)) = reader.next_line().await {
                 if line.contains("READY") {
                     return true;
                 }
             }
             false
-        })
-        .await;
+        };
 
-        match result {
-            Ok(true) => {
-                info!("Received READY from agent");
-                Ok(())
+        tokio::select! {
+            result = tokio::time::timeout(timeout, read_ready) => {
+                match result {
+                    Ok(true) => {
+                        info!("Received READY from agent");
+                        Ok(())
+                    }
+                    _ => Err(SupervisorError::ReadyTimeout {
+                        timeout_secs: self.config.health_timeout / 2,
+                    }),
+                }
             }
-            _ => Err(SupervisorError::ReadyTimeout {
-                timeout_secs: self.config.health_timeout / 2,
-            }),
+            () = self.shutdown.cancelled() => {
+                info!("Shutdown during READY wait");
+                Err(SupervisorError::ReadyTimeout {
+                    timeout_secs: 0,
+                })
+            }
         }
     }
 
@@ -380,6 +394,11 @@ impl SupervisorService {
         let deadline = Instant::now() + timeout;
 
         while Instant::now() < deadline {
+            if self.shutdown.is_cancelled() {
+                info!("Shutdown during health polling");
+                return Err(SupervisorError::HealthTimeout { timeout_secs: 0 });
+            }
+
             match client.get(&self.health_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     consecutive_ok += 1;
@@ -396,7 +415,14 @@ impl SupervisorService {
                     consecutive_ok = 0;
                 }
             }
-            tokio::time::sleep(poll_interval).await;
+
+            tokio::select! {
+                () = tokio::time::sleep(poll_interval) => {}
+                () = self.shutdown.cancelled() => {
+                    info!("Shutdown during health poll sleep");
+                    return Err(SupervisorError::HealthTimeout { timeout_secs: 0 });
+                }
+            }
         }
 
         Err(SupervisorError::HealthTimeout {
@@ -405,6 +431,9 @@ impl SupervisorService {
     }
 
     /// Graceful shutdown: SIGTERM → wait 5s → SIGKILL.
+    ///
+    /// Uses process-group signals because the child is spawned with
+    /// `process_group(0)` (PGID = child PID).
     async fn graceful_shutdown(&mut self) {
         let Some(ref mut child) = self.child else {
             return;
@@ -419,15 +448,8 @@ impl SupervisorService {
             }
         };
 
-        info!(pid, "Sending SIGTERM to agent");
-
-        #[cfg(unix)]
-        {
-            // Use the `kill` command to send SIGTERM without requiring `unsafe`.
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-        }
+        info!(pid, "Sending SIGTERM to agent process group");
+        let _ = base::process_group::terminate_process_group(pid);
 
         // Wait up to 5 seconds for clean exit.
         match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
@@ -436,6 +458,7 @@ impl SupervisorService {
             }
             _ => {
                 warn!(pid, "Agent did not exit after 5s — sending SIGKILL");
+                let _ = base::process_group::kill_process_group(pid);
                 let _ = child.kill().await;
             }
         }
