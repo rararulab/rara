@@ -64,6 +64,10 @@ impl ServerArgs {
         // settings are available before initialising the tracing subscriber.
         let config = AppConfig::new().whatever_context("Failed to load config")?;
 
+        let logs_dir = rara_paths::logs_dir();
+        std::fs::create_dir_all(logs_dir).expect("failed to create logs directory");
+        let logs_dir_str = logs_dir.to_string_lossy().into_owned();
+
         let logging_opts = if let Some(ref endpoint) = config
             .telemetry
             .otlp_endpoint
@@ -76,6 +80,7 @@ impl ServerArgs {
                 _ => OtlpExportProtocol::Http,
             });
             LoggingOptions {
+                dir: logs_dir_str,
                 enable_otlp_tracing: true,
                 otlp_endpoint: Some(endpoint.to_string()),
                 otlp_export_protocol: protocol,
@@ -86,6 +91,7 @@ impl ServerArgs {
             use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
             tracing::info!("Kubernetes detected — auto-enabling OTLP tracing to Alloy");
             LoggingOptions {
+                dir: logs_dir_str,
                 enable_otlp_tracing: true,
                 otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
                 otlp_export_protocol: Some(OtlpExportProtocol::Http),
@@ -93,7 +99,10 @@ impl ServerArgs {
                 ..Default::default()
             }
         } else {
-            common_telemetry::logging::LoggingOptions::default()
+            common_telemetry::logging::LoggingOptions {
+                dir: logs_dir_str,
+                ..Default::default()
+            }
         };
 
         let _guards = common_telemetry::logging::init_global_logging(
@@ -120,9 +129,15 @@ impl GatewayArgs {
     async fn run() -> Result<(), Whatever> {
         let config = AppConfig::new().whatever_context("Failed to load config")?;
 
+        let logs_dir = rara_paths::logs_dir();
+        std::fs::create_dir_all(logs_dir).whatever_context("Failed to create logs directory")?;
+
         let _guards = common_telemetry::logging::init_global_logging(
             "rara-gateway",
-            &common_telemetry::logging::LoggingOptions::default(),
+            &common_telemetry::logging::LoggingOptions {
+                dir: logs_dir.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
             &common_telemetry::logging::TracingOptions::default(),
             None,
         );
@@ -135,8 +150,6 @@ impl GatewayArgs {
             .rsplit(':')
             .next()
             .unwrap_or("25555");
-
-        let logs_dir = rara_paths::logs_dir();
         tracing::info!(
             health_timeout = gateway_config.health_timeout,
             max_restart_attempts = gateway_config.max_restart_attempts,
