@@ -262,6 +262,25 @@ pub fn skills_dir() -> &'static PathBuf {
     SKILLS_DIR.get_or_init(|| config_dir().join("skills"))
 }
 
+/// Returns the path to the staging directory used for gateway updates.
+///
+/// Resolves to `<data_dir>/staging/`. The directory is created if it
+/// does not already exist.
+///
+/// # Panics
+///
+/// Panics if the directory cannot be created.
+pub fn staging_dir() -> &'static PathBuf {
+    static STAGING_DIR: OnceLock<PathBuf> = OnceLock::new();
+    STAGING_DIR.get_or_init(|| {
+        let dir = data_dir().join("staging");
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
+            panic!("failed to create staging directory {}: {e}", dir.display())
+        });
+        dir
+    })
+}
+
 /// Returns the path to the main YAML configuration file.
 ///
 /// Resolves to `<config_dir>/config.yaml`.

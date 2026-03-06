@@ -14,6 +14,7 @@
 
 mod boot;
 pub mod flatten;
+pub mod gateway;
 mod mita;
 mod tools;
 
@@ -78,6 +79,9 @@ pub struct AppConfig {
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default)]
     pub knowledge:   Option<flatten::KnowledgeConfig>,
+    /// Gateway supervisor configuration (optional — used by `rara gateway`).
+    #[serde(default)]
+    pub gateway:     Option<GatewayConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -85,6 +89,46 @@ pub struct AppConfig {
 pub struct MitaConfig {
     /// Heartbeat interval in seconds (e.g. 1800 = 30 minutes).
     pub heartbeat_interval_secs: u64,
+}
+
+/// Configuration for the gateway supervisor.
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
+pub struct GatewayConfig {
+    /// Upstream check interval in seconds.
+    #[serde(default = "gateway_defaults::check_interval")]
+    pub check_interval:      u64,
+    /// Total health confirmation timeout in seconds.
+    #[serde(default = "gateway_defaults::health_timeout")]
+    pub health_timeout:      u64,
+    /// HTTP health poll interval in seconds.
+    #[serde(default = "gateway_defaults::health_poll_interval")]
+    pub health_poll_interval: u64,
+    /// Max consecutive restart failures before giving up.
+    #[serde(default = "gateway_defaults::max_restart_attempts")]
+    pub max_restart_attempts: u32,
+    /// Whether to auto-apply upstream updates.
+    #[serde(default = "gateway_defaults::auto_update")]
+    pub auto_update:         bool,
+}
+
+mod gateway_defaults {
+    pub fn check_interval() -> u64 { 300 }
+    pub fn health_timeout() -> u64 { 30 }
+    pub fn health_poll_interval() -> u64 { 2 }
+    pub fn max_restart_attempts() -> u32 { 3 }
+    pub fn auto_update() -> bool { true }
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            check_interval:      gateway_defaults::check_interval(),
+            health_timeout:      gateway_defaults::health_timeout(),
+            health_poll_interval: gateway_defaults::health_poll_interval(),
+            max_restart_attempts: gateway_defaults::max_restart_attempts(),
+            auto_update:         gateway_defaults::auto_update(),
+        }
+    }
 }
 
 /// General OTLP telemetry configuration.
@@ -301,6 +345,11 @@ pub async fn start_with_options(
         .wait_for_start()
         .await
         .whatever_context("REST server failed to report started")?;
+
+    // Signal readiness to the gateway supervisor (if present).
+    // The gateway watches our stdout for this marker.
+    // tracing goes to stderr, so this does not interfere.
+    println!("READY");
 
     let worker_runtime = Arc::new(
         common_runtime::RuntimeOptions::builder()

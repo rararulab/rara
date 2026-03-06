@@ -49,6 +49,7 @@ enum Commands {
     Server(ServerArgs),
     Chat(ChatArgs),
     Top(top::TopCmd),
+    Gateway(GatewayArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -103,6 +104,62 @@ impl ServerArgs {
         );
 
         run_app(config).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gateway command
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Start the gateway supervisor")]
+#[command(long_about = "Start the gateway supervisor that spawns, monitors, and restarts the agent server.\n\nExamples:\n  rara gateway")]
+struct GatewayArgs {}
+
+impl GatewayArgs {
+    async fn run() -> Result<(), Whatever> {
+        let config = AppConfig::new().whatever_context("Failed to load config")?;
+
+        let _guards = common_telemetry::logging::init_global_logging(
+            "rara-gateway",
+            &common_telemetry::logging::LoggingOptions::default(),
+            &common_telemetry::logging::TracingOptions::default(),
+            None,
+        );
+
+        let gateway_config = config.gateway.clone().unwrap_or_default();
+
+        // Extract port from HTTP bind_address (e.g. "127.0.0.1:25555" -> "25555").
+        let bind_addr = &config.http.bind_address;
+        let port = bind_addr
+            .rsplit(':')
+            .next()
+            .unwrap_or("25555");
+
+        tracing::info!(
+            health_timeout = gateway_config.health_timeout,
+            max_restart_attempts = gateway_config.max_restart_attempts,
+            health_port = port,
+            "Starting gateway supervisor"
+        );
+
+        let mut supervisor =
+            rara_app::gateway::SupervisorService::new(gateway_config, port);
+
+        match supervisor.run().await {
+            Ok(()) => {
+                tracing::info!("Gateway supervisor exited cleanly");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Gateway supervisor stopped with error");
+                // Gateway stays alive for manual intervention — don't propagate
+                // the error as a hard failure.
+                tracing::info!("Gateway will remain alive for manual intervention. Press Ctrl+C to exit.");
+                tokio::signal::ctrl_c().await.ok();
+                Ok(())
+            }
+        }
     }
 }
 
@@ -384,5 +441,6 @@ async fn main() -> Result<(), Whatever> {
         Commands::Server(_) => ServerArgs::run().await,
         Commands::Chat(args) => args.run().await,
         Commands::Top(args) => args.run().await,
+        Commands::Gateway(_) => GatewayArgs::run().await,
     }
 }
