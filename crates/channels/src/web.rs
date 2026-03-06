@@ -219,6 +219,7 @@ impl WebAdapter {
             .route("/ws", get(ws_handler))
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
+            .route("/signals/:session_id/interrupt", post(interrupt_handler))
             .with_state(state)
     }
 
@@ -738,6 +739,37 @@ async fn send_message_handler(
         None => {
             let status = axum::http::StatusCode::SERVICE_UNAVAILABLE;
             (status, "adapter not started").into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /signals/:session_id/interrupt handler
+// ---------------------------------------------------------------------------
+
+async fn interrupt_handler(
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    State(state): State<WebAdapterState>,
+) -> Response {
+    let session_key = match rara_kernel::session::SessionKey::try_from_raw(&session_id) {
+        Ok(k) => k,
+        Err(_) => {
+            return (axum::http::StatusCode::BAD_REQUEST, "invalid session key").into_response();
+        }
+    };
+
+    let guard = state.sink.read().await;
+    match &*guard {
+        Some(handle) => {
+            match handle.send_signal(session_key, rara_kernel::session::Signal::Interrupt) {
+                Ok(()) => axum::Json(serde_json::json!({ "ok": true })).into_response(),
+                Err(e) => {
+                    (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                }
+            }
+        }
+        None => {
+            (axum::http::StatusCode::SERVICE_UNAVAILABLE, "adapter not started").into_response()
         }
     }
 }
