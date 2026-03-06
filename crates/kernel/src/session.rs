@@ -42,6 +42,7 @@ use crate::{
     error::Result as KernelResult,
     event::KernelEventEnvelope,
     identity::Principal,
+    io::Endpoint,
 };
 
 // ---------------------------------------------------------------------------
@@ -284,10 +285,14 @@ pub struct Session {
     pub paused:          bool,
     /// Buffered events received while the session was paused or busy.
     pub pause_buffer:    Vec<KernelEventEnvelope>,
+    /// The channel endpoint that originated this session (e.g. a specific
+    /// Telegram chat). Used as a fallback for reply routing when the
+    /// triggering message is synthetic (no platform origin).
+    pub origin_endpoint: Option<Endpoint>,
     /// Per-session semaphore limiting concurrent child sessions.
-    pub child_semaphore: Arc<Semaphore>,
+    pub child_semaphore:  Arc<Semaphore>,
     /// Global semaphore permit.
-    pub _global_permit:  OwnedSemaphorePermit,
+    pub _global_permit:   OwnedSemaphorePermit,
 }
 
 /// Per-process runtime metrics using atomic counters for lock-free updates.

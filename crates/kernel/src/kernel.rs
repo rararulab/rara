@@ -423,7 +423,7 @@ impl Kernel {
             } => {
                 // CreateSession from SessionHandle::create_child() — subagent.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, parent_id, None, None)
+                    .handle_spawn_agent(manifest, input, principal, parent_id, None, None, None)
                     .await;
                 let _ = reply_tx.send(result);
             }
@@ -494,6 +494,9 @@ impl Kernel {
         // generating a fresh one (used when routing a message to an
         // already-known session identity).
         desired_session_key: Option<SessionKey>,
+        // The originating channel endpoint, stored in the session so that
+        // reply routing works even for synthetic re-entry messages.
+        origin_endpoint: Option<crate::io::Endpoint>,
     ) -> crate::Result<SessionKey> {
         // Validate principal.
         let principal = self.security.resolve_principal(&principal).await?;
@@ -548,6 +551,7 @@ impl Kernel {
             turn_cancel: CancellationToken::new(),
             process_cancel,
             paused: false,
+            origin_endpoint,
             pause_buffer: Vec::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _global_permit: global_permit,
@@ -940,6 +944,7 @@ impl Kernel {
                 None,
                 resume_session_id,
                 Some(session_id.clone()),
+                origin_endpoint.clone(),
             )
             .await;
         match spawn_result {
@@ -1255,7 +1260,25 @@ impl Kernel {
         // per session.
         let user = msg.user.clone();
         let msg_id = msg.id.clone();
-        let origin_endpoint = msg.origin_endpoint();
+        // Prefer the message's own origin endpoint (set for real platform
+        // messages). Fall back to the session's stored origin endpoint so
+        // that synthetic re-entry messages (from handle_spawn_agent or Mita
+        // dispatch) still route replies to the correct channel.
+        let msg_origin = msg.origin_endpoint();
+        let origin_endpoint = msg_origin.clone().or_else(|| {
+            self.process_table
+                .with(&session_key, |p| p.origin_endpoint.clone())
+                .flatten()
+        });
+
+        // Update the session's stored origin endpoint when a real platform
+        // message provides one, so that subsequent synthetic messages can
+        // inherit the correct routing target.
+        if msg_origin.is_some() {
+            self.process_table.with_mut(&session_key, |p| {
+                p.origin_endpoint = msg_origin;
+            });
+        }
 
         let _ = self
             .process_table
