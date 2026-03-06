@@ -143,11 +143,22 @@ impl GatewayArgs {
             "Starting gateway supervisor"
         );
 
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // Spawn the update detector as a background task.
+        let (detector, _update_rx) =
+            rara_app::gateway::UpdateDetector::new(gateway_config.clone()).await;
+        let detector_cancel = cancel.clone();
+        tokio::spawn(async move {
+            detector.run(detector_cancel).await;
+        });
+
         let mut supervisor =
             rara_app::gateway::SupervisorService::new(gateway_config, port);
 
         match supervisor.run().await {
             Ok(()) => {
+                cancel.cancel();
                 tracing::info!("Gateway supervisor exited cleanly");
                 Ok(())
             }
@@ -157,6 +168,7 @@ impl GatewayArgs {
                 // the error as a hard failure.
                 tracing::info!("Gateway will remain alive for manual intervention. Press Ctrl+C to exit.");
                 tokio::signal::ctrl_c().await.ok();
+                cancel.cancel();
                 Ok(())
             }
         }
