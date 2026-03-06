@@ -689,9 +689,9 @@ async fn handle_update(
     // --- Group chat authorization ---
     let group_chat = is_group_chat(msg);
 
-    // Track whether this is a group message where Rara was NOT directly
+    // Determine whether this is a group message where Rara was NOT directly
     // mentioned — these are "proactive candidates" that the kernel will
-    // gate behind a lightweight LLM judgment.
+    // gate behind a lightweight LLM judgment via the GroupMessage event.
     let mut is_group_proactive = false;
 
     if group_chat {
@@ -709,7 +709,7 @@ async fn handle_update(
             || contains_rara_keyword(trigger_text);
 
         if !directly_addressed {
-            // Not mentioned — mark as proactive candidate instead of dropping.
+            // Not mentioned — route as GroupMessage for proactive judgment.
             is_group_proactive = true;
         }
 
@@ -738,11 +738,10 @@ async fn handle_update(
     // Convert to RawPlatformMessage.
     let username_guard = bot_username.read().await;
     let username_ref = username_guard.as_deref().unwrap_or("");
-    let mut raw = match telegram_to_raw_platform_message(msg, username_ref) {
+    let raw = match telegram_to_raw_platform_message(msg, username_ref) {
         Some(raw) => raw,
         None => return,
     };
-    raw.is_group_proactive = is_group_proactive;
     drop(username_guard);
 
     let msg = match handle.resolve(raw).await {
@@ -767,9 +766,21 @@ async fn handle_update(
     };
 
     let session_id = msg.session_key.clone();
-    match handle.submit_message(msg) {
+
+    // Route: group proactive candidates go through GroupMessage event for
+    // lightweight LLM judgment; directly-addressed messages go through the
+    // normal UserMessage path.
+    let submit_result = if is_group_proactive {
+        handle.submit_group_message(msg)
+    } else {
+        handle.submit_message(msg)
+    };
+
+    match submit_result {
         Ok(()) => {
             // Spawn stream forwarder for progressive editMessageText.
+            // (Only needed for direct messages — group proactive messages
+            // may not produce a reply, but the forwarder is harmless if idle.)
             if let Some(sid) = session_id {
                 spawn_stream_forwarder(
                     Arc::clone(stream_hub),
@@ -1189,7 +1200,6 @@ pub fn telegram_to_raw_platform_message(
         content: MessageContent::Text(text),
         reply_context,
         metadata,
-        is_group_proactive: false, // caller sets this after construction
     })
 }
 
