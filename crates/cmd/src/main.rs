@@ -140,22 +140,36 @@ impl GatewayArgs {
             health_timeout = gateway_config.health_timeout,
             max_restart_attempts = gateway_config.max_restart_attempts,
             health_port = port,
+            admin_bind = %gateway_config.bind_address,
             "Starting gateway supervisor"
         );
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
-        // Spawn the update detector as a background task.
-        let (detector, _update_rx) =
+        // 1. Create supervisor + handle.
+        let (mut supervisor, supervisor_handle) =
+            rara_app::gateway::SupervisorService::new(gateway_config.clone(), port);
+
+        // 2. Create update detector + watch receiver.
+        let (detector, update_rx) =
             rara_app::gateway::UpdateDetector::new(gateway_config.clone()).await;
         let detector_cancel = cancel.clone();
         tokio::spawn(async move {
             detector.run(detector_cancel).await;
         });
 
-        let mut supervisor =
-            rara_app::gateway::SupervisorService::new(gateway_config, port);
+        // 3. Build admin HTTP server state and spawn it.
+        let admin_state = rara_app::gateway::server::GatewayAppState {
+            supervisor_handle,
+            update_state_rx: update_rx,
+            shutdown: cancel.clone(),
+        };
+        let admin_bind = gateway_config.bind_address.clone();
+        let _admin_handle = rara_app::gateway::server::serve(&admin_bind, admin_state)
+            .await
+            .whatever_context("Failed to start gateway admin HTTP server")?;
 
+        // 4. Run supervisor (blocking).
         match supervisor.run().await {
             Ok(()) => {
                 cancel.cancel();
