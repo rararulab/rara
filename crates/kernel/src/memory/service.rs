@@ -208,18 +208,37 @@ impl TapeService {
     }
 
     /// Build LLM-ready messages from tape entries since the last anchor.
+    ///
+    /// If the last anchor carries a `summary` or `next_steps` in its state,
+    /// a system message is injected so the LLM retains key context from
+    /// before the anchor even after older entries leave the context window.
     pub async fn build_llm_context(&self, tape_name: &str) -> TapResult<Vec<crate::llm::Message>> {
-        let entries = self
-            .from_last_anchor(
-                tape_name,
-                Some(&[
-                    TapEntryKind::Message,
-                    TapEntryKind::ToolCall,
-                    TapEntryKind::ToolResult,
-                ]),
-            )
-            .await?;
-        super::context::default_tape_context(&entries)
+        // Load all entry kinds so we can inspect the anchor itself.
+        let all_entries = self.from_last_anchor(tape_name, None).await?;
+
+        // Filter to conversational kinds for LLM message reconstruction.
+        let conv_entries: Vec<_> = all_entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    TapEntryKind::Message | TapEntryKind::ToolCall | TapEntryKind::ToolResult
+                )
+            })
+            .cloned()
+            .collect();
+        let mut messages = super::context::default_tape_context(&conv_entries)?;
+
+        // Inject anchor state (summary/next_steps) as a system message.
+        if let Some(anchor_msg) = super::context::anchor_context(&all_entries) {
+            let insert_pos = messages
+                .iter()
+                .position(|m| m.role != crate::llm::Role::System)
+                .unwrap_or(messages.len());
+            messages.insert(insert_pos, anchor_msg);
+        }
+
+        Ok(messages)
     }
 
     /// Build LLM-ready messages from a session tape, prepending user-specific
