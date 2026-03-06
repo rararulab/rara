@@ -14,7 +14,7 @@
 
 //! [`UpdateExecutor`] — staging worktree build, binary activation & rollback.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use snafu::{ResultExt, Snafu};
@@ -103,6 +103,9 @@ impl UpdateExecutor {
         let backup_path = exe_path.with_extension("bak");
 
         let repo_dir = detect_repo_root(&exe_path).await?;
+
+        // Clean up any stale staging worktrees left by a previous crash.
+        cleanup_stale_worktrees(&repo_dir).await;
 
         // staging_dir is set per-update in execute_update; use a placeholder.
         Ok(Self {
@@ -333,6 +336,60 @@ impl UpdateExecutor {
         }
 
         Ok(())
+    }
+}
+
+/// Clean up stale staging worktrees that may have been left behind by a
+/// previous crash, timeout, or SIGKILL.
+///
+/// This is best-effort: errors are logged but never propagated.
+async fn cleanup_stale_worktrees(repo_dir: &Path) {
+    // 1. Prune git's worktree bookkeeping for any already-deleted directories.
+    match Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(repo_dir)
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => {
+            info!("Pruned stale git worktree references");
+        }
+        Ok(o) => {
+            warn!(
+                stderr = %String::from_utf8_lossy(&o.stderr),
+                "git worktree prune failed (non-fatal)"
+            );
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to run git worktree prune (non-fatal)");
+        }
+    }
+
+    // 2. Remove leftover directories inside the staging root.
+    let staging_root = rara_paths::staging_dir();
+    let mut entries = match tokio::fs::read_dir(staging_root).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            // Directory may simply not exist yet — that's fine.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(error = %e, "Failed to read staging directory (non-fatal)");
+            }
+            return;
+        }
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.is_dir() {
+            info!(path = %path.display(), "Removing stale staging directory");
+            if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to remove stale staging directory (non-fatal)"
+                );
+            }
+        }
     }
 }
 
