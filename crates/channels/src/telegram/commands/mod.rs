@@ -38,4 +38,4 @@ pub use basic::BasicCommandHandler;
 pub use callbacks::SessionSwitchCallbackHandler;
 pub use client::BotServiceClient;
 pub use mcp::McpCommandHandler;
-pub use session::SessionCommandHandler;
+pub use session::{SessionCommandHandler, StopCommandHandler};
