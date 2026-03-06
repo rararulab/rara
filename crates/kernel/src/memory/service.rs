@@ -89,6 +89,19 @@ impl TapeService {
         Ok(self.store.read(tape_name).await?.unwrap_or_default())
     }
 
+    /// Load a specific entry by ID from a tape.
+    pub async fn entry_by_id(&self, tape_name: &str, entry_id: u64) -> TapResult<Option<TapEntry>> {
+        let entries = self.entries(tape_name).await?;
+        Ok(entries.into_iter().find(|e| e.id == entry_id))
+    }
+
+    /// Load multiple entries by their IDs from a tape.
+    pub async fn entries_by_ids(&self, tape_name: &str, ids: &[u64]) -> TapResult<Vec<TapEntry>> {
+        let entries = self.entries(tape_name).await?;
+        let id_set: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        Ok(entries.into_iter().filter(|e| id_set.contains(&e.id)).collect())
+    }
+
     /// Execute `func` against a forked tape. On success, merge the fork back
     /// into the parent tape. On failure, discard the fork so failed turns do
     /// not pollute the main tape.
@@ -548,10 +561,12 @@ impl TapeService {
             TapEntryKind::ToolCall,
             TapEntryKind::ToolResult,
         ];
-        let discarded = old_entries
+        let source_ids: Vec<u64> = old_entries
             .iter()
             .filter(|e| conversational_kinds.contains(&e.kind))
-            .count();
+            .map(|e| e.id)
+            .collect();
+        let discarded = source_ids.len();
 
         if discarded == 0 {
             return Ok(0);
@@ -568,6 +583,7 @@ impl TapeService {
                 "discarded_from_view": discarded,
                 "original_total": total,
                 "kept_recent": keep_recent,
+                "source_ids": source_ids,
             }
         });
 
