@@ -143,16 +143,6 @@ pub(crate) async fn boot(
         SettingsComposioAuthProvider::new(settings_provider.clone()),
     );
 
-    // -- primitive tools (Layer 1) -----------------------------------------
-
-    let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
-    for tool in crate::tools::default_primitives(crate::tools::PrimitiveDeps {
-        settings: settings_provider.clone(),
-        composio_auth_provider,
-    }) {
-        tool_registry.register_primitive(tool);
-    }
-
     // -- skills registry ---------------------------------------------------
 
     let skill_registry = rara_skills::registry::InMemoryRegistry::new();
@@ -165,13 +155,16 @@ pub(crate) async fn boot(
         .await
         .whatever_context("Failed to initialize MCP manager")?;
 
-    // -- service tools (Layer 2) -------------------------------------------
+    // -- tools -------------------------------------------------------------
 
-    crate::tools::register_service_tools(
+    let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
+    crate::tools::register_all(
         &mut tool_registry,
-        crate::tools::ServiceToolDeps {
-            skill_registry: skill_registry.clone(),
-            mcp_manager:    mcp_manager.clone(),
+        crate::tools::ToolDeps {
+            settings:               settings_provider.clone(),
+            composio_auth_provider,
+            skill_registry:         skill_registry.clone(),
+            mcp_manager:            mcp_manager.clone(),
         },
     );
 

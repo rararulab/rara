@@ -12,17 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tool implementations and factory functions.
-//!
-//! - **Primitives** (Layer 1): basic I/O, file operations, HTTP, etc.
-//! - **Services** (Layer 2): complex business workflows built on domain
-//!   services.
+//! Tool implementations and registration.
 
 use std::{path::PathBuf, sync::Arc};
 
 use rara_kernel::tool::{AgentToolRef, ToolRegistry};
-
-pub mod services;
 
 mod bash;
 mod composio;
@@ -31,31 +25,41 @@ mod find_files;
 mod grep;
 mod http_fetch;
 mod list_directory;
+mod mcp_tools;
 mod read_file;
+mod screenshot;
 mod send_email;
+mod skill_tools;
 mod write_file;
 
-pub use bash::BashTool;
-pub use composio::ComposioTool;
-pub use edit_file::EditFileTool;
-pub use find_files::FindFilesTool;
-pub use grep::GrepTool;
-pub use http_fetch::HttpFetchTool;
-pub use list_directory::ListDirectoryTool;
-pub use read_file::ReadFileTool;
-pub use send_email::SendEmailTool;
-pub use write_file::WriteFileTool;
+use bash::BashTool;
+use composio::ComposioTool;
+use edit_file::EditFileTool;
+use find_files::FindFilesTool;
+use grep::GrepTool;
+use http_fetch::HttpFetchTool;
+use list_directory::ListDirectoryTool;
+use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
+use read_file::ReadFileTool;
+use screenshot::ScreenshotTool;
+use send_email::SendEmailTool;
+use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
+use write_file::WriteFileTool;
 
-/// Dependencies required to construct primitive tools.
-pub struct PrimitiveDeps {
+/// Dependencies required to construct all tools.
+pub struct ToolDeps {
     pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
+    pub skill_registry:         rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
 }
 
-/// Returns all primitive tools, ready for registration.
-pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
-    let mut tools: Vec<AgentToolRef> = vec![
-        // Core primitives
+/// Register all tools into the given [`ToolRegistry`].
+pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) {
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Core tools
+    let tools: Vec<AgentToolRef> = vec![
         Arc::new(BashTool::new()),
         Arc::new(ReadFileTool::new()),
         Arc::new(WriteFileTool::new()),
@@ -64,51 +68,21 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
         Arc::new(GrepTool::new()),
         Arc::new(ListDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
-        // Domain primitives
         Arc::new(SendEmailTool::new(deps.settings.clone())),
+        Arc::new(ComposioTool::from_auth_provider(deps.composio_auth_provider)),
+        // Screenshot
+        Arc::new(ScreenshotTool::new(project_root)),
+        // Skill tools
+        Arc::new(ListSkillsTool::new(deps.skill_registry.clone())),
+        Arc::new(CreateSkillTool::new(deps.skill_registry.clone())),
+        Arc::new(DeleteSkillTool::new(deps.skill_registry)),
+        // MCP management tools
+        Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
+        Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
+        Arc::new(RemoveMcpServerTool::new(deps.mcp_manager)),
     ];
-    tools.push(Arc::new(ComposioTool::from_auth_provider(
-        deps.composio_auth_provider,
-    )));
-    tools
-}
 
-// ---------------------------------------------------------------------------
-// Layer 2: Service tools
-// ---------------------------------------------------------------------------
-
-/// Dependencies required to construct Layer 2 service tools.
-pub struct ServiceToolDeps {
-    pub skill_registry: rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:    rara_mcp::manager::mgr::McpManager,
-}
-
-/// Register all Layer 2 service tools into the given [`ToolRegistry`].
-pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps) {
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // Screenshot
-    registry.register_service(Arc::new(services::ScreenshotTool::new(project_root)));
-
-    // Skill tools
-    registry.register_service(Arc::new(services::ListSkillsTool::new(
-        deps.skill_registry.clone(),
-    )));
-    registry.register_service(Arc::new(services::CreateSkillTool::new(
-        deps.skill_registry.clone(),
-    )));
-    registry.register_service(Arc::new(services::DeleteSkillTool::new(
-        deps.skill_registry,
-    )));
-
-    // MCP tools
-    registry.register_service(Arc::new(services::InstallMcpServerTool::new(
-        deps.mcp_manager.clone(),
-    )));
-    registry.register_service(Arc::new(services::ListMcpServersTool::new(
-        deps.mcp_manager.clone(),
-    )));
-    registry.register_service(Arc::new(services::RemoveMcpServerTool::new(
-        deps.mcp_manager,
-    )));
+    for tool in tools {
+        registry.register(tool);
+    }
 }

@@ -260,12 +260,12 @@ impl SyscallDispatcher {
                         kernel_handle.clone(),
                         syscall_sender,
                     );
-                    registry.register_builtin(Arc::new(syscall_tool));
+                    registry.register(Arc::new(syscall_tool));
                     let tape_tool = TapeTool::new(
                         self.tape_service.clone(),
                         tape_name,
                     );
-                    registry.register_builtin(Arc::new(tape_tool));
+                    registry.register(Arc::new(tape_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));
             }

@@ -38,36 +38,10 @@ pub trait AgentTool: Send + Sync {
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 }
 
-/// Where a tool originates from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolSource {
-    /// Built-in tool shipped with the binary.
-    Builtin,
-    /// Tool provided by an MCP server.
-    Mcp { server: String },
-}
-
-/// Architectural layer a tool belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolLayer {
-    /// Atomic primitive operation (db, http, notify, storage).
-    Primitive,
-    /// Complex business workflow (MCP service).
-    Service,
-}
-
-/// Internal entry pairing a tool with its source and layer metadata.
-#[derive(Clone)]
-struct ToolEntry {
-    tool:   AgentToolRef,
-    source: ToolSource,
-    layer:  ToolLayer,
-}
-
 /// Registry of available tools for an agent run.
 #[derive(Clone)]
 pub struct ToolRegistry {
-    tools: HashMap<String, ToolEntry>,
+    tools: HashMap<String, AgentToolRef>,
 }
 
 impl ToolRegistry {
@@ -78,46 +52,15 @@ impl ToolRegistry {
         }
     }
 
-    /// Register a built-in primitive tool (Layer 1).
-    pub fn register_primitive(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
-        self.register(tool, ToolSource::Builtin, ToolLayer::Primitive)
-    }
-
-    /// Register a built-in service tool (Layer 2).
-    pub fn register_service(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
-        self.register(tool, ToolSource::Builtin, ToolLayer::Service)
-    }
-
-    /// Register a built-in tool. Defaults to [`ToolLayer::Primitive`].
-    pub fn register_builtin(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
-        self.register(tool, ToolSource::Builtin, ToolLayer::Primitive)
-    }
-
-    /// Register an MCP-provided tool. Defaults to [`ToolLayer::Service`].
-    pub fn register_mcp(
-        &mut self,
-        tool: AgentToolRef,
-        server: impl Into<String>,
-    ) -> Option<AgentToolRef> {
-        self.register(
-            tool,
-            ToolSource::Mcp {
-                server: server.into(),
-            },
-            ToolLayer::Service,
-        )
+    /// Register a tool. Returns the previously registered tool with the same
+    /// name, if any.
+    pub fn register(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
+        let name = tool.name().to_owned();
+        self.tools.insert(name, tool)
     }
 
     pub fn get(&self, name: &str) -> Option<&AgentToolRef> {
-        self.tools.get(name).map(|entry| &entry.tool)
-    }
-
-    pub fn source_of(&self, name: &str) -> Option<&ToolSource> {
-        self.tools.get(name).map(|entry| &entry.source)
-    }
-
-    pub fn layer_of(&self, name: &str) -> Option<ToolLayer> {
-        self.tools.get(name).map(|entry| entry.layer)
+        self.tools.get(name)
     }
 
     #[must_use]
@@ -126,10 +69,10 @@ impl ToolRegistry {
     #[must_use]
     pub fn len(&self) -> usize { self.tools.len() }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &AgentToolRef, &ToolSource, ToolLayer)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &AgentToolRef)> {
         self.tools
             .iter()
-            .map(|(name, entry)| (name.as_str(), &entry.tool, &entry.source, entry.layer))
+            .map(|(name, tool)| (name.as_str(), tool))
     }
 
     /// Convert all tools to [`llm::ToolDefinition`] format for the
@@ -138,10 +81,10 @@ impl ToolRegistry {
     pub fn to_llm_tool_definitions(&self) -> Vec<crate::llm::ToolDefinition> {
         self.tools
             .values()
-            .map(|entry| crate::llm::ToolDefinition {
-                name:        entry.tool.name().to_string(),
-                description: entry.tool.description().to_string(),
-                parameters:  entry.tool.parameters_schema(),
+            .map(|tool| crate::llm::ToolDefinition {
+                name:        tool.name().to_string(),
+                description: tool.description().to_string(),
+                parameters:  tool.parameters_schema(),
             })
             .collect()
     }
@@ -155,38 +98,15 @@ impl ToolRegistry {
     #[must_use]
     pub fn filtered(&self, tool_names: &[String]) -> Self {
         if tool_names.is_empty() {
-            let mut new = Self::new();
-            for entry in self.tools.values() {
-                new.register(Arc::clone(&entry.tool), entry.source.clone(), entry.layer);
-            }
-            return new;
+            return self.clone();
         }
         let mut new = Self::new();
-        for (name, entry) in &self.tools {
+        for (name, tool) in &self.tools {
             if tool_names.iter().any(|n| n == name) {
-                new.register(Arc::clone(&entry.tool), entry.source.clone(), entry.layer);
+                new.register(Arc::clone(tool));
             }
         }
         new
-    }
-
-    fn register(
-        &mut self,
-        tool: AgentToolRef,
-        source: ToolSource,
-        layer: ToolLayer,
-    ) -> Option<AgentToolRef> {
-        let name = tool.name().to_owned();
-        self.tools
-            .insert(
-                name,
-                ToolEntry {
-                    tool,
-                    source,
-                    layer,
-                },
-            )
-            .map(|entry| entry.tool)
     }
 }
 
