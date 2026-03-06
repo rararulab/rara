@@ -48,6 +48,8 @@ pub(crate) struct BootResult {
     /// `KernelHandle` after kernel startup.
     pub dispatch_rara_handle:
         std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
+    /// Knowledge layer service for long-term memory.
+    pub knowledge_service:    rara_kernel::memory::knowledge::KnowledgeServiceRef,
 }
 
 /// A user entry in the YAML configuration file.
@@ -178,6 +180,12 @@ pub(crate) async fn boot(
 
     let agent_registry = Arc::new(load_default_registry());
 
+    // -- knowledge layer ------------------------------------------------------
+
+    let knowledge_service = init_knowledge_service(settings_provider.as_ref())
+        .await
+        .whatever_context("Failed to initialize knowledge layer")?;
+
     info!("Boot completed");
 
     Ok(BootResult {
@@ -193,6 +201,7 @@ pub(crate) async fn boot(
         identity_resolver,
         agent_registry,
         dispatch_rara_handle: tool_result.dispatch_rara_handle,
+        knowledge_service,
     })
 }
 
@@ -499,4 +508,67 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
             entity_id.as_deref(),
         ))
     }
+}
+
+// =========================================================================
+// Private: Knowledge Layer initialization
+// =========================================================================
+
+/// Initialize the knowledge layer from settings.
+///
+/// All config fields are required — returns an error if any are missing.
+async fn init_knowledge_service(
+    settings: &dyn rara_domain_shared::settings::SettingsProvider,
+) -> anyhow::Result<rara_kernel::memory::knowledge::KnowledgeServiceRef> {
+    use rara_kernel::memory::knowledge::{EmbeddingService, KnowledgeConfig, KnowledgeService};
+
+    fn require(val: Option<String>, key: &str) -> anyhow::Result<String> {
+        val.ok_or_else(|| anyhow::anyhow!("{key} is not configured in settings"))
+    }
+
+    let embedding_model = require(settings.get("memory.knowledge.embedding_model").await, "memory.knowledge.embedding_model")?;
+    let embedding_dimensions: usize = require(settings.get("memory.knowledge.embedding_dimensions").await, "memory.knowledge.embedding_dimensions")?
+        .parse()
+        .map_err(|_| anyhow::anyhow!("memory.knowledge.embedding_dimensions must be a valid usize"))?;
+    let search_top_k: usize = require(settings.get("memory.knowledge.search_top_k").await, "memory.knowledge.search_top_k")?
+        .parse()
+        .map_err(|_| anyhow::anyhow!("memory.knowledge.search_top_k must be a valid usize"))?;
+    let similarity_threshold: f32 = require(settings.get("memory.knowledge.similarity_threshold").await, "memory.knowledge.similarity_threshold")?
+        .parse()
+        .map_err(|_| anyhow::anyhow!("memory.knowledge.similarity_threshold must be a valid f32"))?;
+    let extractor_model = require(settings.get("memory.knowledge.extractor_model").await, "memory.knowledge.extractor_model")?;
+
+    let config = KnowledgeConfig::builder()
+        .embedding_model(embedding_model)
+        .embedding_dimensions(embedding_dimensions)
+        .search_top_k(search_top_k)
+        .similarity_threshold(similarity_threshold)
+        .extractor_model(extractor_model)
+        .build();
+
+    // Get OpenAI API key from the default LLM provider settings.
+    let default_provider = require(settings.get("llm.default_provider").await, "llm.default_provider")?;
+    let api_key_setting = format!("llm.providers.{default_provider}.api_key");
+    let api_key = require(settings.get(&api_key_setting).await, &api_key_setting)?;
+
+    // Open SQLite database for knowledge items.
+    let db_path = rara_paths::data_dir().join("knowledge/knowledge.db");
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let pool = sqlx::SqlitePool::connect(&db_url).await?;
+
+    // Run knowledge-specific migrations.
+    sqlx::migrate!("../rara-model/migrations").run(&pool).await?;
+
+    // Build embedding service.
+    let embedding_svc = Arc::new(EmbeddingService::new(config.clone(), api_key)?);
+
+    info!("knowledge layer initialized");
+    Ok(Arc::new(KnowledgeService {
+        pool,
+        embedding_svc,
+        config,
+    }))
 }

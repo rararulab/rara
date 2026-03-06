@@ -129,6 +129,7 @@
 //!   the last read, keeping per-turn I/O proportional to new entries rather
 //!   than total tape size.
 
+pub mod knowledge;
 mod anchors;
 mod context;
 mod error;

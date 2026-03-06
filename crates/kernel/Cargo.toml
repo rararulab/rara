@@ -43,6 +43,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 smart-default.workspace = true
 snafu.workspace = true
+sqlx.workspace = true
 strum = { workspace = true, features = ["derive"] }
 tokio.workspace = true
 tokio-util = { workspace = true }
@@ -50,6 +51,7 @@ tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true
 urlencoding.workspace = true
+usearch = "2"
 uuid.workspace = true
 
 [dev-dependencies]
