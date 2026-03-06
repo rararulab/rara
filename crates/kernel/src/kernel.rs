@@ -1100,17 +1100,60 @@ impl Kernel {
         self.start_llm_turn(session_key, msg).await;
     }
 
-    /// Start an LLM turn for the given agent, spawning the work as an async
-    /// task that pushes `TurnCompleted` back into the EventQueue when done.
+    /// Start an LLM turn for a session, spawning the work as a background
+    /// async task.
+    ///
+    /// # What this method does
+    ///
+    /// This is the heart of the agent execution pipeline. It takes an inbound
+    /// user message and orchestrates the full lifecycle of one "turn" — from
+    /// recording the message, through LLM reasoning, to delivering the reply.
+    ///
+    /// # Why it exists as a separate method
+    ///
+    /// The kernel event loop is single-threaded per shard. LLM calls are slow
+    /// (seconds to minutes), so the actual work is spawned as a background
+    /// tokio task. This method sets up all the context the task needs, spawns
+    /// it, and returns immediately — freeing the event loop to process other
+    /// events.
+    ///
+    /// # Lifecycle phases (in order)
+    ///
+    /// 1. **Validation** — verify the process still exists in the table.
+    /// 2. **State transition** — mark the process as `Active` so new messages
+    ///    are buffered (not dropped) while the turn runs.
+    /// 3. **UX feedback** — send an initial typing indicator so the user knows
+    ///    the agent is working.
+    /// 4. **Tape persistence** — append the user message to the session tape
+    ///    (JSONL on disk) before any LLM call, ensuring no message is lost.
+    /// 5. **Context assembly** — build the LLM conversation history from the
+    ///    tape, injecting the user's cross-session memory (user tape).
+    /// 6. **Stream setup** — open a streaming channel for real-time token
+    ///    delivery to the client.
+    /// 7. **Spawn background task** — the task runs `run_agent_loop` (which
+    ///    may involve multiple LLM calls and tool executions), then pushes a
+    ///    `TurnCompleted` event back into the queue.
+    ///
+    /// # Failure safety
+    ///
+    /// A `TurnGuard` (RAII) ensures that `TurnCompleted` is always pushed and
+    /// the stream is always closed, even if the spawned task panics or is
+    /// cancelled. Without this, the process would be stuck in `Active` state
+    /// forever — no new messages could be processed.
+    ///
+    /// Tape forking provides transactional semantics: the agent writes to a
+    /// fork during its turn. On success the fork is merged back; on failure
+    /// it is discarded, keeping the main tape clean.
     #[tracing::instrument(skip_all, fields(session_key = %session_key, msg_session_key = ?msg.session_key))]
     async fn start_llm_turn(&self, session_key: SessionKey, msg: InboundMessage) {
-        /// RAII guard ensuring that `TurnCompleted` is always pushed and the
-        /// stream is always closed, even when the spawned turn task
-        /// panics or is cancelled.
-        ///
-        /// On normal completion the caller sets `completed = true` before the
-        /// guard is dropped; on abnormal exit `Drop` performs the
-        /// cleanup.
+        // -- TurnGuard: RAII safety net ------------------------------------------
+        //
+        // Why: The spawned task can panic, be cancelled (user interrupt), or hit
+        // an unexpected error at any point. Without cleanup the process stays in
+        // `Active` state forever (deadlocked). TurnGuard::drop() ensures:
+        //   - the typing indicator task is aborted
+        //   - the response stream is closed
+        //   - a TurnCompleted(Err) event is pushed so the process returns to Ready
         struct TurnGuard {
             event_queue:    EventQueueRef,
             stream_hub:     Arc<crate::io::StreamHub>,
@@ -1156,6 +1199,12 @@ impl Kernel {
             }
         }
 
+        // -- Phase 1: Validation -------------------------------------------------
+        //
+        // Why: Between the time a message is queued and this method runs, the
+        // process may have been killed or reaped. Delivering to a missing
+        // process would silently lose the message, so we send an error back
+        // to the user instead.
         if !self.process_table.contains(&session_key) {
             warn!(session_key = %session_key, "runtime not found for LLM turn");
             // Send error back to the user instead of silently dropping.
@@ -1175,18 +1224,27 @@ impl Kernel {
             return;
         }
 
-        // session_key is always resolved by this point (set by handle_user_message or synthetic).
+        // -- Phase 2: State transition -------------------------------------------
+        //
+        // Why: Moving to `Active` tells the process table that this session is
+        // busy. Any new messages arriving for this session while it's Active
+        // are buffered in `pause_buffer` (see `deliver_to_session`) rather than
+        // starting a concurrent turn — the kernel enforces one turn at a time
+        // per session.
         let session_key = msg.session_key.clone().unwrap_or(session_key);
         let user = msg.user.clone();
         let msg_id = msg.id.clone();
 
-        // Set state to Active.
         let _ = self
             .process_table
             .set_state(session_key, SessionState::Active);
 
-        // Send a typing / progress indicator so the user sees feedback
-        // while the LLM is thinking (e.g. Telegram "typing..." bubble).
+        // -- Phase 3: UX feedback ------------------------------------------------
+        //
+        // Why: LLM calls can take seconds. Sending a typing indicator
+        // immediately gives the user visual feedback that their message was
+        // received and the agent is working. On Telegram this shows the
+        // "typing..." bubble.
         let egress_session_key = session_key;
         let _ =
             &self
@@ -1199,12 +1257,16 @@ impl Kernel {
                     None,
                 )));
 
-        // Record metrics.
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
             metrics.record_message();
         }
 
-        // Build tape-backed context and append user message to tape first.
+        // -- Phase 4: Tape persistence -------------------------------------------
+        //
+        // Why: The user message is appended to the JSONL tape BEFORE any LLM
+        // call. This is a write-ahead pattern — if the process crashes during
+        // the LLM turn, the message is already durably stored and won't be
+        // lost. The tape is the source of truth for conversation history.
         let user_text = msg.content.as_text();
         let turn_data = self
             .process_table
@@ -1228,8 +1290,13 @@ impl Kernel {
             warn!(%e, "failed to persist user message to tape");
         }
 
-        // Build LLM context from tape, injecting user-specific memory when
-        // the user identity is known.
+        // -- Phase 5: Context assembly -------------------------------------------
+        //
+        // Why: The LLM needs the full conversation history plus cross-session
+        // user memory to generate a contextually appropriate response.
+        // `build_llm_context_with_user` loads the session tape (conversation
+        // history) and the user tape (persistent facts, preferences, TODOs
+        // about this user), combining them into a single message list.
         let history = {
             let msgs = self
                 .tape_service
@@ -1240,10 +1307,16 @@ impl Kernel {
             if msgs.is_empty() { None } else { Some(msgs) }
         };
 
-        // Open stream.
+        // -- Phase 6: Stream setup -----------------------------------------------
+        //
+        // Why: The stream allows real-time token-by-token delivery to the
+        // client (e.g. SSE for web, chunked updates for Telegram). The
+        // stream_handle is passed into the agent loop so it can emit tokens
+        // as they arrive from the LLM.
         let stream_handle = self.io.stream_hub().open(session_key.clone());
 
-        // Clone what we need for the spawned task.
+        // Clone dependencies for the spawned task. The task outlives this
+        // method call, so it needs owned copies of everything it uses.
         let tape_service = self.tape_service.clone();
         let kernel_handle = self.handle();
         let event_queue = self.event_queue.clone();
@@ -1251,10 +1324,22 @@ impl Kernel {
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(&self.io.stream_hub());
 
-        // Capture parent span for the spawned task.
         let parent_span = tracing::Span::current();
 
-        // Spawn async task for the LLM turn.
+        // -- Phase 7: Spawn background task --------------------------------------
+        //
+        // Why: LLM turns are slow (seconds to minutes) and may involve multiple
+        // tool calls. Running them on the event loop would block all other
+        // event processing. Instead we spawn a detached tokio task that:
+        //
+        //   a) Refreshes the typing indicator every 4s (Telegram expires it
+        //      after ~5s).
+        //   b) Forks the tape for transactional safety — if the turn fails,
+        //      the fork is discarded and the main tape stays clean.
+        //   c) Runs the full agent loop (LLM calls + tool executions).
+        //   d) Merges or discards the tape fork based on outcome.
+        //   e) Pushes TurnCompleted back into the event queue so the kernel
+        //      can deliver the reply and transition the process back to Ready.
         tokio::spawn(async move {
             let turn_span = info_span!(
                 parent: &parent_span,
@@ -1268,10 +1353,10 @@ impl Kernel {
             let _span_guard = turn_span.enter();
             let start = std::time::Instant::now();
 
-            // Spawn a background task that refreshes the typing indicator every
-            // 4 seconds.  Telegram's `sendChatAction(typing)` expires after ~5s,
-            // so we re-send it periodically to keep the indicator visible while
-            // the LLM is reasoning.
+            // -- 7a: Typing refresh loop --
+            // Why: Telegram's typing indicator expires after ~5s. Re-sending it
+            // every 4s keeps the "typing..." bubble visible for the entire
+            // duration of the LLM turn.
             let typing_refresh = {
                 let eq = event_queue.clone();
                 let sid = typing_session_key.clone();
@@ -1294,7 +1379,7 @@ impl Kernel {
                 })
             };
 
-            // TurnGuard ensures cleanup on panic or cancellation.
+            // -- 7b: Arm the TurnGuard --
             let mut turn_guard = TurnGuard {
                 event_queue:    event_queue.clone(),
                 stream_hub:     Arc::clone(&stream_hub_ref),
@@ -1306,8 +1391,11 @@ impl Kernel {
                 completed:      false,
             };
 
-            // Fork the tape so failed turns don't pollute the main tape.
-            // On success the fork is merged back; on failure it is discarded.
+            // -- 7c: Tape fork (transactional safety) --
+            // Why: If the LLM turn fails midway (e.g. tool error, timeout),
+            // we don't want partial assistant messages polluting the tape.
+            // Forking creates a copy; on success we merge it back, on failure
+            // we discard it — the main tape stays clean either way.
             let fork_name = match tape_service.store().fork(&tape_name).await {
                 Ok(name) => Some(name),
                 Err(e) => {
@@ -1317,6 +1405,11 @@ impl Kernel {
             };
             let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
 
+            // -- 7d: Run the agent loop --
+            // Why: This is the core LLM reasoning loop. It may make multiple
+            // LLM calls interspersed with tool executions (bash, file I/O,
+            // etc.). The ToolContext carries the authenticated user_id so
+            // tools can access it without relying on LLM-supplied identity.
             let tool_context = crate::tool::ToolContext {
                 user_id: Some(user.0.clone()),
             };
@@ -1334,7 +1427,7 @@ impl Kernel {
             )
             .await;
 
-            // Merge or discard the fork depending on the turn outcome.
+            // -- 7e: Tape fork resolution --
             if let Some(ref fork) = fork_name {
                 if turn_result.is_ok() {
                     if let Err(e) = tape_service.store().merge(fork, &tape_name).await {
@@ -1347,7 +1440,7 @@ impl Kernel {
                 }
             }
 
-            // Stop the typing refresh loop now that the turn is done.
+            // -- 7f: Cleanup --
             if let Some(handle) = turn_guard.typing_refresh.take() {
                 handle.abort();
             }
@@ -1374,16 +1467,19 @@ impl Kernel {
             // Close stream.
             stream_hub_ref.close(&stream_id);
 
-            // Push TurnCompleted back into the event queue.
-            // Convert KernelError -> String at the event boundary because
-            // KernelEvent requires Clone but KernelError does not implement it.
+            // -- 7g: Signal completion --
+            // Why: The kernel event loop needs to know the turn is done so it
+            // can deliver the reply, update metrics, and transition the process
+            // back to Ready state. KernelError -> String conversion happens
+            // here because KernelEvent requires Clone but KernelError doesn't.
             let result = turn_result.map_err(|e| e.to_string());
             let event = KernelEventEnvelope::turn_completed(session_key, result, msg_id, user);
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, session_key = %session_key, "failed to push TurnCompleted");
             }
 
-            // Normal completion — disarm the guard.
+            // Disarm the guard — TurnCompleted was pushed manually above,
+            // so Drop should not push a duplicate.
             turn_guard.completed = true;
         });
     }
