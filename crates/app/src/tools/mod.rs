@@ -30,6 +30,7 @@ mod read_file;
 mod screenshot;
 mod send_email;
 mod skill_tools;
+mod user_note;
 mod write_file;
 
 use bash::BashTool;
@@ -44,6 +45,7 @@ use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
 use send_email::SendEmailTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
+use user_note::UserNoteTool;
 use write_file::WriteFileTool;
 
 /// Dependencies required to construct all tools.
@@ -52,6 +54,7 @@ pub struct ToolDeps {
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
     pub skill_registry:         rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
+    pub tape_service:           rara_kernel::memory::TapeService,
 }
 
 /// Register all tools into the given [`ToolRegistry`].
@@ -80,6 +83,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) {
         Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
         Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
         Arc::new(RemoveMcpServerTool::new(deps.mcp_manager)),
+        // User memory
+        Arc::new(UserNoteTool::new(deps.tape_service)),
     ];
 
     for tool in tools {

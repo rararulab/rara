@@ -22,6 +22,17 @@ pub type AgentToolRef = Arc<dyn AgentTool>;
 /// Shared reference to the [`ToolRegistry`].
 pub type ToolRegistryRef = Arc<ToolRegistry>;
 
+/// Execution context passed to every tool invocation.
+///
+/// Provides ambient session metadata (e.g. the authenticated user) so tools
+/// do not need to rely on LLM-supplied identity parameters.
+#[derive(Debug, Clone, Default)]
+pub struct ToolContext {
+    /// The authenticated user identifier for the current session.
+    /// `None` when the session has no resolved principal (e.g. anonymous).
+    pub user_id: Option<String>,
+}
+
 /// Agent-callable tool.
 #[async_trait]
 pub trait AgentTool: Send + Sync {
@@ -34,8 +45,12 @@ pub trait AgentTool: Send + Sync {
     /// JSON Schema describing the accepted parameters.
     fn parameters_schema(&self) -> serde_json::Value;
 
-    /// Execute the tool with the given parameters.
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value>;
+    /// Execute the tool with the given parameters and execution context.
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        context: &ToolContext,
+    ) -> anyhow::Result<serde_json::Value>;
 }
 
 /// Registry of available tools for an agent run.

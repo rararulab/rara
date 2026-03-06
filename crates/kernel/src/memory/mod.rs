@@ -28,7 +28,7 @@
 //! | `timestamp` | `jiff::Timestamp` | Wall-clock time captured at persistence          |
 //! | `metadata`  | `Option<Value>`   | Optional free-form data (token counts, model, latency, ...) |
 //!
-//! Six entry kinds cover the full lifecycle of an agent turn:
+//! Seven entry kinds cover the full lifecycle of an agent turn:
 //!
 //! | Kind         | Payload semantics                                    |
 //! |--------------|------------------------------------------------------|
@@ -38,6 +38,7 @@
 //! | `Event`      | Non-chat lifecycle / telemetry (`{"name": "...", "data": {...}}`) |
 //! | `System`     | System prompt or system-level content (`{"content": "..."}`) |
 //! | `Anchor`     | Named checkpoint (`{"name": "...", "state": {...}}`) |
+//! | `Note`       | Structured note in a user tape (`{"category": "...", "content": "..."}`) |
 //!
 //! # How -- Architecture
 //!
@@ -134,7 +135,7 @@ mod service;
 mod store;
 
 pub use anchors::AnchorSummary;
-pub use context::default_tape_context;
+pub use context::{default_tape_context, user_tape_context};
 pub use error::{TapError, TapResult};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -173,6 +174,37 @@ pub enum TapEntryKind {
     System,
     /// Named checkpoint for relative tape queries.
     Anchor,
+    /// Structured note persisted in a user tape (preferences, facts, TODOs).
+    Note,
+}
+
+/// Canonical tape name prefix for per-user tapes.
+const USER_TAPE_PREFIX: &str = "user:";
+
+/// Derive the canonical user tape name from a user identifier.
+///
+/// User tapes are stored alongside session tapes in the same
+/// [`FileTapeStore`] but keyed by `"user:<user_id>"` instead of a session
+/// key.  This keeps storage layout flat and reuses the existing JSONL
+/// infrastructure.
+pub fn user_tape_name(user_id: &str) -> String {
+    format!("{USER_TAPE_PREFIX}{user_id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_tape_name_formats_correctly() {
+        assert_eq!(user_tape_name("alice"), "user:alice");
+        assert_eq!(user_tape_name("bob123"), "user:bob123");
+    }
+
+    #[test]
+    fn user_tape_name_empty_user() {
+        assert_eq!(user_tape_name(""), "user:");
+    }
 }
 
 /// One append-only entry in a tape.

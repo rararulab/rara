@@ -1087,12 +1087,13 @@ impl Kernel {
             warn!(%e, "failed to persist user message to tape");
         }
 
-        // Build LLM context from tape.
+        // Build LLM context from tape, injecting user-specific memory when
+        // the user identity is known.
         let history = {
             let msgs = self
                 .tape_service
                 .clone()
-                .build_llm_context(&tape_name)
+                .build_llm_context_with_user(&tape_name, &user.0)
                 .await
                 .unwrap_or_default();
             if msgs.is_empty() { None } else { Some(msgs) }
@@ -1175,6 +1176,10 @@ impl Kernel {
             };
             let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
 
+            let tool_context = crate::tool::ToolContext {
+                user_id: Some(user.0.clone()),
+            };
+
             let turn_result = run_agent_loop(
                 &kernel_handle,
                 rt_session_key,
@@ -1184,6 +1189,7 @@ impl Kernel {
                 &turn_cancel,
                 tape_service.clone(),
                 effective_tape,
+                tool_context,
             )
             .await;
 

@@ -146,3 +146,160 @@ fn render_tool_result(result: &Value) -> TapResult<String> {
         }
     })
 }
+
+// ---------------------------------------------------------------------------
+// User tape context
+// ---------------------------------------------------------------------------
+
+/// Build a system-role message summarizing the user tape for LLM context
+/// injection.
+///
+/// Reads all `Note` entries from the user tape and formats them into a single
+/// system message.  Returns `None` when the user tape has no notes, so the
+/// caller can skip injection entirely.
+pub fn user_tape_context(entries: &[TapEntry]) -> Option<Message> {
+    let notes: Vec<&TapEntry> = entries
+        .iter()
+        .filter(|e| e.kind == TapEntryKind::Note)
+        .collect();
+
+    if notes.is_empty() {
+        return None;
+    }
+
+    let mut sections: Vec<String> = Vec::new();
+
+    for entry in &notes {
+        let category = entry
+            .payload
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or("general");
+        let content = entry
+            .payload
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if content.is_empty() {
+            continue;
+        }
+        // Include the date so the LLM can gauge information freshness.
+        let date = entry.timestamp.strftime("%Y-%m-%d");
+        sections.push(format!("- [{category}] ({date}) {content}"));
+    }
+
+    if sections.is_empty() {
+        return None;
+    }
+
+    let body = format!(
+        "[User Memory]\nThe following notes were previously recorded about this user. \
+         Use them to personalize your responses.\n\n{}",
+        sections.join("\n")
+    );
+
+    Some(Message::system(body))
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::Timestamp;
+    use serde_json::json;
+
+    use super::*;
+    use crate::llm::{MessageContent, Role};
+
+    /// Helper to build a `TapEntry` with kind `Note`.
+    fn note_entry(category: &str, content: &str, date: &str) -> TapEntry {
+        TapEntry {
+            id:        1,
+            kind:      TapEntryKind::Note,
+            payload:   json!({"category": category, "content": content}),
+            timestamp: Timestamp::from(
+                jiff::civil::date(
+                    date[..4].parse().unwrap(),
+                    date[5..7].parse().unwrap(),
+                    date[8..10].parse().unwrap(),
+                )
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .unwrap(),
+            ),
+            metadata:  None,
+        }
+    }
+
+    #[test]
+    fn user_tape_context_returns_none_for_empty_entries() {
+        assert!(user_tape_context(&[]).is_none());
+    }
+
+    #[test]
+    fn user_tape_context_returns_none_for_non_note_entries() {
+        let entry = TapEntry {
+            id:        1,
+            kind:      TapEntryKind::Message,
+            payload:   json!({"role": "user", "content": "hello"}),
+            timestamp: Timestamp::now(),
+            metadata:  None,
+        };
+        assert!(user_tape_context(&[entry]).is_none());
+    }
+
+    #[test]
+    fn user_tape_context_skips_empty_content() {
+        let entry = note_entry("fact", "", "2026-03-06");
+        assert!(user_tape_context(&[entry]).is_none());
+    }
+
+    #[test]
+    fn user_tape_context_renders_with_timestamp() {
+        let entry = note_entry("preference", "prefers dark mode", "2026-03-06");
+        let msg = user_tape_context(&[entry]).expect("should produce a message");
+        assert_eq!(msg.role, Role::System);
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("[User Memory]"));
+        assert!(text.contains("- [preference] (2026-03-06) prefers dark mode"));
+    }
+
+    #[test]
+    fn user_tape_context_multiple_notes() {
+        let entries = vec![
+            note_entry("fact", "name is Alice", "2026-01-15"),
+            note_entry("todo", "follow up on project", "2026-02-20"),
+        ];
+        let msg = user_tape_context(&entries).expect("should produce a message");
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("- [fact] (2026-01-15) name is Alice"));
+        assert!(text.contains("- [todo] (2026-02-20) follow up on project"));
+    }
+
+    #[test]
+    fn default_tape_context_reconstructs_messages() {
+        let entries = vec![
+            TapEntry {
+                id:        1,
+                kind:      TapEntryKind::Message,
+                payload:   json!({"role": "user", "content": "hello"}),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        2,
+                kind:      TapEntryKind::Message,
+                payload:   json!({"role": "assistant", "content": "hi there"}),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+        ];
+        let messages = default_tape_context(&entries).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::Assistant);
+    }
+}

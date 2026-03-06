@@ -216,6 +216,75 @@ impl TapeService {
         super::context::default_tape_context(&entries)
     }
 
+    /// Build LLM-ready messages from a session tape, prepending user-specific
+    /// context from the corresponding user tape when available.
+    ///
+    /// This is the primary entry point for context construction when a user
+    /// identity is known.  The user tape is loaded once per turn and injected
+    /// as a system message at the front of the message list so the LLM sees
+    /// accumulated user knowledge before the conversation history.
+    pub async fn build_llm_context_with_user(
+        &self,
+        tape_name: &str,
+        user_id: &str,
+    ) -> TapResult<Vec<crate::llm::Message>> {
+        let mut messages = self.build_llm_context(tape_name).await?;
+
+        // Load user tape and inject user context after any leading system
+        // messages, so it appears between the system prompt and conversation
+        // history.  This ensures the LLM's system prompt is never displaced.
+        let user_tape = super::user_tape_name(user_id);
+        let user_entries = self.entries(&user_tape).await?;
+        if let Some(user_msg) = super::context::user_tape_context(&user_entries) {
+            let insert_pos = messages
+                .iter()
+                .position(|m| m.role != crate::llm::Role::System)
+                .unwrap_or(messages.len());
+            messages.insert(insert_pos, user_msg);
+        }
+
+        Ok(messages)
+    }
+
+    // -----------------------------------------------------------------------
+    // User tape helpers
+    // -----------------------------------------------------------------------
+
+    /// Append a structured note to a user tape.
+    ///
+    /// Notes are the primary entry kind for user tapes. Each note carries a
+    /// `category` tag (e.g. `"preference"`, `"fact"`, `"todo"`) and free-form
+    /// `content`.
+    pub async fn append_user_note(
+        &self,
+        user_id: &str,
+        category: &str,
+        content: &str,
+    ) -> TapResult<TapEntry> {
+        let user_tape = super::user_tape_name(user_id);
+        self.store
+            .append(
+                &user_tape,
+                TapEntryKind::Note,
+                serde_json::json!({
+                    "category": category,
+                    "content": content,
+                }),
+                None,
+            )
+            .await
+    }
+
+    /// Read all note entries from a user tape.
+    pub async fn read_user_notes(&self, user_id: &str) -> TapResult<Vec<TapEntry>> {
+        let user_tape = super::user_tape_name(user_id);
+        let entries = self.entries(&user_tape).await?;
+        Ok(entries
+            .into_iter()
+            .filter(|e| e.kind == TapEntryKind::Note)
+            .collect())
+    }
+
     /// Inspect current tape state without mutating it.
     pub async fn info(&self, tape_name: &str) -> TapResult<TapeInfo> {
         let entries = self.entries(tape_name).await?;
@@ -526,4 +595,93 @@ fn extract_searchable_text(payload: &Value) -> String {
         return text.to_owned();
     }
     serde_json::to_string(payload).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// Create a [`TapeService`] backed by a temporary directory.
+    async fn temp_tape_service(dir: &Path) -> TapeService {
+        let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
+        TapeService::new(store)
+    }
+
+    #[tokio::test]
+    async fn build_llm_context_with_user_inserts_after_system_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "test-session";
+
+        // Bootstrap anchor + system entry + user message.
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "system", "content": "You are a helpful assistant."}),
+            None,
+        )
+        .await
+        .unwrap();
+        svc.append_message(tape, json!({"role": "user", "content": "hi"}), None)
+            .await
+            .unwrap();
+
+        // Write a user note.
+        svc.append_user_note("alice", "fact", "likes Rust")
+            .await
+            .unwrap();
+
+        let messages = svc.build_llm_context_with_user(tape, "alice").await.unwrap();
+
+        // The first message should still be the system prompt, not the user
+        // memory note.
+        assert_eq!(messages[0].role, crate::llm::Role::System);
+        let first_text = match &messages[0].content {
+            crate::llm::MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text"),
+        };
+        assert!(
+            first_text.contains("helpful assistant"),
+            "first message should be the original system prompt"
+        );
+
+        // The user memory message should be the second message (after the system
+        // prompt but before conversation messages).
+        assert_eq!(messages[1].role, crate::llm::Role::System);
+        let second_text = match &messages[1].content {
+            crate::llm::MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text"),
+        };
+        assert!(
+            second_text.contains("[User Memory]"),
+            "second message should be user memory"
+        );
+        assert!(second_text.contains("likes Rust"));
+
+        // The conversation user message should follow.
+        assert_eq!(messages[2].role, crate::llm::Role::User);
+    }
+
+    #[tokio::test]
+    async fn build_llm_context_with_user_no_notes_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "test-session-2";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(tape, json!({"role": "user", "content": "hello"}), None)
+            .await
+            .unwrap();
+
+        let messages = svc
+            .build_llm_context_with_user(tape, "nobody")
+            .await
+            .unwrap();
+
+        // No user notes → no injected system message, just the user message.
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, crate::llm::Role::User);
+    }
 }

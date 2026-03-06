@@ -67,7 +67,7 @@ impl AgentTool for BashTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
