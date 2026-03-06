@@ -21,6 +21,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
+use anyhow::Context;
 
 use crate::memory::{TapEntryKind, TapeService};
 
@@ -48,7 +49,7 @@ impl TapeTool {
             .tape_service
             .info(&self.tape_name)
             .await
-            .map_err(|e| anyhow::anyhow!("tape_info failed: {e}"))?;
+            .context("tape_info")?;
         Ok(serde_json::json!({
             "tape_name": info.name,
             "total_entries": info.entries,
@@ -68,7 +69,7 @@ impl TapeTool {
             .tape_service
             .search(&self.tape_name, query, limit.unwrap_or(10), false)
             .await
-            .map_err(|e| anyhow::anyhow!("tape_search failed: {e}"))?;
+            .context("tape_search")?;
         let count = results.len();
         Ok(serde_json::json!({ "results": results, "count": count }))
     }
@@ -111,9 +112,8 @@ impl TapeTool {
             .tape_service
             .handoff(&self.tape_name, name, merged_state)
             .await
-            .map_err(|e| anyhow::anyhow!("tape_anchor failed: {e}"))?;
+            .context("tape_anchor")?;
         Ok(serde_json::json!({
-            "ok": true,
             "anchor_name": name,
             "entries_after_anchor": entries.len(),
         }))
@@ -124,7 +124,7 @@ impl TapeTool {
             .tape_service
             .anchors(&self.tape_name, limit.unwrap_or(10))
             .await
-            .map_err(|e| anyhow::anyhow!("tape_anchors failed: {e}"))?;
+            .context("tape_anchors")?;
         let count = anchors.len();
         Ok(serde_json::json!({ "anchors": anchors, "count": count }))
     }
@@ -150,7 +150,30 @@ impl TapeTool {
                 .from_last_anchor(&self.tape_name, kind_refs)
                 .await
         }
-        .map_err(|e| anyhow::anyhow!("tape_entries failed: {e}"))?;
+        .context("tape_entries")?;
+
+        let count = entries.len();
+        Ok(serde_json::json!({ "entries": entries, "count": count }))
+    }
+
+    async fn exec_between_anchors(
+        &self,
+        start: &str,
+        end: &str,
+        kinds: Option<Vec<String>>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let kind_filters: Option<Vec<TapEntryKind>> = kinds.map(|ks| {
+            ks.iter()
+                .filter_map(|k| k.parse::<TapEntryKind>().ok())
+                .collect()
+        });
+        let kind_refs = kind_filters.as_deref();
+
+        let entries = self
+            .tape_service
+            .between_anchors(&self.tape_name, start, end, kind_refs)
+            .await
+            .context("tape_between_anchors")?;
 
         let count = entries.len();
         Ok(serde_json::json!({ "entries": entries, "count": count }))
@@ -188,6 +211,12 @@ enum TapeParams {
         after_anchor: Option<String>,
         #[serde(default)]
         kinds:        Option<Vec<String>>,
+    },
+    BetweenAnchors {
+        start: String,
+        end:   String,
+        #[serde(default)]
+        kinds: Option<Vec<String>>,
     },
 }
 
@@ -227,7 +256,9 @@ impl crate::tool::AgentTool for TapeTool {
          - `anchor` — create a checkpoint to trim your context window\n\
          - `anchors` — list recent checkpoints to understand your memory structure\n\
          - `entries` — read raw tape entries in your current context window or after a specific \
-           anchor"
+           anchor
+         - `between_anchors` — read entries between two named anchors to inspect a specific \
+           past context window"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -237,7 +268,7 @@ impl crate::tool::AgentTool for TapeTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["info", "search", "anchor", "anchors", "entries"],
+                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors"],
                     "description": "The tape operation to perform."
                 },
                 "query": {
@@ -267,13 +298,21 @@ impl crate::tool::AgentTool for TapeTool {
                     "type": "string",
                     "description": "[entries] Read entries after this named anchor instead of the most recent one."
                 },
+                "start": {
+                    "type": "string",
+                    "description": "[between_anchors] Starting anchor name."
+                },
+                "end": {
+                    "type": "string",
+                    "description": "[between_anchors] Ending anchor name."
+                },
                 "kinds": {
                     "type": "array",
                     "items": {
                         "type": "string",
                         "enum": ["message", "tool_call", "tool_result", "event", "system", "anchor"]
                     },
-                    "description": "[entries] Filter entries by kind."
+                    "description": "[entries, between_anchors] Filter entries by kind."
                 }
             }
         })
@@ -300,6 +339,9 @@ impl crate::tool::AgentTool for TapeTool {
                 after_anchor,
                 kinds,
             } => self.exec_entries(after_anchor.as_deref(), kinds).await,
+            TapeParams::BetweenAnchors { start, end, kinds } => {
+                self.exec_between_anchors(&start, &end, kinds).await
+            }
         }
     }
 }
