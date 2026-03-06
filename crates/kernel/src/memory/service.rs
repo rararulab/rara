@@ -20,6 +20,7 @@
 
 use std::{future::Future, sync::OnceLock};
 
+use jiff::Timestamp;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -485,6 +486,81 @@ impl TapeService {
         Ok(results)
     }
 
+    /// Compact a tape by discarding old `Message`, `ToolCall`, and
+    /// `ToolResult` entries while preserving all `Note`, `Anchor`, `Summary`,
+    /// `System`, and `Event` entries.
+    ///
+    /// The most recent `keep_recent` entries are always preserved regardless of
+    /// kind.  Older entries outside that window are filtered: only structurally
+    /// important kinds survive.  A single `Summary` entry is prepended to
+    /// record how many entries were discarded.
+    ///
+    /// Returns the number of entries that were discarded, or 0 if the tape was
+    /// below the compaction threshold.
+    pub async fn compact_tape(
+        &self,
+        tape_name: &str,
+        keep_recent: usize,
+    ) -> TapResult<usize> {
+        let entries = self.entries(tape_name).await?;
+        let total = entries.len();
+
+        // Nothing to compact if the tape is small enough.
+        if total <= keep_recent {
+            return Ok(0);
+        }
+
+        let split_point = total.saturating_sub(keep_recent);
+        let (old_entries, recent_entries) = entries.split_at(split_point);
+
+        // From old entries, keep structurally important kinds.
+        let preserved_kinds = [
+            TapEntryKind::Note,
+            TapEntryKind::Anchor,
+            TapEntryKind::Summary,
+            TapEntryKind::System,
+            TapEntryKind::Event,
+        ];
+        let preserved_old: Vec<TapEntry> = old_entries
+            .iter()
+            .filter(|e| preserved_kinds.contains(&e.kind))
+            .cloned()
+            .collect();
+
+        let discarded = old_entries.len() - preserved_old.len();
+        if discarded == 0 {
+            return Ok(0);
+        }
+
+        // Build the replacement tape: Summary + preserved old + recent.
+        let summary_entry = TapEntry {
+            id:        0,
+            kind:      TapEntryKind::Summary,
+            payload:   json!({
+                "discarded_count": discarded,
+                "original_total": total,
+                "preserved_old": preserved_old.len(),
+                "kept_recent": recent_entries.len(),
+                "message": format!(
+                    "Compacted tape: discarded {discarded} old message/tool entries, \
+                     preserved {} structural entries and {} recent entries.",
+                    preserved_old.len(),
+                    recent_entries.len(),
+                ),
+            }),
+            timestamp: Timestamp::now(),
+            metadata:  None,
+        };
+
+        let mut new_entries = Vec::with_capacity(1 + preserved_old.len() + recent_entries.len());
+        new_entries.push(summary_entry);
+        new_entries.extend(preserved_old);
+        new_entries.extend(recent_entries.iter().cloned());
+
+        self.store.replace_entries(tape_name, new_entries).await?;
+        Ok(discarded)
+    }
+
     /// List all tape names known to the underlying store.
     pub async fn list_tapes(&self) -> TapResult<Vec<String>> { self.store.list_tapes().await }
 }
@@ -683,5 +759,89 @@ mod tests {
         // No user notes → no injected system message, just the user message.
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, crate::llm::Role::User);
+    }
+
+    #[tokio::test]
+    async fn compact_tape_below_threshold_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "compact-noop";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        for i in 0..5 {
+            svc.append_message(tape, json!({"role": "user", "content": format!("msg {i}")}), None)
+                .await
+                .unwrap();
+        }
+
+        let discarded = svc.compact_tape(tape, 100).await.unwrap();
+        assert_eq!(discarded, 0);
+
+        // Entries should be unchanged.
+        let entries = svc.entries(tape).await.unwrap();
+        assert_eq!(entries.len(), 6); // 1 anchor + 5 messages
+    }
+
+    #[tokio::test]
+    async fn compact_tape_discards_old_messages_preserves_notes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "compact-test";
+
+        // Create: 1 anchor + 1 note + 10 messages = 12 entries total.
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_user_note("alice", "fact", "likes Rust").await.unwrap();
+        // Append messages to the same tape (not user tape) for testing.
+        for i in 0..10 {
+            svc.append_message(tape, json!({"role": "user", "content": format!("msg {i}")}), None)
+                .await
+                .unwrap();
+        }
+
+        // Note was written to user tape, so add a Note directly to this tape for testing.
+        svc.store()
+            .append(tape, TapEntryKind::Note, json!({"category": "fact", "content": "test note"}), None)
+            .await
+            .unwrap();
+
+        // Now: 1 anchor + 10 messages + 1 note = 12 entries.
+        let before = svc.entries(tape).await.unwrap();
+        assert_eq!(before.len(), 12);
+
+        // Compact keeping only the 3 most recent entries.
+        let discarded = svc.compact_tape(tape, 3).await.unwrap();
+
+        // Old section had 9 entries (1 anchor + 8 messages). Anchor is preserved,
+        // 8 messages discarded.
+        assert_eq!(discarded, 8);
+
+        let after = svc.entries(tape).await.unwrap();
+        // 1 summary + 1 anchor (preserved) + 3 recent = 5
+        assert_eq!(after.len(), 5);
+        assert_eq!(after[0].kind, TapEntryKind::Summary);
+        assert_eq!(after[1].kind, TapEntryKind::Anchor);
+    }
+
+    #[tokio::test]
+    async fn compact_tape_no_discardable_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "compact-only-anchors";
+
+        // Create a tape with only anchors (non-discardable).
+        for i in 0..5 {
+            svc.handoff(tape, &format!("anchor-{i}"), None).await.unwrap();
+        }
+
+        let entries = svc.entries(tape).await.unwrap();
+        let total = entries.len();
+
+        // Keep 2 recent, old section is all anchors → 0 discarded.
+        let discarded = svc.compact_tape(tape, 2).await.unwrap();
+        assert_eq!(discarded, 0);
+
+        // Entries should be unchanged.
+        let after = svc.entries(tape).await.unwrap();
+        assert_eq!(after.len(), total);
     }
 }

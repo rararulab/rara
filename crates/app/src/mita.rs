@@ -22,10 +22,17 @@ use rara_kernel::{
     identity::Principal,
     memory::TapeService,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Fixed tape name for Mita's own session.
 const MITA_TAPE: &str = "mita";
+
+/// Default entry count threshold above which a tape becomes eligible for
+/// compaction.  Tapes with fewer entries are left untouched.
+const DEFAULT_COMPACT_THRESHOLD: usize = 500;
+
+/// Number of recent entries to preserve verbatim during compaction.
+const DEFAULT_COMPACT_KEEP_RECENT: usize = 200;
 
 /// Worker that runs the Mita heartbeat.
 ///
@@ -46,6 +53,59 @@ impl MitaHeartbeatWorker {
             tape_service,
         }
     }
+
+    /// Check all tapes and compact any that exceed the entry threshold.
+    ///
+    /// This runs before the Mita agent loop on each heartbeat to keep tape
+    /// sizes bounded.  Compaction preserves structurally important entries
+    /// (anchors, notes, summaries, system, events) and the most recent N
+    /// entries, discarding old message/tool entries.
+    async fn auto_compact_tapes(&self) {
+        let tapes = match self.tape_service.list_tapes().await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(error = %e, "failed to list tapes for auto-compaction");
+                return;
+            }
+        };
+
+        for tape_name in tapes {
+            let info = match self.tape_service.info(&tape_name).await {
+                Ok(i) => i,
+                Err(e) => {
+                    warn!(tape = %tape_name, error = %e, "failed to read tape info for compaction check");
+                    continue;
+                }
+            };
+
+            if info.entries < DEFAULT_COMPACT_THRESHOLD {
+                continue;
+            }
+
+            match self
+                .tape_service
+                .compact_tape(&tape_name, DEFAULT_COMPACT_KEEP_RECENT)
+                .await
+            {
+                Ok(0) => {} // nothing to compact
+                Ok(discarded) => {
+                    info!(
+                        tape = %tape_name,
+                        discarded,
+                        original = info.entries,
+                        "auto-compacted tape"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        tape = %tape_name,
+                        error = %e,
+                        "failed to compact tape"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -56,6 +116,11 @@ impl common_worker::Worker for MitaHeartbeatWorker {
 
     async fn work<S: Clone + Send + Sync>(&mut self, ctx: common_worker::WorkerContext<S>) {
         info!(worker = ctx.name(), "Mita heartbeat triggered");
+
+        // ---------------------------------------------------------------
+        // Auto-compact oversized tapes before running the agent loop.
+        // ---------------------------------------------------------------
+        self.auto_compact_tapes().await;
 
         // Ensure Mita's tape exists with a bootstrap anchor.
         if let Err(e) = self.tape_service.ensure_bootstrap_anchor(MITA_TAPE).await {

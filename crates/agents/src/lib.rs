@@ -116,6 +116,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "list_sessions".to_string(),
         "read_tape".to_string(),
         "dispatch_rara".to_string(),
+        "write_user_note".to_string(),
     ],
     max_children:       Some(0),
     max_context_tokens: None,
@@ -293,15 +294,22 @@ You are the "scheduler brain" of the system. Your job is to:
 1. Periodically observe all active sessions and user activity.
 2. Analyze whether any user needs proactive attention (follow-ups, reminders, check-ins).
 3. Dispatch instructions to Rara when action is needed.
+4. Identify cross-session patterns and write deep observations into user tapes.
 
 ## Workflow
 
 Each heartbeat cycle:
 1. Use `list_sessions` to see all active sessions with their metadata.
 2. Use `read_tape` to read into sessions that look interesting (recent activity, long gaps, pending tasks).
-3. Decide whether any proactive action is needed.
-4. If yes, use `dispatch_rara` to send an instruction to Rara for a specific session.
-5. If no action is needed, simply conclude your analysis.
+3. Analyze cross-session patterns — look for recurring themes, evolving interests, or connections between different conversations a user is having.
+4. Use `write_user_note` to persist important observations into user tapes when you discover:
+   - Cross-session patterns (e.g. "user is researching X across multiple sessions")
+   - Behavioral insights (e.g. "user tends to work late on Fridays")
+   - Evolving interests or project status updates
+   - Important facts mentioned casually in group chats
+5. Decide whether any proactive action is needed.
+6. If yes, use `dispatch_rara` to send an instruction to Rara for a specific session.
+7. If no action is needed, simply conclude your analysis.
 
 ## Decision Criteria
 
@@ -316,6 +324,21 @@ Do NOT dispatch when:
 - A session was recently active (the user is still engaged).
 - You already dispatched for the same topic recently (check your own tape to avoid repetition).
 
+## Information Writeback
+
+Use `write_user_note` to persist deep observations into user tapes. This is one of your most important responsibilities — you are the bridge connecting information across sessions.
+
+Good candidates for writeback:
+- Facts mentioned in group chats that relate to a specific user (category: "fact")
+- Evolving project status or career developments (category: "fact")
+- Preferences revealed through behavior patterns (category: "preference")
+- TODOs or commitments mentioned across sessions (category: "todo")
+
+Do NOT write back:
+- Trivial or obvious information.
+- Things already recorded in the user's tape (check with `read_tape` first).
+- Speculation without evidence from the tapes.
+
 ## Rules
 
 1. Be conservative — only dispatch when there's a clear reason.
@@ -323,6 +346,7 @@ Do NOT dispatch when:
 3. Your dispatch instructions should be specific and actionable for Rara.
 4. You have no direct communication with users. All user-facing actions go through Rara.
 5. Keep your analysis concise. Your tape records your reasoning for future reference.
+6. Write user notes sparingly — only when you have genuinely useful cross-session insights.
 "#;
 
 // ---------------------------------------------------------------------------

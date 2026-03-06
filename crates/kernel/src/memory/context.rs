@@ -18,7 +18,8 @@
 //! `Vec<llm::Message>` suitable for feeding to the LLM.  `Message` entries are
 //! deserialized directly, `ToolCall` entries become assistant messages with a
 //! `tool_calls` array, and `ToolResult` entries become tool-role messages.
-//! Non-conversational kinds (`Event`, `System`, `Anchor`) are skipped.
+//! Non-conversational kinds (`Event`, `System`, `Anchor`, `Note`, `Summary`)
+//! are skipped.
 
 use serde_json::Value;
 

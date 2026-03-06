@@ -455,6 +455,23 @@ impl WorkerState {
             })
     }
 
+    /// Replace all entries in a tape atomically: reset the tape file, then
+    /// write the new entries in order.  Used by compaction to swap old content
+    /// with a condensed version.
+    fn replace_entries(&mut self, tape: &str, entries: Vec<TapEntry>) -> TapResult<()> {
+        self.reset(tape)?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let path = self.tape_path(tape);
+        let file = self
+            .tape_files
+            .entry(tape.to_owned())
+            .or_insert_with(|| TapeFile::new(path));
+        file.append_many(entries)?;
+        Ok(())
+    }
+
     /// Rename the active tape into a timestamped archive file.
     fn archive(&mut self, tape: &str) -> TapResult<Option<PathBuf>> {
         let mut file = self.take_tape_file(tape);
@@ -615,6 +632,17 @@ impl FileTapeStore {
         let tape = tape.to_owned();
         self.worker
             .call(move |state| state.append(&tape, kind, payload, metadata))
+            .await
+    }
+
+    /// Replace all entries in a tape atomically (reset + rewrite).
+    ///
+    /// Used by [`TapeService::compact_tape`] to swap old content with a
+    /// condensed version after compaction.
+    pub async fn replace_entries(&self, tape: &str, entries: Vec<TapEntry>) -> TapResult<()> {
+        let tape = tape.to_owned();
+        self.worker
+            .call(move |state| state.replace_entries(&tape, entries))
             .await
     }
 

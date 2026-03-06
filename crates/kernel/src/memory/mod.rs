@@ -28,7 +28,7 @@
 //! | `timestamp` | `jiff::Timestamp` | Wall-clock time captured at persistence          |
 //! | `metadata`  | `Option<Value>`   | Optional free-form data (token counts, model, latency, ...) |
 //!
-//! Seven entry kinds cover the full lifecycle of an agent turn:
+//! Eight entry kinds cover the full lifecycle of an agent turn:
 //!
 //! | Kind         | Payload semantics                                    |
 //! |--------------|------------------------------------------------------|
@@ -39,6 +39,7 @@
 //! | `System`     | System prompt or system-level content (`{"content": "..."}`) |
 //! | `Anchor`     | Named checkpoint (`{"name": "...", "state": {...}}`) |
 //! | `Note`       | Structured note in a user tape (`{"category": "...", "content": "..."}`) |
+//! | `Summary`    | Compaction summary replacing pruned entries (`{"discarded_count": N, "preserved_kinds": [...]}`) |
 //!
 //! # How -- Architecture
 //!
@@ -176,6 +177,8 @@ pub enum TapEntryKind {
     Anchor,
     /// Structured note persisted in a user tape (preferences, facts, TODOs).
     Note,
+    /// Compaction summary replacing older entries that were pruned.
+    Summary,
 }
 
 /// Canonical tape name prefix for per-user tapes.
