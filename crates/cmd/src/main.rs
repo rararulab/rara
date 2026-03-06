@@ -161,7 +161,22 @@ impl GatewayArgs {
             detector.run(detector_cancel).await;
         });
 
-        // 3. Build admin HTTP server state and spawn it.
+        // 3. Spawn update pipeline (detector → executor → supervisor restart).
+        let pipeline_rx = update_rx.clone();
+        let pipeline_cancel = cancel.clone();
+        let pipeline_handle = supervisor_handle.clone();
+        let pipeline_config = gateway_config.clone();
+        tokio::spawn(async move {
+            rara_app::gateway::run_update_pipeline(
+                pipeline_config,
+                pipeline_rx,
+                pipeline_handle,
+                pipeline_cancel,
+            )
+            .await;
+        });
+
+        // 4. Build admin HTTP server state and spawn it.
         let admin_state = rara_app::gateway::server::GatewayAppState {
             supervisor_handle,
             update_state_rx: update_rx,
@@ -172,7 +187,7 @@ impl GatewayArgs {
             .await
             .whatever_context("Failed to start gateway admin HTTP server")?;
 
-        // 4. Run supervisor (blocking).
+        // 5. Run supervisor (blocking).
         match supervisor.run().await {
             Ok(()) => {
                 cancel.cancel();

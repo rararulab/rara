@@ -1,0 +1,139 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Update pipeline — wires [`UpdateDetector`] state changes to
+//! [`UpdateExecutor`] and [`SupervisorHandle`] for automatic updates.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
+
+use super::detector::UpdateState;
+use super::executor::{UpdateExecutor, UpdateResult};
+use super::supervisor::SupervisorHandle;
+use crate::GatewayConfig;
+
+/// Guard that prevents concurrent update executions.
+static UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// Run the update pipeline loop.
+///
+/// Watches for [`UpdateState`] changes from the detector. When an update is
+/// available and `config.auto_update` is enabled, it creates an
+/// [`UpdateExecutor`], builds the new revision, and restarts the agent via
+/// the [`SupervisorHandle`].
+pub async fn run_update_pipeline(
+    config: GatewayConfig,
+    mut update_rx: watch::Receiver<UpdateState>,
+    supervisor_handle: SupervisorHandle,
+    cancel: CancellationToken,
+) {
+    info!("Update pipeline started (auto_update={})", config.auto_update);
+
+    loop {
+        tokio::select! {
+            result = update_rx.changed() => {
+                if result.is_err() {
+                    // Sender dropped — detector is gone.
+                    info!("Update pipeline: detector channel closed, exiting");
+                    return;
+                }
+            }
+            () = cancel.cancelled() => {
+                info!("Update pipeline shutting down");
+                return;
+            }
+        }
+
+        let state = update_rx.borrow_and_update().clone();
+
+        if !state.update_available || !config.auto_update {
+            continue;
+        }
+
+        let upstream_rev = match state.upstream_rev {
+            Some(ref rev) => rev.clone(),
+            None => continue,
+        };
+
+        // Prevent concurrent updates.
+        if UPDATING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            info!("Update pipeline: another update is already in progress, skipping");
+            continue;
+        }
+
+        info!(rev = %upstream_rev, "Auto-update: starting update to {}", upstream_rev);
+
+        let result = execute_and_handle(&upstream_rev, &supervisor_handle).await;
+
+        if let Err(e) = result {
+            warn!(error = %e, "Auto-update: executor creation failed");
+        }
+
+        UPDATING.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Create an executor, run the update, and handle the result.
+async fn execute_and_handle(
+    upstream_rev: &str,
+    supervisor_handle: &SupervisorHandle,
+) -> Result<(), String> {
+    let mut executor = UpdateExecutor::new()
+        .await
+        .map_err(|e| format!("failed to create UpdateExecutor: {e}"))?;
+
+    info!("Auto-update: building new version...");
+
+    let result = executor
+        .execute_update(upstream_rev)
+        .await
+        .map_err(|e| format!("execute_update error: {e}"))?;
+
+    match result {
+        UpdateResult::Success { new_rev } => {
+            info!(rev = %new_rev, "Auto-update: successfully updated to {}, restarting agent", new_rev);
+            if let Err(e) = supervisor_handle.restart().await {
+                warn!(error = %e, "Auto-update: failed to send restart command");
+            }
+            if let Err(e) = executor.cleanup().await {
+                warn!(error = %e, "Auto-update: cleanup failed (non-fatal)");
+            }
+        }
+        UpdateResult::BuildFailed { reason } => {
+            warn!(reason = %reason, "Auto-update: build failed for {}: {}", upstream_rev, reason);
+            // No rollback needed — executor already cleaned up the staging worktree.
+        }
+        UpdateResult::ActivationFailed { reason, rolled_back } => {
+            warn!(
+                reason = %reason,
+                rolled_back,
+                "Auto-update: activation failed, rolled back to previous version"
+            );
+            if !rolled_back {
+                if let Err(e) = executor.rollback().await {
+                    warn!(error = %e, "Auto-update: manual rollback also failed");
+                }
+            }
+            // Restart the supervisor so it picks up the restored binary.
+            if let Err(e) = supervisor_handle.restart().await {
+                warn!(error = %e, "Auto-update: failed to send restart command after rollback");
+            }
+        }
+    }
+
+    Ok(())
+}
