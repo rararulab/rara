@@ -75,6 +75,8 @@ pub struct AppConfig {
     /// Mita proactive agent configuration (optional — disabled if absent).
     #[serde(default)]
     pub mita:        Option<MitaConfig>,
+    /// Knowledge layer configuration (long-term memory extraction).
+    pub knowledge:   rara_kernel::memory::knowledge::KnowledgeConfig,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -189,7 +191,7 @@ pub async fn start_with_options(
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
 
-    let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
+    let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users, &config.knowledge)
         .await
         .whatever_context("Failed to boot kernel dependencies")?;
 
