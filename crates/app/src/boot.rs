@@ -280,6 +280,36 @@ async fn build_driver_registry(
             )
         })?;
 
+    // -- per-agent model/driver overrides ---------------------------------------
+
+    let agent_names: BTreeSet<&str> = all_settings
+        .keys()
+        .filter_map(|k| k.strip_prefix("llm.agent_overrides."))
+        .filter_map(|k| k.split('.').next())
+        .collect();
+
+    for &agent in &agent_names {
+        let model_key = format!("llm.agent_overrides.{agent}.model");
+        let driver_key = format!("llm.agent_overrides.{agent}.provider");
+
+        let model = all_settings
+            .get(&model_key)
+            .filter(|v| !v.trim().is_empty())
+            .cloned();
+        let driver = all_settings
+            .get(&driver_key)
+            .filter(|v| !v.trim().is_empty())
+            .cloned();
+
+        if model.is_some() || driver.is_some() {
+            info!(agent, ?model, ?driver, "per-agent LLM override");
+            registry.set_agent_override(
+                agent,
+                rara_kernel::llm::registry::AgentDriverConfig { driver, model },
+            );
+        }
+    }
+
     // -- codex (OpenAI via OAuth) — special-cased -----------------------------
 
     match rara_codex_oauth::load_tokens(credential_store).await {
