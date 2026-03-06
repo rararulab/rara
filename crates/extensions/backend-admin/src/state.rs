@@ -64,7 +64,7 @@ impl BackendState {
     /// Kernel-dependent routes (`agents`, `kernel`) use the `KernelHandle`
     /// for read-only access and mutation through the event queue.
     /// Skill and MCP routes need their respective service
-    /// handles from [`RaraState`](rara_boot::state::RaraState).
+    /// handles from boot result (see `rara_app::boot`).
     pub fn routes(
         &self,
         kernel_handle: &rara_kernel::handle::KernelHandle,

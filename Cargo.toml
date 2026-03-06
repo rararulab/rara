@@ -123,7 +123,6 @@ members = [
     "crates/integrations/keyring-store",
     "crates/integrations/pg-credential-store",
     "crates/agents",
-    "crates/boot",
     "crates/channels",
     "crates/kernel",
     "crates/integrations/composio",
@@ -231,7 +230,6 @@ rara-agents = { path = "crates/agents" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
-rara-boot = { path = "crates/boot" }
 rara-channels = { path = "crates/channels" }
 rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }

@@ -21,7 +21,6 @@ jiff = { workspace = true }
 
 llmfit-core = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
-rara-boot = { workspace = true }
 rara-channels = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-composio = { workspace = true }

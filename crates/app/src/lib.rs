@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod boot;
 pub mod flatten;
+mod tools;
 
 use std::{
     sync::{
@@ -68,7 +70,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub telegram:    Option<flatten::TelegramConfig>,
     /// Configured users with platform identity mappings (required).
-    pub users:       Vec<rara_boot::user_store::UserConfig>,
+    pub users:       Vec<crate::boot::UserConfig>,
 }
 
 /// General OTLP telemetry configuration.
@@ -177,9 +179,9 @@ pub async fn start_with_options(
     info!("Runtime settings service loaded");
 
     let rara =
-        rara_boot::state::RaraState::init(pool.clone(), settings_provider.clone(), &config.users)
+        crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
             .await
-            .whatever_context("Failed to initialize RaraState")?;
+            .whatever_context("Failed to boot kernel dependencies")?;
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),
@@ -190,9 +192,6 @@ pub async fn start_with_options(
     .await
     .whatever_context("Failed to initialize BackendState")?;
 
-    let identity_resolver: Arc<dyn rara_kernel::io::IdentityResolver> = Arc::new(
-        rara_boot::resolvers::PlatformIdentityResolver::new(&config.users),
-    );
     let web_adapter = Arc::new(rara_channels::web::WebAdapter::new(
         config.owner_token.clone(),
     ));
@@ -214,7 +213,7 @@ pub async fn start_with_options(
     };
 
     // Build IOSubsystem with all adapters before passing to Kernel.
-    let mut io = rara_kernel::io::IOSubsystem::new(identity_resolver, rara.session_index.clone());
+    let mut io = rara_kernel::io::IOSubsystem::new(rara.identity_resolver.clone(), rara.session_index.clone());
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
     }
@@ -230,7 +229,7 @@ pub async fn start_with_options(
         Default::default(),
         rara.driver_registry.clone(),
         rara.tool_registry.clone(),
-        Arc::new(rara_boot::manifests::load_default_registry()),
+        rara.agent_registry.clone(),
         rara.session_index.clone(),
         rara.tape_service.clone(),
         settings_provider.clone(),
