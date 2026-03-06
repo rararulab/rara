@@ -124,13 +124,27 @@ impl UpdateDetector {
         self.state.last_check_time = Some(chrono::Utc::now());
 
         let upstream = self.state.upstream_rev.as_deref().unwrap_or_default();
-        self.state.update_available = upstream != self.state.current_rev;
+
+        // Only trigger when remote is strictly ahead of local.
+        // A simple != would also fire when local is ahead (e.g. local commits
+        // not yet pushed), which is not an updateable situation.
+        self.state.update_available = if upstream == self.state.current_rev {
+            false
+        } else {
+            Self::is_ancestor(&self.state.current_rev, upstream).await
+        };
 
         if self.state.update_available {
             info!(
                 current = %self.state.current_rev,
                 upstream = %upstream,
-                "Update available"
+                "Update available (remote ahead)"
+            );
+        } else if upstream != self.state.current_rev {
+            info!(
+                current = %self.state.current_rev,
+                upstream = %upstream,
+                "Revisions differ but remote is not ahead — skipping"
             );
         } else {
             info!(rev = %self.state.current_rev, "Already up to date");
@@ -154,6 +168,23 @@ impl UpdateDetector {
             return Err(format!("git fetch exited {}: {stderr}", output.status));
         }
         Ok(())
+    }
+
+    /// Returns `true` if `ancestor` is an ancestor of `descendant`, i.e.
+    /// `descendant` is strictly ahead of `ancestor`.
+    async fn is_ancestor(ancestor: &str, descendant: &str) -> bool {
+        let output = tokio::process::Command::new("git")
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .output()
+            .await;
+
+        match output {
+            Ok(o) => o.status.success(),
+            Err(e) => {
+                warn!(error = %e, "git merge-base --is-ancestor failed, assuming not ancestor");
+                false
+            }
+        }
     }
 
     async fn git_rev_parse(refspec: &str) -> Result<String, String> {
