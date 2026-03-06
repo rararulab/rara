@@ -1479,6 +1479,19 @@ impl Kernel {
             }
         }
 
+        // Child agents spawned via spawn_child have a result_tx — once their
+        // first turn completes we send the result and clean up the process.
+        // Regular (long-lived) sessions transition to Ready instead.
+        let has_result_tx = self
+            .process_table
+            .with(&session_key, |p| p.result_tx.is_some())
+            .unwrap_or(false);
+
+        if has_result_tx {
+            self.cleanup_process(session_key).await;
+            return;
+        }
+
         // Session-centric model: sessions are long-lived. After each turn,
         // the session transitions to Ready (idle) instead of a terminal state.
         // The next user message will be routed to the same session via Path 2.
