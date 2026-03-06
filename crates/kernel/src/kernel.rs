@@ -1323,6 +1323,29 @@ impl Kernel {
         };
 
         let tape_name = session_key.to_string();
+
+        // -- Phase 5: Context assembly -------------------------------------------
+        //
+        // Why: The LLM needs the full conversation history plus cross-session
+        // user memory to generate a contextually appropriate response.
+        // `build_llm_context_with_user` loads the session tape (conversation
+        // history) and the user tape (persistent facts, preferences, TODOs
+        // about this user), combining them into a single message list.
+        //
+        // Build context BEFORE appending the user message to tape.
+        // `run_agent_loop` adds user_text explicitly, so including it
+        // in the tape-loaded history would cause duplication.
+        let history = {
+            let msgs = self
+                .tape_service
+                .clone()
+                .build_llm_context_with_user(&tape_name, &user.0)
+                .await
+                .unwrap_or_default();
+            if msgs.is_empty() { None } else { Some(msgs) }
+        };
+
+        // Persist the user message to tape for future turns.
         let tape_payload = serde_json::json!({
             "role": "user",
             "content": &user_text,
@@ -1334,23 +1357,6 @@ impl Kernel {
         {
             warn!(%e, "failed to persist user message to tape");
         }
-
-        // -- Phase 5: Context assembly -------------------------------------------
-        //
-        // Why: The LLM needs the full conversation history plus cross-session
-        // user memory to generate a contextually appropriate response.
-        // `build_llm_context_with_user` loads the session tape (conversation
-        // history) and the user tape (persistent facts, preferences, TODOs
-        // about this user), combining them into a single message list.
-        let history = {
-            let msgs = self
-                .tape_service
-                .clone()
-                .build_llm_context_with_user(&tape_name, &user.0)
-                .await
-                .unwrap_or_default();
-            if msgs.is_empty() { None } else { Some(msgs) }
-        };
 
         // -- Phase 6: Stream setup -----------------------------------------------
         //
