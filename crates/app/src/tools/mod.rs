@@ -33,6 +33,7 @@ mod mita_write_user_note;
 mod read_file;
 mod screenshot;
 mod send_email;
+mod send_image;
 mod settings;
 mod skill_tools;
 mod user_note;
@@ -53,6 +54,7 @@ use mita_write_user_note::MitaWriteUserNoteTool;
 use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
 use send_email::SendEmailTool;
+use send_image::SendImageTool;
 use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use user_note::UserNoteTool;
@@ -99,6 +101,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ListDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
+        Arc::new(SendImageTool::new()),
         Arc::new(SettingsTool::new(deps.settings.clone())),
         Arc::new(ComposioTool::from_auth_provider(
             deps.composio_auth_provider,

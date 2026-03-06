@@ -26,11 +26,28 @@ pub type ToolRegistryRef = Arc<ToolRegistry>;
 ///
 /// Provides ambient session metadata (e.g. the authenticated user) so tools
 /// do not need to rely on LLM-supplied identity parameters.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ToolContext {
     /// The authenticated user identifier for the current session.
     /// `None` when the session has no resolved principal (e.g. anonymous).
     pub user_id: Option<String>,
+    /// The session key for the current conversation turn.
+    pub session_key: Option<crate::session::SessionKey>,
+    /// The originating endpoint (e.g. Telegram chat) for routing replies.
+    pub origin_endpoint: Option<crate::io::Endpoint>,
+    /// Event queue for pushing outbound events.
+    pub event_queue: Option<crate::queue::EventQueueRef>,
+}
+
+impl std::fmt::Debug for ToolContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContext")
+            .field("user_id", &self.user_id)
+            .field("session_key", &self.session_key)
+            .field("origin_endpoint", &self.origin_endpoint)
+            .field("event_queue", &self.event_queue.as_ref().map(|_| "..."))
+            .finish()
+    }
 }
 
 /// Agent-callable tool.
