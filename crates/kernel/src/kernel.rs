@@ -42,6 +42,7 @@
 use std::sync::Arc;
 
 use futures::future::join_all;
+use futures::FutureExt;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -1416,102 +1417,147 @@ impl Kernel {
                 completed:       false,
             };
 
-            // -- 7c: Tape fork (transactional safety) --
-            // Why: If the LLM turn fails midway (e.g. tool error, timeout),
-            // we don't want partial assistant messages polluting the tape.
-            // Forking creates a copy; on success we merge it back, on failure
-            // we discard it — the main tape stays clean either way.
-            let fork_name = match tape_service.store().fork(&tape_name).await {
-                Ok(name) => Some(name),
-                Err(e) => {
-                    tracing::warn!(tape = %tape_name, error = %e, "tape fork failed, writing directly to main tape");
-                    None
+            // Wrap the core turn work in catch_unwind so that if a panic
+            // occurs, we capture the actual panic message instead of losing
+            // it in TurnGuard::drop's generic error.
+            let panic_result = std::panic::AssertUnwindSafe(async {
+                // -- 7c: Tape fork (transactional safety) --
+                // Why: If the LLM turn fails midway (e.g. tool error, timeout),
+                // we don't want partial assistant messages polluting the tape.
+                // Forking creates a copy; on success we merge it back, on failure
+                // we discard it — the main tape stays clean either way.
+                let fork_name = match tape_service.store().fork(&tape_name).await {
+                    Ok(name) => Some(name),
+                    Err(e) => {
+                        tracing::warn!(tape = %tape_name, error = %e, "tape fork failed, writing directly to main tape");
+                        None
+                    }
+                };
+                let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
+
+                // -- 7d: Run the agent loop --
+                // Why: This is the core LLM reasoning loop. It may make multiple
+                // LLM calls interspersed with tool executions (bash, file I/O,
+                // etc.). The ToolContext carries the authenticated user_id so
+                // tools can access it without relying on LLM-supplied identity.
+                let tool_context = crate::tool::ToolContext {
+                    user_id: Some(user.0.clone()),
+                };
+
+                let turn_result = run_agent_loop(
+                    &kernel_handle,
+                    rt_session_key,
+                    user_text,
+                    history,
+                    &stream_handle,
+                    &turn_cancel,
+                    tape_service.clone(),
+                    effective_tape,
+                    tool_context,
+                )
+                .await;
+
+                // -- 7e: Tape fork resolution --
+                if let Some(ref fork) = fork_name {
+                    if turn_result.is_ok() {
+                        if let Err(e) = tape_service.store().merge(fork, &tape_name).await {
+                            tracing::warn!(fork = %fork, tape = %tape_name, error = %e, "tape merge failed, fork entries may be lost");
+                        }
+                    } else {
+                        if let Err(e) = tape_service.store().discard(fork).await {
+                            tracing::warn!(fork = %fork, error = %e, "tape discard failed, fork file may leak");
+                        }
+                    }
                 }
-            };
-            let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
 
-            // -- 7d: Run the agent loop --
-            // Why: This is the core LLM reasoning loop. It may make multiple
-            // LLM calls interspersed with tool executions (bash, file I/O,
-            // etc.). The ToolContext carries the authenticated user_id so
-            // tools can access it without relying on LLM-supplied identity.
-            let tool_context = crate::tool::ToolContext {
-                user_id: Some(user.0.clone()),
-            };
+                // -- 7f: Cleanup --
+                if let Some(handle) = turn_guard.typing_refresh.take() {
+                    handle.abort();
+                }
 
-            let turn_result = run_agent_loop(
-                &kernel_handle,
-                rt_session_key,
-                user_text,
-                history,
-                &stream_handle,
-                &turn_cancel,
-                tape_service.clone(),
-                effective_tape,
-                tool_context,
-            )
+                // Record timing and result metrics on the span.
+                let elapsed = start.elapsed();
+                let elapsed_ms = elapsed.as_millis() as u64;
+                turn_span.record("total_ms", elapsed_ms);
+                if let Ok(ref result) = turn_result {
+                    turn_span.record("iterations", result.iterations);
+                    turn_span.record("tool_calls", result.tool_calls);
+                }
+
+                // Emit turn metrics before closing stream.
+                if let Ok(ref result) = turn_result {
+                    stream_handle.emit(crate::io::StreamEvent::TurnMetrics {
+                        duration_ms: elapsed_ms,
+                        iterations:  result.iterations,
+                        tool_calls:  result.tool_calls,
+                        model:       result.model.clone(),
+                    });
+                }
+
+                // Close stream.
+                stream_hub_ref.close(&stream_id);
+
+                // -- 7g: Signal completion --
+                // Why: The kernel event loop needs to know the turn is done so it
+                // can deliver the reply, update metrics, and transition the process
+                // back to Ready state. KernelError -> String conversion happens
+                // here because KernelEvent requires Clone but KernelError doesn't.
+                let result = turn_result.map_err(|e| e.to_string());
+                let event = KernelEventEnvelope::turn_completed(
+                    session_key,
+                    result,
+                    msg_id,
+                    user,
+                    origin_endpoint,
+                );
+                if let Err(e) = event_queue.try_push(event) {
+                    error!(%e, session_key = %session_key, "failed to push TurnCompleted");
+                }
+            })
+            .catch_unwind()
             .await;
 
-            // -- 7e: Tape fork resolution --
-            if let Some(ref fork) = fork_name {
-                if turn_result.is_ok() {
-                    if let Err(e) = tape_service.store().merge(fork, &tape_name).await {
-                        tracing::warn!(fork = %fork, tape = %tape_name, error = %e, "tape merge failed, fork entries may be lost");
+            match panic_result {
+                Ok(()) => {
+                    // Normal completion — TurnCompleted was pushed inside the block.
+                    turn_guard.completed = true;
+                }
+                Err(panic_payload) => {
+                    // Extract the panic message from the payload.
+                    let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        (*s).to_string()
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic (non-string payload)".to_string()
+                    };
+                    error!(
+                        session_key = %turn_guard.session_key,
+                        panic_message = %panic_msg,
+                        "turn task panicked"
+                    );
+
+                    // Abort typing refresh if still running.
+                    if let Some(handle) = turn_guard.typing_refresh.take() {
+                        handle.abort();
                     }
-                } else {
-                    if let Err(e) = tape_service.store().discard(fork).await {
-                        tracing::warn!(fork = %fork, error = %e, "tape discard failed, fork file may leak");
+                    // Close stream so the forwarder stops.
+                    turn_guard.stream_hub.close(&turn_guard.stream_id);
+                    // Push TurnCompleted(Err) with the real panic message.
+                    let event = KernelEventEnvelope::turn_completed(
+                        turn_guard.session_key.clone(),
+                        Err(format!("turn task panicked: {panic_msg}")),
+                        turn_guard.msg_id.clone(),
+                        turn_guard.user.clone(),
+                        turn_guard.origin_endpoint.clone(),
+                    );
+                    if let Err(e) = turn_guard.event_queue.try_push(event) {
+                        error!(%e, "failed to push panic TurnCompleted");
                     }
+                    // Disarm the guard — we handled cleanup manually.
+                    turn_guard.completed = true;
                 }
             }
-
-            // -- 7f: Cleanup --
-            if let Some(handle) = turn_guard.typing_refresh.take() {
-                handle.abort();
-            }
-
-            // Record timing and result metrics on the span.
-            let elapsed = start.elapsed();
-            let elapsed_ms = elapsed.as_millis() as u64;
-            turn_span.record("total_ms", elapsed_ms);
-            if let Ok(ref result) = turn_result {
-                turn_span.record("iterations", result.iterations);
-                turn_span.record("tool_calls", result.tool_calls);
-            }
-
-            // Emit turn metrics before closing stream.
-            if let Ok(ref result) = turn_result {
-                stream_handle.emit(crate::io::StreamEvent::TurnMetrics {
-                    duration_ms: elapsed_ms,
-                    iterations:  result.iterations,
-                    tool_calls:  result.tool_calls,
-                    model:       result.model.clone(),
-                });
-            }
-
-            // Close stream.
-            stream_hub_ref.close(&stream_id);
-
-            // -- 7g: Signal completion --
-            // Why: The kernel event loop needs to know the turn is done so it
-            // can deliver the reply, update metrics, and transition the process
-            // back to Ready state. KernelError -> String conversion happens
-            // here because KernelEvent requires Clone but KernelError doesn't.
-            let result = turn_result.map_err(|e| e.to_string());
-            let event = KernelEventEnvelope::turn_completed(
-                session_key,
-                result,
-                msg_id,
-                user,
-                origin_endpoint,
-            );
-            if let Err(e) = event_queue.try_push(event) {
-                error!(%e, session_key = %session_key, "failed to push TurnCompleted");
-            }
-
-            // Disarm the guard — TurnCompleted was pushed manually above,
-            // so Drop should not push a duplicate.
-            turn_guard.completed = true;
         });
     }
 
