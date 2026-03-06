@@ -1460,7 +1460,11 @@ impl Kernel {
             Err(err_msg) => {
                 span.record("success", false);
                 _turn_failed = err_msg != "interrupted by user";
-                warn!(session_key = %session_key, error = %err_msg, "turn completed (error)");
+                if _turn_failed {
+                    error!(session_key = %session_key, error = %err_msg, "turn failed");
+                } else {
+                    info!(session_key = %session_key, "turn interrupted by user");
+                }
 
                 // Deliver error — use egress session for routing.
                 let envelope = OutboundEnvelope::error(
