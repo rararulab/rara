@@ -536,7 +536,6 @@ async fn init_knowledge_service(
         val.ok_or_else(|| anyhow::anyhow!("{key} is not configured in settings"))
     }
 
-    let enabled = require(settings.get("memory.knowledge.enabled").await, "memory.knowledge.enabled")?;
     let embedding_model = require(settings.get("memory.knowledge.embedding_model").await, "memory.knowledge.embedding_model")?;
     let embedding_dimensions: usize = require(settings.get("memory.knowledge.embedding_dimensions").await, "memory.knowledge.embedding_dimensions")?
         .parse()
@@ -550,7 +549,6 @@ async fn init_knowledge_service(
     let extractor_model = require(settings.get("memory.knowledge.extractor_model").await, "memory.knowledge.extractor_model")?;
 
     let config = KnowledgeConfig::builder()
-        .enabled(enabled == "true")
         .embedding_model(embedding_model)
         .embedding_dimensions(embedding_dimensions)
         .search_top_k(search_top_k)

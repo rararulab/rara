@@ -1668,7 +1668,7 @@ impl Kernel {
         // After each successful turn, spawn an async task to extract long-term
         // memories from the conversation tape. Failures are logged but never
         // block the main event loop.
-        if !_turn_failed && self.knowledge.config.enabled {
+        if !_turn_failed {
             let tape_service = self.tape_service.clone();
             let knowledge = Arc::clone(&self.knowledge);
             let driver_registry = Arc::clone(self.syscall.driver_registry());

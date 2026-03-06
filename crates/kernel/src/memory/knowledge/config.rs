@@ -23,8 +23,6 @@ use serde::Deserialize;
 /// All fields are required — no hardcoded defaults.
 #[derive(Debug, Clone, Builder, Deserialize)]
 pub struct KnowledgeConfig {
-    /// Whether the knowledge layer is active.
-    pub enabled: bool,
     /// OpenAI embedding model name (e.g. "text-embedding-3-small").
     pub embedding_model: String,
     /// Embedding vector dimensions (e.g. 1536).
