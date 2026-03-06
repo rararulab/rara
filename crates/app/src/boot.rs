@@ -47,6 +47,8 @@ pub(crate) struct BootResult {
     /// Handle reference for `DispatchRaraTool` — must be wired with a
     /// `KernelHandle` after kernel startup.
     pub dispatch_rara_handle: std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
+    /// Optional knowledge layer service for long-term memory.
+    pub knowledge_service:    Option<rara_kernel::memory::knowledge::KnowledgeServiceRef>,
 }
 
 /// A user entry in the YAML configuration file.
@@ -189,6 +191,10 @@ pub(crate) async fn boot(
 
     let agent_registry = Arc::new(load_default_registry());
 
+    // -- knowledge layer (optional) ------------------------------------------
+
+    let knowledge_service = init_knowledge_service(settings_provider.as_ref()).await;
+
     info!("Boot completed");
 
     Ok(BootResult {
@@ -204,6 +210,7 @@ pub(crate) async fn boot(
         identity_resolver,
         agent_registry,
         dispatch_rara_handle: tool_result.dispatch_rara_handle,
+        knowledge_service,
     })
 }
 
@@ -509,4 +516,112 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
             .await;
         Ok(rara_composio::ComposioAuth::new(api_key, entity_id.as_deref()))
     }
+}
+
+// =========================================================================
+// Private: Knowledge Layer initialization
+// =========================================================================
+
+/// Attempt to initialize the knowledge layer from settings.
+///
+/// Returns `None` (with a log message) if not configured or if initialization
+/// fails — the knowledge layer is strictly optional.
+async fn init_knowledge_service(
+    settings: &dyn rara_domain_shared::settings::SettingsProvider,
+) -> Option<rara_kernel::memory::knowledge::KnowledgeServiceRef> {
+    use rara_kernel::memory::knowledge::{EmbeddingService, KnowledgeConfig, KnowledgeService};
+
+    // Read knowledge config from settings. All fields are required.
+    let enabled = settings.get("memory.knowledge.enabled").await?;
+    if enabled != "true" {
+        info!("knowledge layer disabled in settings");
+        return None;
+    }
+
+    let embedding_model = settings.get("memory.knowledge.embedding_model").await?;
+    let embedding_dimensions: usize = settings
+        .get("memory.knowledge.embedding_dimensions")
+        .await?
+        .parse()
+        .ok()?;
+    let search_top_k: usize = settings
+        .get("memory.knowledge.search_top_k")
+        .await?
+        .parse()
+        .ok()?;
+    let similarity_threshold: f32 = settings
+        .get("memory.knowledge.similarity_threshold")
+        .await?
+        .parse()
+        .ok()?;
+    let extractor_model = settings.get("memory.knowledge.extractor_model").await?;
+
+    let config = KnowledgeConfig::builder()
+        .enabled(true)
+        .embedding_model(embedding_model)
+        .embedding_dimensions(embedding_dimensions)
+        .search_top_k(search_top_k)
+        .similarity_threshold(similarity_threshold)
+        .extractor_model(extractor_model)
+        .build();
+
+    // Get OpenAI API key from the default LLM provider settings.
+    let default_provider = settings.get("llm.default_provider").await.unwrap_or_default();
+    let api_key_setting = format!("llm.providers.{default_provider}.api_key");
+    let api_key = match settings.get(&api_key_setting).await {
+        Some(key) => key,
+        None => {
+            tracing::warn!("knowledge layer: no API key found at {api_key_setting}");
+            return None;
+        }
+    };
+
+    // Open SQLite database for knowledge items.
+    let db_path = rara_paths::data_dir().join("knowledge/knowledge.db");
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let pool = match sqlx::SqlitePool::connect(&db_url).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(%e, "knowledge layer: failed to open SQLite database");
+            return None;
+        }
+    };
+
+    // Run knowledge-specific migrations.
+    match sqlx::migrate!("../rara-model/migrations").run(&pool).await {
+        Ok(()) => {}
+        Err(e) => {
+            tracing::warn!(%e, "knowledge layer: migration failed");
+            return None;
+        }
+    }
+
+    // Build embedding service.
+    let embedding_svc = match EmbeddingService::new(config.clone(), api_key) {
+        Ok(svc) => Arc::new(svc),
+        Err(e) => {
+            tracing::warn!(%e, "knowledge layer: failed to initialize embedding service");
+            return None;
+        }
+    };
+
+    // Rebuild usearch index from existing embeddings in the database.
+    match rara_kernel::memory::knowledge::items::load_embeddings(&pool, "").await {
+        Ok(_) => {
+            // Index is loaded from disk by EmbeddingService::new if the file exists.
+        }
+        Err(e) => {
+            tracing::warn!(%e, "knowledge layer: failed to load embeddings for index rebuild");
+        }
+    }
+
+    info!("knowledge layer initialized");
+    Some(Arc::new(KnowledgeService {
+        pool,
+        embedding_svc,
+        config,
+    }))
 }

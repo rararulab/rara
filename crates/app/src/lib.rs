@@ -251,6 +251,7 @@ pub async fn start_with_options(
             )),
         )),
         io,
+        rara.knowledge_service.clone(),
     );
 
     let cancellation_token = CancellationToken::new();

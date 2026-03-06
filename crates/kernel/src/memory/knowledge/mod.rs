@@ -24,8 +24,10 @@ pub mod config;
 pub mod embedding;
 pub mod extractor;
 pub mod items;
+pub mod service;
 pub mod tool;
 
 pub use config::KnowledgeConfig;
 pub use embedding::EmbeddingService;
+pub use service::{KnowledgeService, KnowledgeServiceRef};
 pub use tool::MemoryTool;
