@@ -93,6 +93,62 @@ const MIN_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// Set below 4096 to leave buffer for HTML tag expansion from markdown→html.
 const STREAM_SPLIT_THRESHOLD: usize = 3800;
 
+/// Single tool's progress state within a streaming turn.
+struct ToolProgress {
+    id:       String,
+    name:     String,
+    finished: bool,
+    success:  bool,
+}
+
+/// Progress message state for tool execution feedback.
+struct ProgressMessage {
+    message_id: Option<MessageId>,
+    tools:      Vec<ToolProgress>,
+    last_edit:  Instant,
+}
+
+impl ProgressMessage {
+    fn new() -> Self {
+        Self {
+            message_id: None,
+            tools:      Vec::new(),
+            last_edit:  Instant::now()
+                .checked_sub(MIN_EDIT_INTERVAL)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+}
+
+/// Render tool progress lines for display in Telegram.
+fn render_progress(tools: &[ToolProgress]) -> String {
+    tools
+        .iter()
+        .map(|t| {
+            if t.finished {
+                if t.success {
+                    format!("✅ {}", t.name)
+                } else {
+                    format!("❌ {}", t.name)
+                }
+            } else {
+                format!("🔧 {}...", t.name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Map raw tool names to shorter, human-friendly display names.
+fn tool_display_name(raw: &str) -> &str {
+    match raw {
+        "shell_execute" => "shell",
+        "web_search" => "search",
+        "web_fetch" => "fetch",
+        other => other,
+    }
+}
+
 /// Per-chat streaming state for progressive `editMessageText` updates.
 struct StreamingMessage {
     /// All message IDs sent for this stream (multiple when splitting long
@@ -889,6 +945,9 @@ fn spawn_stream_forwarder(
         let mut throttle = tokio::time::interval(MIN_EDIT_INTERVAL);
         throttle.tick().await; // skip immediate first tick
 
+        let mut progress = ProgressMessage::new();
+        let mut progress_dirty = false;
+
         loop {
             tokio::select! {
                 result = rx.recv() => {
@@ -934,7 +993,75 @@ fn spawn_stream_forwarder(
                                 }
                             }
                         }
-                        Ok(_) => {} // Ignore non-text events
+                        Ok(StreamEvent::ToolCallStart { name, id, .. }) => {
+                            let display = tool_display_name(&name).to_owned();
+                            progress.tools.push(ToolProgress {
+                                id,
+                                name: display,
+                                finished: false,
+                                success: false,
+                            });
+
+                            // Send typing indicator before the first progress message.
+                            if progress.message_id.is_none() {
+                                let _ = bot
+                                    .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+                                    .await;
+                            }
+
+                            let text = render_progress(&progress.tools);
+                            if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                match progress.message_id {
+                                    Some(mid) => {
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &text)
+                                            .await;
+                                    }
+                                    None => {
+                                        if let Ok(msg) = bot
+                                            .send_message(ChatId(chat_id), &text)
+                                            .await
+                                        {
+                                            progress.message_id = Some(msg.id);
+                                        }
+                                    }
+                                }
+                                progress.last_edit = Instant::now();
+                                progress_dirty = false;
+                            } else {
+                                progress_dirty = true;
+                            }
+                        }
+                        Ok(StreamEvent::ToolCallEnd { id, success, .. }) => {
+                            if let Some(tp) = progress.tools.iter_mut().find(|t| t.id == id) {
+                                tp.finished = true;
+                                tp.success = success;
+                            }
+
+                            let text = render_progress(&progress.tools);
+                            if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                match progress.message_id {
+                                    Some(mid) => {
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &text)
+                                            .await;
+                                    }
+                                    None => {
+                                        if let Ok(msg) = bot
+                                            .send_message(ChatId(chat_id), &text)
+                                            .await
+                                        {
+                                            progress.message_id = Some(msg.id);
+                                        }
+                                    }
+                                }
+                                progress.last_edit = Instant::now();
+                                progress_dirty = false;
+                            } else {
+                                progress_dirty = true;
+                            }
+                        }
+                        Ok(_) => {} // Ignore other events (ReasoningDelta, Progress, etc.)
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }
@@ -986,6 +1113,28 @@ fn spawn_stream_forwarder(
                     if let Some(req) = flush_req {
                         let result = flush_edit(&bot, chat_id, &req).await;
                         apply_flush_result(&active_streams, chat_id, result);
+                    }
+
+                    // Flush throttled progress updates.
+                    if progress_dirty && !progress.tools.is_empty() {
+                        let text = render_progress(&progress.tools);
+                        match progress.message_id {
+                            Some(mid) => {
+                                let _ = bot
+                                    .edit_message_text(ChatId(chat_id), mid, &text)
+                                    .await;
+                            }
+                            None => {
+                                if let Ok(msg) = bot
+                                    .send_message(ChatId(chat_id), &text)
+                                    .await
+                                {
+                                    progress.message_id = Some(msg.id);
+                                }
+                            }
+                        }
+                        progress.last_edit = Instant::now();
+                        progress_dirty = false;
                     }
                 }
             }
