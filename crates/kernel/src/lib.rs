@@ -41,6 +41,7 @@ pub mod llm;
 pub mod memory;
 pub mod metrics;
 pub mod notification;
+pub mod proactive;
 pub mod queue;
 pub mod security;
 pub mod session;

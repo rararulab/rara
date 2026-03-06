@@ -166,6 +166,13 @@ pub struct InboundMessage {
     pub timestamp:     jiff::Timestamp,
     /// Extension metadata (adapter-specific fields only).
     pub metadata:      HashMap<String, Value>,
+
+    /// Whether this is a group-chat message where the bot was **not** directly
+    /// mentioned (@ or keyword). When `true`, the kernel records the message
+    /// to the session tape but gates the LLM turn behind a lightweight
+    /// proactive-reply judgment instead of responding unconditionally.
+    #[serde(default)]
+    pub is_group_proactive: bool,
 }
 
 impl InboundMessage {
@@ -186,6 +193,7 @@ impl InboundMessage {
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
+            is_group_proactive: false,
         }
     }
 
@@ -212,6 +220,7 @@ impl InboundMessage {
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
+            is_group_proactive: false,
         }
     }
 
@@ -238,6 +247,7 @@ impl InboundMessage {
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
+            is_group_proactive: false,
         }
     }
 }
@@ -903,6 +913,9 @@ pub struct RawPlatformMessage {
     pub reply_context:       Option<ReplyContext>,
     /// Arbitrary adapter-specific metadata.
     pub metadata:            HashMap<String, Value>,
+    /// Whether this is a group-chat message where the bot was **not** directly
+    /// mentioned. Propagated to [`InboundMessage::is_group_proactive`].
+    pub is_group_proactive:  bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1224,6 +1237,7 @@ impl IOSubsystem {
             reply_context:      raw.reply_context,
             timestamp:          jiff::Timestamp::now(),
             metadata:           raw.metadata,
+            is_group_proactive: raw.is_group_proactive,
         };
 
         tracing::info!(

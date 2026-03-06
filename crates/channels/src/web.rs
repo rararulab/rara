@@ -341,6 +341,7 @@ fn build_raw_platform_message(
             interaction_type:         InteractionType::Message,
         }),
         metadata:            HashMap::new(),
+        is_group_proactive:  false,
     }
 }
 

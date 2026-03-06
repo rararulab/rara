@@ -405,6 +405,29 @@ pub struct AgentTurnResult {
     pub trace:      TurnTrace,
 }
 
+impl AgentTurnResult {
+    /// Create an empty result (no text, no tool calls) used when a proactive
+    /// judgment decides Rara should not reply.
+    pub fn empty() -> Self {
+        Self {
+            text:       String::new(),
+            iterations: 0,
+            tool_calls: 0,
+            model:      String::new(),
+            trace:      TurnTrace {
+                duration_ms:      0,
+                model:            String::new(),
+                input_text:       None,
+                iterations:       Vec::new(),
+                final_text_len:   0,
+                total_tool_calls: 0,
+                success:          true,
+                error:            None,
+            },
+        }
+    }
+}
+
 fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json::Value, String> {
     let args = serde_json::from_str::<serde_json::Value>(arguments)
         .map_err(|err| format!("invalid tool arguments: {err}"))?;

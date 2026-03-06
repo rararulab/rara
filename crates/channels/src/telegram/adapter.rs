@@ -689,6 +689,11 @@ async fn handle_update(
     // --- Group chat authorization ---
     let group_chat = is_group_chat(msg);
 
+    // Track whether this is a group message where Rara was NOT directly
+    // mentioned — these are "proactive candidates" that the kernel will
+    // gate behind a lightweight LLM judgment.
+    let mut is_group_proactive = false;
+
     if group_chat {
         let trigger_text = msg.text().or_else(|| msg.caption()).unwrap_or_default();
         let username_guard = bot_username.read().await;
@@ -699,12 +704,13 @@ async fn handle_update(
             Ok(n) if n <= SMALL_GROUP_THRESHOLD
         );
 
-        if !is_small {
-            let should_respond = is_group_mention(msg, trigger_text, username_ref)
-                || contains_rara_keyword(trigger_text);
-            if !should_respond {
-                return;
-            }
+        let directly_addressed = is_small
+            || is_group_mention(msg, trigger_text, username_ref)
+            || contains_rara_keyword(trigger_text);
+
+        if !directly_addressed {
+            // Not mentioned — mark as proactive candidate instead of dropping.
+            is_group_proactive = true;
         }
 
         // Check allowed group chat authorization.
@@ -732,10 +738,11 @@ async fn handle_update(
     // Convert to RawPlatformMessage.
     let username_guard = bot_username.read().await;
     let username_ref = username_guard.as_deref().unwrap_or("");
-    let raw = match telegram_to_raw_platform_message(msg, username_ref) {
+    let mut raw = match telegram_to_raw_platform_message(msg, username_ref) {
         Some(raw) => raw,
         None => return,
     };
+    raw.is_group_proactive = is_group_proactive;
     drop(username_guard);
 
     let msg = match handle.resolve(raw).await {
@@ -1182,6 +1189,7 @@ pub fn telegram_to_raw_platform_message(
         content: MessageContent::Text(text),
         reply_context,
         metadata,
+        is_group_proactive: false, // caller sets this after construction
     })
 }
 

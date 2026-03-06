@@ -1071,20 +1071,90 @@ impl Kernel {
         };
 
         let tape_name = session_key.to_string();
+        // Include sender display name in tape payload for group proactive
+        // messages so the LLM can distinguish speakers.
+        let tape_payload = if msg.is_group_proactive {
+            let display_name = msg
+                .metadata
+                .get("telegram_display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("User");
+            serde_json::json!({
+                "role": "user",
+                "content": format!("[{display_name}]: {user_text}"),
+            })
+        } else {
+            serde_json::json!({
+                "role": "user",
+                "content": &user_text,
+            })
+        };
         if let Err(e) = &self
             .tape_service
-            .append_message(
-                &tape_name,
-                // TODO: why ?
-                serde_json::json!({
-                    "role": "user",
-                    "content": &user_text,
-                }),
-                None,
-            )
+            .append_message(&tape_name, tape_payload, None)
             .await
         {
             warn!(%e, "failed to persist user message to tape");
+        }
+
+        // -- Proactive reply judgment (group chat, not @-mentioned) -----------
+        //
+        // For group-chat messages where Rara was not directly addressed, run a
+        // lightweight LLM call to decide whether to reply. If the judgment
+        // says "skip", we push TurnCompleted so the process returns to Ready
+        // state and stop here — the message is already recorded in the tape.
+        if msg.is_group_proactive {
+            let sender_display_name = msg
+                .metadata
+                .get("telegram_display_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_owned());
+
+            // Resolve the default driver for the judgment call.
+            let judgment_result = match self.syscall.driver_registry().resolve(
+                "__proactive_judgment__",
+                None,
+                None,
+            ) {
+                Ok((driver, model)) => {
+                    crate::proactive::should_reply(
+                        &driver,
+                        &model,
+                        &self.tape_service,
+                        &tape_name,
+                        &user_text,
+                        sender_display_name.as_deref(),
+                    )
+                    .await
+                }
+                Err(e) => {
+                    warn!(error = %e, "proactive: failed to resolve driver, skipping");
+                    crate::proactive::ProactiveJudgment::ShouldSkip {
+                        reason: "driver resolution failed".into(),
+                    }
+                }
+            };
+
+            if matches!(judgment_result, crate::proactive::ProactiveJudgment::ShouldSkip { .. }) {
+                // Return process to Ready state without producing a reply.
+                let _ = self
+                    .process_table
+                    .set_state(session_key, SessionState::Ready);
+                // Push a TurnCompleted(Ok) so downstream (e.g. pause buffer
+                // drain) can proceed normally.
+                let event = KernelEventEnvelope::turn_completed(
+                    session_key,
+                    Ok(crate::agent::AgentTurnResult::empty()),
+                    msg_id,
+                    user.clone(),
+                );
+                if let Err(e) = self.event_queue.try_push(event) {
+                    warn!(%e, "proactive: failed to push TurnCompleted after skip");
+                }
+                return;
+            }
+            // Judgment says reply — fall through to normal agent turn.
+            info!(session_key = %session_key, "proactive: judgment approved reply, proceeding to agent turn");
         }
 
         // Build LLM context from tape, injecting user-specific memory when

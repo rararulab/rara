@@ -263,6 +263,7 @@ fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> Raw
             interaction_type:         InteractionType::Message,
         }),
         metadata:            HashMap::new(),
+        is_group_proactive:  false,
     }
 }
 
