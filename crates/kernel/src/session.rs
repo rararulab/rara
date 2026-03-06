@@ -15,7 +15,7 @@
 //! Unified session types and traits.
 //!
 //! This module is the canonical source of truth for session-related types
-//! used across the kernel and downstream crates (rara-sessions, rara-boot,
+//! used across the kernel and downstream crates (rara-sessions, rara-app,
 //! etc.). Session metadata is managed via [`SessionIndex`]. Message
 //! persistence is handled by the tape subsystem (`crate::memory`).
 

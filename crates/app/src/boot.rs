@@ -477,26 +477,6 @@ async fn init_mcp_manager(
     Ok(manager)
 }
 
-/// Bridge MCP server tools into a [`ToolRegistry`].
-#[allow(dead_code)]
-pub(crate) async fn register_mcp_tools(
-    registry: &mut rara_kernel::tool::ToolRegistry,
-    manager: &rara_mcp::manager::mgr::McpManager,
-) {
-    use rara_mcp::tool_bridge::McpToolBridge;
-
-    match McpToolBridge::from_manager(manager.clone()).await {
-        Ok(bridges) => {
-            for bridge in bridges {
-                registry.register_service(Arc::new(bridge));
-            }
-            info!("MCP tools bridged into tool registry");
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to bridge MCP tools");
-        }
-    }
-}
 
 // =========================================================================
 // Private: Composio auth provider
