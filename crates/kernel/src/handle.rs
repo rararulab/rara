@@ -353,7 +353,13 @@ impl KernelHandle {
             message: "spawn reply channel closed".to_string(),
         })??;
 
-        let (_result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+
+        // Store result_tx in the child session so cleanup_process can send the result.
+        self.process_table.with_mut(&child_key, |session| {
+            session.result_tx = Some(result_tx);
+        });
+
         Ok(AgentHandle {
             session_key: child_key,
             result_rx,

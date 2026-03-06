@@ -266,6 +266,9 @@ pub struct Session {
     pub finished_at:     Option<Timestamp>,
     /// Result of last execution (set on turn completion).
     pub result:          Option<AgentRunLoopResult>,
+    /// Oneshot sender for notifying the parent when this child agent completes.
+    /// Only set for child agents spawned via `spawn_child`.
+    pub result_tx:       Option<tokio::sync::oneshot::Sender<AgentRunLoopResult>>,
     /// Files created or modified by this agent (for resource tracking).
     pub created_files:   Vec<PathBuf>,
     /// Per-session runtime metrics (atomic counters for lock-free updates).

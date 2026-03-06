@@ -525,6 +525,7 @@ impl Kernel {
             created_at: jiff::Timestamp::now(),
             finished_at: None,
             result: None,
+            result_tx: None,
             created_files: vec![],
             metrics,
             turn_traces: vec![],
@@ -713,11 +714,17 @@ impl Kernel {
 
             // Notify parent if this is a child process.
             if let Some(parent_id) = parent_id {
-                let result = rt.result.unwrap_or(AgentRunLoopResult {
+                let result = rt.result.clone().unwrap_or(AgentRunLoopResult {
                     output:     "process ended".to_string(),
                     iterations: 0,
                     tool_calls: 0,
                 });
+
+                // Send result through oneshot channel if spawn_child is waiting.
+                if let Some(tx) = rt.result_tx {
+                    let _ = tx.send(result.clone());
+                }
+
                 let event = KernelEventEnvelope::child_session_done(parent_id, session_key, result);
                 if let Err(e) = &self.event_queue.try_push(event) {
                     warn!(%e, "failed to push ChildSessionDone event");
