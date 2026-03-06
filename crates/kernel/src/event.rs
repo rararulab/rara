@@ -222,6 +222,14 @@ pub enum KernelEvent {
     #[debug("UserMessage(session={:?})", _0.session_key)]
     UserMessage(InboundMessage),
 
+    /// A group-chat message where the bot was **not** directly mentioned.
+    ///
+    /// Handled separately from `UserMessage`: the kernel records the message
+    /// to the session tape, runs a lightweight LLM judgment to decide whether
+    /// to reply, and only promotes to a full `UserMessage` turn on approval.
+    #[debug("GroupMessage(session={:?})", _0.session_key)]
+    GroupMessage(InboundMessage),
+
     // === Session control ===
     /// Request to create (or reactivate) a session.
     ///
@@ -291,9 +299,10 @@ impl KernelEvent {
             | Self::ChildSessionDone { .. }
             | Self::Deliver(_)
             | Self::SessionCommand(_) => EventPriority::Normal,
-            Self::UserMessage(_) | Self::CreateSession { .. } | Self::IdleCheck => {
-                EventPriority::Low
-            }
+            Self::UserMessage(_)
+            | Self::GroupMessage(_)
+            | Self::CreateSession { .. }
+            | Self::IdleCheck => EventPriority::Low,
         }
     }
 
@@ -338,6 +347,15 @@ impl KernelEventEnvelope {
         Self {
             base: EventBase::from(base_key),
             kind: KernelEvent::UserMessage(msg),
+        }
+    }
+
+    /// Create a `GroupMessage` event.
+    pub fn group_message(msg: InboundMessage) -> Self {
+        let base_key = msg.session_key.clone().unwrap_or_else(SessionKey::new);
+        Self {
+            base: EventBase::from(base_key),
+            kind: KernelEvent::GroupMessage(msg),
         }
     }
 
@@ -476,6 +494,10 @@ impl KernelEventEnvelope {
                 Some(key) => format!("user message queued for session {key}"),
                 None => "user message queued (no session yet)".to_string(),
             },
+            KernelEvent::GroupMessage(msg) => match &msg.session_key {
+                Some(key) => format!("group message queued for session {key}"),
+                None => "group message queued (no session yet)".to_string(),
+            },
             KernelEvent::CreateSession { manifest, .. } => {
                 format!("create session for {}", manifest.name)
             }
@@ -511,8 +533,8 @@ impl KernelEventEnvelope {
     /// Returns the session key used for shard routing, or `None` for global
     /// events.
     ///
-    /// - **Global** (returns `None`): `UserMessage`, `CreateSession`,
-    ///   `Deliver`, `IdleCheck`, `Shutdown`
+    /// - **Global** (returns `None`): `UserMessage`, `GroupMessage`,
+    ///   `CreateSession`, `Deliver`, `IdleCheck`, `Shutdown`
     /// - **Sharded** (returns `Some`): `SendSignal`, `TurnCompleted`,
     ///   `ChildSessionDone`, `SessionCommand`
     pub fn shard_key(&self) -> Option<SessionKey> {

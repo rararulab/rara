@@ -406,6 +406,9 @@ impl Kernel {
             KernelEvent::UserMessage(msg) => {
                 self.handle_user_message(msg).await;
             }
+            KernelEvent::GroupMessage(msg) => {
+                self.handle_group_message(msg).await;
+            }
             KernelEvent::CreateSession {
                 manifest,
                 input,
@@ -934,6 +937,141 @@ impl Kernel {
         }
     }
 
+    /// Handle a group-chat message where the bot was not directly mentioned.
+    ///
+    /// 1. Resolve session (reusing the same logic as `handle_user_message`).
+    /// 2. Record the message to the session tape (with `[DisplayName]: text` format).
+    /// 3. Run a lightweight LLM judgment via `proactive::should_reply()`.
+    /// 4. If approved, push a `UserMessage` event to go through the normal agent turn.
+    /// 5. If skipped, end here — the message is already persisted in the tape.
+    #[tracing::instrument(
+        skip(self, msg),
+        fields(
+            session_id = ?msg.session_key,
+            user_id = %msg.user.0,
+            channel = ?msg.source.channel_type,
+        )
+    )]
+    async fn handle_group_message(&self, msg: InboundMessage) {
+        // -- Session resolution (same as handle_user_message) ------------------
+        let session_id = match msg.session_key.clone() {
+            Some(key) => key,
+            None => {
+                let now = chrono::Utc::now();
+                let entry = crate::session::SessionEntry {
+                    key:           SessionKey::new(),
+                    title:         None,
+                    model:         None,
+                    system_prompt: None,
+                    message_count: 0,
+                    preview:       None,
+                    metadata:      None,
+                    created_at:    now,
+                    updated_at:    now,
+                };
+                let session = match self.io.session_index().create_session(&entry).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(error = %e, "group: failed to create session for new binding");
+                        return;
+                    }
+                };
+                if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
+                    let binding = crate::session::ChannelBinding {
+                        channel_type: msg.source.channel_type.to_string(),
+                        chat_id:      chat_id.to_string(),
+                        session_key:  session.key.clone(),
+                        created_at:   now,
+                        updated_at:   now,
+                    };
+                    if let Err(e) = self.io.session_index().bind_channel(&binding).await {
+                        warn!(error = %e, "group: failed to bind channel to new session");
+                    }
+                }
+                session.key
+            }
+        };
+
+        let mut msg = msg;
+        msg.session_key = Some(session_id.clone());
+
+        self.io.register_stateless_endpoint(&msg);
+
+        // -- Record message to tape -------------------------------------------
+        let tape_name = session_id.to_string();
+        let user_text = msg.content.as_text();
+        let display_name = msg
+            .metadata
+            .get("telegram_display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("User");
+        let tape_payload = serde_json::json!({
+            "role": "user",
+            "content": format!("[{display_name}]: {user_text}"),
+        });
+        if let Err(e) = &self
+            .tape_service
+            .append_message(&tape_name, tape_payload, None)
+            .await
+        {
+            warn!(%e, "group: failed to persist message to tape");
+        }
+
+        // -- Proactive reply judgment -----------------------------------------
+        let sender_display_name = msg
+            .metadata
+            .get("telegram_display_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+
+        let judgment_result = match self.syscall.driver_registry().resolve(
+            "__proactive_judgment__",
+            None,
+            None,
+        ) {
+            Ok((driver, model)) => {
+                crate::proactive::should_reply(
+                    &driver,
+                    &model,
+                    &self.tape_service,
+                    &tape_name,
+                    &user_text,
+                    sender_display_name.as_deref(),
+                )
+                .await
+            }
+            Err(e) => {
+                warn!(error = %e, "group: failed to resolve driver, skipping");
+                crate::proactive::ProactiveJudgment::ShouldSkip {
+                    reason: "driver resolution failed".into(),
+                }
+            }
+        };
+
+        if matches!(
+            judgment_result,
+            crate::proactive::ProactiveJudgment::ShouldSkip { .. }
+        ) {
+            info!(
+                session_key = %session_id,
+                "group: proactive judgment = skip, message recorded to tape"
+            );
+            return;
+        }
+
+        // -- Judgment approved: promote to UserMessage -------------------------
+        info!(
+            session_key = %session_id,
+            "group: proactive judgment approved reply, promoting to UserMessage"
+        );
+        if let Err(e) = self
+            .event_queue
+            .try_push(KernelEventEnvelope::user_message(msg))
+        {
+            error!(%e, "group: failed to push promoted UserMessage");
+        }
+    }
+
     /// Deliver a message to a live process: buffer if the process is paused
     /// or busy (Running state), otherwise start a new LLM turn.
     async fn deliver_to_session(&self, session_key: SessionKey, msg: InboundMessage) {
@@ -1078,90 +1216,16 @@ impl Kernel {
         };
 
         let tape_name = session_key.to_string();
-        // Include sender display name in tape payload for group proactive
-        // messages so the LLM can distinguish speakers.
-        let tape_payload = if msg.is_group_proactive {
-            let display_name = msg
-                .metadata
-                .get("telegram_display_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("User");
-            serde_json::json!({
-                "role": "user",
-                "content": format!("[{display_name}]: {user_text}"),
-            })
-        } else {
-            serde_json::json!({
-                "role": "user",
-                "content": &user_text,
-            })
-        };
+        let tape_payload = serde_json::json!({
+            "role": "user",
+            "content": &user_text,
+        });
         if let Err(e) = &self
             .tape_service
             .append_message(&tape_name, tape_payload, None)
             .await
         {
             warn!(%e, "failed to persist user message to tape");
-        }
-
-        // -- Proactive reply judgment (group chat, not @-mentioned) -----------
-        //
-        // For group-chat messages where Rara was not directly addressed, run a
-        // lightweight LLM call to decide whether to reply. If the judgment
-        // says "skip", we push TurnCompleted so the process returns to Ready
-        // state and stop here — the message is already recorded in the tape.
-        if msg.is_group_proactive {
-            let sender_display_name = msg
-                .metadata
-                .get("telegram_display_name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_owned());
-
-            // Resolve the default driver for the judgment call.
-            let judgment_result = match self.syscall.driver_registry().resolve(
-                "__proactive_judgment__",
-                None,
-                None,
-            ) {
-                Ok((driver, model)) => {
-                    crate::proactive::should_reply(
-                        &driver,
-                        &model,
-                        &self.tape_service,
-                        &tape_name,
-                        &user_text,
-                        sender_display_name.as_deref(),
-                    )
-                    .await
-                }
-                Err(e) => {
-                    warn!(error = %e, "proactive: failed to resolve driver, skipping");
-                    crate::proactive::ProactiveJudgment::ShouldSkip {
-                        reason: "driver resolution failed".into(),
-                    }
-                }
-            };
-
-            if matches!(judgment_result, crate::proactive::ProactiveJudgment::ShouldSkip { .. }) {
-                // Return process to Ready state without producing a reply.
-                let _ = self
-                    .process_table
-                    .set_state(session_key, SessionState::Ready);
-                // Push a TurnCompleted(Ok) so downstream (e.g. pause buffer
-                // drain) can proceed normally.
-                let event = KernelEventEnvelope::turn_completed(
-                    session_key,
-                    Ok(crate::agent::AgentTurnResult::empty()),
-                    msg_id,
-                    user.clone(),
-                );
-                if let Err(e) = self.event_queue.try_push(event) {
-                    warn!(%e, "proactive: failed to push TurnCompleted after skip");
-                }
-                return;
-            }
-            // Judgment says reply — fall through to normal agent turn.
-            info!(session_key = %session_key, "proactive: judgment approved reply, proceeding to agent turn");
         }
 
         // Build LLM context from tape, injecting user-specific memory when

@@ -205,6 +205,18 @@ impl KernelHandle {
             })
     }
 
+    /// Submit a group-chat message for proactive judgment (fire-and-forget).
+    ///
+    /// The kernel will record the message to tape, run a lightweight LLM
+    /// judgment, and only promote to a full agent turn if approved.
+    pub fn submit_group_message(&self, msg: InboundMessage) -> Result<()> {
+        self.event_queue
+            .try_push(KernelEventEnvelope::group_message(msg))
+            .map_err(|_| KernelError::Other {
+                message: "event queue full for group message".into(),
+            })
+    }
+
     /// Request a graceful kernel shutdown (fire-and-forget).
     ///
     /// Uses `try_push` (non-async) so this can be called from synchronous
