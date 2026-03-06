@@ -152,6 +152,7 @@ impl RaraState {
             crate::tools::ServiceToolDeps {
                 skill_registry: skill_registry.clone(),
                 mcp_manager:    mcp_manager.clone(),
+                tape_service:   tape_service.clone(),
             },
         );
 

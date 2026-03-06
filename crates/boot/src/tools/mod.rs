@@ -33,6 +33,7 @@ mod http_fetch;
 mod list_directory;
 mod read_file;
 mod send_email;
+mod user_note;
 mod write_file;
 
 pub use bash::BashTool;
@@ -44,6 +45,7 @@ pub use http_fetch::HttpFetchTool;
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
 pub use send_email::SendEmailTool;
+pub use user_note::UserNoteTool;
 pub use write_file::WriteFileTool;
 
 /// Dependencies required to construct primitive tools.
@@ -81,6 +83,7 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
 pub struct ServiceToolDeps {
     pub skill_registry: rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:    rara_mcp::manager::mgr::McpManager,
+    pub tape_service:   rara_kernel::memory::TapeService,
 }
 
 /// Register all Layer 2 service tools into the given [`ToolRegistry`].
@@ -111,4 +114,7 @@ pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps
     registry.register_service(Arc::new(services::RemoveMcpServerTool::new(
         deps.mcp_manager,
     )));
+
+    // User memory tools
+    registry.register_service(Arc::new(UserNoteTool::new(deps.tape_service)));
 }

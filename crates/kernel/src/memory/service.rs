@@ -216,6 +216,69 @@ impl TapeService {
         super::context::default_tape_context(&entries)
     }
 
+    /// Build LLM-ready messages from a session tape, prepending user-specific
+    /// context from the corresponding user tape when available.
+    ///
+    /// This is the primary entry point for context construction when a user
+    /// identity is known.  The user tape is loaded once per turn and injected
+    /// as a system message at the front of the message list so the LLM sees
+    /// accumulated user knowledge before the conversation history.
+    pub async fn build_llm_context_with_user(
+        &self,
+        tape_name: &str,
+        user_id: &str,
+    ) -> TapResult<Vec<crate::llm::Message>> {
+        let mut messages = self.build_llm_context(tape_name).await?;
+
+        // Load user tape and prepend user context if available.
+        let user_tape = super::user_tape_name(user_id);
+        let user_entries = self.entries(&user_tape).await?;
+        if let Some(user_msg) = super::context::user_tape_context(&user_entries) {
+            messages.insert(0, user_msg);
+        }
+
+        Ok(messages)
+    }
+
+    // -----------------------------------------------------------------------
+    // User tape helpers
+    // -----------------------------------------------------------------------
+
+    /// Append a structured note to a user tape.
+    ///
+    /// Notes are the primary entry kind for user tapes. Each note carries a
+    /// `category` tag (e.g. `"preference"`, `"fact"`, `"todo"`) and free-form
+    /// `content`.
+    pub async fn append_user_note(
+        &self,
+        user_id: &str,
+        category: &str,
+        content: &str,
+    ) -> TapResult<TapEntry> {
+        let user_tape = super::user_tape_name(user_id);
+        self.store
+            .append(
+                &user_tape,
+                TapEntryKind::Note,
+                serde_json::json!({
+                    "category": category,
+                    "content": content,
+                }),
+                None,
+            )
+            .await
+    }
+
+    /// Read all note entries from a user tape.
+    pub async fn read_user_notes(&self, user_id: &str) -> TapResult<Vec<TapEntry>> {
+        let user_tape = super::user_tape_name(user_id);
+        let entries = self.entries(&user_tape).await?;
+        Ok(entries
+            .into_iter()
+            .filter(|e| e.kind == TapEntryKind::Note)
+            .collect())
+    }
+
     /// Inspect current tape state without mutating it.
     pub async fn info(&self, tape_name: &str) -> TapResult<TapeInfo> {
         let entries = self.entries(tape_name).await?;

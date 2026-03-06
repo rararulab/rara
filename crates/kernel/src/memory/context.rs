@@ -146,3 +146,55 @@ fn render_tool_result(result: &Value) -> TapResult<String> {
         }
     })
 }
+
+// ---------------------------------------------------------------------------
+// User tape context
+// ---------------------------------------------------------------------------
+
+/// Build a system-role message summarizing the user tape for LLM context
+/// injection.
+///
+/// Reads all `Note` entries from the user tape and formats them into a single
+/// system message.  Returns `None` when the user tape has no notes, so the
+/// caller can skip injection entirely.
+pub fn user_tape_context(entries: &[TapEntry]) -> Option<Message> {
+    let notes: Vec<&TapEntry> = entries
+        .iter()
+        .filter(|e| e.kind == TapEntryKind::Note)
+        .collect();
+
+    if notes.is_empty() {
+        return None;
+    }
+
+    let mut sections: Vec<String> = Vec::new();
+
+    for entry in &notes {
+        let category = entry
+            .payload
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or("general");
+        let content = entry
+            .payload
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if content.is_empty() {
+            continue;
+        }
+        sections.push(format!("- [{category}] {content}"));
+    }
+
+    if sections.is_empty() {
+        return None;
+    }
+
+    let body = format!(
+        "[User Memory]\nThe following notes were previously recorded about this user. \
+         Use them to personalize your responses.\n\n{}",
+        sections.join("\n")
+    );
+
+    Some(Message::system(body))
+}
