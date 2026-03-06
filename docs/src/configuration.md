@@ -169,6 +169,7 @@ just consul-keys   # list current keys
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
+| `bind_address` | `RARA__GATEWAY__BIND_ADDRESS` | `127.0.0.1:25556` | Admin API listen address |
 | `check_interval` | `RARA__GATEWAY__CHECK_INTERVAL` | `300` | Upstream check interval (seconds) |
 | `health_timeout` | `RARA__GATEWAY__HEALTH_TIMEOUT` | `30` | Health confirmation timeout (seconds) |
 | `health_poll_interval` | `RARA__GATEWAY__HEALTH_POLL_INTERVAL` | `2` | HTTP health poll interval (seconds) |

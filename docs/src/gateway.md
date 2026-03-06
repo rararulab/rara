@@ -114,12 +114,61 @@ Key properties:
 
 The staging directory is managed internally by `rara_paths` and is not user-configurable.
 
+## Admin API
+
+The gateway exposes its own HTTP server (default port `25556`, separate from the agent's `25555`) for operational control.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/gateway/status` | Agent status, current/upstream rev, update availability |
+| `POST` | `/gateway/restart` | Gracefully restart the agent child process |
+| `POST` | `/gateway/shutdown` | Graceful shutdown of gateway + agent |
+
+### `GET /gateway/status`
+
+```json
+{
+  "agent": {
+    "running": true,
+    "restart_count": 0,
+    "pid": 12345
+  },
+  "update": {
+    "current_rev": "abc1234...",
+    "upstream_rev": "def5678...",
+    "update_available": true,
+    "last_check_time": "2026-03-06T12:00:00Z"
+  }
+}
+```
+
+### `POST /gateway/restart`
+
+Triggers a graceful restart of the agent: SIGTERM → wait → respawn. This is a **manual restart** — it does not count as a failure and does not trigger backoff.
+
+```bash
+curl -X POST http://127.0.0.1:25556/gateway/restart
+# {"ok": true}
+```
+
+### `POST /gateway/shutdown`
+
+Gracefully shuts down both the agent and the gateway process.
+
+```bash
+curl -X POST http://127.0.0.1:25556/gateway/shutdown
+# {"ok": true}
+```
+
 ## Configuration
 
 Add an optional `gateway` section to your YAML config:
 
 ```yaml
 gateway:
+  bind_address: "127.0.0.1:25556"  # admin API listen address
   check_interval: 300        # seconds between upstream checks
   health_timeout: 30         # total health confirmation timeout (seconds)
   health_poll_interval: 2    # HTTP poll interval (seconds)
@@ -131,6 +180,7 @@ All fields have sensible defaults. If the `gateway` section is omitted entirely,
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `bind_address` | `127.0.0.1:25556` | Admin API listen address |
 | `check_interval` | `300` | How often to `git fetch` and check for updates (seconds) |
 | `health_timeout` | `30` | Total time budget for both health check phases (seconds) |
 | `health_poll_interval` | `2` | Interval between HTTP `/health` poll requests (seconds) |
