@@ -677,6 +677,36 @@ async fn handle_update(
 
     let chat_id = msg.chat.id.0;
 
+    // Intercept /stop command — send Interrupt signal directly without going through kernel.
+    if let UpdateKind::Message(ref stop_msg) = update.kind {
+        if let Some(text) = stop_msg.text() {
+            let cmd = text.split_whitespace().next().unwrap_or("");
+            let cmd_name = cmd.trim_start_matches('/').split('@').next().unwrap_or("");
+            if cmd_name == "stop" {
+                let username_guard = bot_username.read().await;
+                let username_ref = username_guard.as_deref().unwrap_or("");
+                let raw = telegram_to_raw_platform_message(stop_msg, username_ref);
+                drop(username_guard);
+                if let Some(raw) = raw {
+                    match handle.resolve(raw).await {
+                        Ok(inbound) => {
+                            if let Some(session_key) = inbound.session_key {
+                                let _ = handle.send_signal(session_key, rara_kernel::session::Signal::Interrupt);
+                                let _ = bot.send_message(ChatId(chat_id), "已中断当前操作。").await;
+                            } else {
+                                let _ = bot.send_message(ChatId(chat_id), "当前没有活跃的会话。").await;
+                            }
+                        }
+                        Err(_) => {
+                            let _ = bot.send_message(ChatId(chat_id), "当前没有活跃的会话。").await;
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
+
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
         warn!(

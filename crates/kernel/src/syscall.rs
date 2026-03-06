@@ -591,7 +591,8 @@ impl SyscallTool {
             "kill" => crate::session::Signal::Kill,
             "pause" => crate::session::Signal::Pause,
             "resume" => crate::session::Signal::Resume,
-            _ => unreachable!(),
+            "interrupt" => crate::session::Signal::Interrupt,
+            other => return Err(anyhow::anyhow!("unknown signal: {other}")),
         };
         self.handle
             .send_signal(target_key, sig)
@@ -704,6 +705,9 @@ enum SyscallParams {
     Resume {
         target: String,
     },
+    Interrupt {
+        target: String,
+    },
     // -- Memory --
     MemStore {
         key:   String,
@@ -787,7 +791,7 @@ impl crate::tool::AgentTool for SyscallTool {
                     "type": "string",
                     "enum": [
                         "spawn", "spawn_parallel",
-                        "status", "children", "kill", "pause", "resume",
+                        "status", "children", "kill", "pause", "resume", "interrupt",
                         "mem_store", "mem_recall",
                         "shared_store", "shared_recall",
                         "publish"
@@ -821,7 +825,7 @@ impl crate::tool::AgentTool for SyscallTool {
                 },
                 "target": {
                     "type": "string",
-                    "description": "Target agent ID (UUID) for status/kill/pause/resume"
+                    "description": "Target agent ID (UUID) for status/kill/pause/resume/interrupt"
                 },
                 "key": {
                     "type": "string",
@@ -861,6 +865,7 @@ impl crate::tool::AgentTool for SyscallTool {
             SyscallParams::Kill { target } => self.exec_signal(&target, "kill").await,
             SyscallParams::Pause { target } => self.exec_signal(&target, "pause").await,
             SyscallParams::Resume { target } => self.exec_signal(&target, "resume").await,
+            SyscallParams::Interrupt { target } => self.exec_signal(&target, "interrupt").await,
             SyscallParams::MemStore { key, value } => self.exec_mem_store(&key, value).await,
             SyscallParams::MemRecall { key } => self.exec_mem_recall(&key).await,
             SyscallParams::SharedStore { scope, key, value } => {
