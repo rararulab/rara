@@ -29,6 +29,7 @@ mod mcp_tools;
 mod mita_dispatch_rara;
 mod mita_list_sessions;
 mod mita_read_tape;
+mod mita_write_user_note;
 mod read_file;
 mod screenshot;
 mod send_email;
@@ -54,6 +55,7 @@ use write_file::WriteFileTool;
 pub use mita_dispatch_rara::DispatchRaraTool;
 use mita_list_sessions::ListSessionsTool;
 use mita_read_tape::ReadTapeTool;
+use mita_write_user_note::MitaWriteUserNoteTool;
 
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
@@ -110,7 +112,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
         // Mita-exclusive tools
         Arc::new(ListSessionsTool::new(deps.session_index)),
-        Arc::new(ReadTapeTool::new(deps.tape_service)),
+        Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
+        Arc::new(MitaWriteUserNoteTool::new(deps.tape_service)),
         dispatch_rara,
     ];
 
