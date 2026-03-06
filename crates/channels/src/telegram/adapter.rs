@@ -233,7 +233,7 @@ pub struct TelegramAdapter {
     /// Bot username from getMe (set during start).
     bot_username:      Arc<RwLock<Option<String>>>,
     /// Registered command handlers for slash commands.
-    command_handlers:  Vec<Arc<dyn CommandHandler>>,
+    command_handlers:  StdRwLock<Vec<Arc<dyn CommandHandler>>>,
     /// Registered callback handlers for interactive elements.
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
@@ -262,7 +262,7 @@ impl TelegramAdapter {
             shutdown_tx,
             shutdown_rx,
             bot_username: Arc::new(RwLock::new(None)),
-            command_handlers: Vec::new(),
+            command_handlers: StdRwLock::new(Vec::new()),
             callback_handlers: Vec::new(),
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
@@ -300,10 +300,15 @@ impl TelegramAdapter {
         self
     }
 
-    /// Register command handlers.
-    pub fn with_command_handlers(mut self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
-        self.command_handlers = handlers;
+    /// Register command handlers (builder pattern — must be called before `Arc` wrapping).
+    pub fn with_command_handlers(self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
+        *self.command_handlers.write().unwrap_or_else(|e| e.into_inner()) = handlers;
         self
+    }
+
+    /// Replace command handlers at runtime (works through `&self` / `Arc<Self>`).
+    pub fn set_command_handlers(&self, handlers: Vec<Arc<dyn CommandHandler>>) {
+        *self.command_handlers.write().unwrap_or_else(|e| e.into_inner()) = handlers;
     }
 
     /// Register callback handlers.
@@ -592,8 +597,12 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
-        let command_handlers: Arc<[Arc<dyn CommandHandler>]> =
-            self.command_handlers.clone().into();
+        let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
+            .command_handlers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .into();
 
         tokio::spawn(async move {
             polling_loop(
