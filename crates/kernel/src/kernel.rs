@@ -1176,6 +1176,10 @@ impl Kernel {
             };
             let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
 
+            let tool_context = crate::tool::ToolContext {
+                user_id: Some(user.0.clone()),
+            };
+
             let turn_result = run_agent_loop(
                 &kernel_handle,
                 rt_session_key,
@@ -1185,6 +1189,7 @@ impl Kernel {
                 &turn_cancel,
                 tape_service.clone(),
                 effective_tape,
+                tool_context,
             )
             .await;
 

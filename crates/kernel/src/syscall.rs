@@ -846,7 +846,7 @@ impl crate::tool::AgentTool for SyscallTool {
     }
 
     // FIXME: don't write this like match.
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value, _context: &crate::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
         let action: SyscallParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid kernel tool params: {e}"))?;
 

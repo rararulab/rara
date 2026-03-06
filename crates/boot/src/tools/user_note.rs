@@ -23,6 +23,12 @@ use rara_kernel::memory::TapeService;
 use rara_kernel::tool::AgentTool;
 use serde_json::json;
 
+/// Single source of truth for valid user-note categories.
+///
+/// Both the JSON schema (sent to the LLM) and the runtime validation match
+/// derive from this array, eliminating the risk of silent divergence.
+pub const NOTE_CATEGORIES: &[&str] = &["preference", "fact", "todo", "general"];
+
 /// Layer 2 service tool: persist a structured note in the user's tape.
 pub struct UserNoteTool {
     tape_service: TapeService,
@@ -37,9 +43,10 @@ impl AgentTool for UserNoteTool {
     fn name(&self) -> &str { "user_note" }
 
     fn description(&self) -> &str {
-        "Record a note about the current user for future reference. Use this to remember user \
-         preferences, important facts, or pending tasks. Notes persist across sessions and are \
-         automatically loaded into context for future conversations with this user.\n\n\
+        "Record a note about the current user for future reference. The user is automatically \
+         identified from the session context — do NOT pass a user_id. Notes persist across \
+         sessions and are automatically loaded into context for future conversations with this \
+         user.\n\n\
          Categories:\n\
          - preference: User preferences (language, style, tools they like)\n\
          - fact: Important facts about the user (name, role, projects)\n\
@@ -48,16 +55,16 @@ impl AgentTool for UserNoteTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let categories: Vec<serde_json::Value> = NOTE_CATEGORIES
+            .iter()
+            .map(|c| serde_json::Value::String((*c).to_owned()))
+            .collect();
         json!({
             "type": "object",
             "properties": {
-                "user_id": {
-                    "type": "string",
-                    "description": "The user identifier (username) to record the note for"
-                },
                 "category": {
                     "type": "string",
-                    "enum": ["preference", "fact", "todo", "general"],
+                    "enum": categories,
                     "description": "Category of the note"
                 },
                 "content": {
@@ -65,15 +72,19 @@ impl AgentTool for UserNoteTool {
                     "description": "The note content to record"
                 }
             },
-            "required": ["user_id", "category", "content"]
+            "required": ["category", "content"]
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let user_id = params
-            .get("user_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: user_id"))?;
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
+        let user_id = context
+            .user_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("no authenticated user in session context"))?;
         let category = params
             .get("category")
             .and_then(|v| v.as_str())
@@ -83,10 +94,11 @@ impl AgentTool for UserNoteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
 
-        // Validate category.
-        if !matches!(category, "preference" | "fact" | "todo" | "general") {
+        // Validate category against the single source of truth.
+        if !NOTE_CATEGORIES.contains(&category) {
             anyhow::bail!(
-                "invalid category '{category}': must be one of preference, fact, todo, general"
+                "invalid category '{category}': must be one of {}",
+                NOTE_CATEGORIES.join(", ")
             );
         }
 

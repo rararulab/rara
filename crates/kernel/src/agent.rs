@@ -457,6 +457,7 @@ pub(crate) async fn run_agent_loop(
     turn_cancel: &CancellationToken,
     tape: crate::memory::TapeService,
     tape_name: &str,
+    tool_context: crate::tool::ToolContext,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -818,6 +819,7 @@ pub(crate) async fn run_agent_loop(
                 let tool = tools.get(name);
                 let args = args.clone();
                 let name = name.clone();
+                let tc = tool_context.clone();
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -827,7 +829,7 @@ pub(crate) async fn run_agent_loop(
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
                     if let Some(tool) = tool {
-                        match tool.execute(args).await {
+                        match tool.execute(args, &tc).await {
                             Ok(result) => {
                                 tool_span.record("success", true);
                                 let dur = tool_start.elapsed().as_millis() as u64;

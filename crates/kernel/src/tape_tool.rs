@@ -318,7 +318,7 @@ impl crate::tool::AgentTool for TapeTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value, _context: &crate::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
         let action: TapeParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid tape tool params: {e}"))?;
 

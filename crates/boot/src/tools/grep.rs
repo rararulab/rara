@@ -75,7 +75,7 @@ impl AgentTool for GrepTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())

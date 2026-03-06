@@ -191,6 +191,22 @@ pub fn user_tape_name(user_id: &str) -> String {
     format!("{USER_TAPE_PREFIX}{user_id}")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_tape_name_formats_correctly() {
+        assert_eq!(user_tape_name("alice"), "user:alice");
+        assert_eq!(user_tape_name("bob123"), "user:bob123");
+    }
+
+    #[test]
+    fn user_tape_name_empty_user() {
+        assert_eq!(user_tape_name(""), "user:");
+    }
+}
+
 /// One append-only entry in a tape.
 ///
 /// Entries are immutable once persisted. The store assigns strictly increasing
