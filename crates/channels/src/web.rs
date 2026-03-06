@@ -219,7 +219,7 @@ impl WebAdapter {
             .route("/ws", get(ws_handler))
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
-            .route("/signals/:session_id/interrupt", post(interrupt_handler))
+            .route("/signals/{session_id}/interrupt", post(interrupt_handler))
             .with_state(state)
     }
 
@@ -744,7 +744,7 @@ async fn send_message_handler(
 }
 
 // ---------------------------------------------------------------------------
-// POST /signals/:session_id/interrupt handler
+// POST /signals/{session_id}/interrupt handler
 // ---------------------------------------------------------------------------
 
 async fn interrupt_handler(
