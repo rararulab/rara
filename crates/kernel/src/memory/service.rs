@@ -105,12 +105,17 @@ impl TapeService {
     /// Execute `func` against a forked tape. On success, merge the fork back
     /// into the parent tape. On failure, discard the fork so failed turns do
     /// not pollute the main tape.
-    pub async fn fork_tape<T, F, Fut>(&self, tape_name: &str, func: F) -> TapResult<T>
+    pub async fn fork_tape<T, F, Fut>(
+        &self,
+        tape_name: &str,
+        at_entry_id: Option<u64>,
+        func: F,
+    ) -> TapResult<T>
     where
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = TapResult<T>>,
     {
-        let fork_name = self.store.fork(tape_name).await?;
+        let fork_name = self.store.fork(tape_name, at_entry_id).await?;
 
         let previous = TAPE_CONTEXT.with(|current| current.replace(Some(fork_name.clone())));
         let result = func(fork_name.clone()).await;

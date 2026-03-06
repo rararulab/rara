@@ -1455,7 +1455,7 @@ impl Kernel {
                 // we don't want partial assistant messages polluting the tape.
                 // Forking creates a copy; on success we merge it back, on failure
                 // we discard it — the main tape stays clean either way.
-                let fork_name = match tape_service.store().fork(&tape_name).await {
+                let fork_name = match tape_service.store().fork(&tape_name, None).await {
                     Ok(name) => Some(name),
                     Err(e) => {
                         tracing::warn!(tape = %tape_name, error = %e, "tape fork failed, writing directly to main tape");

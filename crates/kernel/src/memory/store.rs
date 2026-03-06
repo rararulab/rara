@@ -72,21 +72,39 @@ impl TapeFile {
         }
     }
 
-    /// Copy the current file into `target`, preserving the read cache and the
-    /// next append ID so later merges can identify fork-local entries.
-    fn copy_to(&mut self, target: &mut Self) -> TapResult<()> {
-        self.close_file();
+    /// Copy entries into `target`.  If `at_entry_id` is `Some`, only copy
+    /// entries with `id >= fork_point` (partial fork).  Otherwise copy
+    /// everything (full fork).
+    fn copy_to(&mut self, target: &mut Self, at_entry_id: Option<u64>) -> TapResult<()> {
+        self.ensure_cached()?;
         target.close_file();
 
-        if self.path.exists() {
-            fs::copy(&self.path, &target.path).context(super::error::IoSnafu)?;
-        } else {
-            File::create(&target.path).context(super::error::IoSnafu)?;
+        match at_entry_id {
+            Some(fork_point) => {
+                // Partial fork: only write entries from fork_point onward.
+                let entries: Vec<TapEntry> = self
+                    .read_entries
+                    .iter()
+                    .filter(|e| e.id >= fork_point)
+                    .cloned()
+                    .collect();
+                target.append_many(entries)?;
+                target.fork_start_id = Some(target.next_id());
+            }
+            None => {
+                // Full fork: copy entire file (original behavior).
+                self.close_file();
+                if self.path.exists() {
+                    fs::copy(&self.path, &target.path).context(super::error::IoSnafu)?;
+                } else {
+                    File::create(&target.path).context(super::error::IoSnafu)?;
+                }
+                self.ensure_cached()?;
+                target.read_entries = self.read_entries.clone();
+                target.read_offset = self.read_offset;
+                target.fork_start_id = Some(self.next_id());
+            }
         }
-        self.ensure_cached()?;
-        target.read_entries = self.read_entries.clone();
-        target.fork_start_id = Some(self.next_id());
-        target.read_offset = self.read_offset;
         Ok(())
     }
 
@@ -373,12 +391,13 @@ impl WorkerState {
     }
 
     /// Create a fork by cloning the source file and cache state into a new
-    /// tape.
-    fn fork(&mut self, source: &str) -> TapResult<String> {
+    /// tape.  When `at_entry_id` is `Some`, only entries from that ID onward
+    /// are included in the fork (partial fork).
+    fn fork(&mut self, source: &str, at_entry_id: Option<u64>) -> TapResult<String> {
         let fork_name = format!("{source}__{:08x}", unique_suffix());
         let mut source_file = self.take_tape_file(source);
         let mut target_file = self.take_tape_file(&fork_name);
-        source_file.copy_to(&mut target_file)?;
+        source_file.copy_to(&mut target_file, at_entry_id)?;
         self.tape_files.insert(source.to_owned(), source_file);
         self.tape_files.insert(fork_name.clone(), target_file);
         Ok(fork_name)
@@ -569,10 +588,13 @@ impl FileTapeStore {
         self.worker.call(WorkerState::list_tapes).await
     }
 
-    /// Create a fork tape derived from `source`.
-    pub async fn fork(&self, source: &str) -> TapResult<String> {
+    /// Create a fork tape derived from `source`.  When `at_entry_id` is
+    /// `Some`, only entries from that ID onward are included (partial fork).
+    pub async fn fork(&self, source: &str, at_entry_id: Option<u64>) -> TapResult<String> {
         let source = source.to_owned();
-        self.worker.call(move |state| state.fork(&source)).await
+        self.worker
+            .call(move |state| state.fork(&source, at_entry_id))
+            .await
     }
 
     /// Merge a fork tape back into `target`, appending only fork-local entries.
