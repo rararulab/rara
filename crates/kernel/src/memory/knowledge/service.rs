@@ -30,5 +30,31 @@ pub struct KnowledgeService {
     pub extractor_model: String,
 }
 
+impl KnowledgeService {
+    /// Resolve source tape entries for memory items that have source references.
+    ///
+    /// Groups lookups by `source_tape` to minimise tape reads, then fetches
+    /// the referenced entries via [`TapeService::entries_by_ids`].
+    pub async fn resolve_sources(
+        tape_service: &crate::memory::TapeService,
+        items: &[super::items::MemoryItem],
+    ) -> Vec<crate::memory::TapEntry> {
+        let mut by_tape: std::collections::HashMap<String, Vec<u64>> =
+            std::collections::HashMap::new();
+        for item in items {
+            if let (Some(tape), Some(entry_id)) = (&item.source_tape, item.source_entry_id) {
+                by_tape.entry(tape.clone()).or_default().push(entry_id as u64);
+            }
+        }
+        let mut results = Vec::new();
+        for (tape_name, ids) in &by_tape {
+            if let Ok(entries) = tape_service.entries_by_ids(tape_name, ids).await {
+                results.extend(entries);
+            }
+        }
+        results
+    }
+}
+
 /// Shared reference to the knowledge service.
 pub type KnowledgeServiceRef = Arc<KnowledgeService>;

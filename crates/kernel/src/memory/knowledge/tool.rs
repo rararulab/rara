@@ -127,6 +127,8 @@ impl MemoryTool {
                     "content": item.content,
                     "memory_type": item.memory_type,
                     "category": item.category,
+                    "source_tape": item.source_tape,
+                    "source_entry_id": item.source_entry_id,
                 })
             })
             .collect();
