@@ -23,7 +23,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::memory::{TapEntryKind, TapeService};
+use crate::memory::{HandoffState, TapEntryKind, TapeService};
 
 /// LLM-callable tool that exposes raw tape memory primitives.
 ///
@@ -81,36 +81,17 @@ impl TapeTool {
         next_steps: Option<&str>,
         state: Option<serde_json::Value>,
     ) -> anyhow::Result<serde_json::Value> {
-        // Merge summary/next_steps into state.
-        let merged_state = {
-            let mut obj = match state {
-                Some(serde_json::Value::Object(m)) => m,
-                Some(other) => {
-                    let mut m = serde_json::Map::new();
-                    m.insert("data".into(), other);
-                    m
-                }
-                None => serde_json::Map::new(),
-            };
-            if let Some(s) = summary {
-                obj.insert("summary".into(), serde_json::Value::String(s.to_owned()));
-            }
-            if let Some(ns) = next_steps {
-                obj.insert(
-                    "next_steps".into(),
-                    serde_json::Value::String(ns.to_owned()),
-                );
-            }
-            if obj.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Object(obj))
-            }
+        let handoff_state = HandoffState {
+            summary: summary.map(|s| s.to_owned()),
+            next_steps: next_steps.map(|s| s.to_owned()),
+            owner: Some("agent".into()),
+            extra: state,
+            ..Default::default()
         };
 
         let entries = self
             .tape_service
-            .handoff(&self.tape_name, name, merged_state)
+            .handoff(&self.tape_name, name, handoff_state)
             .await
             .context("tape_anchor")?;
         Ok(serde_json::json!({

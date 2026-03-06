@@ -136,7 +136,7 @@ pub mod knowledge;
 mod service;
 mod store;
 
-pub use anchors::AnchorSummary;
+pub use anchors::{AnchorSummary, HandoffState};
 pub use context::{anchor_context, default_tape_context, user_tape_context};
 pub use error::{TapError, TapResult};
 use jiff::Timestamp;

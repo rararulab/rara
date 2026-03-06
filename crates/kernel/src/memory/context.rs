@@ -23,7 +23,7 @@
 
 use serde_json::Value;
 
-use super::{TapEntry, TapEntryKind, TapResult};
+use super::{HandoffState, TapEntry, TapEntryKind, TapResult};
 use crate::llm::{Message, ToolCallRequest};
 
 /// Reconstruct LLM messages from persisted tape entries.
@@ -163,9 +163,19 @@ pub fn anchor_context(entries: &[TapEntry]) -> Option<Message> {
         .rev()
         .find(|e| e.kind == TapEntryKind::Anchor)?;
 
-    let state = anchor.payload.get("state")?;
-    let summary = state.get("summary").and_then(Value::as_str).unwrap_or("");
-    let next_steps = state.get("next_steps").and_then(Value::as_str).unwrap_or("");
+    let state_val = anchor.payload.get("state")?;
+
+    // Try typed deserialization, fall back to raw JSON fields for old anchors.
+    let (summary, next_steps) = match serde_json::from_value::<HandoffState>(state_val.clone()) {
+        Ok(hs) => (
+            hs.summary.unwrap_or_default(),
+            hs.next_steps.unwrap_or_default(),
+        ),
+        Err(_) => (
+            state_val.get("summary").and_then(Value::as_str).unwrap_or("").to_owned(),
+            state_val.get("next_steps").and_then(Value::as_str).unwrap_or("").to_owned(),
+        ),
+    };
 
     if summary.is_empty() && next_steps.is_empty() {
         return None;
@@ -173,14 +183,14 @@ pub fn anchor_context(entries: &[TapEntry]) -> Option<Message> {
 
     let mut body = String::from("[Previous Context]\n");
     if !summary.is_empty() {
-        body.push_str(summary);
+        body.push_str(&summary);
     }
     if !next_steps.is_empty() {
         if !summary.is_empty() {
             body.push_str("\n\n");
         }
         body.push_str("Next steps: ");
-        body.push_str(next_steps);
+        body.push_str(&next_steps);
     }
 
     Some(Message::system(body))

@@ -23,7 +23,7 @@ use std::{future::Future, sync::OnceLock};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::{AnchorSummary, FileTapeStore, TapEntry, TapEntryKind, TapResult};
+use super::{AnchorSummary, FileTapeStore, HandoffState, TapEntry, TapEntryKind, TapResult};
 
 thread_local! {
     /// Per-thread current tape context used while executing fork closures.
@@ -131,7 +131,7 @@ impl TapeService {
             return Ok(());
         }
         let _ = self
-            .handoff(tape_name, "session/start", Some(json!({"owner": "human"})))
+            .handoff(tape_name, "session/start", HandoffState { owner: Some("human".into()), ..Default::default() })
             .await?;
         Ok(())
     }
@@ -141,7 +141,7 @@ impl TapeService {
         &self,
         tape_name: &str,
         name: &str,
-        state: Option<Value>,
+        state: HandoffState,
     ) -> TapResult<Vec<TapEntry>> {
         self.store
             .append(
@@ -149,7 +149,7 @@ impl TapeService {
                 TapEntryKind::Anchor,
                 json!({
                     "name": name,
-                    "state": state.unwrap_or(Value::Object(Map::new())),
+                    "state": serde_json::to_value(&state).unwrap_or(Value::Object(Map::new())),
                 }),
                 None,
             )
@@ -376,16 +376,15 @@ impl TapeService {
         };
 
         self.store.reset(tape_name).await?;
-        let mut state = Map::new();
-        state.insert("owner".to_owned(), Value::String("human".to_owned()));
-        if let Some(path) = archive_path.as_ref() {
-            state.insert(
-                "archived".to_owned(),
-                Value::String(path.to_string_lossy().into_owned()),
-            );
-        }
+        let handoff_state = HandoffState {
+            owner: Some("human".into()),
+            extra: archive_path.as_ref().map(|path| {
+                json!({ "archived": path.to_string_lossy() })
+            }),
+            ..Default::default()
+        };
         let _ = self
-            .handoff(tape_name, "session/start", Some(Value::Object(state)))
+            .handoff(tape_name, "session/start", handoff_state)
             .await?;
 
         Ok(if let Some(path) = archive_path {
@@ -574,20 +573,24 @@ impl TapeService {
 
         // Write a compaction anchor — from_last_anchor() will naturally narrow
         // the default read set to entries after this point.
-        let state = json!({
-            "summary": format!(
+        let handoff_state = HandoffState {
+            summary: Some(format!(
                 "Compacted: {discarded} old message/tool entries moved out of default view. \
                  Total history: {total} entries preserved on tape."
-            ),
-            "compaction": {
-                "discarded_from_view": discarded,
-                "original_total": total,
-                "kept_recent": keep_recent,
-                "source_ids": source_ids,
-            }
-        });
+            )),
+            owner: Some("system".into()),
+            source_ids,
+            extra: Some(json!({
+                "compaction": {
+                    "discarded_from_view": discarded,
+                    "original_total": total,
+                    "kept_recent": keep_recent,
+                }
+            })),
+            ..Default::default()
+        };
 
-        self.handoff(tape_name, "compaction", Some(state)).await?;
+        self.handoff(tape_name, "compaction", handoff_state).await?;
         Ok(discarded)
     }
 
@@ -879,7 +882,7 @@ mod tests {
 
         // Create a tape with only anchors (non-discardable).
         for i in 0..5 {
-            svc.handoff(tape, &format!("anchor-{i}"), None)
+            svc.handoff(tape, &format!("anchor-{i}"), HandoffState::default())
                 .await
                 .unwrap();
         }
