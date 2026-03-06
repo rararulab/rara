@@ -145,8 +145,8 @@ pub struct Kernel {
     sharded_queue:    ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
     started_at:       Timestamp,
-    /// Optional knowledge layer service for long-term memory extraction.
-    knowledge:        Option<crate::memory::knowledge::KnowledgeServiceRef>,
+    /// Knowledge layer service for long-term memory extraction.
+    knowledge:        crate::memory::knowledge::KnowledgeServiceRef,
 }
 
 impl Kernel {
@@ -163,7 +163,7 @@ impl Kernel {
         settings: SettingsRef,
         security: SecurityRef,
         io: IOSubsystem,
-        knowledge: Option<crate::memory::knowledge::KnowledgeServiceRef>,
+        knowledge: crate::memory::knowledge::KnowledgeServiceRef,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
 
@@ -1668,53 +1668,49 @@ impl Kernel {
         // After each successful turn, spawn an async task to extract long-term
         // memories from the conversation tape. Failures are logged but never
         // block the main event loop.
-        if !_turn_failed {
-            if let Some(ref knowledge) = self.knowledge {
-                if knowledge.config.enabled {
-                    let tape_service = self.tape_service.clone();
-                    let knowledge = Arc::clone(knowledge);
-                    let driver_registry = Arc::clone(self.syscall.driver_registry());
-                    let user_id = user.0.clone();
-                    let tape_name = session_key.to_string();
-                    tokio::spawn(async move {
-                        let extractor_model = &knowledge.config.extractor_model;
-                        let driver = match driver_registry.resolve("knowledge_extractor", None, Some(extractor_model)) {
-                            Ok((d, _model_name)) => d,
-                            Err(e) => {
-                                tracing::warn!(%e, "knowledge extraction: cannot resolve model");
-                                return;
-                            }
-                        };
-                        let entries = match tape_service.from_last_anchor(&tape_name, None).await {
-                            Ok(e) => e,
-                            Err(e) => {
-                                tracing::warn!(%e, "knowledge extraction: failed to read tape");
-                                return;
-                            }
-                        };
-                        match crate::memory::knowledge::extractor::extract_knowledge(
-                            &entries,
-                            &user_id,
-                            &tape_name,
-                            &knowledge.pool,
-                            &knowledge.embedding_svc,
-                            driver.as_ref(),
-                            extractor_model,
-                            knowledge.config.similarity_threshold,
-                        )
-                        .await
-                        {
-                            Ok(count) if count > 0 => {
-                                tracing::info!(user = %user_id, count, "knowledge extraction succeeded");
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::warn!(user = %user_id, %e, "knowledge extraction failed");
-                            }
-                        }
-                    });
+        if !_turn_failed && self.knowledge.config.enabled {
+            let tape_service = self.tape_service.clone();
+            let knowledge = Arc::clone(&self.knowledge);
+            let driver_registry = Arc::clone(self.syscall.driver_registry());
+            let user_id = user.0.clone();
+            let tape_name = session_key.to_string();
+            tokio::spawn(async move {
+                let extractor_model = &knowledge.config.extractor_model;
+                let driver = match driver_registry.resolve("knowledge_extractor", None, Some(extractor_model)) {
+                    Ok((d, _model_name)) => d,
+                    Err(e) => {
+                        tracing::warn!(%e, "knowledge extraction: cannot resolve model");
+                        return;
+                    }
+                };
+                let entries = match tape_service.from_last_anchor(&tape_name, None).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(%e, "knowledge extraction: failed to read tape");
+                        return;
+                    }
+                };
+                match crate::memory::knowledge::extractor::extract_knowledge(
+                    &entries,
+                    &user_id,
+                    &tape_name,
+                    &knowledge.pool,
+                    &knowledge.embedding_svc,
+                    driver.as_ref(),
+                    extractor_model,
+                    knowledge.config.similarity_threshold,
+                )
+                .await
+                {
+                    Ok(count) if count > 0 => {
+                        tracing::info!(user = %user_id, count, "knowledge extraction succeeded");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(user = %user_id, %e, "knowledge extraction failed");
+                    }
                 }
-            }
+            });
         }
 
         // Drain pause buffer — if the user sent messages while the turn was
