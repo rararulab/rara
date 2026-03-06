@@ -18,6 +18,8 @@
 //! channel. Does NOT go through the kernel IO subsystem — the gateway
 //! runs independently of the kernel.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use teloxide::prelude::*;
 use teloxide::types::ChatId;
 use tracing::warn;
@@ -29,20 +31,137 @@ use tracing::warn;
 pub struct UpdateNotifier {
     bot: Bot,
     channel_id: i64,
+    /// Gateway version string (injected from build_info).
+    version: String,
+    /// Machine hostname.
+    hostname: String,
+    /// Wall-clock time the gateway process started.
+    started_at: chrono::DateTime<chrono::Local>,
+    /// Number of times the agent has been (re)started.
+    agent_generation: AtomicU32,
+    /// Wall-clock time of the most recent agent launch.
+    agent_started_at: std::sync::Mutex<Option<chrono::DateTime<chrono::Local>>>,
+    /// Version/revision of the currently running agent binary.
+    /// Initially same as gateway version; updated after each successful update.
+    agent_version: std::sync::Mutex<String>,
 }
 
 impl UpdateNotifier {
     /// Create a new notifier.
     ///
-    /// Proxy is automatically picked up from `HTTPS_PROXY` / `HTTP_PROXY` /
-    /// `ALL_PROXY` environment variables by the underlying reqwest client.
-    pub fn new(bot_token: &str, channel_id: i64) -> Self {
+    /// `version` and `hostname` should be provided by the binary crate —
+    /// the `app` crate does not have access to shadow-rs or platform metadata.
+    pub fn new(bot_token: &str, channel_id: i64, version: &str, hostname: &str) -> Self {
         let bot = Bot::new(bot_token);
-        Self { bot, channel_id }
+        Self {
+            bot,
+            channel_id,
+            version: version.to_owned(),
+            hostname: hostname.to_owned(),
+            started_at: chrono::Local::now(),
+            agent_generation: AtomicU32::new(0),
+            agent_started_at: std::sync::Mutex::new(None),
+            agent_version: std::sync::Mutex::new(version.to_owned()),
+        }
     }
 
-    /// Send a notification message. Errors are logged but never propagated.
-    pub async fn notify(&self, message: &str) {
+    // -- lifecycle events -----------------------------------------------------
+
+    pub async fn agent_healthy(&self) {
+        self.agent_generation.fetch_add(1, Ordering::Relaxed);
+        *self.agent_started_at.lock().unwrap() = Some(chrono::Local::now());
+        self.send(&format!(
+            "✅ <b>Agent started and healthy</b>\n{}",
+            self.status_block(),
+        )).await;
+    }
+
+    pub async fn update_started(&self, rev: &str) {
+        self.send(&format!(
+            "🔄 <b>Auto-update: starting build</b>\n\
+             target: <code>{rev}</code>\n{}",
+            self.status_block(),
+        )).await;
+    }
+
+    pub async fn build_in_progress(&self) {
+        self.send(&format!(
+            "🔨 <b>Auto-update: building new version…</b>\n{}",
+            self.status_block(),
+        )).await;
+    }
+
+    pub async fn update_success(&self, new_rev: &str) {
+        *self.agent_version.lock().unwrap() = new_rev.to_owned();
+        self.send(&format!(
+            "✅ <b>Auto-update: updated, restarting agent</b>\n\
+             new rev: <code>{new_rev}</code>\n{}",
+            self.status_block(),
+        )).await;
+    }
+
+    // -- error events ---------------------------------------------------------
+
+    pub async fn executor_creation_failed(&self, err: &str) {
+        self.send(&format!(
+            "❌ <b>Auto-update: executor creation failed</b>\n{}\n<pre>{err}</pre>",
+            self.status_block(),
+        )).await;
+    }
+
+    pub async fn build_failed(&self, rev: &str, reason: &str) {
+        self.send(&format!(
+            "❌ <b>Auto-update: build failed</b>\n\
+             target: <code>{rev}</code>\n{}\n<pre>{reason}</pre>",
+            self.status_block(),
+        )).await;
+    }
+
+    pub async fn activation_failed(&self, reason: &str, rolled_back: bool) {
+        self.send(&format!(
+            "❌ <b>Auto-update: activation failed</b>\n\
+             rolled_back: {rolled_back}\n{}\n<pre>{reason}</pre>",
+            self.status_block(),
+        )).await;
+    }
+
+    pub async fn restart_failed(&self, err: &str) {
+        self.send(&format!(
+            "❌ <b>Auto-update: restart failed</b>\n{}\n<pre>{err}</pre>",
+            self.status_block(),
+        )).await;
+    }
+
+    // -- internal -------------------------------------------------------------
+
+    /// Render the common status block appended to every notification.
+    fn status_block(&self) -> String {
+        let generation = self.agent_generation.load(Ordering::Relaxed);
+
+        let agent_since = self.agent_started_at.lock().unwrap()
+            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "—".into());
+
+        let agent_ver = self.agent_version.lock().unwrap().clone();
+
+        format!(
+            "\n🖥 host: <code>{}</code>\n\
+             📦 gateway: <code>{}</code>\n\
+             🤖 agent: <code>{}</code>\n\
+             ⏱ gateway since: {}\n\
+             🔄 agent generation: {}\n\
+             🕐 agent since: {}",
+            self.hostname,
+            self.version,
+            agent_ver,
+            self.started_at.format("%Y-%m-%d %H:%M:%S"),
+            generation,
+            agent_since,
+        )
+    }
+
+    /// Send a message via Telegram. Errors are logged, never propagated.
+    async fn send(&self, message: &str) {
         let result = self
             .bot
             .send_message(ChatId(self.channel_id), message)

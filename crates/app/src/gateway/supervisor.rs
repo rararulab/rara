@@ -14,6 +14,7 @@
 
 //! [`SupervisorService`] — spawn, health-check, and restart `rara server`.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -26,6 +27,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use super::notifier::UpdateNotifier;
 use crate::GatewayConfig;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +116,7 @@ pub struct SupervisorService {
     shutdown:      CancellationToken,
     cmd_rx:        mpsc::Receiver<SupervisorCommand>,
     status_tx:     watch::Sender<SupervisorStatus>,
+    notifier:      Arc<UpdateNotifier>,
 }
 
 impl SupervisorService {
@@ -121,7 +124,7 @@ impl SupervisorService {
     ///
     /// `health_port` is the HTTP port the agent binds to (from
     /// `RestServerConfig::bind_address`).
-    pub fn new(config: GatewayConfig, health_port: &str) -> (Self, SupervisorHandle) {
+    pub fn new(config: GatewayConfig, health_port: &str, notifier: Arc<UpdateNotifier>) -> (Self, SupervisorHandle) {
         let health_url = format!("http://127.0.0.1:{health_port}/api/health");
         let shutdown = CancellationToken::new();
 
@@ -150,6 +153,7 @@ impl SupervisorService {
             shutdown,
             cmd_rx,
             status_tx,
+            notifier,
         };
 
         let handle = SupervisorHandle { cmd_tx, status_rx };
@@ -266,6 +270,8 @@ impl SupervisorService {
         self.last_healthy = Some(Instant::now());
         self.child = Some(child);
         self.publish_status();
+
+        self.notifier.agent_healthy().await;
 
         // Wait for the child to exit, a shutdown signal, or a command.
         let reason = loop {

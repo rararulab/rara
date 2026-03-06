@@ -15,6 +15,7 @@
 //! Update pipeline — wires [`UpdateDetector`] state changes to
 //! [`UpdateExecutor`] and [`SupervisorHandle`] for automatic updates.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::watch;
@@ -41,7 +42,7 @@ pub async fn run_update_pipeline(
     mut update_rx: watch::Receiver<UpdateState>,
     supervisor_handle: SupervisorHandle,
     cancel: CancellationToken,
-    notifier: Option<UpdateNotifier>,
+    notifier: Arc<UpdateNotifier>,
 ) {
     info!("Update pipeline started (auto_update={})", config.auto_update);
 
@@ -78,17 +79,13 @@ pub async fn run_update_pipeline(
         }
 
         info!(rev = %upstream_rev, "Auto-update: starting update to {}", upstream_rev);
-        if let Some(ref n) = notifier {
-            n.notify(&format!("\u{1f504} Auto-update: starting update to {upstream_rev}")).await;
-        }
+        notifier.update_started(&upstream_rev).await;
 
-        let result = execute_and_handle(&upstream_rev, &supervisor_handle, notifier.as_ref()).await;
+        let result = execute_and_handle(&upstream_rev, &supervisor_handle, &notifier).await;
 
         if let Err(ref e) = result {
             warn!(error = %e, "Auto-update: executor creation failed");
-            if let Some(ref n) = notifier {
-                n.notify(&format!("\u{274c} Auto-update: executor creation failed: {e}")).await;
-            }
+            notifier.executor_creation_failed(e).await;
         }
 
         UPDATING.store(false, Ordering::Relaxed);
@@ -99,16 +96,14 @@ pub async fn run_update_pipeline(
 async fn execute_and_handle(
     upstream_rev: &str,
     supervisor_handle: &SupervisorHandle,
-    notifier: Option<&UpdateNotifier>,
+    notifier: &UpdateNotifier,
 ) -> Result<(), String> {
     let mut executor = UpdateExecutor::new()
         .await
         .map_err(|e| format!("failed to create UpdateExecutor: {e}"))?;
 
     info!("Auto-update: building new version...");
-    if let Some(n) = notifier {
-        n.notify("\u{1f528} Auto-update: building new version...").await;
-    }
+    notifier.build_in_progress().await;
 
     let result = executor
         .execute_update(upstream_rev)
@@ -118,14 +113,10 @@ async fn execute_and_handle(
     match result {
         UpdateResult::Success { new_rev } => {
             info!(rev = %new_rev, "Auto-update: successfully updated to {}, restarting agent", new_rev);
-            if let Some(n) = notifier {
-                n.notify(&format!("\u{2705} Auto-update: updated to {new_rev}, restarting agent")).await;
-            }
+            notifier.update_success(&new_rev).await;
             if let Err(e) = supervisor_handle.restart().await {
                 warn!(error = %e, "Auto-update: failed to send restart command");
-                if let Some(n) = notifier {
-                    n.notify(&format!("\u{274c} Auto-update: restart failed: {e}")).await;
-                }
+                notifier.restart_failed(&e.to_string()).await;
             }
             if let Err(e) = executor.cleanup().await {
                 warn!(error = %e, "Auto-update: cleanup failed (non-fatal)");
@@ -133,9 +124,7 @@ async fn execute_and_handle(
         }
         UpdateResult::BuildFailed { reason } => {
             warn!(reason = %reason, "Auto-update: build failed for {}: {}", upstream_rev, reason);
-            if let Some(n) = notifier {
-                n.notify(&format!("\u{274c} Auto-update: build failed for {upstream_rev}: {reason}")).await;
-            }
+            notifier.build_failed(upstream_rev, &reason).await;
         }
         UpdateResult::ActivationFailed { reason, rolled_back } => {
             warn!(
@@ -143,11 +132,7 @@ async fn execute_and_handle(
                 rolled_back,
                 "Auto-update: activation failed, rolled back to previous version"
             );
-            if let Some(n) = notifier {
-                n.notify(&format!(
-                    "\u{274c} Auto-update: activation failed: {reason} (rolled_back={rolled_back})"
-                )).await;
-            }
+            notifier.activation_failed(&reason, rolled_back).await;
             if !rolled_back {
                 if let Err(e) = executor.rollback().await {
                     warn!(error = %e, "Auto-update: manual rollback also failed");
@@ -155,9 +140,7 @@ async fn execute_and_handle(
             }
             if let Err(e) = supervisor_handle.restart().await {
                 warn!(error = %e, "Auto-update: failed to send restart command after rollback");
-                if let Some(n) = notifier {
-                    n.notify(&format!("\u{274c} Auto-update: restart after rollback failed: {e}")).await;
-                }
+                notifier.restart_failed(&e.to_string()).await;
             }
         }
     }

@@ -162,9 +162,33 @@ impl GatewayArgs {
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
+        // 0. Create Telegram notifier (required — fail fast if not configured).
+        let Some(tg) = config.telegram.as_ref() else {
+            whatever!("Gateway requires [telegram] config for notifications");
+        };
+        let Some(bot_token) = tg.bot_token.as_deref().filter(|s| !s.is_empty()) else {
+            whatever!("Gateway requires telegram.bot_token");
+        };
+        let Some(raw_channel_id) = tg.notification_channel_id.as_deref().filter(|s| !s.is_empty()) else {
+            whatever!("Gateway requires telegram.notification_channel_id");
+        };
+        let channel_id: i64 = raw_channel_id
+            .parse()
+            .whatever_context("telegram.notification_channel_id must be a valid i64")?;
+        let hostname = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("HOST"))
+            .unwrap_or_else(|_| "unknown".into());
+        let notifier = std::sync::Arc::new(
+            rara_app::gateway::UpdateNotifier::new(bot_token, channel_id, build_info::FULL_VERSION, &hostname),
+        );
+
         // 1. Create supervisor + handle.
         let (mut supervisor, supervisor_handle) =
-            rara_app::gateway::SupervisorService::new(gateway_config.clone(), port);
+            rara_app::gateway::SupervisorService::new(
+                gateway_config.clone(),
+                port,
+                std::sync::Arc::clone(&notifier),
+            );
 
         // 2. Create update detector + watch receiver.
         let (detector, update_rx) =
@@ -175,31 +199,18 @@ impl GatewayArgs {
         });
 
         // 3. Spawn update pipeline (detector → executor → supervisor restart).
-        let notifier = config
-            .telegram
-            .as_ref()
-            .and_then(|tg| {
-                let token = tg.bot_token.as_deref().filter(|s| !s.is_empty())?;
-                let channel_id: i64 = tg
-                    .notification_channel_id
-                    .as_deref()
-                    .filter(|s| !s.is_empty())?
-                    .parse()
-                    .ok()?;
-                Some(rara_app::gateway::UpdateNotifier::new(token, channel_id))
-            });
-
         let pipeline_rx = update_rx.clone();
         let pipeline_cancel = cancel.clone();
         let pipeline_handle = supervisor_handle.clone();
         let pipeline_config = gateway_config.clone();
+        let pipeline_notifier = std::sync::Arc::clone(&notifier);
         tokio::spawn(async move {
             rara_app::gateway::run_update_pipeline(
                 pipeline_config,
                 pipeline_rx,
                 pipeline_handle,
                 pipeline_cancel,
-                notifier,
+                pipeline_notifier,
             )
             .await;
         });
