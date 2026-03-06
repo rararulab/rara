@@ -211,10 +211,16 @@ docs-open:
 # Running & Examples
 # ========================================================================================
 
-[doc("run the binary")]
+[doc("run rara via gateway supervisor")]
 [group("🏃 Running")]
 run:
-    @echo "🏃 Running rara binary..."
+    @echo "🏃 Starting rara gateway (supervised mode)..."
+    cargo run -p rara-cli -- gateway
+
+[doc("run rara server standalone (no supervisor)")]
+[group("🏃 Running")]
+run-standalone:
+    @echo "🏃 Running rara server (standalone)..."
     cargo run -p rara-cli -- server
 
 [doc("run hello-world example")]

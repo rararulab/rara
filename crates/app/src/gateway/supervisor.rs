@@ -21,6 +21,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::GatewayConfig;
@@ -59,6 +60,7 @@ pub struct SupervisorService {
     child:            Option<Child>,
     restart_count:    u32,
     last_healthy:     Option<Instant>,
+    shutdown:         CancellationToken,
 }
 
 impl SupervisorService {
@@ -68,12 +70,24 @@ impl SupervisorService {
     /// `RestServerConfig::bind_address`).
     pub fn new(config: GatewayConfig, health_port: &str) -> Self {
         let health_url = format!("http://127.0.0.1:{health_port}/api/health");
+        let shutdown = CancellationToken::new();
+
+        // Spawn a task that cancels the token on SIGTERM/SIGINT.
+        // This ensures the signal is captured exactly once and the
+        // token can be checked from anywhere without re-registering.
+        let token = shutdown.clone();
+        tokio::spawn(async move {
+            Self::wait_for_signal().await;
+            token.cancel();
+        });
+
         Self {
             config,
             health_url,
             child: None,
             restart_count: 0,
             last_healthy: None,
+            shutdown,
         }
     }
 
@@ -84,6 +98,11 @@ impl SupervisorService {
     /// and restarts on failure with exponential backoff.
     pub async fn run(&mut self) -> Result<(), SupervisorError> {
         loop {
+            if self.shutdown.is_cancelled() {
+                info!("Shutdown requested — exiting supervisor loop");
+                return Ok(());
+            }
+
             // Reset restart counter if healthy for long enough.
             if let Some(ts) = self.last_healthy {
                 if ts.elapsed() >= Duration::from_secs(60) {
@@ -97,7 +116,10 @@ impl SupervisorService {
             info!(attempt = self.restart_count + 1, "Spawning agent process");
 
             match self.spawn_and_monitor().await {
-                Ok(()) => {
+                Ok(shutdown_requested) => {
+                    if shutdown_requested {
+                        return Ok(());
+                    }
                     // Child exited cleanly (status 0). This is unexpected for
                     // a long-running server but not an error — restart it.
                     info!("Agent process exited cleanly, restarting");
@@ -121,7 +143,7 @@ impl SupervisorService {
 
                     tokio::select! {
                         () = tokio::time::sleep(backoff) => {}
-                        () = Self::shutdown_signal() => {
+                        () = self.shutdown.cancelled() => {
                             info!("Shutdown signal received during backoff");
                             return Ok(());
                         }
@@ -133,7 +155,10 @@ impl SupervisorService {
 
     /// Spawn the child, run health checks, then wait for it to exit or
     /// a shutdown signal.
-    async fn spawn_and_monitor(&mut self) -> Result<(), SupervisorError> {
+    ///
+    /// Returns `Ok(true)` if shutdown was requested, `Ok(false)` if the
+    /// child exited cleanly on its own.
+    async fn spawn_and_monitor(&mut self) -> Result<bool, SupervisorError> {
         let mut child = self.spawn_child().await?;
 
         // Phase 1: wait for READY on stdout.
@@ -154,7 +179,7 @@ impl SupervisorService {
                     Ok(s) if s.success() => {
                         info!("Agent process exited with status 0");
                         self.child = None;
-                        Ok(())
+                        Ok(false)
                     }
                     Ok(s) => {
                         self.child = None;
@@ -172,10 +197,10 @@ impl SupervisorService {
                     }
                 }
             }
-            () = Self::shutdown_signal() => {
+            () = self.shutdown.cancelled() => {
                 info!("Shutdown signal received — stopping agent");
                 self.graceful_shutdown().await;
-                Ok(())
+                Ok(true)
             }
         }
     }
@@ -306,7 +331,7 @@ impl SupervisorService {
     }
 
     /// Wait for SIGTERM or SIGINT.
-    async fn shutdown_signal() {
+    async fn wait_for_signal() {
         let ctrl_c = tokio::signal::ctrl_c();
 
         #[cfg(unix)]

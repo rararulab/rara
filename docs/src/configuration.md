@@ -165,6 +165,16 @@ just consul-keys   # list current keys
 | `otlp_endpoint` | `RARA__TELEMETRY__OTLP_ENDPOINT` | — | Generic OTLP endpoint (e.g. `http://alloy:4318/v1/traces`) |
 | `otlp_protocol` | `RARA__TELEMETRY__OTLP_PROTOCOL` | `http` | Export protocol: `http` or `grpc` |
 
+#### Gateway (`gateway.*`)
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `check_interval` | `RARA__GATEWAY__CHECK_INTERVAL` | `300` | Upstream check interval (seconds) |
+| `health_timeout` | `RARA__GATEWAY__HEALTH_TIMEOUT` | `30` | Health confirmation timeout (seconds) |
+| `health_poll_interval` | `RARA__GATEWAY__HEALTH_POLL_INTERVAL` | `2` | HTTP health poll interval (seconds) |
+| `max_restart_attempts` | `RARA__GATEWAY__MAX_RESTART_ATTEMPTS` | `3` | Max consecutive restart failures |
+| `auto_update` | `RARA__GATEWAY__AUTO_UPDATE` | `true` | Auto-apply upstream updates |
+
 #### Other
 
 | Key | Env Var | Default | Description |
