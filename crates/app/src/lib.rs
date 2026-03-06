@@ -372,6 +372,23 @@ pub async fn start_with_options(
     let mut worker_manager = common_worker::Manager::with_state_and_config((), manager_config);
 
     if let Some(ref tg_adapter) = telegram_adapter {
+        // Wire command handlers now that KernelHandle is available.
+        {
+            use rara_channels::telegram::commands::{
+                KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
+            };
+            let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
+                std::sync::Arc::new(KernelBotServiceClient::new(
+                    rara.session_index.clone(),
+                    rara.tape_service.clone(),
+                ));
+            let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = vec![
+                std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
+                std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
+            ];
+            tg_adapter.set_command_handlers(handlers);
+        }
+
         use rara_kernel::channel::adapter::ChannelAdapter as _;
         match tg_adapter.start(kernel_handle.clone()).await {
             Ok(()) => info!("Telegram adapter started"),

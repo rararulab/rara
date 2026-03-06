@@ -24,6 +24,8 @@ use rara_kernel::{
         types::InlineButton,
     },
     error::KernelError,
+    handle::KernelHandle,
+    session::Signal,
 };
 
 use super::client::BotServiceClient;
@@ -306,6 +308,66 @@ impl SessionCommandHandler {
                 }
                 Err(e) => Ok(CommandResult::Text(format!("Failed to update model: {e}"))),
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StopCommandHandler
+// ---------------------------------------------------------------------------
+
+/// Handles the `/stop` command — sends an interrupt signal to the active
+/// session so the kernel cancels the in-progress LLM turn.
+pub struct StopCommandHandler {
+    client: Arc<dyn BotServiceClient>,
+    handle: KernelHandle,
+}
+
+impl StopCommandHandler {
+    pub fn new(client: Arc<dyn BotServiceClient>, handle: KernelHandle) -> Self {
+        Self { client, handle }
+    }
+}
+
+#[async_trait]
+impl CommandHandler for StopCommandHandler {
+    fn commands(&self) -> Vec<CommandDefinition> {
+        vec![CommandDefinition {
+            name:        "stop".to_owned(),
+            description: "Interrupt the current operation".to_owned(),
+            usage:       Some("/stop".to_owned()),
+        }]
+    }
+
+    async fn handle(
+        &self,
+        _command: &CommandInfo,
+        context: &CommandContext,
+    ) -> Result<CommandResult, KernelError> {
+        let chat_id = extract_chat_id(context);
+
+        let session_key = match self.client.get_channel_session(&chat_id).await {
+            Ok(Some(binding)) => binding.session_key,
+            Ok(None) => {
+                return Ok(CommandResult::Text(
+                    "当前没有活跃的会话。".to_owned(),
+                ));
+            }
+            Err(_) => {
+                return Ok(CommandResult::Text(
+                    "当前没有活跃的会话。".to_owned(),
+                ));
+            }
+        };
+
+        match rara_kernel::session::SessionKey::try_from_raw(&session_key) {
+            Ok(key) => {
+                let _ = self.handle.send_signal(key, Signal::Interrupt);
+                Ok(CommandResult::Text("已中断当前操作。".to_owned()))
+            }
+            Err(_) => Ok(CommandResult::Text(
+                "当前没有活跃的会话。".to_owned(),
+            )),
         }
     }
 }

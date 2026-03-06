@@ -51,8 +51,10 @@ use dashmap::DashMap;
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
-        command::{CallbackHandler, CommandHandler},
-        types::{ChannelType, InlineButton, MessageContent, ReplyMarkup},
+        command::{
+            CallbackHandler, CommandContext, CommandHandler, CommandInfo, CommandResult,
+        },
+        types::{ChannelType, ChannelUser, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
     handle::KernelHandle,
@@ -231,7 +233,7 @@ pub struct TelegramAdapter {
     /// Bot username from getMe (set during start).
     bot_username:      Arc<RwLock<Option<String>>>,
     /// Registered command handlers for slash commands.
-    command_handlers:  Vec<Arc<dyn CommandHandler>>,
+    command_handlers:  StdRwLock<Vec<Arc<dyn CommandHandler>>>,
     /// Registered callback handlers for interactive elements.
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
@@ -260,7 +262,7 @@ impl TelegramAdapter {
             shutdown_tx,
             shutdown_rx,
             bot_username: Arc::new(RwLock::new(None)),
-            command_handlers: Vec::new(),
+            command_handlers: StdRwLock::new(Vec::new()),
             callback_handlers: Vec::new(),
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
@@ -298,10 +300,15 @@ impl TelegramAdapter {
         self
     }
 
-    /// Register command handlers.
-    pub fn with_command_handlers(mut self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
-        self.command_handlers = handlers;
+    /// Register command handlers (builder pattern — must be called before `Arc` wrapping).
+    pub fn with_command_handlers(self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
+        *self.command_handlers.write().unwrap_or_else(|e| e.into_inner()) = handlers;
         self
+    }
+
+    /// Replace command handlers at runtime (works through `&self` / `Arc<Self>`).
+    pub fn set_command_handlers(&self, handlers: Vec<Arc<dyn CommandHandler>>) {
+        *self.command_handlers.write().unwrap_or_else(|e| e.into_inner()) = handlers;
     }
 
     /// Register callback handlers.
@@ -590,6 +597,12 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
+        let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
+            .command_handlers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .into();
 
         tokio::spawn(async move {
             polling_loop(
@@ -602,6 +615,7 @@ impl ChannelAdapter for TelegramAdapter {
                 config,
                 stream_hub,
                 active_streams,
+                command_handlers,
             )
             .await;
         });
@@ -652,6 +666,7 @@ async fn polling_loop(
     config: Arc<StdRwLock<TelegramConfig>>,
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    command_handlers: Arc<[Arc<dyn CommandHandler>]>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -706,6 +721,7 @@ async fn polling_loop(
                     let config = Arc::clone(&config);
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
+                    let command_handlers = Arc::clone(&command_handlers);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -716,6 +732,7 @@ async fn polling_loop(
                             &config,
                             &stream_hub,
                             &active_streams,
+                            &command_handlers,
                         )
                         .await;
                     });
@@ -751,6 +768,7 @@ async fn handle_update(
     config: &Arc<StdRwLock<TelegramConfig>>,
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
+    command_handlers: &[Arc<dyn CommandHandler>],
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -770,44 +788,6 @@ async fn handle_update(
     };
 
     let chat_id = msg.chat.id.0;
-
-    // Intercept /stop command — send Interrupt signal directly without going
-    // through kernel.
-    if let UpdateKind::Message(ref stop_msg) = update.kind {
-        if let Some(text) = stop_msg.text() {
-            let cmd = text.split_whitespace().next().unwrap_or("");
-            let cmd_name = cmd.trim_start_matches('/').split('@').next().unwrap_or("");
-            if cmd_name == "stop" {
-                let username_guard = bot_username.read().await;
-                let username_ref = username_guard.as_deref().unwrap_or("");
-                let raw = telegram_to_raw_platform_message(stop_msg, username_ref);
-                drop(username_guard);
-                if let Some(raw) = raw {
-                    match handle.resolve(raw).await {
-                        Ok(inbound) => {
-                            if let Some(session_key) = inbound.session_key {
-                                let _ = handle.send_signal(
-                                    session_key,
-                                    rara_kernel::session::Signal::Interrupt,
-                                );
-                                let _ = bot.send_message(ChatId(chat_id), "已中断当前操作。").await;
-                            } else {
-                                let _ = bot
-                                    .send_message(ChatId(chat_id), "当前没有活跃的会话。")
-                                    .await;
-                            }
-                        }
-                        Err(_) => {
-                            let _ = bot
-                                .send_message(ChatId(chat_id), "当前没有活跃的会话。")
-                                .await;
-                        }
-                    }
-                }
-                return;
-            }
-        }
-    }
 
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
@@ -865,6 +845,87 @@ async fn handle_update(
         }
 
         drop(username_guard);
+    }
+
+    // --- Command dispatch ---
+    // Intercept `/command` messages and route them to registered handlers
+    // before the message enters the kernel pipeline.
+    if let UpdateKind::Message(_) = &update.kind {
+        if let Some(text) = msg.text() {
+            if text.starts_with('/') && !command_handlers.is_empty() {
+                let first_token = text.split_whitespace().next().unwrap_or("");
+                // Strip leading `/` and optional `@botname` suffix.
+                let cmd_name = first_token
+                    .trim_start_matches('/')
+                    .split('@')
+                    .next()
+                    .unwrap_or("");
+
+                if !cmd_name.is_empty() {
+                    // Find a handler whose `commands()` list contains this name.
+                    let matched_handler = command_handlers.iter().find(|h| {
+                        h.commands().iter().any(|def| def.name == cmd_name)
+                    });
+
+                    if let Some(handler) = matched_handler {
+                        let args = text[first_token.len()..].trim_start().to_owned();
+                        let info = CommandInfo {
+                            name: cmd_name.to_owned(),
+                            args,
+                            raw:  text.to_owned(),
+                        };
+
+                        let user_id = msg
+                            .from
+                            .as_ref()
+                            .map(|u| u.id.0.to_string())
+                            .unwrap_or_default();
+                        let display_name = msg.from.as_ref().and_then(|u| {
+                            u.username
+                                .clone()
+                                .or_else(|| Some(u.first_name.clone()))
+                        });
+
+                        let mut metadata = HashMap::new();
+                        metadata.insert(
+                            "telegram_chat_id".to_owned(),
+                            serde_json::Value::Number(chat_id.into()),
+                        );
+
+                        let ctx = CommandContext {
+                            channel_type: ChannelType::Telegram,
+                            session_key:  String::new(),
+                            user:         ChannelUser {
+                                platform_id:  user_id,
+                                display_name,
+                            },
+                            metadata,
+                        };
+
+                        match handler.handle(&info, &ctx).await {
+                            Ok(result) => {
+                                dispatch_command_result(bot, chat_id, result).await;
+                            }
+                            Err(e) => {
+                                error!(
+                                    command = cmd_name,
+                                    error = %e,
+                                    "telegram adapter: command handler failed"
+                                );
+                                let _ = bot
+                                    .send_message(
+                                        ChatId(chat_id),
+                                        format!("Command failed: {e}"),
+                                    )
+                                    .await;
+                            }
+                        }
+                        return;
+                    }
+                    // No handler matched — fall through to normal message processing.
+                }
+            }
+        }
     }
 
     // Convert to RawPlatformMessage.
@@ -928,6 +989,55 @@ async fn handle_update(
                 .send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。")
                 .await;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Command result dispatch
+// ---------------------------------------------------------------------------
+
+/// Send a [`CommandResult`] back to the Telegram chat.
+async fn dispatch_command_result(
+    bot: &teloxide::Bot,
+    chat_id: i64,
+    result: CommandResult,
+) {
+    match result {
+        CommandResult::Text(text) => {
+            let _ = bot.send_message(ChatId(chat_id), text).await;
+        }
+        CommandResult::Html(html) => {
+            let _ = bot
+                .send_message(ChatId(chat_id), html)
+                .parse_mode(ParseMode::Html)
+                .await;
+        }
+        CommandResult::HtmlWithKeyboard { html, keyboard } => {
+            let rows: Vec<Vec<InlineKeyboardButton>> = keyboard
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|btn| {
+                            if let Some(url) = btn.url {
+                                InlineKeyboardButton::url(btn.text, url.parse().unwrap())
+                            } else {
+                                InlineKeyboardButton::callback(
+                                    btn.text,
+                                    btn.callback_data.unwrap_or_default(),
+                                )
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let markup = InlineKeyboardMarkup::new(rows);
+            let _ = bot
+                .send_message(ChatId(chat_id), html)
+                .parse_mode(ParseMode::Html)
+                .reply_markup(markup)
+                .await;
+        }
+        CommandResult::None => {}
     }
 }
 
