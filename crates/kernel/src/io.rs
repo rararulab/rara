@@ -240,6 +240,26 @@ impl InboundMessage {
             metadata: HashMap::new(),
         }
     }
+
+    /// Build the originating endpoint for session-scoped reply routing.
+    ///
+    /// Returns `Some(Endpoint)` for channel types that support multiple
+    /// chat destinations per user (e.g. Telegram private vs group chats).
+    /// Returns `None` for internal/synthetic messages.
+    pub fn origin_endpoint(&self) -> Option<Endpoint> {
+        match self.source.channel_type {
+            ChannelType::Telegram => {
+                let chat_id = self.source.platform_chat_id.as_ref()?
+                    .parse::<i64>().ok()?;
+                Some(Endpoint {
+                    channel_type: ChannelType::Telegram,
+                    address: EndpointAddress::Telegram { chat_id, thread_id: None },
+                })
+            }
+            // Web endpoints are already per-connection; CLI/Internal don't need scoping.
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,19 +288,23 @@ pub struct Attachment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundEnvelope {
     /// Unique envelope identifier (ULID).
-    pub id:          MessageId,
+    pub id:               MessageId,
     /// The inbound message this is replying to.
-    pub in_reply_to: MessageId,
+    pub in_reply_to:      MessageId,
     /// Target user.
-    pub user:        UserId,
+    pub user:             UserId,
     /// Session context.
-    pub session_key: SessionKey,
+    pub session_key:      SessionKey,
     /// How to route this envelope.
-    pub routing:     OutboundRouting,
+    pub routing:          OutboundRouting,
     /// The payload to deliver.
-    pub payload:     OutboundPayload,
+    pub payload:          OutboundPayload,
     /// When this envelope was created.
-    pub timestamp:   jiff::Timestamp,
+    pub timestamp:        jiff::Timestamp,
+    /// When set, deliver ONLY to this endpoint (session-scoped routing).
+    /// Takes priority over `routing` for same-type endpoints.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub origin_endpoint:  Option<Endpoint>,
 }
 
 impl OutboundEnvelope {
@@ -304,6 +328,7 @@ impl OutboundEnvelope {
                 message: message.into(),
             },
             timestamp: jiff::Timestamp::now(),
+            origin_endpoint: None,
         }
     }
 
@@ -326,6 +351,7 @@ impl OutboundEnvelope {
                 attachments,
             },
             timestamp: jiff::Timestamp::now(),
+            origin_endpoint: None,
         }
     }
 
@@ -348,6 +374,7 @@ impl OutboundEnvelope {
                 detail,
             },
             timestamp: jiff::Timestamp::now(),
+            origin_endpoint: None,
         }
     }
 
@@ -370,7 +397,14 @@ impl OutboundEnvelope {
                 data,
             },
             timestamp: jiff::Timestamp::now(),
+            origin_endpoint: None,
         }
+    }
+
+    /// Set the origin endpoint for session-scoped routing.
+    pub fn with_origin(mut self, endpoint: Option<Endpoint>) -> Self {
+        self.origin_endpoint = endpoint;
+        self
     }
 
     /// Format this envelope as a [`PlatformOutbound`] for delivery.
@@ -945,7 +979,7 @@ pub struct AgentHandle {
 /// An endpoint pairs a channel type with a specific address, enabling
 /// precise delivery to individual connections (e.g. a specific Telegram
 /// chat, a specific WebSocket connection).
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Endpoint {
     /// The channel type of this endpoint.
     pub channel_type: ChannelType,
@@ -954,7 +988,7 @@ pub struct Endpoint {
 }
 
 /// Platform-specific addressing for an [`Endpoint`].
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum EndpointAddress {
     /// Telegram chat endpoint.
     Telegram {
@@ -1316,7 +1350,7 @@ impl IOSubsystem {
     )]
     async fn deliver_to_endpoints(&self, envelope: OutboundEnvelope) {
         let connected = self.endpoint_registry.get_endpoints(&envelope.user);
-        let targets = match &envelope.routing {
+        let mut targets = match &envelope.routing {
             OutboundRouting::BroadcastAll => connected,
             OutboundRouting::BroadcastExcept { exclude } => connected
                 .into_iter()
@@ -1327,6 +1361,12 @@ impl IOSubsystem {
                 .filter(|e| channels.contains(&e.channel_type))
                 .collect(),
         };
+
+        // Session-scoped delivery: when origin_endpoint is set, deliver only
+        // to that endpoint instead of broadcasting to all same-type endpoints.
+        if let Some(ref origin) = envelope.origin_endpoint {
+            targets.retain(|e| e == origin);
+        }
 
         let futs = targets.into_iter().map(|endpoint| {
             let adapter = self.adapters.get(&endpoint.channel_type).cloned();

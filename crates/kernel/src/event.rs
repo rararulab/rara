@@ -256,9 +256,11 @@ pub enum KernelEvent {
     TurnCompleted {
         #[debug("{}", if result.is_ok() { "Ok(..)" } else { "Err(..)" })]
         #[serde(skip_serializing)]
-        result:      Result<AgentTurnResult, String>,
-        in_reply_to: MessageId,
-        user:        UserId,
+        result:           Result<AgentTurnResult, String>,
+        in_reply_to:      MessageId,
+        user:             UserId,
+        /// Origin endpoint from the inbound message for session-scoped routing.
+        origin_endpoint:  Option<crate::io::Endpoint>,
     },
 
     /// A child session completed its work.
@@ -404,6 +406,7 @@ impl KernelEventEnvelope {
         result: Result<AgentTurnResult, String>,
         in_reply_to: MessageId,
         user: UserId,
+        origin_endpoint: Option<crate::io::Endpoint>,
     ) -> Self {
         Self {
             base: EventBase::from(session_key),
@@ -411,6 +414,7 @@ impl KernelEventEnvelope {
                 result,
                 in_reply_to,
                 user,
+                origin_endpoint,
             },
         }
     }

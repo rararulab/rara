@@ -429,8 +429,9 @@ impl Kernel {
                 result,
                 in_reply_to,
                 user,
+                origin_endpoint,
             } => {
-                self.handle_turn_completed(base.session_key, result, in_reply_to, user)
+                self.handle_turn_completed(base.session_key, result, in_reply_to, user, origin_endpoint)
                     .await;
             }
             KernelEvent::ChildSessionDone { child_id, result } => {
@@ -830,6 +831,8 @@ impl Kernel {
 
         self.io.register_stateless_endpoint(&msg);
 
+        let origin_endpoint = msg.origin_endpoint();
+
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_session_key {
             span.record("routing_path", "id_addressing");
@@ -842,7 +845,7 @@ impl Kernel {
                         session_id.clone(),
                         "process_terminal",
                         format!("process {} is {}", target_id, state),
-                    );
+                    ).with_origin(origin_endpoint.clone());
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
@@ -862,7 +865,7 @@ impl Kernel {
                         session_id.clone(),
                         "process_not_found",
                         format!("process not found: {target_id}"),
-                    );
+                    ).with_origin(origin_endpoint.clone());
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1158,14 +1161,15 @@ impl Kernel {
         //   - the response stream is closed
         //   - a TurnCompleted(Err) event is pushed so the process returns to Ready
         struct TurnGuard {
-            event_queue:    EventQueueRef,
-            stream_hub:     Arc<crate::io::StreamHub>,
-            stream_id:      StreamId,
-            typing_refresh: Option<tokio::task::JoinHandle<()>>,
-            session_key:    SessionKey,
-            msg_id:         MessageId,
-            user:           crate::identity::UserId,
-            completed:      bool,
+            event_queue:     EventQueueRef,
+            stream_hub:      Arc<crate::io::StreamHub>,
+            stream_id:       StreamId,
+            typing_refresh:  Option<tokio::task::JoinHandle<()>>,
+            session_key:     SessionKey,
+            msg_id:          MessageId,
+            user:            crate::identity::UserId,
+            origin_endpoint: Option<crate::io::Endpoint>,
+            completed:       bool,
         }
 
         impl Drop for TurnGuard {
@@ -1185,6 +1189,7 @@ impl Kernel {
                         Err("turn task terminated unexpectedly".to_string()),
                         self.msg_id.clone(),
                         self.user.clone(),
+                        self.origin_endpoint.clone(),
                     );
                     if let Err(e) = self.event_queue.try_push(event) {
                         error!(
@@ -1217,7 +1222,7 @@ impl Kernel {
                 session_key.clone(),
                 "runtime_not_found",
                 format!("agent runtime not found: {session_key}"),
-            );
+            ).with_origin(msg.origin_endpoint());
             if let Err(e) = &self
                 .event_queue
                 .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1236,6 +1241,7 @@ impl Kernel {
         // per session.
         let user = msg.user.clone();
         let msg_id = msg.id.clone();
+        let origin_endpoint = msg.origin_endpoint();
 
         let _ = self
             .process_table
@@ -1257,7 +1263,7 @@ impl Kernel {
                     egress_session_key.clone(),
                     crate::io::stages::THINKING,
                     None,
-                )));
+                ).with_origin(origin_endpoint.clone())));
 
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
             metrics.record_message();
@@ -1364,6 +1370,7 @@ impl Kernel {
                 let sid = typing_session_key.clone();
                 let usr = user.clone();
                 let mid = msg_id.clone();
+                let oe = origin_endpoint.clone();
                 tokio::spawn(async move {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
                     interval.tick().await; // skip the immediate first tick
@@ -1376,21 +1383,22 @@ impl Kernel {
                                 sid.clone(),
                                 crate::io::stages::THINKING,
                                 None,
-                            )));
+                            ).with_origin(oe.clone())));
                     }
                 })
             };
 
             // -- 7b: Arm the TurnGuard --
             let mut turn_guard = TurnGuard {
-                event_queue:    event_queue.clone(),
-                stream_hub:     Arc::clone(&stream_hub_ref),
-                stream_id:      stream_id.clone(),
-                typing_refresh: Some(typing_refresh),
-                session_key:    session_key.clone(),
-                msg_id:         msg_id.clone(),
-                user:           user.clone(),
-                completed:      false,
+                event_queue:     event_queue.clone(),
+                stream_hub:      Arc::clone(&stream_hub_ref),
+                stream_id:       stream_id.clone(),
+                typing_refresh:  Some(typing_refresh),
+                session_key:     session_key.clone(),
+                msg_id:          msg_id.clone(),
+                user:            user.clone(),
+                origin_endpoint: origin_endpoint.clone(),
+                completed:       false,
             };
 
             // -- 7c: Tape fork (transactional safety) --
@@ -1475,7 +1483,7 @@ impl Kernel {
             // back to Ready state. KernelError -> String conversion happens
             // here because KernelEvent requires Clone but KernelError doesn't.
             let result = turn_result.map_err(|e| e.to_string());
-            let event = KernelEventEnvelope::turn_completed(session_key, result, msg_id, user);
+            let event = KernelEventEnvelope::turn_completed(session_key, result, msg_id, user, origin_endpoint);
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, session_key = %session_key, "failed to push TurnCompleted");
             }
@@ -1499,6 +1507,7 @@ impl Kernel {
         result: std::result::Result<AgentTurnResult, String>,
         in_reply_to: MessageId,
         user: crate::identity::UserId,
+        origin_endpoint: Option<crate::io::Endpoint>,
     ) {
         let span = tracing::Span::current();
 
@@ -1582,7 +1591,7 @@ impl Kernel {
                     egress_session_key.clone(),
                     crate::channel::types::MessageContent::Text(turn.text),
                     vec![],
-                );
+                ).with_origin(origin_endpoint.clone());
                 if let Err(e) = &self
                     .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1635,7 +1644,7 @@ impl Kernel {
                     egress_session_key.clone(),
                     "agent_error",
                     err_msg,
-                );
+                ).with_origin(origin_endpoint.clone());
                 if let Err(e) = &self
                     .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
