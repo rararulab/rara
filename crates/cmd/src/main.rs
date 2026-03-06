@@ -175,11 +175,8 @@ impl GatewayArgs {
         let channel_id: i64 = raw_channel_id
             .parse()
             .whatever_context("telegram.notification_channel_id must be a valid i64")?;
-        let hostname = std::env::var("HOSTNAME")
-            .or_else(|_| std::env::var("HOST"))
-            .unwrap_or_else(|_| "unknown".into());
         let notifier = std::sync::Arc::new(
-            rara_app::gateway::UpdateNotifier::new(bot_token, channel_id, build_info::FULL_VERSION, &hostname),
+            rara_app::gateway::UpdateNotifier::new(bot_token, channel_id, build_info::FULL_VERSION),
         );
 
         // 1. Create supervisor + handle.
