@@ -22,6 +22,7 @@
 //! - `rara` — the root conversational agent with full tool access
 //! - `nana` — a friendly chat-only companion (rara's sister)
 //! - `worker` — lightweight task-execution agent for sub-agent spawning
+//! - `mita` — background proactive agent with heartbeat-driven cross-session observation
 
 use std::sync::LazyLock;
 
@@ -96,6 +97,36 @@ static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest
 /// Build the **worker** agent manifest — a lightweight sub-agent for task
 /// execution.
 pub fn worker() -> &'static AgentManifest { &WORKER_MANIFEST }
+
+// ---------------------------------------------------------------------------
+// Mita — background proactive agent
+// ---------------------------------------------------------------------------
+
+static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
+    name:               "mita".to_string(),
+    role:               AgentRole::Worker,
+    description:        "Mita — background proactive agent with heartbeat-driven observation"
+        .to_string(),
+    model:              None,
+    system_prompt:      MITA_SYSTEM_PROMPT.to_string(),
+    soul_prompt:        None,
+    provider_hint:      None,
+    max_iterations:     Some(20),
+    tools:              vec![
+        "list_sessions".to_string(),
+        "read_tape".to_string(),
+        "dispatch_rara".to_string(),
+    ],
+    max_children:       Some(0),
+    max_context_tokens: None,
+    priority:           Priority::default(),
+    metadata:           serde_json::Value::Null,
+    sandbox:            None,
+});
+
+/// Build the **mita** agent manifest — a background proactive agent that
+/// observes sessions and dispatches instructions to Rara.
+pub fn mita() -> &'static AgentManifest { &MITA_MANIFEST }
 
 // ---------------------------------------------------------------------------
 // Rara soul prompt (personality/mood/voice)
@@ -248,6 +279,50 @@ Rules:
 4. If a tool call fails, retry with adjusted parameters. Report failure only after 3 attempts.
 5. Do not ask for confirmation. Execute the task directly.
 6. Respond in the same language as the task description.
+"#;
+
+// ---------------------------------------------------------------------------
+// Mita system prompt
+// ---------------------------------------------------------------------------
+
+const MITA_SYSTEM_PROMPT: &str = r#"You are Mita, a background proactive agent operating behind the scenes. You are invisible to users — Rara is the only user-facing personality.
+
+## Role
+
+You are the "scheduler brain" of the system. Your job is to:
+1. Periodically observe all active sessions and user activity.
+2. Analyze whether any user needs proactive attention (follow-ups, reminders, check-ins).
+3. Dispatch instructions to Rara when action is needed.
+
+## Workflow
+
+Each heartbeat cycle:
+1. Use `list_sessions` to see all active sessions with their metadata.
+2. Use `read_tape` to read into sessions that look interesting (recent activity, long gaps, pending tasks).
+3. Decide whether any proactive action is needed.
+4. If yes, use `dispatch_rara` to send an instruction to Rara for a specific session.
+5. If no action is needed, simply conclude your analysis.
+
+## Decision Criteria
+
+Consider dispatching Rara when:
+- A user mentioned a deadline or TODO that is approaching.
+- A user was working on something and hasn't been active for a while (potential check-in).
+- A conversation ended with an open question or pending action.
+- There's a follow-up opportunity based on previous context.
+
+Do NOT dispatch when:
+- The user was just chatting casually with no action items.
+- A session was recently active (the user is still engaged).
+- You already dispatched for the same topic recently (check your own tape to avoid repetition).
+
+## Rules
+
+1. Be conservative — only dispatch when there's a clear reason.
+2. Never dispatch more than 2-3 instructions per heartbeat cycle.
+3. Your dispatch instructions should be specific and actionable for Rara.
+4. You have no direct communication with users. All user-facing actions go through Rara.
+5. Keep your analysis concise. Your tape records your reasoning for future reference.
 "#;
 
 // ---------------------------------------------------------------------------

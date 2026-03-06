@@ -14,6 +14,7 @@
 
 mod boot;
 pub mod flatten;
+mod mita;
 mod tools;
 
 use std::{
@@ -71,6 +72,16 @@ pub struct AppConfig {
     pub telegram:    Option<flatten::TelegramConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
+    /// Mita proactive agent configuration (optional — disabled if absent).
+    #[serde(default)]
+    pub mita:        Option<MitaConfig>,
+}
+
+/// Configuration for the Mita background proactive agent.
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
+pub struct MitaConfig {
+    /// Heartbeat interval in seconds (e.g. 1800 = 30 minutes).
+    pub heartbeat_interval_secs: u64,
 }
 
 /// General OTLP telemetry configuration.
@@ -245,6 +256,12 @@ pub async fn start_with_options(
     let cancellation_token = CancellationToken::new();
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
+    // Wire DispatchRaraTool with the now-available KernelHandle.
+    {
+        let mut lock = rara.dispatch_rara_handle.write().await;
+        *lock = Some(kernel_handle.clone());
+    }
+
     let (domain_routes, openapi) =
         backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
     let swagger_ui =
@@ -309,6 +326,26 @@ pub async fn start_with_options(
         }
     }
     info!("Kernel I/O subsystem running");
+
+    // -- Mita heartbeat worker ---------------------------------------------
+    if let Some(ref mita_config) = config.mita {
+        let heartbeat_worker = mita::MitaHeartbeatWorker::new(
+            kernel_handle.clone(),
+            rara.tape_service.clone(),
+        );
+        let _mita_handle = worker_manager
+            .worker(heartbeat_worker)
+            .name("mita-heartbeat")
+            .interval(Duration::from_secs(mita_config.heartbeat_interval_secs))
+            .spawn();
+        info!(
+            interval_secs = mita_config.heartbeat_interval_secs,
+            "Mita heartbeat worker started"
+        );
+    } else {
+        info!("Mita proactive agent disabled (no `mita` config section)");
+    }
+
     info!("Application started successfully");
 
     let app_handle = AppHandle {

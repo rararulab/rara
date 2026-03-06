@@ -33,17 +33,20 @@ use tracing::info;
 /// [`Kernel`](rara_kernel::kernel::Kernel).
 #[derive(Clone)]
 pub(crate) struct BootResult {
-    pub credential_store:  rara_keyring_store::KeyringStoreRef,
-    pub driver_registry:   Arc<rara_kernel::llm::DriverRegistry>,
-    pub tool_registry:     Arc<rara_kernel::tool::ToolRegistry>,
-    pub user_store:        Arc<dyn rara_kernel::identity::UserStore>,
-    pub session_index:     Arc<dyn rara_kernel::session::SessionIndex>,
-    pub tape_service:      rara_kernel::memory::TapeService,
-    pub skill_registry:    rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:       rara_mcp::manager::mgr::McpManager,
-    pub settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    pub identity_resolver: Arc<dyn rara_kernel::io::IdentityResolver>,
-    pub agent_registry:    Arc<rara_kernel::agent::AgentRegistry>,
+    pub credential_store:     rara_keyring_store::KeyringStoreRef,
+    pub driver_registry:      Arc<rara_kernel::llm::DriverRegistry>,
+    pub tool_registry:        Arc<rara_kernel::tool::ToolRegistry>,
+    pub user_store:           Arc<dyn rara_kernel::identity::UserStore>,
+    pub session_index:        Arc<dyn rara_kernel::session::SessionIndex>,
+    pub tape_service:         rara_kernel::memory::TapeService,
+    pub skill_registry:       rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:          rara_mcp::manager::mgr::McpManager,
+    pub settings_provider:    Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub identity_resolver:    Arc<dyn rara_kernel::io::IdentityResolver>,
+    pub agent_registry:       Arc<rara_kernel::agent::AgentRegistry>,
+    /// Handle reference for `DispatchRaraTool` — must be wired with a
+    /// `KernelHandle` after kernel startup.
+    pub dispatch_rara_handle: std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
 }
 
 /// A user entry in the YAML configuration file.
@@ -158,7 +161,7 @@ pub(crate) async fn boot(
     // -- tools -------------------------------------------------------------
 
     let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
-    crate::tools::register_all(
+    let tool_result = crate::tools::register_all(
         &mut tool_registry,
         crate::tools::ToolDeps {
             settings:               settings_provider.clone(),
@@ -166,6 +169,7 @@ pub(crate) async fn boot(
             skill_registry:         skill_registry.clone(),
             mcp_manager:            mcp_manager.clone(),
             tape_service:           tape_service.clone(),
+            session_index:          session_index.clone(),
         },
     );
 
@@ -199,6 +203,7 @@ pub(crate) async fn boot(
         settings_provider,
         identity_resolver,
         agent_registry,
+        dispatch_rara_handle: tool_result.dispatch_rara_handle,
     })
 }
 
@@ -430,6 +435,7 @@ fn load_default_registry() -> rara_kernel::agent::AgentRegistry {
         (rara_agents::rara().clone(), Role::Admin),
         (rara_agents::nana().clone(), Role::User),
         (rara_agents::worker().clone(), Role::User),
+        (rara_agents::mita().clone(), Role::Root),
     ];
     let agents_dir = rara_paths::data_dir().join("agents");
     let mut loader = ManifestLoader::new();
