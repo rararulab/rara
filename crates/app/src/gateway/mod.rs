@@ -14,6 +14,8 @@
 
 //! Gateway supervisor — spawns, monitors, and restarts `rara server`.
 
+mod executor;
 mod supervisor;
 
+pub use executor::{ExecutorError, UpdateExecutor, UpdateResult};
 pub use supervisor::SupervisorService;
