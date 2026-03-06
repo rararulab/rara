@@ -180,11 +180,13 @@ impl GatewayArgs {
             .as_ref()
             .and_then(|tg| {
                 let token = tg.bot_token.as_deref().filter(|s| !s.is_empty())?;
-                let channel = tg.notification_channel_id.as_deref().filter(|s| !s.is_empty())?;
-                Some(rara_app::gateway::UpdateNotifier::new(
-                    token.to_owned(),
-                    channel.to_owned(),
-                ))
+                let channel_id: i64 = tg
+                    .notification_channel_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())?
+                    .parse()
+                    .ok()?;
+                Some(rara_app::gateway::UpdateNotifier::new(token, channel_id))
             });
 
         let pipeline_rx = update_rx.clone();
