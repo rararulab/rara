@@ -15,22 +15,17 @@
 //! Configuration for the Knowledge Layer.
 
 use bon::Builder;
-use serde::Deserialize;
 
-/// Configuration for the Knowledge Layer.
+/// Static tuning parameters for the Knowledge Layer.
 ///
-/// Loaded from `memory.knowledge` section in config.yaml.
-/// All fields are required — no hardcoded defaults.
-#[derive(Debug, Clone, Builder, Deserialize)]
+/// Model names live in runtime settings; this struct holds only the
+/// numeric/threshold parameters populated by `boot()`.
+#[derive(Debug, Clone, Builder)]
 pub struct KnowledgeConfig {
-    /// OpenAI embedding model name (e.g. "text-embedding-3-small").
-    pub embedding_model: String,
     /// Embedding vector dimensions (e.g. 1536).
     pub embedding_dimensions: usize,
     /// Number of top-k results from vector search.
-    pub search_top_k: usize,
+    pub search_top_k:         usize,
     /// Cosine similarity threshold for deduplication (0.0–1.0).
     pub similarity_threshold: f32,
-    /// LLM model name for memory extraction (e.g. "haiku").
-    pub extractor_model: String,
 }

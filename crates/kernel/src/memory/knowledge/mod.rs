@@ -16,7 +16,8 @@
 //!
 //! Three layers:
 //! 1. **Tape** (existing, untouched) — raw conversation log
-//! 2. **Memory Items** (SQLite + usearch) — extracted facts, preferences, events
+//! 2. **Memory Items** (SQLite + usearch) — extracted facts, preferences,
+//!    events
 //! 3. **Category Files** (markdown on disk) — organized knowledge summaries
 
 pub mod categories;

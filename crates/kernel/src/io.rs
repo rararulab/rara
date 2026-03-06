@@ -249,11 +249,13 @@ impl InboundMessage {
     pub fn origin_endpoint(&self) -> Option<Endpoint> {
         match self.source.channel_type {
             ChannelType::Telegram => {
-                let chat_id = self.source.platform_chat_id.as_ref()?
-                    .parse::<i64>().ok()?;
+                let chat_id = self.source.platform_chat_id.as_ref()?.parse::<i64>().ok()?;
                 Some(Endpoint {
                     channel_type: ChannelType::Telegram,
-                    address: EndpointAddress::Telegram { chat_id, thread_id: None },
+                    address:      EndpointAddress::Telegram {
+                        chat_id,
+                        thread_id: None,
+                    },
                 })
             }
             // Web endpoints are already per-connection; CLI/Internal don't need scoping.
@@ -288,23 +290,23 @@ pub struct Attachment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundEnvelope {
     /// Unique envelope identifier (ULID).
-    pub id:               MessageId,
+    pub id:              MessageId,
     /// The inbound message this is replying to.
-    pub in_reply_to:      MessageId,
+    pub in_reply_to:     MessageId,
     /// Target user.
-    pub user:             UserId,
+    pub user:            UserId,
     /// Session context.
-    pub session_key:      SessionKey,
+    pub session_key:     SessionKey,
     /// How to route this envelope.
-    pub routing:          OutboundRouting,
+    pub routing:         OutboundRouting,
     /// The payload to deliver.
-    pub payload:          OutboundPayload,
+    pub payload:         OutboundPayload,
     /// When this envelope was created.
-    pub timestamp:        jiff::Timestamp,
+    pub timestamp:       jiff::Timestamp,
     /// When set, deliver ONLY to this endpoint (session-scoped routing).
     /// Takes priority over `routing` for same-type endpoints.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub origin_endpoint:  Option<Endpoint>,
+    pub origin_endpoint: Option<Endpoint>,
 }
 
 impl OutboundEnvelope {

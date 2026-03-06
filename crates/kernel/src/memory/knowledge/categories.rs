@@ -64,11 +64,7 @@ pub async fn read_category(username: &str, category: &str) -> anyhow::Result<Opt
 }
 
 /// Write (overwrite) a category markdown file.
-pub async fn write_category(
-    username: &str,
-    category: &str,
-    content: &str,
-) -> anyhow::Result<()> {
+pub async fn write_category(username: &str, category: &str, content: &str) -> anyhow::Result<()> {
     let dir = user_knowledge_dir(username);
     fs::create_dir_all(&dir).await?;
     let path = category_path(username, category);

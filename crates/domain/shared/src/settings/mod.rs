@@ -46,6 +46,11 @@ pub mod keys {
     pub const FS_ALLOWED_DIRECTORIES: &str = "fs.allowed_directories";
     pub const FS_READ_ONLY_DIRECTORIES: &str = "fs.read_only_directories";
     pub const FS_DENIED_DIRECTORIES: &str = "fs.denied_directories";
+    pub const KNOWLEDGE_EMBEDDING_MODEL: &str = "memory.knowledge.embedding_model";
+    pub const KNOWLEDGE_EMBEDDING_DIMENSIONS: &str = "memory.knowledge.embedding_dimensions";
+    pub const KNOWLEDGE_SEARCH_TOP_K: &str = "memory.knowledge.search_top_k";
+    pub const KNOWLEDGE_SIMILARITY_THRESHOLD: &str = "memory.knowledge.similarity_threshold";
+    pub const KNOWLEDGE_EXTRACTOR_MODEL: &str = "memory.knowledge.extractor_model";
 }
 
 /// Unified trait for reading and writing flat KV settings.

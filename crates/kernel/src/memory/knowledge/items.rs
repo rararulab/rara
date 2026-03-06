@@ -18,21 +18,20 @@
 //! conversation, along with an optional embedding blob for vector search.
 
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{FromRow, Row, SqlitePool};
+use sqlx::{FromRow, Row, SqlitePool, sqlite::SqliteRow};
 
 /// A single memory item stored in SQLite.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryItem {
-    pub id: i64,
-    pub username: String,
-    pub content: String,
-    pub memory_type: String,
-    pub category: String,
-    pub source_tape: Option<String>,
+    pub id:              i64,
+    pub username:        String,
+    pub content:         String,
+    pub memory_type:     String,
+    pub category:        String,
+    pub source_tape:     Option<String>,
     pub source_entry_id: Option<i64>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at:      String,
+    pub updated_at:      String,
 }
 
 impl<'r> FromRow<'r, SqliteRow> for MemoryItem {
@@ -54,13 +53,13 @@ impl<'r> FromRow<'r, SqliteRow> for MemoryItem {
 /// Data needed to insert a new memory item (no id, no timestamps).
 #[derive(Debug, Clone)]
 pub struct NewMemoryItem {
-    pub username: String,
-    pub content: String,
-    pub memory_type: String,
-    pub category: String,
-    pub source_tape: Option<String>,
+    pub username:        String,
+    pub content:         String,
+    pub memory_type:     String,
+    pub category:        String,
+    pub source_tape:     Option<String>,
     pub source_entry_id: Option<i64>,
-    pub embedding: Option<Vec<u8>>,
+    pub embedding:       Option<Vec<u8>>,
 }
 
 /// Insert a new memory item. Returns the assigned row id.
@@ -89,7 +88,8 @@ pub async fn list_items_by_username(
     username: &str,
 ) -> sqlx::Result<Vec<MemoryItem>> {
     sqlx::query_as::<_, MemoryItem>(
-        "SELECT id, username, content, memory_type, category, source_tape, source_entry_id, created_at, updated_at FROM memory_items WHERE username = ?1 ORDER BY created_at DESC",
+        "SELECT id, username, content, memory_type, category, source_tape, source_entry_id, \
+         created_at, updated_at FROM memory_items WHERE username = ?1 ORDER BY created_at DESC",
     )
     .bind(username)
     .fetch_all(pool)
@@ -97,10 +97,7 @@ pub async fn list_items_by_username(
 }
 
 /// Get memory items by a list of ids.
-pub async fn get_items_by_ids(
-    pool: &SqlitePool,
-    ids: &[i64],
-) -> sqlx::Result<Vec<MemoryItem>> {
+pub async fn get_items_by_ids(pool: &SqlitePool, ids: &[i64]) -> sqlx::Result<Vec<MemoryItem>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -108,7 +105,8 @@ pub async fn get_items_by_ids(
     // Build a comma-separated placeholder list for the IN clause.
     let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
-        "SELECT id, username, content, memory_type, category, source_tape, source_entry_id, created_at, updated_at FROM memory_items WHERE id IN ({}) ORDER BY created_at DESC",
+        "SELECT id, username, content, memory_type, category, source_tape, source_entry_id, \
+         created_at, updated_at FROM memory_items WHERE id IN ({}) ORDER BY created_at DESC",
         placeholders.join(", ")
     );
 
@@ -135,10 +133,7 @@ pub async fn load_embeddings(
 }
 
 /// List distinct categories for a user.
-pub async fn list_categories(
-    pool: &SqlitePool,
-    username: &str,
-) -> sqlx::Result<Vec<String>> {
+pub async fn list_categories(pool: &SqlitePool, username: &str) -> sqlx::Result<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT category FROM memory_items WHERE username = ?1 ORDER BY category",
     )
@@ -156,7 +151,9 @@ pub async fn list_items_by_category(
     category: &str,
 ) -> sqlx::Result<Vec<MemoryItem>> {
     sqlx::query_as::<_, MemoryItem>(
-        "SELECT id, username, content, memory_type, category, source_tape, source_entry_id, created_at, updated_at FROM memory_items WHERE username = ?1 AND category = ?2 ORDER BY created_at DESC",
+        "SELECT id, username, content, memory_type, category, source_tape, source_entry_id, \
+         created_at, updated_at FROM memory_items WHERE username = ?1 AND category = ?2 ORDER BY \
+         created_at DESC",
     )
     .bind(username)
     .bind(category)

@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use super::{categories, embedding::EmbeddingService, items};
@@ -30,27 +30,27 @@ use crate::tool::{AgentTool, ToolContext};
 
 /// LLM-callable tool for querying the Knowledge Layer.
 pub struct MemoryTool {
-    pool: SqlitePool,
+    pool:          SqlitePool,
     embedding_svc: Arc<EmbeddingService>,
 }
 
 impl MemoryTool {
     pub fn new(pool: SqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
-        Self { pool, embedding_svc }
+        Self {
+            pool,
+            embedding_svc,
+        }
     }
 }
 
 #[async_trait]
 impl AgentTool for MemoryTool {
-    fn name(&self) -> &str {
-        "memory"
-    }
+    fn name(&self) -> &str { "memory" }
 
     fn description(&self) -> &str {
-        "Search and read the user's long-term memory. Supports three actions:\n\
-         - search: semantic search across memory items\n\
-         - categories: list all memory categories for the user\n\
-         - read_category: read the full content of a specific category file"
+        "Search and read the user's long-term memory. Supports three actions:\n- search: semantic \
+         search across memory items\n- categories: list all memory categories for the user\n- \
+         read_category: read the full content of a specific category file"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -76,10 +76,7 @@ impl AgentTool for MemoryTool {
     }
 
     async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<Value> {
-        let action = params
-            .get("action")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let action = params.get("action").and_then(Value::as_str).unwrap_or("");
 
         let username = context.user_id.as_deref().unwrap_or("default");
 
@@ -93,10 +90,7 @@ impl AgentTool for MemoryTool {
             }
             "categories" => self.exec_categories(username).await,
             "read_category" => {
-                let category = params
-                    .get("category")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let category = params.get("category").and_then(Value::as_str).unwrap_or("");
                 if category.is_empty() {
                     return Ok(json!({"error": "category is required for read_category action"}));
                 }
@@ -145,11 +139,7 @@ impl MemoryTool {
         Ok(json!({"categories": cats}))
     }
 
-    async fn exec_read_category(
-        &self,
-        username: &str,
-        category: &str,
-    ) -> anyhow::Result<Value> {
+    async fn exec_read_category(&self, username: &str, category: &str) -> anyhow::Result<Value> {
         match categories::read_category(username, category).await? {
             Some(content) => Ok(json!({"category": category, "content": content})),
             None => Ok(json!({"error": format!("category '{category}' not found")})),

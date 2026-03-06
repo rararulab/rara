@@ -17,8 +17,7 @@
 //! Handles embedding generation via the OpenAI API and provides in-memory
 //! approximate nearest-neighbor search via usearch for semantic retrieval.
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::{path::PathBuf, sync::Mutex};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -27,19 +26,23 @@ use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 use super::config::KnowledgeConfig;
 
-/// Manages embedding generation (OpenAI API) and vector search (usearch).
+/// Manages embedding generation (OpenAI-compatible API) and vector search
+/// (usearch).
 pub struct EmbeddingService {
-    client: Client,
-    config: KnowledgeConfig,
-    index: Mutex<Index>,
-    index_path: PathBuf,
-    api_key: String,
+    client:          Client,
+    config:          KnowledgeConfig,
+    index:           Mutex<Index>,
+    index_path:      PathBuf,
+    api_key:         String,
+    embedding_model: String,
+    /// Base URL of the OpenAI-compatible provider (e.g. "https://openrouter.ai/api/v1").
+    base_url:        String,
 }
 
 #[derive(Serialize)]
 struct EmbeddingRequest {
-    model: String,
-    input: Vec<String>,
+    model:      String,
+    input:      Vec<String>,
     dimensions: usize,
 }
 
@@ -55,7 +58,12 @@ struct EmbeddingData {
 
 impl EmbeddingService {
     /// Create a new EmbeddingService, loading or creating the usearch index.
-    pub fn new(config: KnowledgeConfig, api_key: String) -> anyhow::Result<Self> {
+    pub fn new(
+        config: KnowledgeConfig,
+        api_key: String,
+        embedding_model: String,
+        base_url: String,
+    ) -> anyhow::Result<Self> {
         let index_path = rara_paths::data_dir().join("knowledge/memory.usearch");
         if let Some(parent) = index_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -93,24 +101,28 @@ impl EmbeddingService {
             index: Mutex::new(index),
             index_path,
             api_key,
+            embedding_model,
+            base_url,
         })
     }
 
-    /// Call the OpenAI embeddings API to generate embeddings for one or more texts.
+    /// Call the OpenAI embeddings API to generate embeddings for one or more
+    /// texts.
     pub async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         let request = EmbeddingRequest {
-            model: self.config.embedding_model.clone(),
-            input: texts.to_vec(),
+            model:      self.embedding_model.clone(),
+            input:      texts.to_vec(),
             dimensions: self.config.embedding_dimensions,
         };
 
+        let url = format!("{}/embeddings", self.base_url.trim_end_matches('/'));
         let response = self
             .client
-            .post("https://api.openai.com/v1/embeddings")
+            .post(&url)
             .bearer_auth(&self.api_key)
             .json(&request)
             .send()
@@ -156,7 +168,8 @@ impl EmbeddingService {
         Ok(())
     }
 
-    /// Search the usearch index for the nearest neighbors of the given query vector.
+    /// Search the usearch index for the nearest neighbors of the given query
+    /// vector.
     ///
     /// Returns `(key, distance)` pairs sorted by increasing distance.
     pub fn search(&self, query: &[f32], top_k: usize) -> anyhow::Result<Vec<(u64, f32)>> {
@@ -173,11 +186,7 @@ impl EmbeddingService {
             .search(query, top_k)
             .map_err(|e| anyhow::anyhow!("search failed: {e}"))?;
 
-        Ok(matches
-            .keys
-            .into_iter()
-            .zip(matches.distances)
-            .collect())
+        Ok(matches.keys.into_iter().zip(matches.distances).collect())
     }
 
     /// Persist the usearch index to disk.
@@ -240,10 +249,7 @@ impl EmbeddingService {
 
 /// Convert a `Vec<f32>` embedding to a raw byte blob (little-endian).
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
-    embedding
-        .iter()
-        .flat_map(|f| f.to_le_bytes())
-        .collect()
+    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 /// Convert a raw byte blob back to `Vec<f32>` (little-endian).

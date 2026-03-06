@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Memory extraction pipeline — tape entries -> LLM extraction -> dedup -> persist -> category update.
+//! Memory extraction pipeline — tape entries -> LLM extraction -> dedup ->
+//! persist -> category update.
 //!
 //! This module is the core of the knowledge layer's write path. After a session
 //! completes, [`extract_knowledge`] processes the conversation tape to extract
@@ -28,15 +29,17 @@ use super::{
     embedding::{self, EmbeddingService},
     items::{self, NewMemoryItem},
 };
-use crate::llm::{CompletionRequest, LlmDriver, Message, ToolChoice};
-use crate::memory::{TapEntry, TapEntryKind};
+use crate::{
+    llm::{CompletionRequest, LlmDriver, Message, ToolChoice},
+    memory::{TapEntry, TapEntryKind},
+};
 
 /// A raw extracted memory from LLM output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedMemory {
-    pub content: String,
+    pub content:     String,
     pub memory_type: String,
-    pub category: String,
+    pub category:    String,
 }
 
 /// Run the full memorize pipeline for a completed session.
@@ -70,7 +73,11 @@ pub async fn extract_knowledge(
         info!(username, "LLM extracted zero items");
         return Ok(0);
     }
-    info!(username, count = extracted.len(), "LLM extracted memory items");
+    info!(
+        username,
+        count = extracted.len(),
+        "LLM extracted memory items"
+    );
 
     // Step 3 + 4: Deduplicate and persist.
     let mut new_count = 0;
@@ -228,20 +235,17 @@ async fn update_category_files(
             .join("\n");
 
         let prompt = format!(
-            "You are a memory organizer. Update the following category file with these memory items.\n\n\
-             Category: {category}\n\n\
-             Current file content (may be empty):\n{existing}\n\n\
-             Memory items:\n{items_text}\n\n\
-             Write the updated markdown file. Organize items into logical sections. \
-             Output ONLY the markdown content, no fences."
+            "You are a memory organizer. Update the following category file with these memory \
+             items.\n\nCategory: {category}\n\nCurrent file content (may be \
+             empty):\n{existing}\n\nMemory items:\n{items_text}\n\nWrite the updated markdown \
+             file. Organize items into logical sections. Output ONLY the markdown content, no \
+             fences."
         );
 
         let request = CompletionRequest {
             model:               model.to_string(),
             messages:            vec![
-                Message::system(
-                    "You are a structured knowledge organizer. Output clean markdown.",
-                ),
+                Message::system("You are a structured knowledge organizer. Output clean markdown."),
                 Message::user(prompt),
             ],
             tools:               Vec::new(),

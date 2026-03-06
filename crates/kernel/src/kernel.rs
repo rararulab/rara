@@ -435,8 +435,14 @@ impl Kernel {
                 user,
                 origin_endpoint,
             } => {
-                self.handle_turn_completed(base.session_key, result, in_reply_to, user, origin_endpoint)
-                    .await;
+                self.handle_turn_completed(
+                    base.session_key,
+                    result,
+                    in_reply_to,
+                    user,
+                    origin_endpoint,
+                )
+                .await;
             }
             KernelEvent::ChildSessionDone { child_id, result } => {
                 self.handle_child_completed(base.session_key, child_id, result)
@@ -849,7 +855,8 @@ impl Kernel {
                         session_id.clone(),
                         "process_terminal",
                         format!("process {} is {}", target_id, state),
-                    ).with_origin(origin_endpoint.clone());
+                    )
+                    .with_origin(origin_endpoint.clone());
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
@@ -869,7 +876,8 @@ impl Kernel {
                         session_id.clone(),
                         "process_not_found",
                         format!("process not found: {target_id}"),
-                    ).with_origin(origin_endpoint.clone());
+                    )
+                    .with_origin(origin_endpoint.clone());
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1226,7 +1234,8 @@ impl Kernel {
                 session_key.clone(),
                 "runtime_not_found",
                 format!("agent runtime not found: {session_key}"),
-            ).with_origin(msg.origin_endpoint());
+            )
+            .with_origin(msg.origin_endpoint());
             if let Err(e) = &self
                 .event_queue
                 .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1258,16 +1267,16 @@ impl Kernel {
         // received and the agent is working. On Telegram this shows the
         // "typing..." bubble.
         let egress_session_key = session_key;
-        let _ =
-            &self
-                .event_queue
-                .try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
-                    msg_id.clone(),
-                    user.clone(),
-                    egress_session_key.clone(),
-                    crate::io::stages::THINKING,
-                    None,
-                ).with_origin(origin_endpoint.clone())));
+        let _ = &self.event_queue.try_push(KernelEventEnvelope::deliver(
+            OutboundEnvelope::progress(
+                msg_id.clone(),
+                user.clone(),
+                egress_session_key.clone(),
+                crate::io::stages::THINKING,
+                None,
+            )
+            .with_origin(origin_endpoint.clone()),
+        ));
 
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
             metrics.record_message();
@@ -1380,14 +1389,16 @@ impl Kernel {
                     interval.tick().await; // skip the immediate first tick
                     loop {
                         interval.tick().await;
-                        let _ =
-                            eq.try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
+                        let _ = eq.try_push(KernelEventEnvelope::deliver(
+                            OutboundEnvelope::progress(
                                 mid.clone(),
                                 usr.clone(),
                                 sid.clone(),
                                 crate::io::stages::THINKING,
                                 None,
-                            ).with_origin(oe.clone())));
+                            )
+                            .with_origin(oe.clone()),
+                        ));
                     }
                 })
             };
@@ -1487,7 +1498,13 @@ impl Kernel {
             // back to Ready state. KernelError -> String conversion happens
             // here because KernelEvent requires Clone but KernelError doesn't.
             let result = turn_result.map_err(|e| e.to_string());
-            let event = KernelEventEnvelope::turn_completed(session_key, result, msg_id, user, origin_endpoint);
+            let event = KernelEventEnvelope::turn_completed(
+                session_key,
+                result,
+                msg_id,
+                user,
+                origin_endpoint,
+            );
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, session_key = %session_key, "failed to push TurnCompleted");
             }
@@ -1595,7 +1612,8 @@ impl Kernel {
                     egress_session_key.clone(),
                     crate::channel::types::MessageContent::Text(turn.text),
                     vec![],
-                ).with_origin(origin_endpoint.clone());
+                )
+                .with_origin(origin_endpoint.clone());
                 if let Err(e) = &self
                     .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1648,7 +1666,8 @@ impl Kernel {
                     egress_session_key.clone(),
                     "agent_error",
                     err_msg,
-                ).with_origin(origin_endpoint.clone());
+                )
+                .with_origin(origin_endpoint.clone());
                 if let Err(e) = &self
                     .event_queue
                     .try_push(KernelEventEnvelope::deliver(envelope))
@@ -1686,8 +1705,12 @@ impl Kernel {
             let user_id = user.0.clone();
             let tape_name = session_key.to_string();
             tokio::spawn(async move {
-                let extractor_model = &knowledge.config.extractor_model;
-                let driver = match driver_registry.resolve("knowledge_extractor", None, Some(extractor_model)) {
+                let extractor_model = &knowledge.extractor_model;
+                let driver = match driver_registry.resolve(
+                    "knowledge_extractor",
+                    None,
+                    Some(extractor_model),
+                ) {
                     Ok((d, _model_name)) => d,
                     Err(e) => {
                         tracing::warn!(%e, "knowledge extraction: cannot resolve model");

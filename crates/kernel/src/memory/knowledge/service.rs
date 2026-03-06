@@ -23,9 +23,11 @@ use super::{EmbeddingService, KnowledgeConfig};
 /// Bundles the knowledge layer's runtime dependencies into a single handle
 /// that can be shared across the kernel.
 pub struct KnowledgeService {
-    pub pool: SqlitePool,
-    pub embedding_svc: Arc<EmbeddingService>,
-    pub config: KnowledgeConfig,
+    pub pool:            SqlitePool,
+    pub embedding_svc:   Arc<EmbeddingService>,
+    pub config:          KnowledgeConfig,
+    /// LLM model name for memory extraction (from runtime settings).
+    pub extractor_model: String,
 }
 
 /// Shared reference to the knowledge service.

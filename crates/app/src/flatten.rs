@@ -82,6 +82,30 @@ pub struct TelegramConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge config types
+// ---------------------------------------------------------------------------
+
+/// Knowledge layer configuration section in config.yaml.
+///
+/// ```yaml
+/// knowledge:
+///   embedding_model: "text-embedding-3-small"
+///   embedding_dimensions: 1536
+///   search_top_k: 10
+///   similarity_threshold: 0.85
+///   extractor_model: "gpt-4o-mini"
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    pub embedding_model:      Option<String>,
+    pub embedding_dimensions: Option<u32>,
+    pub search_top_k:         Option<u32>,
+    pub similarity_threshold: Option<f32>,
+    pub extractor_model:      Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Flatten logic
 // ---------------------------------------------------------------------------
 
@@ -93,6 +117,9 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     }
     if let Some(ref tg) = config.telegram {
         flatten_telegram(tg, &mut pairs);
+    }
+    if let Some(ref k) = config.knowledge {
+        flatten_knowledge(k, &mut pairs);
     }
     pairs
 }
@@ -134,5 +161,24 @@ fn flatten_telegram(tg: &TelegramConfig, out: &mut Vec<(String, String)>) {
     }
     if let Some(ref v) = tg.notification_channel_id {
         out.push(("telegram.notification_channel_id".into(), v.clone()));
+    }
+}
+
+fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
+    use rara_domain_shared::settings::keys;
+    if let Some(ref v) = k.embedding_model {
+        out.push((keys::KNOWLEDGE_EMBEDDING_MODEL.into(), v.clone()));
+    }
+    if let Some(v) = k.embedding_dimensions {
+        out.push((keys::KNOWLEDGE_EMBEDDING_DIMENSIONS.into(), v.to_string()));
+    }
+    if let Some(v) = k.search_top_k {
+        out.push((keys::KNOWLEDGE_SEARCH_TOP_K.into(), v.to_string()));
+    }
+    if let Some(v) = k.similarity_threshold {
+        out.push((keys::KNOWLEDGE_SIMILARITY_THRESHOLD.into(), v.to_string()));
+    }
+    if let Some(ref v) = k.extractor_model {
+        out.push((keys::KNOWLEDGE_EXTRACTOR_MODEL.into(), v.clone()));
     }
 }

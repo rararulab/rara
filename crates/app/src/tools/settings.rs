@@ -34,9 +34,7 @@ pub struct SettingsTool {
 }
 
 impl SettingsTool {
-    pub fn new(settings: Arc<dyn SettingsProvider>) -> Self {
-        Self { settings }
-    }
+    pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
 }
 
 /// Mask a value if the key looks sensitive.
@@ -58,13 +56,11 @@ fn maybe_mask(key: &str, value: &str) -> String {
 
 #[async_trait]
 impl AgentTool for SettingsTool {
-    fn name(&self) -> &str {
-        "settings"
-    }
+    fn name(&self) -> &str { "settings" }
 
     fn description(&self) -> &str {
-        "Read and modify runtime settings. Use 'list' to see all settings, \
-         'get' to read a specific key, 'set' to update a value."
+        "Read and modify runtime settings. Use 'list' to see all settings, 'get' to read a \
+         specific key, 'set' to update a value."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -147,15 +143,27 @@ mod tests {
 
     #[test]
     fn mask_sensitive_keys() {
-        assert_eq!(maybe_mask("llm.providers.openrouter.api_key", "sk-or-v1-abc123"), "sk-or-****");
-        assert_eq!(maybe_mask("telegram.bot_token", "12345:ABCDE"), "12345:****");
+        assert_eq!(
+            maybe_mask("llm.providers.openrouter.api_key", "sk-or-v1-abc123"),
+            "sk-or-****"
+        );
+        assert_eq!(
+            maybe_mask("telegram.bot_token", "12345:ABCDE"),
+            "12345:****"
+        );
         assert_eq!(maybe_mask("gmail.app_password", "abcd"), "****");
         assert_eq!(maybe_mask("some.secret.value", "longvalue"), "longva****");
     }
 
     #[test]
     fn non_sensitive_keys_not_masked() {
-        assert_eq!(maybe_mask("llm.default_provider", "openrouter"), "openrouter");
-        assert_eq!(maybe_mask("gmail.address", "me@example.com"), "me@example.com");
+        assert_eq!(
+            maybe_mask("llm.default_provider", "openrouter"),
+            "openrouter"
+        );
+        assert_eq!(
+            maybe_mask("gmail.address", "me@example.com"),
+            "me@example.com"
+        );
     }
 }

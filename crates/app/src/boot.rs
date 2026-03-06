@@ -81,7 +81,6 @@ pub(crate) async fn boot(
     pool: sqlx::SqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
-    knowledge_config: &rara_kernel::memory::knowledge::KnowledgeConfig,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
 
@@ -141,7 +140,7 @@ pub(crate) async fn boot(
     // -- skills registry ---------------------------------------------------
 
     let skill_registry = rara_skills::registry::InMemoryRegistry::new();
-    rara_skills::cache::spawn_background_sync(pool, skill_registry.clone());
+    rara_skills::cache::spawn_background_sync(pool.clone(), skill_registry.clone());
     info!("skill registry initialized with background sync");
 
     // -- MCP manager -------------------------------------------------------
@@ -183,7 +182,7 @@ pub(crate) async fn boot(
 
     // -- knowledge layer ------------------------------------------------------
 
-    let knowledge_service = init_knowledge_service(knowledge_config, settings_provider.as_ref())
+    let knowledge_service = init_knowledge_service(pool, settings_provider.as_ref())
         .await
         .whatever_context("Failed to initialize knowledge layer")?;
 
@@ -515,42 +514,76 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 // Private: Knowledge Layer initialization
 // =========================================================================
 
-/// Initialize the knowledge layer.
-///
-/// Config comes from YAML; only the API key is read from runtime settings
-/// (it belongs to the LLM provider credentials).
+/// Initialize the knowledge layer — all configuration read from settings,
+/// reuses the application's shared SQLite pool.
 async fn init_knowledge_service(
-    config: &rara_kernel::memory::knowledge::KnowledgeConfig,
+    pool: sqlx::SqlitePool,
     settings: &dyn rara_domain_shared::settings::SettingsProvider,
 ) -> anyhow::Result<rara_kernel::memory::knowledge::KnowledgeServiceRef> {
-    use rara_kernel::memory::knowledge::{EmbeddingService, KnowledgeService};
+    use rara_domain_shared::settings::keys;
+    use rara_kernel::memory::knowledge::{EmbeddingService, KnowledgeConfig, KnowledgeService};
 
-    // API key from the default LLM provider (runtime credential).
-    let default_provider = settings
-        .get("llm.default_provider")
+    let embedding_model = settings
+        .get(keys::KNOWLEDGE_EMBEDDING_MODEL)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_EMBEDDING_MODEL))?;
+    let embedding_dimensions: usize = settings
+        .get(keys::KNOWLEDGE_EMBEDDING_DIMENSIONS)
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_EMBEDDING_DIMENSIONS)
+        })?
+        .parse()?;
+    let search_top_k: usize = settings
+        .get(keys::KNOWLEDGE_SEARCH_TOP_K)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_SEARCH_TOP_K))?
+        .parse()?;
+    let similarity_threshold: f32 = settings
+        .get(keys::KNOWLEDGE_SIMILARITY_THRESHOLD)
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_SIMILARITY_THRESHOLD)
+        })?
+        .parse()?;
+    let extractor_model = settings
+        .get(keys::KNOWLEDGE_EXTRACTOR_MODEL)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_EXTRACTOR_MODEL))?;
+
+    let provider = settings
+        .get_first(&[keys::LLM_DEFAULT_PROVIDER, keys::LLM_PROVIDER])
         .await
         .ok_or_else(|| anyhow::anyhow!("llm.default_provider is not configured"))?;
-    let api_key_setting = format!("llm.providers.{default_provider}.api_key");
+    let api_key_key = format!("llm.providers.{provider}.api_key");
     let api_key = settings
-        .get(&api_key_setting)
+        .get(&api_key_key)
         .await
-        .ok_or_else(|| anyhow::anyhow!("{api_key_setting} is not configured"))?;
+        .ok_or_else(|| anyhow::anyhow!("{api_key_key} is not configured"))?;
+    let base_url_key = format!("llm.providers.{provider}.base_url");
+    let base_url = settings
+        .get(&base_url_key)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("{base_url_key} is not configured"))?;
 
-    // SQLite database for knowledge items.
-    let db_path = rara_paths::data_dir().join("knowledge/knowledge.db");
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-    let pool = sqlx::SqlitePool::connect(&db_url).await?;
-    sqlx::migrate!("../rara-model/migrations").run(&pool).await?;
+    let config = KnowledgeConfig::builder()
+        .embedding_dimensions(embedding_dimensions)
+        .search_top_k(search_top_k)
+        .similarity_threshold(similarity_threshold)
+        .build();
 
-    let embedding_svc = Arc::new(EmbeddingService::new(config.clone(), api_key)?);
+    let embedding_svc = Arc::new(EmbeddingService::new(
+        config.clone(),
+        api_key,
+        embedding_model,
+        base_url,
+    )?);
 
     info!("knowledge layer initialized");
     Ok(Arc::new(KnowledgeService {
         pool,
         embedding_svc,
-        config: config.clone(),
+        config,
+        extractor_model,
     }))
 }
