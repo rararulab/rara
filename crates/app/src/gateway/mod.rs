@@ -16,8 +16,9 @@
 
 mod detector;
 mod executor;
+pub mod server;
 mod supervisor;
 
 pub use detector::{UpdateDetector, UpdateState};
 pub use executor::{ExecutorError, UpdateExecutor, UpdateResult};
-pub use supervisor::SupervisorService;
+pub use supervisor::{SupervisorCommand, SupervisorHandle, SupervisorService, SupervisorStatus};
