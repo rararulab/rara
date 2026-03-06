@@ -149,6 +149,44 @@ fn render_tool_result(result: &Value) -> TapResult<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Anchor context
+// ---------------------------------------------------------------------------
+
+/// Build a system-role message from the last anchor's state so the LLM retains
+/// key context (summary, next steps) even after older entries leave the context
+/// window.
+///
+/// Returns `None` when the anchor carries no `summary` or `next_steps`.
+pub fn anchor_context(entries: &[TapEntry]) -> Option<Message> {
+    let anchor = entries
+        .iter()
+        .rev()
+        .find(|e| e.kind == TapEntryKind::Anchor)?;
+
+    let state = anchor.payload.get("state")?;
+    let summary = state.get("summary").and_then(Value::as_str).unwrap_or("");
+    let next_steps = state.get("next_steps").and_then(Value::as_str).unwrap_or("");
+
+    if summary.is_empty() && next_steps.is_empty() {
+        return None;
+    }
+
+    let mut body = String::from("[Previous Context]\n");
+    if !summary.is_empty() {
+        body.push_str(summary);
+    }
+    if !next_steps.is_empty() {
+        if !summary.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str("Next steps: ");
+        body.push_str(next_steps);
+    }
+
+    Some(Message::system(body))
+}
+
+// ---------------------------------------------------------------------------
 // User tape context
 // ---------------------------------------------------------------------------
 
@@ -302,5 +340,99 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, Role::User);
         assert_eq!(messages[1].role, Role::Assistant);
+    }
+
+    // -----------------------------------------------------------------------
+    // anchor_context tests
+    // -----------------------------------------------------------------------
+
+    fn anchor_entry(state: serde_json::Value) -> TapEntry {
+        TapEntry {
+            id:        10,
+            kind:      TapEntryKind::Anchor,
+            payload:   json!({"name": "topic/done", "state": state}),
+            timestamp: Timestamp::now(),
+            metadata:  None,
+        }
+    }
+
+    #[test]
+    fn anchor_context_returns_none_for_no_anchors() {
+        assert!(anchor_context(&[]).is_none());
+    }
+
+    #[test]
+    fn anchor_context_returns_none_when_state_has_no_summary() {
+        let entry = anchor_entry(json!({"owner": "human"}));
+        assert!(anchor_context(&[entry]).is_none());
+    }
+
+    #[test]
+    fn anchor_context_includes_summary() {
+        let entry = anchor_entry(json!({"summary": "User logged into Immich"}));
+        let msg = anchor_context(&[entry]).expect("should produce a message");
+        assert_eq!(msg.role, Role::System);
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("[Previous Context]"));
+        assert!(text.contains("User logged into Immich"));
+    }
+
+    #[test]
+    fn anchor_context_includes_summary_and_next_steps() {
+        let entry = anchor_entry(json!({
+            "summary": "Took screenshot of Immich",
+            "next_steps": "Send image via Telegram"
+        }));
+        let msg = anchor_context(&[entry]).expect("should produce a message");
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("Took screenshot of Immich"));
+        assert!(text.contains("Next steps: Send image via Telegram"));
+    }
+
+    #[test]
+    fn anchor_context_only_next_steps() {
+        let entry = anchor_entry(json!({"next_steps": "Follow up tomorrow"}));
+        let msg = anchor_context(&[entry]).expect("should produce a message");
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("Next steps: Follow up tomorrow"));
+        // Should not contain double newlines when summary is absent.
+        assert!(!text.contains("\n\n"));
+    }
+
+    #[test]
+    fn anchor_context_uses_last_anchor() {
+        let entries = vec![
+            anchor_entry(json!({"summary": "old context"})),
+            TapEntry {
+                id:        11,
+                kind:      TapEntryKind::Message,
+                payload:   json!({"role": "user", "content": "hello"}),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        20,
+                kind:      TapEntryKind::Anchor,
+                payload:   json!({"name": "topic/new", "state": {"summary": "new context"}}),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+        ];
+        let msg = anchor_context(&entries).expect("should produce a message");
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("new context"));
+        assert!(!text.contains("old context"));
     }
 }
