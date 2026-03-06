@@ -160,10 +160,7 @@ async fn build_judgment_context(
 ) -> crate::memory::TapResult<Vec<llm::Message>> {
     // Load recent messages from the tape.
     let entries = tape_service
-        .from_last_anchor(
-            tape_name,
-            Some(&[crate::memory::TapEntryKind::Message]),
-        )
+        .from_last_anchor(tape_name, Some(&[crate::memory::TapEntryKind::Message]))
         .await?;
 
     // Take the last N entries for context.
@@ -208,9 +205,8 @@ async fn build_judgment_context(
     } else {
         let conversation = conversation_lines.join("\n");
         messages.push(llm::Message::user(format!(
-            "Recent conversation:\n{conversation}\n\n\
-             New message from {sender_label}:\n{new_message_text}\n\n\
-             Should Rara reply?"
+            "Recent conversation:\n{conversation}\n\nNew message from \
+             {sender_label}:\n{new_message_text}\n\nShould Rara reply?"
         )));
     }
 

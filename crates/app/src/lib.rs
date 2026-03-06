@@ -189,10 +189,9 @@ pub async fn start_with_options(
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
 
-    let rara =
-        crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
-            .await
-            .whatever_context("Failed to boot kernel dependencies")?;
+    let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
+        .await
+        .whatever_context("Failed to boot kernel dependencies")?;
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),
@@ -224,7 +223,10 @@ pub async fn start_with_options(
     };
 
     // Build IOSubsystem with all adapters before passing to Kernel.
-    let mut io = rara_kernel::io::IOSubsystem::new(rara.identity_resolver.clone(), rara.session_index.clone());
+    let mut io = rara_kernel::io::IOSubsystem::new(
+        rara.identity_resolver.clone(),
+        rara.session_index.clone(),
+    );
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
     }
@@ -329,10 +331,8 @@ pub async fn start_with_options(
 
     // -- Mita heartbeat worker ---------------------------------------------
     if let Some(ref mita_config) = config.mita {
-        let heartbeat_worker = mita::MitaHeartbeatWorker::new(
-            kernel_handle.clone(),
-            rara.tape_service.clone(),
-        );
+        let heartbeat_worker =
+            mita::MitaHeartbeatWorker::new(kernel_handle.clone(), rara.tape_service.clone());
         let _mita_handle = worker_manager
             .worker(heartbeat_worker)
             .name("mita-heartbeat")

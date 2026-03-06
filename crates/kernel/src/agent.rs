@@ -888,7 +888,11 @@ pub(crate) async fn run_agent_loop(
                 .map(|(_success, result, _err, _dur)| result.clone())
                 .collect();
             let _ = tape
-                .append_tool_result(tape_name, serde_json::json!({ "results": results_json }), None)
+                .append_tool_result(
+                    tape_name,
+                    serde_json::json!({ "results": results_json }),
+                    None,
+                )
                 .await;
         }
 

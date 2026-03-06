@@ -45,17 +45,16 @@ use grep::GrepTool;
 use http_fetch::HttpFetchTool;
 use list_directory::ListDirectoryTool;
 use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
+pub use mita_dispatch_rara::DispatchRaraTool;
+use mita_list_sessions::ListSessionsTool;
+use mita_read_tape::ReadTapeTool;
+use mita_write_user_note::MitaWriteUserNoteTool;
 use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
 use send_email::SendEmailTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use user_note::UserNoteTool;
 use write_file::WriteFileTool;
-
-pub use mita_dispatch_rara::DispatchRaraTool;
-use mita_list_sessions::ListSessionsTool;
-use mita_read_tape::ReadTapeTool;
-use mita_write_user_note::MitaWriteUserNoteTool;
 
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
@@ -71,7 +70,8 @@ pub struct ToolDeps {
 pub struct ToolRegistrationResult {
     /// Handle reference for the `DispatchRaraTool`, to be wired with the
     /// `KernelHandle` after kernel startup.
-    pub dispatch_rara_handle: std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
+    pub dispatch_rara_handle:
+        std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
 }
 
 /// Register all tools into the given [`ToolRegistry`].
@@ -97,7 +97,9 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ListDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
-        Arc::new(ComposioTool::from_auth_provider(deps.composio_auth_provider)),
+        Arc::new(ComposioTool::from_auth_provider(
+            deps.composio_auth_provider,
+        )),
         // Screenshot
         Arc::new(ScreenshotTool::new(project_root)),
         // Skill tools

@@ -83,8 +83,8 @@
 //!
 //! Before each agent turn the kernel forks the tape:
 //!
-//! 1. `FileTapeStore::fork()` clones the file and in-memory cache into a
-//!    new tape named `{parent}__{suffix}`.
+//! 1. `FileTapeStore::fork()` clones the file and in-memory cache into a new
+//!    tape named `{parent}__{suffix}`.
 //! 2. The agent loop writes all `ToolCall`, `ToolResult`, and assistant
 //!    `Message` entries to the **fork**.
 //! 3. On success: `FileTapeStore::merge()` copies fork-local entries back to
@@ -113,16 +113,16 @@
 //!   single corrupt line does not invalidate the rest of the file.
 //!
 //! - **Anchor-based context truncation**: Avoids unbounded context growth
-//!   without losing historical data.  The LLM sees a bounded window;
-//!   `search()` retrieves anything ever recorded.
+//!   without losing historical data.  The LLM sees a bounded window; `search()`
+//!   retrieves anything ever recorded.
 //!
 //! - **Fork / merge**: LLM responses can fail, hallucinate, or error
 //!   mid-tool-call.  Forking ensures these partial writes never become
 //!   permanent -- the parent tape only absorbs entries from a successful turn.
 //!
 //! - **Dedicated I/O thread** (`rara-tape-io`): Keeps the async Tokio runtime
-//!   free from blocking file-system calls.  All reads and writes funnel
-//!   through one thread, eliminating lock contention on the file cache.
+//!   free from blocking file-system calls.  All reads and writes funnel through
+//!   one thread, eliminating lock contention on the file cache.
 //!
 //! - **In-memory cache (`TapeFile`)**: After initial load, reads are pure
 //!   memory lookups.  Incremental file reads only parse bytes appended since
@@ -190,9 +190,7 @@ const USER_TAPE_PREFIX: &str = "user:";
 /// [`FileTapeStore`] but keyed by `"user:<user_id>"` instead of a session
 /// key.  This keeps storage layout flat and reuses the existing JSONL
 /// infrastructure.
-pub fn user_tape_name(user_id: &str) -> String {
-    format!("{USER_TAPE_PREFIX}{user_id}")
-}
+pub fn user_tape_name(user_id: &str) -> String { format!("{USER_TAPE_PREFIX}{user_id}") }
 
 #[cfg(test)]
 mod tests {
@@ -225,7 +223,8 @@ pub struct TapEntry {
     pub payload:   Value,
     /// Timestamp captured when the entry was persisted.
     pub timestamp: Timestamp,
-    /// Optional free-form metadata (token counts, source channel, model, latency, etc.).
+    /// Optional free-form metadata (token counts, source channel, model,
+    /// latency, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata:  Option<Value>,
 }

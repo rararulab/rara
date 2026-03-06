@@ -742,9 +742,9 @@ impl Kernel {
     ///
     /// `msg.session_key` arrives as `Option<SessionKey>` from the I/O layer:
     /// - `Some` — channel binding already exists, reuse the session.
-    /// - `None` — first message from this chat. Creates a new
-    ///   [`SessionEntry`] + [`ChannelBinding`] so future messages are routed
-    ///   automatically, then patches `msg.session_key = Some(new_key)`.
+    /// - `None` — first message from this chat. Creates a new [`SessionEntry`]
+    ///   + [`ChannelBinding`] so future messages are routed automatically, then
+    ///   patches `msg.session_key = Some(new_key)`.
     ///
     /// After resolution, `session_id` is always a valid key and all
     /// downstream code sees `Some`.
@@ -755,8 +755,8 @@ impl Kernel {
     ///    session — error if terminal or not found (A2A Protocol pattern).
     /// 2. **Session addressing** (direct process table lookup): deliver to
     ///    existing session — if terminal, respawn transparently.
-    /// 3. **Role-based default** (fallback): lookup AgentRegistry by user
-    ///    role, spawn a new agent process keyed by `session_id`.
+    /// 3. **Role-based default** (fallback): lookup AgentRegistry by user role,
+    ///    spawn a new agent process keyed by `session_id`.
     #[tracing::instrument(
         skip(self, msg),
         fields(
@@ -777,8 +777,8 @@ impl Kernel {
         //
         // Here we resolve that None by:
         //   1. Creating a new SessionEntry (UUID key, empty metadata).
-        //   2. Writing a ChannelBinding so subsequent messages from the same
-        //      chat are routed to this session automatically.
+        //   2. Writing a ChannelBinding so subsequent messages from the same chat are
+        //      routed to this session automatically.
         //
         // After this block, `session_id` is always a valid SessionKey.
         let session_id = match msg.session_key.clone() {
@@ -940,9 +940,11 @@ impl Kernel {
     /// Handle a group-chat message where the bot was not directly mentioned.
     ///
     /// 1. Resolve session (reusing the same logic as `handle_user_message`).
-    /// 2. Record the message to the session tape (with `[DisplayName]: text` format).
+    /// 2. Record the message to the session tape (with `[DisplayName]: text`
+    ///    format).
     /// 3. Run a lightweight LLM judgment via `proactive::should_reply()`.
-    /// 4. If approved, push a `UserMessage` event to go through the normal agent turn.
+    /// 4. If approved, push a `UserMessage` event to go through the normal
+    ///    agent turn.
     /// 5. If skipped, end here — the message is already persisted in the tape.
     #[tracing::instrument(
         skip(self, msg),
@@ -1024,29 +1026,30 @@ impl Kernel {
             .and_then(|v| v.as_str())
             .map(|s| s.to_owned());
 
-        let judgment_result = match self.syscall.driver_registry().resolve(
-            "__proactive_judgment__",
-            None,
-            None,
-        ) {
-            Ok((driver, model)) => {
-                crate::proactive::should_reply(
-                    &driver,
-                    &model,
-                    &self.tape_service,
-                    &tape_name,
-                    &user_text,
-                    sender_display_name.as_deref(),
-                )
-                .await
-            }
-            Err(e) => {
-                warn!(error = %e, "group: failed to resolve driver, skipping");
-                crate::proactive::ProactiveJudgment::ShouldSkip {
-                    reason: "driver resolution failed".into(),
+        let judgment_result =
+            match self
+                .syscall
+                .driver_registry()
+                .resolve("__proactive_judgment__", None, None)
+            {
+                Ok((driver, model)) => {
+                    crate::proactive::should_reply(
+                        &driver,
+                        &model,
+                        &self.tape_service,
+                        &tape_name,
+                        &user_text,
+                        sender_display_name.as_deref(),
+                    )
+                    .await
                 }
-            }
-        };
+                Err(e) => {
+                    warn!(error = %e, "group: failed to resolve driver, skipping");
+                    crate::proactive::ProactiveJudgment::ShouldSkip {
+                        reason: "driver resolution failed".into(),
+                    }
+                }
+            };
 
         if matches!(
             judgment_result,
@@ -1130,8 +1133,8 @@ impl Kernel {
     ///    tape, injecting the user's cross-session memory (user tape).
     /// 6. **Stream setup** — open a streaming channel for real-time token
     ///    delivery to the client.
-    /// 7. **Spawn background task** — the task runs `run_agent_loop` (which
-    ///    may involve multiple LLM calls and tool executions), then pushes a
+    /// 7. **Spawn background task** — the task runs `run_agent_loop` (which may
+    ///    involve multiple LLM calls and tool executions), then pushes a
     ///    `TurnCompleted` event back into the queue.
     ///
     /// # Failure safety
@@ -1231,7 +1234,6 @@ impl Kernel {
         // are buffered in `pause_buffer` (see `deliver_to_session`) rather than
         // starting a concurrent turn — the kernel enforces one turn at a time
         // per session.
-        let session_key = msg.session_key.clone().unwrap_or(session_key);
         let user = msg.user.clone();
         let msg_id = msg.id.clone();
 

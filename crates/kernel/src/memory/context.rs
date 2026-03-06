@@ -194,8 +194,8 @@ pub fn user_tape_context(entries: &[TapEntry]) -> Option<Message> {
     }
 
     let body = format!(
-        "[User Memory]\nThe following notes were previously recorded about this user. \
-         Use them to personalize your responses.\n\n{}",
+        "[User Memory]\nThe following notes were previously recorded about this user. Use them to \
+         personalize your responses.\n\n{}",
         sections.join("\n")
     );
 

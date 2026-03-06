@@ -25,7 +25,6 @@ lettre.workspace = true
 rand.workspace = true
 rara-agents.workspace = true
 rara-backend-admin = { workspace = true }
-reqwest = { workspace = true }
 rara-channels = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-composio.workspace = true
@@ -38,6 +37,7 @@ rara-pg-credential-store.workspace = true
 rara-server = { workspace = true }
 rara-sessions.workspace = true
 rara-skills.workspace = true
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu = { workspace = true }
@@ -46,8 +46,8 @@ teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-uuid.workspace = true
 utoipa-swagger-ui = { workspace = true }
+uuid.workspace = true
 yunara-store = { workspace = true }
 
 [lints]

@@ -32,9 +32,7 @@ pub struct ListSessionsTool {
 }
 
 impl ListSessionsTool {
-    pub fn new(session_index: Arc<dyn SessionIndex>) -> Self {
-        Self { session_index }
-    }
+    pub fn new(session_index: Arc<dyn SessionIndex>) -> Self { Self { session_index } }
 }
 
 #[async_trait]
@@ -61,10 +59,7 @@ impl AgentTool for ListSessionsTool {
     }
 
     async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<Value> {
-        let limit = params
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(50);
+        let limit = params.get("limit").and_then(|v| v.as_i64()).unwrap_or(50);
 
         let sessions = self
             .session_index

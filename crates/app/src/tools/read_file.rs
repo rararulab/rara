@@ -72,7 +72,11 @@ impl AgentTool for ReadFileTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())

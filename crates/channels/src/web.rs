@@ -768,9 +768,11 @@ async fn interrupt_handler(
                 }
             }
         }
-        None => {
-            (axum::http::StatusCode::SERVICE_UNAVAILABLE, "adapter not started").into_response()
-        }
+        None => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "adapter not started",
+        )
+            .into_response(),
     }
 }
 

@@ -74,9 +74,7 @@ impl ToolRegistry {
         self.tools.insert(name, tool)
     }
 
-    pub fn get(&self, name: &str) -> Option<&AgentToolRef> {
-        self.tools.get(name)
-    }
+    pub fn get(&self, name: &str) -> Option<&AgentToolRef> { self.tools.get(name) }
 
     #[must_use]
     pub fn is_empty(&self) -> bool { self.tools.is_empty() }
@@ -85,9 +83,7 @@ impl ToolRegistry {
     pub fn len(&self) -> usize { self.tools.len() }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &AgentToolRef)> {
-        self.tools
-            .iter()
-            .map(|(name, tool)| (name.as_str(), tool))
+        self.tools.iter().map(|(name, tool)| (name.as_str(), tool))
     }
 
     /// Convert all tools to [`llm::ToolDefinition`] format for the

@@ -19,8 +19,7 @@
 //! should be recalled across future sessions with the same user.
 
 use async_trait::async_trait;
-use rara_kernel::memory::TapeService;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::{memory::TapeService, tool::AgentTool};
 use serde_json::json;
 
 /// Single source of truth for valid user-note categories.
@@ -46,12 +45,9 @@ impl AgentTool for UserNoteTool {
         "Record a note about the current user for future reference. The user is automatically \
          identified from the session context — do NOT pass a user_id. Notes persist across \
          sessions and are automatically loaded into context for future conversations with this \
-         user.\n\n\
-         Categories:\n\
-         - preference: User preferences (language, style, tools they like)\n\
-         - fact: Important facts about the user (name, role, projects)\n\
-         - todo: Tasks or reminders for the user\n\
-         - general: Anything else worth remembering"
+         user.\n\nCategories:\n- preference: User preferences (language, style, tools they \
+         like)\n- fact: Important facts about the user (name, role, projects)\n- todo: Tasks or \
+         reminders for the user\n- general: Anything else worth remembering"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

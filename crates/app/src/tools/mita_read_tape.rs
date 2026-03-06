@@ -39,8 +39,8 @@ impl AgentTool for ReadTapeTool {
 
     fn description(&self) -> &str {
         "Read tape entries from a specific session. Returns message history including user \
-         messages, assistant responses, and tool calls. Use `recent_n` to limit to the most \
-         recent entries."
+         messages, assistant responses, and tool calls. Use `recent_n` to limit to the most recent \
+         entries."
     }
 
     fn parameters_schema(&self) -> Value {

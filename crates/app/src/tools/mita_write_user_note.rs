@@ -21,8 +21,7 @@
 //! observations into arbitrary user tapes during heartbeat analysis.
 
 use async_trait::async_trait;
-use rara_kernel::memory::TapeService;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::{memory::TapeService, tool::AgentTool};
 use serde_json::json;
 
 use super::user_note::NOTE_CATEGORIES;
@@ -46,12 +45,10 @@ impl AgentTool for MitaWriteUserNoteTool {
 
     fn description(&self) -> &str {
         "Write a structured note into a specific user's tape. This is a system-level tool for \
-         recording cross-session observations about a user. Requires explicit user_id.\n\n\
-         Categories:\n\
-         - preference: User preferences (language, style, tools they like)\n\
-         - fact: Important facts about the user (name, role, projects)\n\
-         - todo: Tasks or reminders for the user\n\
-         - general: Anything else worth remembering"
+         recording cross-session observations about a user. Requires explicit \
+         user_id.\n\nCategories:\n- preference: User preferences (language, style, tools they \
+         like)\n- fact: Important facts about the user (name, role, projects)\n- todo: Tasks or \
+         reminders for the user\n- general: Anything else worth remembering"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

@@ -22,7 +22,8 @@
 //! - `rara` — the root conversational agent with full tool access
 //! - `nana` — a friendly chat-only companion (rara's sister)
 //! - `worker` — lightweight task-execution agent for sub-agent spawning
-//! - `mita` — background proactive agent with heartbeat-driven cross-session observation
+//! - `mita` — background proactive agent with heartbeat-driven cross-session
+//!   observation
 
 use std::sync::LazyLock;
 

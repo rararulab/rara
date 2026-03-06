@@ -95,10 +95,7 @@ impl SessionCommandHandler {
 
         match self.client.create_session(Some("Telegram Chat")).await {
             Ok(key) => {
-                let _ = self
-                    .client
-                    .bind_channel("telegram", &chat_id, &key)
-                    .await;
+                let _ = self.client.bind_channel("telegram", &chat_id, &key).await;
                 Ok(CommandResult::Text("New chat session started.".to_owned()))
             }
             Err(e) => Ok(CommandResult::Text(format!(

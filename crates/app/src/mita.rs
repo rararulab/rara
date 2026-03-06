@@ -17,11 +17,7 @@
 //! On each heartbeat tick, creates (or reuses) Mita's dedicated session
 //! and submits a synthetic message to trigger the Mita agent loop.
 
-use rara_kernel::{
-    handle::KernelHandle,
-    identity::Principal,
-    memory::TapeService,
-};
+use rara_kernel::{handle::KernelHandle, identity::Principal, memory::TapeService};
 use tracing::{error, info, warn};
 
 /// Fixed tape name for Mita's own session.
@@ -144,8 +140,8 @@ impl common_worker::Worker for MitaHeartbeatWorker {
 
         // Spawn a new agent session for this heartbeat cycle.
         let input = "Heartbeat triggered. Analyze active sessions and determine if any proactive \
-                      actions are needed. Review your previous tape entries to avoid repeating \
-                      recent actions."
+                     actions are needed. Review your previous tape entries to avoid repeating \
+                     recent actions."
             .to_string();
 
         match self
@@ -164,5 +160,4 @@ impl common_worker::Worker for MitaHeartbeatWorker {
             }
         }
     }
-
 }

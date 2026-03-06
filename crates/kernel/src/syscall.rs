@@ -256,15 +256,9 @@ impl SyscallDispatcher {
                 let mut registry = self.tool_registry.as_ref().clone();
                 if process_table.contains(&syscall_sender) {
                     let tape_name = syscall_sender.to_string();
-                    let syscall_tool = SyscallTool::new(
-                        kernel_handle.clone(),
-                        syscall_sender,
-                    );
+                    let syscall_tool = SyscallTool::new(kernel_handle.clone(), syscall_sender);
                     registry.register(Arc::new(syscall_tool));
-                    let tape_tool = TapeTool::new(
-                        self.tape_service.clone(),
-                        tape_name,
-                    );
+                    let tape_tool = TapeTool::new(self.tape_service.clone(), tape_name);
                     registry.register(Arc::new(tape_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));
@@ -671,7 +665,6 @@ impl SyscallTool {
             .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
         Ok(serde_json::json!({ "ok": true }))
     }
-
 }
 
 // ============================================================================
@@ -775,9 +768,8 @@ impl crate::tool::AgentTool for SyscallTool {
     fn name(&self) -> &str { "kernel" }
 
     fn description(&self) -> &str {
-        "Interact with the kernel: spawn agents, query process status, send signals, manage \
-         memory (private & shared), and publish events. Set the 'action' field to select the \
-         operation."
+        "Interact with the kernel: spawn agents, query process status, send signals, manage memory \
+         (private & shared), and publish events. Set the 'action' field to select the operation."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -850,7 +842,11 @@ impl crate::tool::AgentTool for SyscallTool {
     }
 
     // FIXME: don't write this like match.
-    async fn execute(&self, params: serde_json::Value, _context: &crate::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: &crate::tool::ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
         let action: SyscallParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid kernel tool params: {e}"))?;
 

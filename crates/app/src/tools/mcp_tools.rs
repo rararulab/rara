@@ -82,7 +82,11 @@ impl AgentTool for InstallMcpServerTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<Value> {
+    async fn execute(
+        &self,
+        params: Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<Value> {
         let server_name = params
             .get("server_name")
             .and_then(|v| v.as_str())
@@ -176,7 +180,11 @@ impl AgentTool for ListMcpServersTool {
         })
     }
 
-    async fn execute(&self, _params: Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<Value> {
+    async fn execute(
+        &self,
+        _params: Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<Value> {
         let registry = self.manager.registry().await;
         let all_names = registry
             .list()
@@ -270,7 +278,11 @@ impl AgentTool for RemoveMcpServerTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<Value> {
+    async fn execute(
+        &self,
+        params: Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<Value> {
         let server_name = params
             .get("server_name")
             .and_then(|v| v.as_str())

@@ -87,7 +87,11 @@ impl AgentTool for McpToolBridge {
 
     fn parameters_schema(&self) -> serde_json::Value { self.input_schema.clone() }
 
-    async fn execute(&self, params: serde_json::Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
         let result = self
             .manager
             .call_tool(&self.server_name, &self.tool_name, Some(params))

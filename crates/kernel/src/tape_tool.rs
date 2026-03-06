@@ -19,9 +19,9 @@
 //! its own tape directly, giving it full visibility into the underlying memory
 //! mechanism so it can make informed decisions about context management.
 
+use anyhow::Context;
 use async_trait::async_trait;
 use serde::Deserialize;
-use anyhow::Context;
 
 use crate::memory::{TapEntryKind, TapeService};
 
@@ -230,35 +230,28 @@ impl crate::tool::AgentTool for TapeTool {
 
     fn description(&self) -> &str {
         "Your memory is a tape — an append-only timeline that records every message, tool call, \
-         and tool result in this session as sequential entries.\n\n\
-         ## How your context window works\n\n\
-         You do NOT see the entire tape. Your LLM context window only contains entries since the \
-         last anchor (checkpoint). Everything before that anchor still exists on the tape and is \
-         fully searchable, but it is not in your current context.\n\n\
-         ## Anchors\n\n\
-         An anchor is a named checkpoint you insert into the tape. When you create an anchor, \
-         your future context window starts from that point. Use anchors when:\n\
-         - A topic or task is complete and you want to free up context space\n\
-         - You want to mark a logical boundary in the conversation\n\
-         - Your context is getting large and you need to trim it\n\n\
-         When creating an anchor, always provide a `summary` of the conversation so far and \
+         and tool result in this session as sequential entries.\n\n## How your context window \
+         works\n\nYou do NOT see the entire tape. Your LLM context window only contains entries \
+         since the last anchor (checkpoint). Everything before that anchor still exists on the \
+         tape and is fully searchable, but it is not in your current context.\n\n## Anchors\n\nAn \
+         anchor is a named checkpoint you insert into the tape. When you create an anchor, your \
+         future context window starts from that point. Use anchors when:\n- A topic or task is \
+         complete and you want to free up context space\n- You want to mark a logical boundary in \
+         the conversation\n- Your context is getting large and you need to trim it\n\nWhen \
+         creating an anchor, always provide a `summary` of the conversation so far and \
          `next_steps` if applicable. These are stored in the anchor state so you retain key \
-         context even after the older entries leave your context window.\n\n\
-         Data before an anchor is NOT deleted — `search` can still find it across all anchors.\n\n\
-         ## Entry kinds\n\n\
-         Each tape entry has a kind: `message` (user/assistant chat), `tool_call` (your tool \
-         invocations), `tool_result` (tool outputs), `event` (lifecycle telemetry), \
-         `system` (system prompts), `anchor` (checkpoints).\n\n\
-         ## Actions\n\n\
-         - `info` — inspect tape state (total entries, anchor count, context window size)\n\
-         - `search` — find past conversations by text, works across all anchors including \
-           forgotten context\n\
-         - `anchor` — create a checkpoint to trim your context window\n\
-         - `anchors` — list recent checkpoints to understand your memory structure\n\
-         - `entries` — read raw tape entries in your current context window or after a specific \
-           anchor
-         - `between_anchors` — read entries between two named anchors to inspect a specific \
-           past context window"
+         context even after the older entries leave your context window.\n\nData before an anchor \
+         is NOT deleted — `search` can still find it across all anchors.\n\n## Entry kinds\n\nEach \
+         tape entry has a kind: `message` (user/assistant chat), `tool_call` (your tool \
+         invocations), `tool_result` (tool outputs), `event` (lifecycle telemetry), `system` \
+         (system prompts), `anchor` (checkpoints).\n\n## Actions\n\n- `info` — inspect tape state \
+         (total entries, anchor count, context window size)\n- `search` — find past conversations \
+         by text, works across all anchors including forgotten context\n- `anchor` — create a \
+         checkpoint to trim your context window\n- `anchors` — list recent checkpoints to \
+         understand your memory structure\n- `entries` — read raw tape entries in your current \
+         context window or after a specific anchor
+         - `between_anchors` — read entries between two named anchors to inspect a specific past \
+         context window"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -318,7 +311,11 @@ impl crate::tool::AgentTool for TapeTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: &crate::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: &crate::tool::ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
         let action: TapeParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid tape tool params: {e}"))?;
 

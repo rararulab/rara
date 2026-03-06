@@ -53,7 +53,11 @@ impl AgentTool for ListDirectoryTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
         let path = params
             .get("path")
             .and_then(|v| v.as_str())

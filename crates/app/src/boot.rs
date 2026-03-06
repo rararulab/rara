@@ -46,7 +46,8 @@ pub(crate) struct BootResult {
     pub agent_registry:       Arc<rara_kernel::agent::AgentRegistry>,
     /// Handle reference for `DispatchRaraTool` — must be wired with a
     /// `KernelHandle` after kernel startup.
-    pub dispatch_rara_handle: std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
+    pub dispatch_rara_handle:
+        std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
 }
 
 /// A user entry in the YAML configuration file.
@@ -86,12 +87,9 @@ pub(crate) async fn boot(
 
     // -- LLM driver registry -----------------------------------------------
 
-    let driver_registry = build_driver_registry(
-        settings_provider.clone(),
-        &*credential_store,
-    )
-    .await
-    .whatever_context("Failed to initialize LLM driver registry")?;
+    let driver_registry = build_driver_registry(settings_provider.clone(), &*credential_store)
+        .await
+        .whatever_context("Failed to initialize LLM driver registry")?;
 
     {
         let driver_registry_ref = driver_registry.clone();
@@ -100,12 +98,7 @@ pub(crate) async fn boot(
         tokio::spawn(async move {
             let mut rx = settings_ref.subscribe();
             while rx.changed().await.is_ok() {
-                match build_driver_registry(
-                    settings_ref.clone(),
-                    &*credential_store_ref,
-                )
-                .await
-                {
+                match build_driver_registry(settings_ref.clone(), &*credential_store_ref).await {
                     Ok(updated) => {
                         driver_registry_ref.update(updated.as_ref());
                         info!("LLM driver registry reloaded from settings");
@@ -121,18 +114,15 @@ pub(crate) async fn boot(
     // -- session index (tape-centric) --------------------------------------
 
     let session_index: Arc<dyn rara_kernel::session::SessionIndex> = Arc::new(
-        rara_sessions::file_index::FileSessionIndex::new(
-            rara_paths::sessions_dir().join("index"),
-        )
-        .await
-        .whatever_context("Failed to initialize file session index")?,
+        rara_sessions::file_index::FileSessionIndex::new(rara_paths::sessions_dir().join("index"))
+            .await
+            .whatever_context("Failed to initialize file session index")?,
     );
     info!("FileSessionIndex initialized");
 
     // -- tape store --------------------------------------------------------
 
-    let workspace_path =
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let workspace_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let tape_service = rara_kernel::memory::TapeService::new(
         rara_kernel::memory::FileTapeStore::new(rara_paths::memory_dir(), &workspace_path)
             .await
@@ -142,9 +132,8 @@ pub(crate) async fn boot(
 
     // -- Composio auth provider --------------------------------------------
 
-    let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> = Arc::new(
-        SettingsComposioAuthProvider::new(settings_provider.clone()),
-    );
+    let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
+        Arc::new(SettingsComposioAuthProvider::new(settings_provider.clone()));
 
     // -- skills registry ---------------------------------------------------
 
@@ -164,12 +153,12 @@ pub(crate) async fn boot(
     let tool_result = crate::tools::register_all(
         &mut tool_registry,
         crate::tools::ToolDeps {
-            settings:               settings_provider.clone(),
+            settings: settings_provider.clone(),
             composio_auth_provider,
-            skill_registry:         skill_registry.clone(),
-            mcp_manager:            mcp_manager.clone(),
-            tape_service:           tape_service.clone(),
-            session_index:          session_index.clone(),
+            skill_registry: skill_registry.clone(),
+            mcp_manager: mcp_manager.clone(),
+            tape_service: tape_service.clone(),
+            session_index: session_index.clone(),
         },
     );
 
@@ -310,6 +299,7 @@ async fn build_driver_registry(
 // =========================================================================
 
 use std::collections::HashMap;
+
 use rara_kernel::{
     error::Result as KernelResult,
     identity::{KernelUser, Permission, Role, UserStore},
@@ -345,10 +335,10 @@ impl InMemoryUserStore {
                 (
                     u.name.clone(),
                     KernelUser {
-                        name:        u.name.clone(),
+                        name: u.name.clone(),
                         role,
                         permissions: perms,
-                        enabled:     true,
+                        enabled: true,
                     },
                 )
             })
@@ -410,15 +400,16 @@ impl IdentityResolver for PlatformIdentityResolver {
         platform_user_id: &str,
         _platform_chat_id: Option<&str>,
     ) -> std::result::Result<UserId, IOError> {
-        let key = (channel_type.to_string().to_lowercase(), platform_user_id.to_string());
+        let key = (
+            channel_type.to_string().to_lowercase(),
+            platform_user_id.to_string(),
+        );
         debug!(channel = %channel_type, platform_user_id, "resolving identity");
-        self.mappings
-            .get(&key)
-            .cloned()
-            .map(UserId)
-            .ok_or_else(|| IOError::IdentityResolutionFailed {
+        self.mappings.get(&key).cloned().map(UserId).ok_or_else(|| {
+            IOError::IdentityResolutionFailed {
                 message: format!("unknown platform user: {platform_user_id}"),
-            })
+            }
+        })
     }
 }
 
@@ -477,7 +468,6 @@ async fn init_mcp_manager(
     Ok(manager)
 }
 
-
 // =========================================================================
 // Private: Composio auth provider
 // =========================================================================
@@ -503,10 +493,10 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
             .get(keys::COMPOSIO_API_KEY)
             .await
             .ok_or_else(|| anyhow::anyhow!("composio.api_key is not configured in settings"))?;
-        let entity_id = self
-            .settings
-            .get(keys::COMPOSIO_ENTITY_ID)
-            .await;
-        Ok(rara_composio::ComposioAuth::new(api_key, entity_id.as_deref()))
+        let entity_id = self.settings.get(keys::COMPOSIO_ENTITY_ID).await;
+        Ok(rara_composio::ComposioAuth::new(
+            api_key,
+            entity_id.as_deref(),
+        ))
     }
 }

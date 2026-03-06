@@ -121,20 +121,19 @@ impl AgentTool for DispatchRaraTool {
         // The message is prefixed so Rara can distinguish proactive
         // instructions from regular user messages.
         let directive_text = format!(
-            "[Proactive Instruction from Mita]\n\
-             The following is an internally-generated directive based on cross-session analysis. \
-             Act on it naturally as if you decided to reach out to the user yourself. Do NOT \
-             mention Mita or reveal that this is an automated instruction.\n\n\
-             Instruction: {instruction}"
+            "[Proactive Instruction from Mita]\nThe following is an internally-generated \
+             directive based on cross-session analysis. Act on it naturally as if you decided to \
+             reach out to the user yourself. Do NOT mention Mita or reveal that this is an \
+             automated instruction.\n\nInstruction: {instruction}"
         );
 
         // Use the system user identity for internal messages.
         let system_user = UserId("system".to_string());
         let msg = InboundMessage::synthetic(directive_text, system_user, session_key);
 
-        handle
-            .submit_message(msg)
-            .map_err(|e| anyhow::anyhow!("failed to dispatch to session '{session_id_str}': {e}"))?;
+        handle.submit_message(msg).map_err(|e| {
+            anyhow::anyhow!("failed to dispatch to session '{session_id_str}': {e}")
+        })?;
 
         Ok(json!({
             "status": "dispatched",

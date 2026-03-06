@@ -161,7 +161,12 @@ impl TapeService {
     /// Append a system entry.
     pub async fn append_system(&self, tape_name: &str, content: &str) -> TapResult<()> {
         self.store
-            .append(tape_name, TapEntryKind::System, json!({"content": content}), None)
+            .append(
+                tape_name,
+                TapEntryKind::System,
+                json!({"content": content}),
+                None,
+            )
             .await?;
         Ok(())
     }
@@ -497,11 +502,7 @@ impl TapeService {
     ///
     /// Returns the number of entries that were discarded, or 0 if the tape was
     /// below the compaction threshold.
-    pub async fn compact_tape(
-        &self,
-        tape_name: &str,
-        keep_recent: usize,
-    ) -> TapResult<usize> {
+    pub async fn compact_tape(&self, tape_name: &str, keep_recent: usize) -> TapResult<usize> {
         let entries = self.entries(tape_name).await?;
         let total = entries.len();
 
@@ -709,7 +710,10 @@ mod tests {
             .await
             .unwrap();
 
-        let messages = svc.build_llm_context_with_user(tape, "alice").await.unwrap();
+        let messages = svc
+            .build_llm_context_with_user(tape, "alice")
+            .await
+            .unwrap();
 
         // The first message should still be the system prompt, not the user
         // memory note.
@@ -769,9 +773,13 @@ mod tests {
 
         svc.ensure_bootstrap_anchor(tape).await.unwrap();
         for i in 0..5 {
-            svc.append_message(tape, json!({"role": "user", "content": format!("msg {i}")}), None)
-                .await
-                .unwrap();
+            svc.append_message(
+                tape,
+                json!({"role": "user", "content": format!("msg {i}")}),
+                None,
+            )
+            .await
+            .unwrap();
         }
 
         let discarded = svc.compact_tape(tape, 100).await.unwrap();
@@ -790,17 +798,29 @@ mod tests {
 
         // Create: 1 anchor + 1 note + 10 messages = 12 entries total.
         svc.ensure_bootstrap_anchor(tape).await.unwrap();
-        svc.append_user_note("alice", "fact", "likes Rust").await.unwrap();
+        svc.append_user_note("alice", "fact", "likes Rust")
+            .await
+            .unwrap();
         // Append messages to the same tape (not user tape) for testing.
         for i in 0..10 {
-            svc.append_message(tape, json!({"role": "user", "content": format!("msg {i}")}), None)
-                .await
-                .unwrap();
+            svc.append_message(
+                tape,
+                json!({"role": "user", "content": format!("msg {i}")}),
+                None,
+            )
+            .await
+            .unwrap();
         }
 
-        // Note was written to user tape, so add a Note directly to this tape for testing.
+        // Note was written to user tape, so add a Note directly to this tape for
+        // testing.
         svc.store()
-            .append(tape, TapEntryKind::Note, json!({"category": "fact", "content": "test note"}), None)
+            .append(
+                tape,
+                TapEntryKind::Note,
+                json!({"category": "fact", "content": "test note"}),
+                None,
+            )
             .await
             .unwrap();
 
@@ -830,7 +850,9 @@ mod tests {
 
         // Create a tape with only anchors (non-discardable).
         for i in 0..5 {
-            svc.handoff(tape, &format!("anchor-{i}"), None).await.unwrap();
+            svc.handoff(tape, &format!("anchor-{i}"), None)
+                .await
+                .unwrap();
         }
 
         let entries = svc.entries(tape).await.unwrap();

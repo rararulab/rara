@@ -74,7 +74,11 @@ impl AgentTool for ListSkillsTool {
         })
     }
 
-    async fn execute(&self, _params: Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<Value> {
+    async fn execute(
+        &self,
+        _params: Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<Value> {
         let skills: Vec<Value> = self
             .registry
             .list_all()
@@ -145,7 +149,11 @@ impl AgentTool for CreateSkillTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<Value> {
+    async fn execute(
+        &self,
+        params: Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<Value> {
         let name = params
             .get("name")
             .and_then(|v| v.as_str())
@@ -234,7 +242,11 @@ impl AgentTool for DeleteSkillTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &rara_kernel::tool::ToolContext) -> anyhow::Result<Value> {
+    async fn execute(
+        &self,
+        params: Value,
+        _context: &rara_kernel::tool::ToolContext,
+    ) -> anyhow::Result<Value> {
         let name = params
             .get("name")
             .and_then(|v| v.as_str())

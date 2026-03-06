@@ -166,7 +166,6 @@ pub struct InboundMessage {
     pub timestamp:     jiff::Timestamp,
     /// Extension metadata (adapter-specific fields only).
     pub metadata:      HashMap<String, Value>,
-
 }
 
 impl InboundMessage {
@@ -1111,9 +1110,10 @@ pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 ///   → InboundMessage { session_key: Option<SessionKey> }
 /// ```
 ///
-/// When no channel binding exists (first message from a new chat), `session_key`
-/// is `None`. The kernel — not the I/O layer — is responsible for creating the
-/// session and writing the binding. See [`Kernel::handle_user_message()`].
+/// When no channel binding exists (first message from a new chat),
+/// `session_key` is `None`. The kernel — not the I/O layer — is responsible for
+/// creating the session and writing the binding. See
+/// [`Kernel::handle_user_message()`].
 ///
 /// Constructed at the app/boot layer and injected into
 /// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
@@ -1193,10 +1193,7 @@ impl IOSubsystem {
                     .await
                 {
                     Ok(Some(binding)) => {
-                        span.record(
-                            "session_id",
-                            tracing::field::display(&binding.session_key),
-                        );
+                        span.record("session_id", tracing::field::display(&binding.session_key));
                         Some(binding.session_key)
                     }
                     Ok(None) => None,
@@ -1211,20 +1208,20 @@ impl IOSubsystem {
 
         // 3. Build InboundMessage
         let msg = InboundMessage {
-            id:                 MessageId::new(),
-            source:             ChannelSource {
+            id: MessageId::new(),
+            source: ChannelSource {
                 channel_type:        raw.channel_type,
                 platform_message_id: raw.platform_message_id,
                 platform_user_id:    raw.platform_user_id,
                 platform_chat_id:    raw.platform_chat_id,
             },
-            user:               user_id,
+            user: user_id,
             session_key,
             target_session_key: None,
-            content:            raw.content,
-            reply_context:      raw.reply_context,
-            timestamp:          jiff::Timestamp::now(),
-            metadata:           raw.metadata,
+            content: raw.content,
+            reply_context: raw.reply_context,
+            timestamp: jiff::Timestamp::now(),
+            metadata: raw.metadata,
         };
 
         tracing::info!(

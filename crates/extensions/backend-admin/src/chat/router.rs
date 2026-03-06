@@ -329,8 +329,6 @@ async fn get_channel_binding(
     State(service): State<SessionService>,
     Path((channel_type, chat_id)): Path<(String, String)>,
 ) -> Result<Json<Option<ChannelBinding>>, ChatError> {
-    let binding = service
-        .get_channel_session(&channel_type, &chat_id)
-        .await?;
+    let binding = service.get_channel_session(&channel_type, &chat_id).await?;
     Ok(Json(binding))
 }

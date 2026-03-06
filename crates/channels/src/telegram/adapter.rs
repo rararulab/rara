@@ -97,25 +97,25 @@ const STREAM_SPLIT_THRESHOLD: usize = 3800;
 struct StreamingMessage {
     /// All message IDs sent for this stream (multiple when splitting long
     /// content).
-    message_ids: Vec<MessageId>,
+    message_ids:           Vec<MessageId>,
     /// Accumulated raw text for the current (latest) message.
-    accumulated: String,
+    accumulated:           String,
     /// Number of raw characters already finalized into earlier split messages.
     streamed_prefix_chars: usize,
     /// Last successful `editMessageText` timestamp for throttling.
-    last_edit:   Instant,
+    last_edit:             Instant,
     /// Whether new text has been appended since the last edit.
-    dirty:       bool,
+    dirty:                 bool,
 }
 
 impl StreamingMessage {
     fn new() -> Self {
         Self {
-            message_ids: Vec::new(),
-            accumulated: String::new(),
+            message_ids:           Vec::new(),
+            accumulated:           String::new(),
             streamed_prefix_chars: 0,
-            last_edit:   Instant::now(),
-            dirty:       false,
+            last_edit:             Instant::now(),
+            dirty:                 false,
         }
     }
 }
@@ -677,7 +677,8 @@ async fn handle_update(
 
     let chat_id = msg.chat.id.0;
 
-    // Intercept /stop command — send Interrupt signal directly without going through kernel.
+    // Intercept /stop command — send Interrupt signal directly without going
+    // through kernel.
     if let UpdateKind::Message(ref stop_msg) = update.kind {
         if let Some(text) = stop_msg.text() {
             let cmd = text.split_whitespace().next().unwrap_or("");
@@ -691,14 +692,21 @@ async fn handle_update(
                     match handle.resolve(raw).await {
                         Ok(inbound) => {
                             if let Some(session_key) = inbound.session_key {
-                                let _ = handle.send_signal(session_key, rara_kernel::session::Signal::Interrupt);
+                                let _ = handle.send_signal(
+                                    session_key,
+                                    rara_kernel::session::Signal::Interrupt,
+                                );
                                 let _ = bot.send_message(ChatId(chat_id), "已中断当前操作。").await;
                             } else {
-                                let _ = bot.send_message(ChatId(chat_id), "当前没有活跃的会话。").await;
+                                let _ = bot
+                                    .send_message(ChatId(chat_id), "当前没有活跃的会话。")
+                                    .await;
                             }
                         }
                         Err(_) => {
-                            let _ = bot.send_message(ChatId(chat_id), "当前没有活跃的会话。").await;
+                            let _ = bot
+                                .send_message(ChatId(chat_id), "当前没有活跃的会话。")
+                                .await;
                         }
                     }
                 }
