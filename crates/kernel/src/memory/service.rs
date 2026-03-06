@@ -20,7 +20,6 @@
 
 use std::{future::Future, sync::OnceLock};
 
-use jiff::Timestamp;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -510,17 +509,16 @@ impl TapeService {
         Ok(results)
     }
 
-    /// Compact a tape by discarding old `Message`, `ToolCall`, and
-    /// `ToolResult` entries while preserving all `Note`, `Anchor`, `Summary`,
-    /// `System`, and `Event` entries.
+    /// Compact a tape by writing a compaction anchor that shrinks the default
+    /// read set (`from_last_anchor`) without deleting any history.
     ///
-    /// The most recent `keep_recent` entries are always preserved regardless of
-    /// kind.  Older entries outside that window are filtered: only structurally
-    /// important kinds survive.  A single `Summary` entry is prepended to
-    /// record how many entries were discarded.
+    /// Old `Message`, `ToolCall`, and `ToolResult` entries remain on disk but
+    /// fall outside the new anchor window and are therefore excluded from the
+    /// default context view.  This preserves the append-only invariant while
+    /// keeping the working set small.
     ///
-    /// Returns the number of entries that were discarded, or 0 if the tape was
-    /// below the compaction threshold.
+    /// Returns the number of conversational entries moved out of the default
+    /// view, or 0 if the tape was below the compaction threshold.
     pub async fn compact_tape(&self, tape_name: &str, keep_recent: usize) -> TapResult<usize> {
         let entries = self.entries(tape_name).await?;
         let total = entries.len();
@@ -530,54 +528,50 @@ impl TapeService {
             return Ok(0);
         }
 
-        let split_point = total.saturating_sub(keep_recent);
-        let (old_entries, recent_entries) = entries.split_at(split_point);
-
-        // From old entries, keep structurally important kinds.
-        let preserved_kinds = [
-            TapEntryKind::Note,
-            TapEntryKind::Anchor,
-            TapEntryKind::Summary,
-            TapEntryKind::System,
-            TapEntryKind::Event,
-        ];
-        let preserved_old: Vec<TapEntry> = old_entries
+        // Count entries since the last anchor — if already within budget, skip.
+        let last_anchor_pos = entries
             .iter()
-            .filter(|e| preserved_kinds.contains(&e.kind))
-            .cloned()
-            .collect();
+            .rposition(|e| e.kind == TapEntryKind::Anchor);
+        let entries_since_anchor = match last_anchor_pos {
+            Some(pos) => total - pos - 1,
+            None => total,
+        };
+        if entries_since_anchor <= keep_recent {
+            return Ok(0);
+        }
 
-        let discarded = old_entries.len() - preserved_old.len();
+        // Determine how many conversational entries fall outside the kept window.
+        let split_point = total.saturating_sub(keep_recent);
+        let old_entries = &entries[..split_point];
+        let conversational_kinds = [
+            TapEntryKind::Message,
+            TapEntryKind::ToolCall,
+            TapEntryKind::ToolResult,
+        ];
+        let discarded = old_entries
+            .iter()
+            .filter(|e| conversational_kinds.contains(&e.kind))
+            .count();
+
         if discarded == 0 {
             return Ok(0);
         }
 
-        // Build the replacement tape: Summary + preserved old + recent.
-        let summary_entry = TapEntry {
-            id:        0,
-            kind:      TapEntryKind::Summary,
-            payload:   json!({
-                "discarded_count": discarded,
+        // Write a compaction anchor — from_last_anchor() will naturally narrow
+        // the default read set to entries after this point.
+        let state = json!({
+            "summary": format!(
+                "Compacted: {discarded} old message/tool entries moved out of default view. \
+                 Total history: {total} entries preserved on tape."
+            ),
+            "compaction": {
+                "discarded_from_view": discarded,
                 "original_total": total,
-                "preserved_old": preserved_old.len(),
-                "kept_recent": recent_entries.len(),
-                "message": format!(
-                    "Compacted tape: discarded {discarded} old message/tool entries, \
-                     preserved {} structural entries and {} recent entries.",
-                    preserved_old.len(),
-                    recent_entries.len(),
-                ),
-            }),
-            timestamp: Timestamp::now(),
-            metadata:  None,
-        };
+                "kept_recent": keep_recent,
+            }
+        });
 
-        let mut new_entries = Vec::with_capacity(1 + preserved_old.len() + recent_entries.len());
-        new_entries.push(summary_entry);
-        new_entries.extend(preserved_old);
-        new_entries.extend(recent_entries.iter().cloned());
-
-        self.store.replace_entries(tape_name, new_entries).await?;
+        self.handoff(tape_name, "compaction", Some(state)).await?;
         Ok(discarded)
     }
 
