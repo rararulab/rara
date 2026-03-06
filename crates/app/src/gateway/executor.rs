@@ -280,7 +280,40 @@ impl UpdateExecutor {
                 .context(PermissionsSnafu)?;
         }
 
+        // Advance local HEAD so the detector sees current_rev == upstream_rev
+        // and stops triggering repeated builds.
+        self.advance_local_head().await;
+
         Ok(())
+    }
+
+    /// Advance the local branch to match `origin/main` so the detector
+    /// sees HEAD == upstream and stops re-triggering builds.
+    ///
+    /// Best-effort — a failure here is non-fatal (the binary is already
+    /// activated). The next successful fetch cycle will just trigger one
+    /// more redundant build in the worst case.
+    async fn advance_local_head(&self) {
+        let output = Command::new("git")
+            .args(["merge", "--ff-only", "origin/main"])
+            .current_dir(&self.repo_dir)
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {
+                info!("Advanced local HEAD to origin/main");
+            }
+            Ok(o) => {
+                warn!(
+                    stderr = %String::from_utf8_lossy(&o.stderr),
+                    "git merge --ff-only origin/main failed (non-fatal)"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to run git merge --ff-only (non-fatal)");
+            }
+        }
     }
 
     /// Remove the staging git worktree (best-effort).
