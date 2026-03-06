@@ -214,6 +214,7 @@ impl UpdateExecutor {
     async fn build(&self) -> Result<(), ExecutorError> {
         let mut child = Command::new("cargo")
             .args(["build", "--release", "-p", "rara-cli"])
+            .env("CARGO_TARGET_DIR", self.repo_dir.join("target"))
             .current_dir(&self.staging_dir)
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
@@ -248,7 +249,7 @@ impl UpdateExecutor {
     /// 2. Copy staging binary → current exe path
     /// 3. Set executable permissions (Unix)
     async fn activate(&self) -> Result<(), ExecutorError> {
-        let new_binary = self.staging_dir.join("target/release/rara");
+        let new_binary = self.repo_dir.join("target/release/rara");
 
         if !new_binary.exists() {
             return Err(ExecutorError::Activation {
