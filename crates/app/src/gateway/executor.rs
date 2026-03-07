@@ -218,6 +218,7 @@ impl UpdateExecutor {
         let mut child = Command::new("cargo")
             .args(["build", "--release", "-p", "rara-cli"])
             .env("CARGO_TARGET_DIR", self.repo_dir.join("target"))
+            .env("RUSTC_WRAPPER", "sccache")
             .current_dir(&self.staging_dir)
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
