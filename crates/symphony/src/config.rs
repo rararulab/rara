@@ -20,11 +20,68 @@ fn default_max_concurrent_agents() -> usize {
     2
 }
 
+fn default_active_states() -> Vec<String> {
+    vec!["Todo".to_owned(), "In Progress".to_owned()]
+}
+
+fn default_terminal_states() -> Vec<String> {
+    vec![
+        "Done".to_owned(),
+        "Closed".to_owned(),
+        "Cancelled".to_owned(),
+        "Canceled".to_owned(),
+        "Duplicate".to_owned(),
+    ]
+}
+
+fn default_repo_label_prefix() -> String {
+    "repo:".to_owned()
+}
+
+fn default_linear_endpoint() -> String {
+    "https://api.linear.app/graphql".to_owned()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TrackerConfig {
+    Github {
+        /// GitHub personal access token. Supports `$ENV_VAR` syntax.
+        api_key: Option<String>,
+    },
+    Linear {
+        /// Linear API key. Supports `$ENV_VAR` syntax.
+        api_key: String,
+
+        /// Linear project slug (slugId).
+        project_slug: String,
+
+        /// GraphQL endpoint override.
+        #[serde(default = "default_linear_endpoint")]
+        endpoint: String,
+
+        /// Issue states that trigger dispatch.
+        #[serde(default = "default_active_states")]
+        active_states: Vec<String>,
+
+        /// Issue states considered terminal.
+        #[serde(default = "default_terminal_states")]
+        terminal_states: Vec<String>,
+
+        /// Label prefix for repo mapping.
+        #[serde(default = "default_repo_label_prefix")]
+        repo_label_prefix: String,
+    },
+}
+
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct SymphonyConfig {
     /// Whether the symphony system is enabled.
     #[serde(default)]
     pub enabled: bool,
+
+    /// Issue tracker configuration. None defaults to GitHub with env token.
+    pub tracker: Option<TrackerConfig>,
 
     /// How often to poll for new issues.
     #[serde(
