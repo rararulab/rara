@@ -131,6 +131,43 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
 pub fn mita() -> &'static AgentManifest { &MITA_MANIFEST }
 
 // ---------------------------------------------------------------------------
+// ScheduledJob — dedicated agent for scheduled task execution
+// ---------------------------------------------------------------------------
+
+/// Build a **scheduled_job** agent manifest with job-specific context baked
+/// into the system prompt.
+///
+/// Unlike the static manifests above, this is constructed dynamically because
+/// the system prompt includes runtime information (job ID, schedule, task).
+pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> AgentManifest {
+    AgentManifest {
+        name:               "scheduled_job".to_string(),
+        role:               AgentRole::Worker,
+        description:        "Executes a scheduled task and summarizes the result".to_string(),
+        model:              None,
+        system_prompt:      format!(
+            "You are a scheduled task executor.\n\n\
+             ## Task\n\
+             Job ID: {job_id}\n\
+             Schedule: {trigger_summary}\n\
+             Task: {message}\n\n\
+             ## Instructions\n\
+             1. Execute the task described above using available tools.\n\
+             2. After completion, provide a brief summary of what you did and the outcome.\n"
+        ),
+        soul_prompt:        None,
+        provider_hint:      None,
+        max_iterations:     Some(15),
+        tools:              vec![],
+        max_children:       Some(0),
+        max_context_tokens: None,
+        priority:           Priority::default(),
+        metadata:           serde_json::Value::Null,
+        sandbox:            None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Rara soul prompt (personality/mood/voice)
 // ---------------------------------------------------------------------------
 

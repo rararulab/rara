@@ -73,6 +73,23 @@ impl Trigger {
             Trigger::Cron { next_at, .. } => *next_at,
         }
     }
+
+    /// Human-readable summary of the trigger schedule.
+    pub fn summary(&self) -> String {
+        match self {
+            Trigger::Once { run_at } => format!("once at {run_at}"),
+            Trigger::Interval { every_secs, .. } => {
+                if *every_secs >= 3600 && every_secs % 3600 == 0 {
+                    format!("every {}h", every_secs / 3600)
+                } else if *every_secs >= 60 && every_secs % 60 == 0 {
+                    format!("every {}m", every_secs / 60)
+                } else {
+                    format!("every {every_secs}s")
+                }
+            }
+            Trigger::Cron { expr, .. } => format!("cron {expr}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

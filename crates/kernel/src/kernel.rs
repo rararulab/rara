@@ -50,7 +50,7 @@ use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     KernelError,
-    agent::{AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, run_agent_loop},
+    agent::{AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, Priority, run_agent_loop},
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -1023,78 +1023,92 @@ impl Kernel {
 
         let session_key = job.session_key;
         let job_id = job.id;
+        let trigger_summary = job.trigger.summary();
 
-        // Publish ScheduledTaskFired notification.
+        // 1. Publish ScheduledTaskFired notification.
         self.syscall
             .event_bus()
             .publish(KernelNotification::ScheduledTaskFired {
-                job_id:      job_id.clone(),
-                session_key: session_key.clone(),
-                message:     job.message.clone(),
-                timestamp:   jiff::Timestamp::now(),
+                job_id:          job_id.clone(),
+                session_key:     session_key.clone(),
+                message:         job.message.clone(),
+                trigger_summary: trigger_summary.clone(),
+                timestamp:       jiff::Timestamp::now(),
             })
             .await;
 
-        // Build a synthetic InboundMessage to feed into the existing turn
-        // pipeline, using Internal channel type.
-        let msg = InboundMessage::synthetic(
-            job.message,
-            job.principal.user_id.clone(),
-            session_key,
-        );
-
-        // Route through the same logic as handle_user_message:
-        // check if a process already exists for this session → deliver,
-        // otherwise spawn a new agent via role-based default.
-        let process_info = self
-            .process_table
-            .with(&session_key, |p| (p.session_key, p.state));
-
-        if let Some((_session_key_found, state)) = process_info {
-            if !state.is_terminal() {
-                self.deliver_to_session(session_key, msg).await;
-                return;
-            }
-            // Terminal process — fall through to respawn below.
-        }
-
-        // No active process for this session — spawn via role-based default.
-        let user = msg.user.clone();
-        let manifest = match self
-            .agent_registry
-            .agent_for_role(self.security.resolve_user_role(&user).await)
-        {
-            Some(m) => m,
-            None => {
-                error!(
-                    session_key = %session_key,
-                    job_id = %job_id,
-                    "no default agent registered for user role — cannot run scheduled task"
-                );
-                return;
-            }
+        // 2. Build a dedicated ScheduledJobAgent manifest with job context
+        //    baked into the system prompt.
+        let manifest = AgentManifest {
+            name:               "scheduled_job".to_string(),
+            role:               AgentRole::Worker,
+            description:        "Executes a scheduled task and summarizes the result".to_string(),
+            model:              None,
+            system_prompt:      format!(
+                "You are a scheduled task executor.\n\n\
+                 ## Task\n\
+                 Job ID: {job_id}\n\
+                 Schedule: {trigger_summary}\n\
+                 Task: {message}\n\n\
+                 ## Instructions\n\
+                 1. Execute the task described above using available tools.\n\
+                 2. After completion, provide a brief summary of what you did and the outcome.\n",
+                message = job.message,
+            ),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(15),
+            tools:              vec![],
+            max_children:       Some(0),
+            max_context_tokens: None,
+            priority:           Priority::default(),
+            metadata:           serde_json::Value::Null,
+            sandbox:            None,
         };
 
-        let principal = crate::identity::Principal::lookup(user.0.clone());
-        let spawn_result = self
+        // 3. Spawn the agent.
+        let principal = crate::identity::Principal::lookup(job.principal.user_id.0.clone());
+        match self
             .handle_spawn_agent(
                 manifest,
-                msg.content.as_text(),
+                job.message.clone(),
                 principal,
-                None,
-                None,
-                Some(session_key),
-                None,
+                None,              // no parent
+                None,              // no resume
+                Some(session_key), // use the job's session key
+                None,              // no origin endpoint
             )
-            .await;
-
-        if let Err(e) = spawn_result {
-            error!(
-                session_key = %session_key,
-                job_id = %job_id,
-                error = %e,
-                "failed to spawn agent for scheduled task"
-            );
+            .await
+        {
+            Ok(spawned_key) => {
+                info!(
+                    job_id = %job_id,
+                    session_key = %spawned_key,
+                    "scheduled job agent spawned"
+                );
+                // TODO: ScheduledTaskDone(success: true) should be sent when
+                // the agent turn completes. This requires propagating job
+                // metadata through TurnCompleted, which is a larger change.
+            }
+            Err(e) => {
+                error!(
+                    job_id = %job_id,
+                    error = %e,
+                    "failed to spawn scheduled job agent"
+                );
+                // Publish ScheduledTaskDone with failure.
+                self.syscall
+                    .event_bus()
+                    .publish(KernelNotification::ScheduledTaskDone {
+                        job_id:          job_id.clone(),
+                        session_key:     session_key.clone(),
+                        message:         job.message.clone(),
+                        trigger_summary: trigger_summary.clone(),
+                        success:         false,
+                        timestamp:       jiff::Timestamp::now(),
+                    })
+                    .await;
+            }
         }
     }
 
