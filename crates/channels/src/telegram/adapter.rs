@@ -99,6 +99,7 @@ const STREAM_SPLIT_THRESHOLD: usize = 3800;
 struct ToolProgress {
     id:       String,
     name:     String,
+    summary:  String,
     finished: bool,
     success:  bool,
 }
@@ -127,29 +128,26 @@ fn render_progress(tools: &[ToolProgress]) -> String {
     tools
         .iter()
         .map(|t| {
+            let label = if t.summary.is_empty() {
+                t.name.clone()
+            } else {
+                format!("{}: {}", t.name, t.summary)
+            };
             if t.finished {
                 if t.success {
-                    format!("✅ {}", t.name)
+                    format!("\u{2705} {label}")
                 } else {
-                    format!("❌ {}", t.name)
+                    format!("\u{274c} {label}")
                 }
             } else {
-                format!("🔧 {}...", t.name)
+                format!("\u{1f527} {label}...")
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// Map raw tool names to shorter, human-friendly display names.
-fn tool_display_name(raw: &str) -> &str {
-    match raw {
-        "shell_execute" => "shell",
-        "web_search" => "search",
-        "web_fetch" => "fetch",
-        other => other,
-    }
-}
+use crate::tool_display::{tool_arguments_summary, tool_display_name};
 
 /// Per-chat streaming state for progressive `editMessageText` updates.
 struct StreamingMessage {
@@ -1141,11 +1139,13 @@ fn spawn_stream_forwarder(
                                 }
                             }
                         }
-                        Ok(StreamEvent::ToolCallStart { name, id, .. }) => {
+                        Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
                             let display = tool_display_name(&name).to_owned();
+                            let summary = tool_arguments_summary(&name, &arguments);
                             progress.tools.push(ToolProgress {
                                 id,
                                 name: display,
+                                summary,
                                 finished: false,
                                 success: false,
                             });

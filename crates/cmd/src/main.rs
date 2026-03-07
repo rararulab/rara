@@ -22,6 +22,7 @@ mod top;
 
 use rara_app::{AppConfig, StartOptions, run as run_app, start_with_options};
 use rara_channels::terminal::{CliEvent, TerminalAdapter};
+use rara_channels::tool_display::{tool_arguments_summary, tool_display_name};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     identity::UserId,
@@ -367,12 +368,16 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
     match event {
         StreamEvent::TextDelta { text: t } => CliEvent::TextDelta { text: t },
         StreamEvent::ReasoningDelta { text: t } => CliEvent::ReasoningDelta { text: t },
-        StreamEvent::ToolCallStart { name, .. } => CliEvent::ToolCallStart { name },
-        StreamEvent::ToolCallEnd { error, .. } => {
+        StreamEvent::ToolCallStart { name, arguments, .. } => {
+            let summary = tool_arguments_summary(&name, &arguments);
+            let display = tool_display_name(&name).to_owned();
+            CliEvent::ToolCallStart { name: display, summary }
+        }
+        StreamEvent::ToolCallEnd { error, success, result_preview, .. } => {
             if let Some(ref err) = error {
                 eprintln!("\x1b[31m[tool error] {}\x1b[0m", err);
             }
-            CliEvent::ToolCallEnd
+            CliEvent::ToolCallEnd { success, result_preview }
         }
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
         StreamEvent::TurnMetrics {
@@ -481,11 +486,27 @@ async fn run_repl(
                         eprint!("\x1b[2m{}\x1b[0m", text);
                         let _ = std::io::stderr().flush();
                     }
-                    Some(CliEvent::ToolCallStart { name }) => {
-                        eprintln!("\x1b[33m[tool] {}\x1b[0m", name);
+                    Some(CliEvent::ToolCallStart { name, summary }) => {
+                        if summary.is_empty() {
+                            eprintln!("\x1b[33m[tool] {}...\x1b[0m", name);
+                        } else {
+                            eprintln!("\x1b[33m[tool] {}: {}\x1b[0m", name, summary);
+                        }
                     }
-                    Some(CliEvent::ToolCallEnd) => {
-                        eprintln!("\x1b[33m[tool] done\x1b[0m");
+                    Some(CliEvent::ToolCallEnd { success, result_preview }) => {
+                        if !success {
+                            eprintln!("\x1b[31m[tool] failed\x1b[0m");
+                        } else if !result_preview.is_empty() {
+                            let first_line = result_preview.lines().next().unwrap_or(&result_preview);
+                            let display: String = first_line.chars().take(100).collect();
+                            if first_line.chars().count() > 100 {
+                                eprintln!("\x1b[33m[tool] done: {}\u{2026}\x1b[0m", display);
+                            } else {
+                                eprintln!("\x1b[33m[tool] done: {}\x1b[0m", display);
+                            }
+                        } else {
+                            eprintln!("\x1b[33m[tool] done\x1b[0m");
+                        }
                     }
                     Some(CliEvent::Progress { text }) => {
                         if !text.is_empty() {

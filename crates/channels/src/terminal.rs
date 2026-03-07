@@ -41,9 +41,9 @@ pub enum CliEvent {
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
     /// A tool call has started.
-    ToolCallStart { name: String },
+    ToolCallStart { name: String, summary: String },
     /// A tool call has finished.
-    ToolCallEnd,
+    ToolCallEnd { success: bool, result_preview: String },
     /// Progress stage update.
     Progress { text: String },
     /// Error notification.
