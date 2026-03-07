@@ -18,6 +18,9 @@ pub enum SymphonyError {
     #[snafu(display("hook failed: {hook} — {message}"))]
     Hook { hook: String, message: String },
 
+    #[snafu(display("linear API error: {message}"))]
+    Linear { message: String },
+
     #[snafu(display("config error: {message}"))]
     Config { message: String },
 
