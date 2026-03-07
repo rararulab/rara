@@ -44,7 +44,9 @@ use super::AppConfig;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_provider: Option<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub providers:        HashMap<String, ProviderConfig>,
 }
 
@@ -57,13 +59,17 @@ pub struct LlmConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url:        Option<String>,
     /// Required for all providers. For Ollama, use any placeholder value (e.g.
     /// `"ollama"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key:         Option<String>,
     /// Default model for this provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model:   Option<String>,
     /// Fallback models to try when the default is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_models: Option<Vec<String>>,
 }
 
@@ -75,9 +81,13 @@ pub struct ProviderConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bot_token:               Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_id:                 Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_group_chat_id:   Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_channel_id: Option<String>,
 }
 
@@ -98,10 +108,15 @@ pub struct TelegramConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KnowledgeConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_model:      Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_dimensions: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_top_k:         Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extractor_model:      Option<String>,
 }
 

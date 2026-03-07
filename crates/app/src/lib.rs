@@ -65,25 +65,26 @@ pub struct AppConfig {
     #[serde(default)]
     pub telemetry:   TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_token: Option<String>,
     /// LLM provider configuration (seeded to settings store at startup).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm:         Option<flatten::LlmConfig>,
     /// Telegram bot configuration (seeded to settings store at startup).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram:    Option<flatten::TelegramConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
     /// Mita proactive agent configuration (required).
     pub mita:        MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knowledge:   Option<flatten::KnowledgeConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:     Option<GatewayConfig>,
     /// Symphony autonomous coding agent orchestrator (optional).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symphony:    Option<rara_symphony::SymphonyConfig>,
 }
 
@@ -91,7 +92,10 @@ pub struct AppConfig {
 #[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct MitaConfig {
     /// Heartbeat interval (e.g. "30m", "1800s").
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub heartbeat_interval: Duration,
 }
 
@@ -99,13 +103,21 @@ pub struct MitaConfig {
 #[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// Upstream check interval (e.g. "5m", "300s").
-    #[serde(default = "gateway_defaults::check_interval", deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        default = "gateway_defaults::check_interval",
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub check_interval:      Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
     pub health_timeout:      u64,
     /// HTTP health poll interval (e.g. "2s").
-    #[serde(default = "gateway_defaults::health_poll_interval", deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        default = "gateway_defaults::health_poll_interval",
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub health_poll_interval: Duration,
     /// Max consecutive restart failures before giving up.
     #[serde(default = "gateway_defaults::max_restart_attempts")]

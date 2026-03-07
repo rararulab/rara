@@ -227,3 +227,96 @@ impl ConfigFileSync {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::AppConfig;
+
+    const TEST_YAML: &str = r#"
+users:
+  - name: "testuser"
+    role: root
+    platforms:
+      - type: telegram
+        user_id: "12345"
+
+http:
+  bind_address: "127.0.0.1:25555"
+
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+
+mita:
+  heartbeat_interval: "30m"
+
+llm:
+  default_provider: "ollama"
+  providers:
+    ollama:
+      base_url: "http://localhost:11434/v1"
+      api_key: "ollama"
+      default_model: "qwen3:32b"
+      fallback_models:
+        - "qwen3:14b"
+        - "llama3:8b"
+
+telegram:
+  bot_token: "123:ABC"
+  chat_id: "456"
+  notification_channel_id: "-100"
+
+knowledge:
+  embedding_model: "text-embedding-3-small"
+  embedding_dimensions: 1536
+  search_top_k: 10
+  similarity_threshold: 0.85
+  extractor_model: "gpt-4o-mini"
+
+gateway:
+  repo_url: "https://github.com/example/repo"
+"#;
+
+    #[test]
+    fn appconfig_yaml_roundtrip() {
+        let config: AppConfig = serde_yaml::from_str(TEST_YAML).expect("TEST_YAML should parse");
+        let serialized = serde_yaml::to_string(&config).expect("AppConfig should serialize");
+        let reparsed: AppConfig =
+            serde_yaml::from_str(&serialized).expect("serialized YAML should reparse");
+
+        // Spot-check key fields survived roundtrip
+        assert_eq!(config.http.bind_address, reparsed.http.bind_address);
+        assert_eq!(
+            config.llm.as_ref().and_then(|l| l.default_provider.as_deref()),
+            reparsed.llm.as_ref().and_then(|l| l.default_provider.as_deref()),
+        );
+        assert_eq!(
+            config.telegram.as_ref().and_then(|t| t.bot_token.as_deref()),
+            reparsed.telegram.as_ref().and_then(|t| t.bot_token.as_deref()),
+        );
+
+        // Duration roundtrip
+        assert_eq!(
+            config.mita.heartbeat_interval,
+            reparsed.mita.heartbeat_interval,
+        );
+
+        // Gateway duration roundtrip
+        let gw = config.gateway.as_ref().unwrap();
+        let gw2 = reparsed.gateway.as_ref().unwrap();
+        assert_eq!(gw.check_interval, gw2.check_interval);
+        assert_eq!(gw.health_poll_interval, gw2.health_poll_interval);
+
+        // Knowledge roundtrip
+        assert_eq!(
+            config.knowledge.as_ref().and_then(|k| k.embedding_model.as_deref()),
+            reparsed.knowledge.as_ref().and_then(|k| k.embedding_model.as_deref()),
+        );
+
+        // None fields should stay None
+        assert_eq!(
+            config.telegram.as_ref().and_then(|t| t.allowed_group_chat_id.as_deref()),
+            reparsed.telegram.as_ref().and_then(|t| t.allowed_group_chat_id.as_deref()),
+        );
+    }
+}
