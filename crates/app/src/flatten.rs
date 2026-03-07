@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::AppConfig;
 
@@ -41,10 +41,12 @@ use super::AppConfig;
 ///         - "qwen3:14b"
 ///         - "llama3:8b"
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_provider: Option<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub providers:        HashMap<String, ProviderConfig>,
 }
 
@@ -54,16 +56,20 @@ pub struct LlmConfig {
 /// `OpenAiDriver::resolve_config()`. For local providers like Ollama
 /// that don't validate API keys, set `api_key` to any non-empty
 /// placeholder (e.g. `"ollama"`).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url:        Option<String>,
     /// Required for all providers. For Ollama, use any placeholder value (e.g.
     /// `"ollama"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key:         Option<String>,
     /// Default model for this provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model:   Option<String>,
     /// Fallback models to try when the default is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_models: Option<Vec<String>>,
 }
 
@@ -72,12 +78,16 @@ pub struct ProviderConfig {
 // ---------------------------------------------------------------------------
 
 /// Telegram bot configuration section in config.yaml.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bot_token:               Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_id:                 Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_group_chat_id:   Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_channel_id: Option<String>,
 }
 
@@ -95,13 +105,18 @@ pub struct TelegramConfig {
 ///   similarity_threshold: 0.85
 ///   extractor_model: "gpt-4o-mini"
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KnowledgeConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_model:      Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_dimensions: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_top_k:         Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extractor_model:      Option<String>,
 }
 
@@ -180,5 +195,203 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
     }
     if let Some(ref v) = k.extractor_model {
         out.push((keys::KNOWLEDGE_EXTRACTOR_MODEL.into(), v.clone()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unflatten logic
+// ---------------------------------------------------------------------------
+
+/// Reconstruct config section structs from flat settings KV pairs.
+///
+/// This is the inverse of [`flatten_config_sections()`]. Keys without
+/// a recognised prefix are ignored.
+pub fn unflatten_from_settings(
+    pairs: &HashMap<String, String>,
+) -> (Option<LlmConfig>, Option<TelegramConfig>, Option<KnowledgeConfig>) {
+    (unflatten_llm(pairs), unflatten_telegram(pairs), unflatten_knowledge(pairs))
+}
+
+fn unflatten_llm(pairs: &HashMap<String, String>) -> Option<LlmConfig> {
+    let mut found = false;
+    let mut config = LlmConfig::default();
+
+    if let Some(v) = pairs.get("llm.default_provider") {
+        config.default_provider = Some(v.clone());
+        found = true;
+    }
+
+    // Collect provider names from keys like "llm.providers.{name}.{field}"
+    let prefix = "llm.providers.";
+    let mut provider_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for key in pairs.keys() {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            if let Some(dot_pos) = rest.find('.') {
+                provider_names.insert(rest[..dot_pos].to_string());
+            }
+        }
+    }
+
+    for name in &provider_names {
+        found = true;
+        let p = ProviderConfig {
+            base_url:        pairs.get(&format!("{prefix}{name}.base_url")).cloned(),
+            api_key:         pairs.get(&format!("{prefix}{name}.api_key")).cloned(),
+            default_model:   pairs.get(&format!("{prefix}{name}.default_model")).cloned(),
+            fallback_models: pairs
+                .get(&format!("{prefix}{name}.fallback_models"))
+                .map(|v| v.split(',').map(|s| s.trim().to_string()).collect()),
+        };
+        config.providers.insert(name.clone(), p);
+    }
+
+    found.then_some(config)
+}
+
+fn unflatten_telegram(pairs: &HashMap<String, String>) -> Option<TelegramConfig> {
+    let bot_token = pairs.get("telegram.bot_token").cloned();
+    let chat_id = pairs.get("telegram.chat_id").cloned();
+    let allowed_group_chat_id = pairs.get("telegram.allowed_group_chat_id").cloned();
+    let notification_channel_id = pairs.get("telegram.notification_channel_id").cloned();
+
+    if bot_token.is_none()
+        && chat_id.is_none()
+        && allowed_group_chat_id.is_none()
+        && notification_channel_id.is_none()
+    {
+        return None;
+    }
+
+    Some(TelegramConfig {
+        bot_token,
+        chat_id,
+        allowed_group_chat_id,
+        notification_channel_id,
+    })
+}
+
+fn unflatten_knowledge(pairs: &HashMap<String, String>) -> Option<KnowledgeConfig> {
+    use rara_domain_shared::settings::keys;
+
+    let embedding_model = pairs.get(keys::KNOWLEDGE_EMBEDDING_MODEL).cloned();
+    let embedding_dimensions = pairs
+        .get(keys::KNOWLEDGE_EMBEDDING_DIMENSIONS)
+        .and_then(|v| v.parse::<u32>().ok());
+    let search_top_k = pairs
+        .get(keys::KNOWLEDGE_SEARCH_TOP_K)
+        .and_then(|v| v.parse::<u32>().ok());
+    let similarity_threshold = pairs
+        .get(keys::KNOWLEDGE_SIMILARITY_THRESHOLD)
+        .and_then(|v| v.parse::<f32>().ok());
+    let extractor_model = pairs.get(keys::KNOWLEDGE_EXTRACTOR_MODEL).cloned();
+
+    if embedding_model.is_none()
+        && embedding_dimensions.is_none()
+        && search_top_k.is_none()
+        && similarity_threshold.is_none()
+        && extractor_model.is_none()
+    {
+        return None;
+    }
+
+    Some(KnowledgeConfig {
+        embedding_model,
+        embedding_dimensions,
+        search_top_k,
+        similarity_threshold,
+        extractor_model,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_flatten_unflatten() {
+        let llm = LlmConfig {
+            default_provider: Some("ollama".into()),
+            providers: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "ollama".into(),
+                    ProviderConfig {
+                        base_url:        Some("http://localhost:11434/v1".into()),
+                        api_key:         Some("ollama".into()),
+                        default_model:   Some("qwen3:32b".into()),
+                        fallback_models: Some(vec!["qwen3:14b".into(), "llama3:8b".into()]),
+                    },
+                );
+                m
+            },
+        };
+
+        let telegram = TelegramConfig {
+            bot_token:               Some("123:ABC".into()),
+            chat_id:                 Some("456".into()),
+            allowed_group_chat_id:   Some("-789".into()),
+            notification_channel_id: Some("-100".into()),
+        };
+
+        let knowledge = KnowledgeConfig {
+            embedding_model:      Some("text-embedding-3-small".into()),
+            embedding_dimensions: Some(1536),
+            search_top_k:         Some(10),
+            similarity_threshold: Some(0.85),
+            extractor_model:      Some("gpt-4o-mini".into()),
+        };
+
+        // Flatten
+        let mut flat = Vec::new();
+        flatten_llm(&llm, &mut flat);
+        flatten_telegram(&telegram, &mut flat);
+        flatten_knowledge(&knowledge, &mut flat);
+        let map: HashMap<String, String> = flat.into_iter().collect();
+
+        // Unflatten
+        let (got_llm, got_tg, got_know) = unflatten_from_settings(&map);
+
+        // --- LLM ---
+        let got_llm = got_llm.expect("llm should be Some");
+        assert_eq!(got_llm.default_provider, llm.default_provider);
+        let got_p = got_llm.providers.get("ollama").expect("ollama provider");
+        let exp_p = llm.providers.get("ollama").unwrap();
+        assert_eq!(got_p.base_url, exp_p.base_url);
+        assert_eq!(got_p.api_key, exp_p.api_key);
+        assert_eq!(got_p.default_model, exp_p.default_model);
+        assert_eq!(got_p.fallback_models, exp_p.fallback_models);
+
+        // --- Telegram ---
+        let got_tg = got_tg.expect("telegram should be Some");
+        assert_eq!(got_tg.bot_token, telegram.bot_token);
+        assert_eq!(got_tg.chat_id, telegram.chat_id);
+        assert_eq!(got_tg.allowed_group_chat_id, telegram.allowed_group_chat_id);
+        assert_eq!(
+            got_tg.notification_channel_id,
+            telegram.notification_channel_id
+        );
+
+        // --- Knowledge ---
+        let got_know = got_know.expect("knowledge should be Some");
+        assert_eq!(got_know.embedding_model, knowledge.embedding_model);
+        assert_eq!(
+            got_know.embedding_dimensions,
+            knowledge.embedding_dimensions
+        );
+        assert_eq!(got_know.search_top_k, knowledge.search_top_k);
+        assert_eq!(
+            got_know.similarity_threshold,
+            knowledge.similarity_threshold
+        );
+        assert_eq!(got_know.extractor_model, knowledge.extractor_model);
+    }
+
+    #[test]
+    fn unflatten_empty_map_returns_none() {
+        let map = HashMap::new();
+        let (llm, tg, know) = unflatten_from_settings(&map);
+        assert!(llm.is_none());
+        assert!(tg.is_none());
+        assert!(know.is_none());
     }
 }

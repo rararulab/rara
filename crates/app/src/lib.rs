@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod boot;
+pub mod config_sync;
 pub mod flatten;
 pub mod gateway;
 mod mita;
@@ -31,7 +32,7 @@ use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -50,7 +51,7 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 ///
 /// For runtime-changeable values (OpenRouter key, Telegram token, …) see
 /// `rara_backend_admin::settings::SettingsSvc`.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 #[builder(on(String, into))]
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
@@ -64,47 +65,59 @@ pub struct AppConfig {
     #[serde(default)]
     pub telemetry:   TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_token: Option<String>,
     /// LLM provider configuration (seeded to settings store at startup).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm:         Option<flatten::LlmConfig>,
     /// Telegram bot configuration (seeded to settings store at startup).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram:    Option<flatten::TelegramConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
     /// Mita proactive agent configuration (required).
     pub mita:        MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knowledge:   Option<flatten::KnowledgeConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:     Option<GatewayConfig>,
     /// Symphony autonomous coding agent orchestrator (optional).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symphony:    Option<rara_symphony::SymphonyConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct MitaConfig {
     /// Heartbeat interval (e.g. "30m", "1800s").
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub heartbeat_interval: Duration,
 }
 
 /// Configuration for the gateway supervisor.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// Upstream check interval (e.g. "5m", "300s").
-    #[serde(default = "gateway_defaults::check_interval", deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        default = "gateway_defaults::check_interval",
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub check_interval:      Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
     pub health_timeout:      u64,
     /// HTTP health poll interval (e.g. "2s").
-    #[serde(default = "gateway_defaults::health_poll_interval", deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        default = "gateway_defaults::health_poll_interval",
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub health_poll_interval: Duration,
     /// Max consecutive restart failures before giving up.
     #[serde(default = "gateway_defaults::max_restart_attempts")]
@@ -130,7 +143,7 @@ mod gateway_defaults {
 }
 
 /// General OTLP telemetry configuration.
-#[derive(Debug, Clone, Default, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, Default, bon::Builder, Serialize, Deserialize)]
 pub struct TelemetryConfig {
     /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
     #[serde(default)]
@@ -222,17 +235,24 @@ pub async fn start_with_options(
         rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
             .await
             .whatever_context("Failed to initialize runtime settings")?;
-    let config_defaults = flatten::flatten_config_sections(&config);
-    if !config_defaults.is_empty() {
-        settings_svc
-            .seed_defaults(config_defaults)
-            .await
-            .whatever_context("Failed to seed config defaults")?;
-    }
 
     let settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider> =
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
+
+    // Resolve config file path (same logic as AppConfig::new)
+    let config_path = {
+        let mut path = std::env::current_dir().unwrap_or_default();
+        path.push("config.yaml");
+        path
+    };
+    let config_file_sync = config_sync::ConfigFileSync::new(
+        settings_provider.clone(),
+        config.clone(),
+        config_path,
+    )
+    .await
+    .whatever_context("Failed to initialize config file sync")?;
 
     let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
         .await
@@ -302,6 +322,15 @@ pub async fn start_with_options(
     );
 
     let cancellation_token = CancellationToken::new();
+
+    // Start bidirectional config <-> settings sync
+    {
+        let cancel = cancellation_token.clone();
+        tokio::spawn(async move {
+            config_file_sync.start(cancel).await;
+        });
+    }
+
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
     // Wire DispatchRaraTool with the now-available KernelHandle.

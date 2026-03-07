@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bon::Builder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 fn default_workflow_file() -> String {
     "WORKFLOW.md".to_owned()
@@ -20,7 +20,7 @@ fn default_max_concurrent_agents() -> usize {
     2
 }
 
-#[derive(Debug, Clone, Builder, Deserialize)]
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct SymphonyConfig {
     /// Whether the symphony system is enabled.
     #[serde(default)]
@@ -53,7 +53,7 @@ pub struct SymphonyConfig {
     pub repos: Vec<RepoConfig>,
 }
 
-#[derive(Debug, Clone, Builder, Deserialize)]
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// The command to invoke the coding agent.
     #[serde(default = "default_command")]
@@ -76,7 +76,7 @@ pub struct AgentConfig {
     pub turn_timeout: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Builder, Deserialize)]
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct RepoConfig {
     /// Display name for the repository.
     pub name: String,
@@ -105,7 +105,7 @@ pub struct RepoConfig {
     pub hooks: HooksConfig,
 }
 
-#[derive(Debug, Clone, Default, Builder, Deserialize)]
+#[derive(Debug, Clone, Default, Builder, Serialize, Deserialize)]
 pub struct HooksConfig {
     /// Script to run after worktree creation.
     pub after_create: Option<String>,

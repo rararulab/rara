@@ -20,7 +20,7 @@ use crate::{db::DBStore, err::Result};
 ///
 /// The database URL is determined by the caller (typically from
 /// `rara_paths::database_dir()`).  Migrations are embedded at compile time.
-#[derive(Debug, Clone, bon::Builder, serde::Deserialize)]
+#[derive(Debug, Clone, bon::Builder, serde::Serialize, serde::Deserialize)]
 pub struct DatabaseConfig {
     /// Maximum number of connections in the pool.
     #[serde(default = "default_max_connections")]
