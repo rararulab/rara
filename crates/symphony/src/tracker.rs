@@ -345,6 +345,12 @@ impl IssueTracker for LinearIssueTracker {
             }
         "#;
 
+        tracing::info!(
+            project_slug = %self.project_slug,
+            active_states = ?self.active_states,
+            "linear: fetching candidate issues"
+        );
+
         let mut all_issues = Vec::new();
         let mut after: Option<String> = None;
 
@@ -366,6 +372,12 @@ impl IssueTracker for LinearIssueTracker {
                     }
                     .build()
                 })?;
+
+            tracing::debug!(
+                page_size = conn.nodes.len(),
+                has_next_page = conn.page_info.has_next_page,
+                "linear: fetched page of issues"
+            );
 
             for node in &conn.nodes {
                 // Extract label names.
@@ -390,7 +402,10 @@ impl IssueTracker for LinearIssueTracker {
                             .unwrap_or("?");
                         tracing::warn!(
                             identifier = ident,
-                            "no matching repo label, skipping issue"
+                            labels = ?labels,
+                            prefix = %self.repo_label_prefix,
+                            configured_repos = ?self.repos,
+                            "linear: no matching repo label, skipping issue"
                         );
                         continue;
                     }
@@ -412,6 +427,15 @@ impl IssueTracker for LinearIssueTracker {
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse().ok())
                     .unwrap_or_default();
+
+                tracing::debug!(
+                    identifier = %identifier,
+                    title = %node.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                    repo = %repo,
+                    priority = linear_priority,
+                    labels = ?labels,
+                    "linear: matched issue to repo"
+                );
 
                 all_issues.push(TrackedIssue {
                     id: node
@@ -445,11 +469,22 @@ impl IssueTracker for LinearIssueTracker {
             }
         }
 
+        tracing::info!(
+            total = all_issues.len(),
+            "linear: fetch complete"
+        );
+
         sort_issues(&mut all_issues);
         Ok(all_issues)
     }
 
     async fn fetch_issue_state(&self, issue: &TrackedIssue) -> Result<IssueState> {
+        tracing::debug!(
+            issue_id = %issue.id,
+            identifier = %issue.identifier,
+            "linear: checking issue state"
+        );
+
         const QUERY: &str = r#"
             query($id: String!) {
                 issue(id: $id) {
@@ -458,7 +493,8 @@ impl IssueTracker for LinearIssueTracker {
             }
         "#;
 
-        let variables = serde_json::json!({ "id": &issue.id });
+        let original_issue_id = &issue.id;
+        let variables = serde_json::json!({ "id": original_issue_id });
 
         let issue: serde_json::Value =
             self.client.execute(QUERY, variables, "issue").await.map_err(|e| {
@@ -473,6 +509,12 @@ impl IssueTracker for LinearIssueTracker {
             .and_then(|s| s.get("name"))
             .and_then(|n| n.as_str())
             .unwrap_or("");
+
+        tracing::debug!(
+            issue_id = %original_issue_id,
+            state = state_name,
+            "linear: issue state resolved"
+        );
 
         let is_terminal = self
             .terminal_states

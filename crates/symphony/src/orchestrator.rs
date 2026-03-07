@@ -153,6 +153,17 @@ impl Orchestrator {
 
         let issues = self.tracker.fetch_active_issues().await?;
 
+        let new_count = issues.iter()
+            .filter(|i| !self.running.contains_key(&i.id) && !self.claimed.contains(&i.id))
+            .count();
+        info!(
+            total = issues.len(),
+            new = new_count,
+            running = self.running.len(),
+            claimed = self.claimed.len(),
+            "poll: fetched issues"
+        );
+
         for issue in issues {
             if self.running.contains_key(&issue.id) || self.claimed.contains(&issue.id) {
                 continue;
@@ -190,6 +201,16 @@ impl Orchestrator {
         let workspace =
             self.workspace_mgr
                 .ensure_worktree(&repo_name, issue.number, &issue.title)?;
+
+        info!(
+            issue_id = %issue.id,
+            identifier = %issue.identifier,
+            repo = %issue.repo,
+            title = %issue.title,
+            workspace = %workspace.path.display(),
+            branch = %workspace.branch,
+            "dispatching agent"
+        );
 
         // Run lifecycle hooks.
         if let Some(hooks) = self.workspace_mgr.hooks_for(&repo_name) {
