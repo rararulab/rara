@@ -128,6 +128,7 @@ members = [
     "crates/integrations/composio",
     "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
+    "crates/symphony",
 ]
 
 [workspace.dependencies]
