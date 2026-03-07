@@ -16,6 +16,8 @@ pub enum IssueState {
 pub struct TrackedIssue {
     /// Unique identifier (owner/repo#number).
     pub id: String,
+    /// Human-readable identifier. GitHub: "42", Linear: "RAR-42".
+    pub identifier: String,
     /// Repository name (owner/repo).
     pub repo: String,
     /// Issue number.

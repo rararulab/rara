@@ -99,6 +99,7 @@ impl GitHubIssueTracker {
                 let priority = derive_priority(&labels);
                 TrackedIssue {
                     id: format!("{}#{}", repo.name, item.number),
+                    identifier: item.number.to_string(),
                     repo: repo.name.clone(),
                     number: item.number,
                     title: item.title,
@@ -308,6 +309,7 @@ mod tests {
     ) -> TrackedIssue {
         TrackedIssue {
             id: id.to_owned(),
+            identifier: number.to_string(),
             repo: "test/repo".to_owned(),
             number,
             title: format!("Issue {number}"),

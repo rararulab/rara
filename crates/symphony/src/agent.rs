@@ -142,6 +142,7 @@ mod tests {
     fn sample_issue() -> TrackedIssue {
         TrackedIssue {
             id: "owner/repo#42".to_owned(),
+            identifier: "42".to_owned(),
             repo: "owner/repo".to_owned(),
             number: 42,
             title: "Add widget support".to_owned(),

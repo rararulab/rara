@@ -127,6 +127,7 @@ pub fn render_prompt(template: &str, ctx: &PromptContext<'_>) -> Result<String> 
     result = result.replace("{{issue.labels}}", &ctx.issue.labels.join(", "));
     result = result.replace("{{issue.repo}}", &ctx.issue.repo);
     result = result.replace("{{issue.id}}", &ctx.issue.id);
+    result = result.replace("{{issue.identifier}}", &ctx.issue.identifier);
     result = result.replace(
         "{{attempt}}",
         &ctx.attempt
@@ -178,6 +179,7 @@ mod tests {
     fn sample_issue() -> TrackedIssue {
         TrackedIssue {
             id: "owner/repo#42".to_owned(),
+            identifier: "42".to_owned(),
             repo: "owner/repo".to_owned(),
             number: 42,
             title: "Add widget support".to_owned(),
