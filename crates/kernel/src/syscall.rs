@@ -42,7 +42,7 @@ use crate::{
     security::SecurityRef,
     session::{SessionKey, SessionTable},
     tape_tool::TapeTool,
-    tool::ToolRegistryRef,
+    tool::{DynamicToolProviderRef, ToolRegistryRef},
 };
 
 /// Dispatches syscalls from session-scoped operations to the appropriate kernel
@@ -66,7 +66,9 @@ pub(crate) struct SyscallDispatcher {
     /// Kernel configuration.
     config:          KernelConfig,
     /// Tape service for session message persistence (passed to SyscallTool).
-    tape_service:    TapeService,
+    tape_service:            TapeService,
+    /// Optional provider of dynamically discovered tools (e.g. MCP servers).
+    dynamic_tool_provider:   Option<DynamicToolProviderRef>,
 }
 
 impl SyscallDispatcher {
@@ -79,6 +81,7 @@ impl SyscallDispatcher {
         event_bus: NotificationBusRef,
         config: KernelConfig,
         tape_service: TapeService,
+        dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         Self {
             shared_kv,
@@ -88,6 +91,7 @@ impl SyscallDispatcher {
             event_bus,
             config,
             tape_service,
+            dynamic_tool_provider,
         }
     }
 
@@ -260,6 +264,12 @@ impl SyscallDispatcher {
                     registry.register(Arc::new(syscall_tool));
                     let tape_tool = TapeTool::new(self.tape_service.clone(), tape_name);
                     registry.register(Arc::new(tape_tool));
+                }
+                // Inject dynamic tools (e.g. MCP server tools).
+                if let Some(ref provider) = self.dynamic_tool_provider {
+                    for tool in provider.tools().await {
+                        registry.register(tool);
+                    }
                 }
                 let _ = reply_tx.send(Arc::new(registry));
             }

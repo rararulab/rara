@@ -303,6 +303,10 @@ pub async fn start_with_options(
         io.register_adapter(ChannelType::Cli, cli.clone() as Arc<dyn ChannelAdapter>);
     }
 
+    let mcp_tool_provider: Option<rara_kernel::tool::DynamicToolProviderRef> = Some(Arc::new(
+        boot::McpDynamicToolProvider::new(rara.mcp_manager.clone()),
+    ));
+
     let kernel = rara_kernel::kernel::Kernel::new(
         Default::default(),
         rara.driver_registry.clone(),
@@ -319,6 +323,7 @@ pub async fn start_with_options(
         )),
         io,
         rara.knowledge_service.clone(),
+        mcp_tool_provider,
     );
 
     let cancellation_token = CancellationToken::new();

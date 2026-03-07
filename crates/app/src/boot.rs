@@ -521,6 +521,39 @@ async fn init_mcp_manager(
 }
 
 // =========================================================================
+// McpDynamicToolProvider
+// =========================================================================
+
+/// Bridges [`McpManager`](rara_mcp::manager::mgr::McpManager) into the
+/// kernel's [`DynamicToolProvider`] trait so that MCP tools are injected
+/// into every `GetToolRegistry` syscall at runtime.
+pub(crate) struct McpDynamicToolProvider {
+    manager: rara_mcp::manager::mgr::McpManager,
+}
+
+impl McpDynamicToolProvider {
+    pub fn new(manager: rara_mcp::manager::mgr::McpManager) -> Self {
+        Self { manager }
+    }
+}
+
+#[async_trait]
+impl rara_kernel::tool::DynamicToolProvider for McpDynamicToolProvider {
+    async fn tools(&self) -> Vec<rara_kernel::tool::AgentToolRef> {
+        match rara_mcp::tool_bridge::McpToolBridge::from_manager(self.manager.clone()).await {
+            Ok(bridges) => bridges
+                .into_iter()
+                .map(|b| Arc::new(b) as rara_kernel::tool::AgentToolRef)
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load MCP dynamic tools");
+                Vec::new()
+            }
+        }
+    }
+}
+
+// =========================================================================
 // Private: Composio auth provider
 // =========================================================================
 

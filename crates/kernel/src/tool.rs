@@ -19,6 +19,18 @@ use async_trait::async_trait;
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
+/// Provider of tools that are discovered at runtime (e.g. MCP servers).
+/// Implementors are called on every `GetToolRegistry` syscall to inject
+/// dynamic tools into the registry.
+#[async_trait]
+pub trait DynamicToolProvider: Send + Sync {
+    /// Return all currently available dynamic tools.
+    async fn tools(&self) -> Vec<AgentToolRef>;
+}
+
+/// Shared reference to a dynamic tool provider.
+pub type DynamicToolProviderRef = Arc<dyn DynamicToolProvider>;
+
 /// Shared reference to the [`ToolRegistry`].
 pub type ToolRegistryRef = Arc<ToolRegistry>;
 

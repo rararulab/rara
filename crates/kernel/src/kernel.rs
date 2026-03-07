@@ -65,7 +65,7 @@ use crate::{
         Signal,
     },
     syscall::SyscallDispatcher,
-    tool::ToolRegistryRef,
+    tool::{DynamicToolProviderRef, ToolRegistryRef},
 };
 
 // ---------------------------------------------------------------------------
@@ -165,6 +165,7 @@ impl Kernel {
         security: SecurityRef,
         io: IOSubsystem,
         knowledge: crate::memory::knowledge::KnowledgeServiceRef,
+        dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
 
@@ -194,6 +195,7 @@ impl Kernel {
             event_bus,
             config.clone(),
             tape_service.clone(),
+            dynamic_tool_provider,
         );
 
         Self {
