@@ -15,7 +15,7 @@ pub trait IssueTracker: Send + Sync {
     async fn fetch_active_issues(&self) -> Result<Vec<TrackedIssue>>;
 
     /// Fetch the current state of a single issue.
-    async fn fetch_issue_state(&self, repo: &str, number: u64) -> Result<IssueState>;
+    async fn fetch_issue_state(&self, issue: &TrackedIssue) -> Result<IssueState>;
 }
 
 /// GitHub-backed issue tracker using the REST API.
@@ -138,12 +138,14 @@ impl IssueTracker for GitHubIssueTracker {
         Ok(all_issues)
     }
 
-    async fn fetch_issue_state(&self, repo: &str, number: u64) -> Result<IssueState> {
-        let (owner, name) = parse_repo_slug(repo);
+    async fn fetch_issue_state(&self, issue: &TrackedIssue) -> Result<IssueState> {
+        let (owner, name) = parse_repo_slug(&issue.repo);
+        let number = issue.number;
         let url = format!(
             "https://api.github.com/repos/{owner}/{name}/issues/{number}"
         );
 
+        let repo = &issue.repo;
         let resp = self.get(&url).send().await.map_err(|e| {
             GitHubSnafu {
                 message: format!("request failed for {repo}#{number}: {e}"),
@@ -256,18 +258,20 @@ impl LinearIssueTracker {
     /// Create a new Linear issue tracker.
     pub fn new(
         api_key: &str,
+        endpoint: &str,
         project_slug: String,
         active_states: Vec<String>,
         terminal_states: Vec<String>,
         repo_label_prefix: String,
         repos: Vec<String>,
     ) -> Result<Self> {
-        let client = lineark_sdk::Client::from_token(api_key).map_err(|e| {
+        let mut client = lineark_sdk::Client::from_token(api_key).map_err(|e| {
             LinearSnafu {
                 message: format!("failed to create Linear client: {e}"),
             }
             .build()
         })?;
+        client.set_base_url(endpoint.to_owned());
         Ok(Self {
             client,
             project_slug,
@@ -280,9 +284,11 @@ impl LinearIssueTracker {
 
     /// Extract repository name from issue labels using the configured prefix.
     fn extract_repo(&self, labels: &[String]) -> Option<String> {
+        let prefix = self.repo_label_prefix.to_lowercase();
         for label in labels {
-            if let Some(repo) = label.strip_prefix(&self.repo_label_prefix) {
-                if self.repos.contains(&repo.to_owned()) {
+            let lower = label.to_lowercase();
+            if let Some(repo) = lower.strip_prefix(&prefix) {
+                if self.repos.iter().any(|r| r == repo) {
                     return Some(repo.to_owned());
                 }
             }
@@ -370,7 +376,7 @@ impl IssueTracker for LinearIssueTracker {
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
-                            .map(|s| s.to_owned())
+                            .map(|s| s.to_lowercase())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -443,8 +449,7 @@ impl IssueTracker for LinearIssueTracker {
         Ok(all_issues)
     }
 
-    async fn fetch_issue_state(&self, repo: &str, _number: u64) -> Result<IssueState> {
-        // For Linear, `repo` is the GraphQL issue ID.
+    async fn fetch_issue_state(&self, issue: &TrackedIssue) -> Result<IssueState> {
         const QUERY: &str = r#"
             query($id: String!) {
                 issue(id: $id) {
@@ -453,7 +458,7 @@ impl IssueTracker for LinearIssueTracker {
             }
         "#;
 
-        let variables = serde_json::json!({ "id": repo });
+        let variables = serde_json::json!({ "id": &issue.id });
 
         let issue: serde_json::Value =
             self.client.execute(QUERY, variables, "issue").await.map_err(|e| {

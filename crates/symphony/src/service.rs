@@ -74,15 +74,16 @@ impl SymphonyService {
             Some(TrackerConfig::Linear {
                 api_key,
                 project_slug,
+                endpoint,
                 active_states,
                 terminal_states,
                 repo_label_prefix,
-                ..
             }) => {
-                let resolved_key = resolve_env_var(api_key);
+                let resolved_key = resolve_env_var(api_key)?;
                 let repo_names = self.config.repos.iter().map(|r| r.name.clone()).collect();
                 Box::new(LinearIssueTracker::new(
                     &resolved_key,
+                    endpoint,
                     project_slug.clone(),
                     active_states.clone(),
                     terminal_states.clone(),
@@ -91,7 +92,10 @@ impl SymphonyService {
                 )?)
             }
             Some(TrackerConfig::Github { api_key }) => {
-                let token = api_key.as_ref().map(|k| resolve_env_var(k));
+                let token = match api_key {
+                    Some(k) => Some(resolve_env_var(k)?),
+                    None => self.github_token.clone(),
+                };
                 Box::new(GitHubIssueTracker::new(
                     self.config.repos.clone(),
                     token,
@@ -125,10 +129,15 @@ impl SymphonyService {
 }
 
 /// Resolve a `$ENV_VAR` reference to its value, or return the string as-is.
-fn resolve_env_var(value: &str) -> String {
+fn resolve_env_var(value: &str) -> crate::error::Result<String> {
     if let Some(var_name) = value.strip_prefix('$') {
-        std::env::var(var_name).unwrap_or_default()
+        std::env::var(var_name).map_err(|_| {
+            crate::error::ConfigSnafu {
+                message: format!("environment variable '{var_name}' not set"),
+            }
+            .build()
+        })
     } else {
-        value.to_owned()
+        Ok(value.to_owned())
     }
 }

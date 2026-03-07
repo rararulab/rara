@@ -407,10 +407,9 @@ impl Orchestrator {
                 return Ok(());
             }
         };
-        let repo = entry.issue.repo.clone();
-        let number = entry.issue.number;
+        let issue = entry.issue.clone();
 
-        match self.tracker.fetch_issue_state(&repo, number).await {
+        match self.tracker.fetch_issue_state(&issue).await {
             Ok(IssueState::Active) => {
                 info!(issue_id = %issue_id, "issue still active, triggering re-poll");
                 if let Err(e) = self.handle_poll_tick().await {
@@ -617,7 +616,7 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn fetch_issue_state(&self, _repo: &str, _number: u64) -> Result<IssueState> {
+        async fn fetch_issue_state(&self, _issue: &TrackedIssue) -> Result<IssueState> {
             Ok(IssueState::Active)
         }
     }
