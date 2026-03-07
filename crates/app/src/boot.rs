@@ -366,7 +366,7 @@ struct InMemoryUserStore {
 
 impl InMemoryUserStore {
     fn from_config(users: &[UserConfig]) -> Self {
-        let by_name = users
+        let by_name: HashMap<String, KernelUser> = users
             .iter()
             .map(|u| {
                 let role = parse_role(&u.role);
@@ -382,7 +382,20 @@ impl InMemoryUserStore {
                 )
             })
             .collect();
-        Self { by_name }
+
+        let mut store = Self { by_name };
+
+        // Ensure a built-in "system" user exists so internal subsystems
+        // (e.g. Mita heartbeat) can resolve a principal without requiring
+        // explicit YAML configuration.
+        store.by_name.entry("system".to_string()).or_insert_with(|| KernelUser {
+            name:        "system".to_string(),
+            role:        Role::Root,
+            permissions: default_permissions(Role::Root),
+            enabled:     true,
+        });
+
+        store
     }
 }
 
