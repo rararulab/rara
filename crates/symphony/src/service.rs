@@ -73,6 +73,7 @@ impl SymphonyService {
         let tracker: Box<dyn crate::tracker::IssueTracker> = match &self.config.tracker {
             Some(TrackerConfig::Linear {
                 api_key,
+                team_key,
                 project_slug,
                 endpoint,
                 active_states,
@@ -84,6 +85,7 @@ impl SymphonyService {
                 Box::new(LinearIssueTracker::new(
                     &resolved_key,
                     endpoint,
+                    team_key.clone(),
                     project_slug.clone(),
                     active_states.clone(),
                     terminal_states.clone(),

@@ -53,8 +53,12 @@ pub enum TrackerConfig {
         /// Linear API key. Supports `$ENV_VAR` syntax.
         api_key: String,
 
-        /// Linear project slug (slugId).
-        project_slug: String,
+        /// Linear team key (e.g. "RAR", "ENG"). Required.
+        team_key: String,
+
+        /// Linear project slug (optional, for further filtering within a team).
+        #[serde(default)]
+        project_slug: Option<String>,
 
         /// GraphQL endpoint override.
         #[serde(default = "default_linear_endpoint")]

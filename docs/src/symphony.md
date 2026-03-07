@@ -225,7 +225,8 @@ symphony:
   tracker:
     kind: linear
     api_key: $LINEAR_API_KEY        # supports $ENV_VAR syntax
-    project_slug: my-project        # Linear project slugId
+    team_key: RAR                   # Linear team key (issue prefix)
+    # project_slug: my-project      # optional, filter within team
     # endpoint: https://api.linear.app/graphql  # override for self-hosted
     # active_states: [Todo, In Progress]        # default
     # terminal_states: [Done, Cancelled, Canceled, Closed, Duplicate]
@@ -274,7 +275,8 @@ Linear Board                          Symphony
 |-----|---------|-------------|
 | `kind` | — (required) | `linear` |
 | `api_key` | — (required) | Linear API key，支持 `$ENV_VAR` 语法 |
-| `project_slug` | — (required) | Linear project 的 slugId |
+| `team_key` | — (required) | Linear team key，如 `RAR`、`ENG`（issue 标识符前缀） |
+| `project_slug` | none | 可选，在 team 内按 project 进一步过滤 |
 | `endpoint` | `https://api.linear.app/graphql` | GraphQL endpoint（自托管时覆盖） |
 | `active_states` | `["Todo", "In Progress"]` | 触发 dispatch 的 issue 状态 |
 | `terminal_states` | `["Done", "Closed", "Cancelled", ...]` | 终止状态 |
@@ -384,7 +386,7 @@ symphony:
   tracker:
     kind: linear
     api_key: $LINEAR_API_KEY
-    project_slug: my-team
+    team_key: RAR
   repos:
     - name: myorg/frontend
       repo_path: /code/frontend

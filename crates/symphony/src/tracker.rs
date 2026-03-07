@@ -247,7 +247,8 @@ struct GitHubLabel {
 /// Linear-backed issue tracker using the GraphQL API.
 pub struct LinearIssueTracker {
     client: lineark_sdk::Client,
-    project_slug: String,
+    team_key: String,
+    project_slug: Option<String>,
     active_states: Vec<String>,
     terminal_states: Vec<String>,
     repo_label_prefix: String,
@@ -259,7 +260,8 @@ impl LinearIssueTracker {
     pub fn new(
         api_key: &str,
         endpoint: &str,
-        project_slug: String,
+        team_key: String,
+        project_slug: Option<String>,
         active_states: Vec<String>,
         terminal_states: Vec<String>,
         repo_label_prefix: String,
@@ -274,6 +276,7 @@ impl LinearIssueTracker {
         client.set_base_url(endpoint.to_owned());
         Ok(Self {
             client,
+            team_key,
             project_slug,
             active_states,
             terminal_states,
@@ -317,36 +320,9 @@ impl LinearIssueTracker {
 #[async_trait]
 impl IssueTracker for LinearIssueTracker {
     async fn fetch_active_issues(&self) -> Result<Vec<TrackedIssue>> {
-        const QUERY: &str = r#"
-            query($projectSlug: String!, $states: [String!]!, $first: Int!, $after: String) {
-                issues(
-                    filter: {
-                        project: { slugId: { eq: $projectSlug } }
-                        state: { name: { in: $states } }
-                    }
-                    first: $first
-                    after: $after
-                ) {
-                    nodes {
-                        id
-                        identifier
-                        title
-                        description
-                        priority
-                        createdAt
-                        state { name }
-                        labels { nodes { name } }
-                    }
-                    pageInfo {
-                        hasNextPage
-                        endCursor
-                    }
-                }
-            }
-        "#;
-
         tracing::info!(
-            project_slug = %self.project_slug,
+            team_key = %self.team_key,
+            project_slug = ?self.project_slug,
             active_states = ?self.active_states,
             "linear: fetching candidate issues"
         );
@@ -355,16 +331,71 @@ impl IssueTracker for LinearIssueTracker {
         let mut after: Option<String> = None;
 
         loop {
-            let variables = serde_json::json!({
-                "projectSlug": self.project_slug,
-                "states": self.active_states,
-                "first": 50,
-                "after": after,
-            });
+            let (query, variables) = if let Some(ref slug) = self.project_slug {
+                // Filter by team + project
+                let q = r#"
+                    query($teamKey: String!, $projectSlug: String!, $states: [String!]!, $first: Int!, $after: String) {
+                        issues(
+                            filter: {
+                                team: { key: { eq: $teamKey } }
+                                project: { slugId: { eq: $projectSlug } }
+                                state: { name: { in: $states } }
+                            }
+                            first: $first
+                            after: $after
+                            orderBy: createdAt
+                        ) {
+                            nodes {
+                                id identifier title description priority createdAt
+                                state { name }
+                                labels { nodes { name } }
+                            }
+                            pageInfo { hasNextPage endCursor }
+                        }
+                    }
+                "#;
+                let v = serde_json::json!({
+                    "teamKey": self.team_key,
+                    "projectSlug": slug,
+                    "states": self.active_states,
+                    "first": 50,
+                    "after": after,
+                });
+                (q, v)
+            } else {
+                // Filter by team only
+                let q = r#"
+                    query($teamKey: String!, $states: [String!]!, $first: Int!, $after: String) {
+                        issues(
+                            filter: {
+                                team: { key: { eq: $teamKey } }
+                                state: { name: { in: $states } }
+                            }
+                            first: $first
+                            after: $after
+                            orderBy: createdAt
+                        ) {
+                            nodes {
+                                id identifier title description priority createdAt
+                                state { name }
+                                labels { nodes { name } }
+                            }
+                            pageInfo { hasNextPage endCursor }
+                        }
+                    }
+                "#;
+                let v = serde_json::json!({
+                    "teamKey": self.team_key,
+                    "states": self.active_states,
+                    "first": 50,
+                    "after": after,
+                });
+                (q, v)
+            };
 
             let conn = self
                 .client
-                .execute_connection::<serde_json::Value>(QUERY, variables, "issues")
+                .execute_connection::<serde_json::Value>(query, variables, "issues")
                 .await
                 .map_err(|e| {
                     LinearSnafu {
