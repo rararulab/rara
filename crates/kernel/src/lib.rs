@@ -43,6 +43,8 @@ pub mod metrics;
 pub mod notification;
 pub mod proactive;
 pub mod queue;
+pub mod schedule;
+pub(crate) mod schedule_tool;
 pub mod security;
 pub mod session;
 pub(crate) mod syscall;

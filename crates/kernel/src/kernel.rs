@@ -361,6 +361,11 @@ impl Kernel {
     ) {
         info!(processor_id = id, "event processor started");
 
+        // Only the global processor (id=0) runs the schedule tick.
+        let mut schedule_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        // Don't fire immediately on startup — wait for the first real tick.
+        schedule_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 _ = queue.wait() => {
@@ -379,8 +384,17 @@ impl Kernel {
                         join_all(futs).await;
                     }
                 }
+                _ = schedule_tick.tick(), if id == 0 => {
+                    self.drain_scheduled_jobs();
+                }
                 _ = shutdown.cancelled() => {
                     info!(processor_id = id, "event processor shutting down");
+                    // Persist scheduled jobs on shutdown.
+                    if id == 0 {
+                        if let Ok(wheel) = self.syscall.job_wheel().lock() {
+                            wheel.persist();
+                        }
+                    }
                     for event in queue.drain(1024) {
                         if matches!(event.kind, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
                             self.handle_event(event).await;
@@ -398,6 +412,39 @@ impl Kernel {
         }
 
         info!(processor_id = id, "event processor stopped");
+    }
+
+    /// Drain expired scheduled jobs and inject them as `UserMessage` events.
+    fn drain_scheduled_jobs(&self) {
+        let now = jiff::Timestamp::now();
+        let expired = {
+            let mut wheel = match self.syscall.job_wheel().lock() {
+                Ok(w) => w,
+                Err(e) => {
+                    warn!(error = %e, "failed to lock job wheel for drain");
+                    return;
+                }
+            };
+            let expired = wheel.drain_expired(now);
+            if !expired.is_empty() {
+                wheel.persist();
+            }
+            expired
+        };
+
+        for job in expired {
+            info!(
+                job_id = %job.id,
+                session = %job.session_key,
+                "scheduled job fired"
+            );
+            let msg = InboundMessage::scheduled(
+                job.message,
+                job.session_key,
+                &job.principal,
+            );
+            let _ = self.event_queue.push(KernelEventEnvelope::user_message(msg));
+        }
     }
 
     /// Dispatch a single event to its handler.

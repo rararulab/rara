@@ -190,6 +190,31 @@ pub enum Syscall {
         event_type: String,
         payload:    serde_json::Value,
     },
+
+    // -- Scheduling --
+    /// Register a new scheduled job.
+    RegisterJob {
+        trigger: crate::schedule::Trigger,
+        message: String,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<crate::schedule::JobId>>,
+    },
+
+    /// Remove a scheduled job by ID.
+    RemoveJob {
+        job_id: crate::schedule::JobId,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<()>>,
+    },
+
+    /// List all scheduled jobs for the current session.
+    ListJobs {
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
+    },
 }
 
 impl Syscall {

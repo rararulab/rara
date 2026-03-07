@@ -241,6 +241,34 @@ impl InboundMessage {
         }
     }
 
+    /// Create a message from a scheduled task firing.
+    ///
+    /// Uses `ChannelType::Scheduled` so the kernel can distinguish scheduled
+    /// triggers from user-initiated messages.
+    pub fn scheduled(
+        message: String,
+        session_key: SessionKey,
+        principal: &crate::identity::Principal,
+    ) -> Self {
+        let user = principal.user_id.clone();
+        Self {
+            id: MessageId::new(),
+            source: ChannelSource {
+                channel_type:        ChannelType::Scheduled,
+                platform_message_id: None,
+                platform_user_id:    user.0.clone(),
+                platform_chat_id:    None,
+            },
+            user,
+            session_key: Some(session_key),
+            target_session_key: None,
+            content: MessageContent::Text(message),
+            reply_context: None,
+            timestamp: jiff::Timestamp::now(),
+            metadata: HashMap::new(),
+        }
+    }
+
     /// Build the originating endpoint for session-scoped reply routing.
     ///
     /// Returns `Some(Endpoint)` for channel types that support multiple

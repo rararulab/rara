@@ -69,6 +69,8 @@ pub(crate) struct SyscallDispatcher {
     tape_service:            TapeService,
     /// Optional provider of dynamically discovered tools (e.g. MCP servers).
     dynamic_tool_provider:   Option<DynamicToolProviderRef>,
+    /// Scheduled task wheel for job scheduling.
+    job_wheel:               std::sync::Mutex<crate::schedule::JobWheel>,
 }
 
 impl SyscallDispatcher {
@@ -83,6 +85,8 @@ impl SyscallDispatcher {
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
+        let jobs_path = rara_paths::data_dir().join("jobs.json");
+        let job_wheel = std::sync::Mutex::new(crate::schedule::JobWheel::load(jobs_path));
         Self {
             shared_kv,
             pipe_registry,
@@ -92,6 +96,7 @@ impl SyscallDispatcher {
             config,
             tape_service,
             dynamic_tool_provider,
+            job_wheel,
         }
     }
 
@@ -99,6 +104,9 @@ impl SyscallDispatcher {
     pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
 
     pub fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
+
+    /// Access the job wheel (for tick-based drain in the event loop).
+    pub fn job_wheel(&self) -> &std::sync::Mutex<crate::schedule::JobWheel> { &self.job_wheel }
 
     // -- Dispatch -----------------------------------------------------------
 
@@ -264,6 +272,10 @@ impl SyscallDispatcher {
                     registry.register(Arc::new(syscall_tool));
                     let tape_tool = TapeTool::new(self.tape_service.clone(), tape_name);
                     registry.register(Arc::new(tape_tool));
+                    // Schedule tools
+                    registry.register(Arc::new(crate::schedule_tool::ScheduleAddTool));
+                    registry.register(Arc::new(crate::schedule_tool::ScheduleRemoveTool));
+                    registry.register(Arc::new(crate::schedule_tool::ScheduleListTool));
                 }
                 // Inject dynamic tools (e.g. MCP server tools).
                 if let Some(ref provider) = self.dynamic_tool_provider {
@@ -285,6 +297,57 @@ impl SyscallDispatcher {
                         timestamp:   Timestamp::now(),
                     })
                     .await;
+            }
+            Syscall::RegisterJob {
+                trigger,
+                message,
+                reply_tx,
+            } => {
+                let principal = process_table
+                    .with(&syscall_sender, |p| p.principal.clone());
+                let result = match principal {
+                    Some(principal) => {
+                        let entry = crate::schedule::JobEntry {
+                            id:          crate::schedule::JobId::new(),
+                            trigger,
+                            message,
+                            session_key: syscall_sender,
+                            principal,
+                            created_at:  Timestamp::now(),
+                        };
+                        let id = entry.id.clone();
+                        let mut wheel = self.job_wheel.lock().unwrap();
+                        wheel.add(entry);
+                        wheel.persist();
+                        info!(job_id = %id, session = %syscall_sender, "registered scheduled job");
+                        Ok(id)
+                    }
+                    None => {
+                        Err(crate::error::KernelError::Other {
+                            message: format!("session not found: {syscall_sender}").into(),
+                        })
+                    }
+                };
+                let _ = reply_tx.send(result);
+            }
+            Syscall::RemoveJob { job_id, reply_tx } => {
+                let mut wheel = self.job_wheel.lock().unwrap();
+                let result = match wheel.remove(&job_id) {
+                    Some(_) => {
+                        wheel.persist();
+                        info!(job_id = %job_id, "removed scheduled job");
+                        Ok(())
+                    }
+                    None => Err(crate::error::KernelError::Other {
+                        message: format!("job not found: {job_id}").into(),
+                    }),
+                };
+                let _ = reply_tx.send(result);
+            }
+            Syscall::ListJobs { reply_tx } => {
+                let wheel = self.job_wheel.lock().unwrap();
+                let jobs = wheel.list(Some(&syscall_sender));
+                let _ = reply_tx.send(Ok(jobs));
             }
         }
     }
