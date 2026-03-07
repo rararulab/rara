@@ -1741,13 +1741,20 @@ impl Kernel {
                     info!(session_key = %session_key, "turn interrupted by user");
                 }
 
+                // Provide user-friendly message for context window errors.
+                let user_msg = if err_msg.contains("context window") {
+                    "上下文已超出模型限制，本轮对话未完成。请发送 /handoff 或开始新对话。".to_string()
+                } else {
+                    err_msg.clone()
+                };
+
                 // Deliver error — use egress session for routing.
                 let envelope = OutboundEnvelope::error(
                     in_reply_to,
                     user.clone(),
                     egress_session_key.clone(),
                     "agent_error",
-                    err_msg,
+                    user_msg,
                 )
                 .with_origin(origin_endpoint.clone());
                 if let Err(e) = &self
