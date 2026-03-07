@@ -21,7 +21,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
 use tracing::info;
 
@@ -53,7 +53,7 @@ pub(crate) struct BootResult {
 }
 
 /// A user entry in the YAML configuration file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
     pub name:      String,
     /// `"root"` | `"admin"` | `"user"`
@@ -63,7 +63,7 @@ pub struct UserConfig {
 }
 
 /// A platform identity binding for a configured user.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlatformBindingConfig {
     /// Channel type: `"telegram"`, `"web"`, `"cli"`, etc.
     #[serde(rename = "type")]

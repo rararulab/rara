@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::AppConfig;
 
@@ -41,7 +41,7 @@ use super::AppConfig;
 ///         - "qwen3:14b"
 ///         - "llama3:8b"
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
     pub default_provider: Option<String>,
@@ -54,7 +54,7 @@ pub struct LlmConfig {
 /// `OpenAiDriver::resolve_config()`. For local providers like Ollama
 /// that don't validate API keys, set `api_key` to any non-empty
 /// placeholder (e.g. `"ollama"`).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
     pub base_url:        Option<String>,
@@ -72,7 +72,7 @@ pub struct ProviderConfig {
 // ---------------------------------------------------------------------------
 
 /// Telegram bot configuration section in config.yaml.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
     pub bot_token:               Option<String>,
@@ -95,7 +95,7 @@ pub struct TelegramConfig {
 ///   similarity_threshold: 0.85
 ///   extractor_model: "gpt-4o-mini"
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KnowledgeConfig {
     pub embedding_model:      Option<String>,

@@ -31,7 +31,7 @@ use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -50,7 +50,7 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 ///
 /// For runtime-changeable values (OpenRouter key, Telegram token, …) see
 /// `rara_backend_admin::settings::SettingsSvc`.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 #[builder(on(String, into))]
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
@@ -87,7 +87,7 @@ pub struct AppConfig {
 }
 
 /// Configuration for the Mita background proactive agent.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct MitaConfig {
     /// Heartbeat interval (e.g. "30m", "1800s").
     #[serde(deserialize_with = "humantime_serde::deserialize")]
@@ -95,7 +95,7 @@ pub struct MitaConfig {
 }
 
 /// Configuration for the gateway supervisor.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// Upstream check interval (e.g. "5m", "300s").
     #[serde(default = "gateway_defaults::check_interval", deserialize_with = "humantime_serde::deserialize")]
@@ -130,7 +130,7 @@ mod gateway_defaults {
 }
 
 /// General OTLP telemetry configuration.
-#[derive(Debug, Clone, Default, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, Default, bon::Builder, Serialize, Deserialize)]
 pub struct TelemetryConfig {
     /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
     #[serde(default)]
