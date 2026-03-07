@@ -482,17 +482,32 @@ impl SyscallTool {
             .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
 
         let child_key = agent_handle.session_key;
+        let mut rx = agent_handle.result_rx;
+        let mut milestones = Vec::new();
 
-        let result = agent_handle.result_rx.await.map_err(|_| {
-            anyhow::anyhow!("agent {} was dropped without producing a result", child_key)
-        })?;
+        while let Some(event) = rx.recv().await {
+            match event {
+                crate::io::AgentEvent::Milestone { stage, detail } => {
+                    milestones.push(serde_json::json!({
+                        "stage": stage,
+                        "detail": detail,
+                    }));
+                }
+                crate::io::AgentEvent::Done(result) => {
+                    return Ok(serde_json::json!({
+                        "milestones": milestones,
+                        "output": result.output,
+                        "iterations": result.iterations,
+                        "tool_calls": result.tool_calls,
+                    }));
+                }
+            }
+        }
 
-        Ok(serde_json::json!({
-            "agent_id": child_key.to_string(),
-            "output": result.output,
-            "iterations": result.iterations,
-            "tool_calls": result.tool_calls,
-        }))
+        Err(anyhow::anyhow!(
+            "agent {} was dropped without producing a result",
+            child_key
+        ))
     }
 
     async fn exec_spawn_parallel(
@@ -528,21 +543,39 @@ impl SyscallTool {
 
         let mut results = Vec::new();
         for (agent_name, handle) in handles {
-            let agent_id = handle.session_key;
-            match handle.result_rx.await {
-                Ok(result) => {
+            let _agent_id = handle.session_key;
+            let mut rx = handle.result_rx;
+            let mut milestones = Vec::new();
+            let mut final_result = None;
+
+            while let Some(event) = rx.recv().await {
+                match event {
+                    crate::io::AgentEvent::Milestone { stage, detail } => {
+                        milestones.push(serde_json::json!({
+                            "stage": stage,
+                            "detail": detail,
+                        }));
+                    }
+                    crate::io::AgentEvent::Done(result) => {
+                        final_result = Some(result);
+                        break;
+                    }
+                }
+            }
+
+            match final_result {
+                Some(result) => {
                     results.push(serde_json::json!({
                         "agent": agent_name,
-                        "agent_id": agent_id.to_string(),
+                        "milestones": milestones,
                         "output": result.output,
                         "iterations": result.iterations,
                         "tool_calls": result.tool_calls,
                     }));
                 }
-                Err(_) => {
+                None => {
                     results.push(serde_json::json!({
                         "agent": agent_name,
-                        "agent_id": agent_id.to_string(),
                         "error": "agent was dropped without producing a result",
                     }));
                 }
