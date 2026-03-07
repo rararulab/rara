@@ -14,8 +14,6 @@
 
 //! [`UpdateDetector`] — periodically checks upstream `origin/main` for new commits.
 
-use std::time::Duration;
-
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -75,9 +73,9 @@ impl UpdateDetector {
     /// Run the detection loop until the provided cancellation token is
     /// cancelled.
     pub async fn run(mut self, cancel: tokio_util::sync::CancellationToken) {
-        let interval = Duration::from_secs(self.config.check_interval);
+        let interval = self.config.check_interval;
         info!(
-            interval_secs = self.config.check_interval,
+            ?interval,
             current_rev = %self.state.current_rev,
             "Update detector started"
         );

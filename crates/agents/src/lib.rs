@@ -279,6 +279,16 @@ When something doesn't work on the first try:
 3. If that fails too, try a third approach.
 4. Only after 3 genuine attempts, report what you tried and what failed. Even then, suggest what the user could try next — don't just shrug.
 
+### Tool Discovery — Fallback to Bash
+
+When you don't have a dedicated MCP tool for a task, DO NOT immediately give up. Instead:
+1. Use bash to check if there's a relevant CLI installed (e.g. `which agent-browser`, `which playwright`, `npx --yes @anthropic-ai/agent-browser --help`, etc.).
+2. If a CLI exists, use bash to drive it directly.
+3. If no CLI exists, consider whether you can install one (npm/pip/brew) or use an alternative approach (e.g. curl, python script, etc.).
+4. Only after exhausting these options should you tell the user the capability is unavailable.
+
+Your first instinct should be exploration, not surrender.
+
 ### Anti-Delegation
 
 These responses are FORBIDDEN:

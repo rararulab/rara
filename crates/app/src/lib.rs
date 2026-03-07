@@ -73,9 +73,8 @@ pub struct AppConfig {
     pub telegram:    Option<flatten::TelegramConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
-    /// Mita proactive agent configuration (optional — disabled if absent).
-    #[serde(default)]
-    pub mita:        Option<MitaConfig>,
+    /// Mita proactive agent configuration (required).
+    pub mita:        MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default)]
     pub knowledge:   Option<flatten::KnowledgeConfig>,
@@ -87,22 +86,23 @@ pub struct AppConfig {
 /// Configuration for the Mita background proactive agent.
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
 pub struct MitaConfig {
-    /// Heartbeat interval in seconds (e.g. 1800 = 30 minutes).
-    pub heartbeat_interval_secs: u64,
+    /// Heartbeat interval (e.g. "30m", "1800s").
+    #[serde(deserialize_with = "humantime_serde::deserialize")]
+    pub heartbeat_interval: Duration,
 }
 
 /// Configuration for the gateway supervisor.
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
 pub struct GatewayConfig {
-    /// Upstream check interval in seconds.
-    #[serde(default = "gateway_defaults::check_interval")]
-    pub check_interval:      u64,
+    /// Upstream check interval (e.g. "5m", "300s").
+    #[serde(default = "gateway_defaults::check_interval", deserialize_with = "humantime_serde::deserialize")]
+    pub check_interval:      Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
     pub health_timeout:      u64,
-    /// HTTP health poll interval in seconds.
-    #[serde(default = "gateway_defaults::health_poll_interval")]
-    pub health_poll_interval: u64,
+    /// HTTP health poll interval (e.g. "2s").
+    #[serde(default = "gateway_defaults::health_poll_interval", deserialize_with = "humantime_serde::deserialize")]
+    pub health_poll_interval: Duration,
     /// Max consecutive restart failures before giving up.
     #[serde(default = "gateway_defaults::max_restart_attempts")]
     pub max_restart_attempts: u32,
@@ -115,9 +115,10 @@ pub struct GatewayConfig {
 }
 
 mod gateway_defaults {
-    pub fn check_interval() -> u64 { 300 }
+    use std::time::Duration;
+    pub fn check_interval() -> Duration { Duration::from_secs(300) }
     pub fn health_timeout() -> u64 { 30 }
-    pub fn health_poll_interval() -> u64 { 2 }
+    pub fn health_poll_interval() -> Duration { Duration::from_secs(2) }
     pub fn max_restart_attempts() -> u32 { 3 }
     pub fn auto_update() -> bool { true }
     pub fn bind_address() -> String { "127.0.0.1:25556".to_owned() }
@@ -126,12 +127,12 @@ mod gateway_defaults {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            check_interval:      gateway_defaults::check_interval(),
-            health_timeout:      gateway_defaults::health_timeout(),
+            check_interval:       gateway_defaults::check_interval(),
+            health_timeout:       gateway_defaults::health_timeout(),
             health_poll_interval: gateway_defaults::health_poll_interval(),
             max_restart_attempts: gateway_defaults::max_restart_attempts(),
-            auto_update:         gateway_defaults::auto_update(),
-            bind_address:        gateway_defaults::bind_address(),
+            auto_update:          gateway_defaults::auto_update(),
+            bind_address:         gateway_defaults::bind_address(),
         }
     }
 }
@@ -405,20 +406,18 @@ pub async fn start_with_options(
     info!("Kernel I/O subsystem running");
 
     // -- Mita heartbeat worker ---------------------------------------------
-    if let Some(ref mita_config) = config.mita {
+    {
         let heartbeat_worker =
             mita::MitaHeartbeatWorker::new(kernel_handle.clone(), rara.tape_service.clone());
         let _mita_handle = worker_manager
             .worker(heartbeat_worker)
             .name("mita-heartbeat")
-            .interval(Duration::from_secs(mita_config.heartbeat_interval_secs))
+            .interval(config.mita.heartbeat_interval)
             .spawn();
         info!(
-            interval_secs = mita_config.heartbeat_interval_secs,
+            heartbeat_interval = ?config.mita.heartbeat_interval,
             "Mita heartbeat worker started"
         );
-    } else {
-        info!("Mita proactive agent disabled (no `mita` config section)");
     }
 
     info!("Application started successfully");

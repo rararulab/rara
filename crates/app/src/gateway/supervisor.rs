@@ -390,7 +390,7 @@ impl SupervisorService {
     /// Phase 2: HTTP GET `/api/health` — 3 consecutive 200s required.
     async fn poll_health(&self) -> Result<(), SupervisorError> {
         let timeout = Duration::from_secs(self.config.health_timeout / 2);
-        let poll_interval = Duration::from_secs(self.config.health_poll_interval);
+        let poll_interval = self.config.health_poll_interval;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()

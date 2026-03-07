@@ -39,6 +39,7 @@ rara-server = { workspace = true }
 rara-sessions.workspace = true
 rara-skills.workspace = true
 reqwest = { workspace = true }
+humantime-serde = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu = { workspace = true }
