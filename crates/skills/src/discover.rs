@@ -61,6 +61,7 @@ impl FsSkillDiscoverer {
         let mut paths = vec![
             (data.join(".rara/skills"), SkillSource::Project),
             (data.join("skills"), SkillSource::Personal),
+            (rara_paths::skills_dir().clone(), SkillSource::Personal),
         ];
 
         // ~/.claude/skills/ — Claude Code personal skills
