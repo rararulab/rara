@@ -1377,6 +1377,7 @@ impl Kernel {
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(&self.io.stream_hub());
 
+        let milestone_tx = self.process_table.with(&session_key, |p| p.result_tx.clone()).flatten();
         let parent_span = tracing::Span::current();
 
         // -- Phase 7: Spawn background task --------------------------------------
@@ -1488,6 +1489,7 @@ impl Kernel {
                     tape_service.clone(),
                     effective_tape,
                     tool_context,
+                    milestone_tx,
                 )
                 .await;
 

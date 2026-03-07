@@ -481,6 +481,7 @@ pub(crate) async fn run_agent_loop(
     tape: crate::memory::TapeService,
     tape_name: &str,
     tool_context: crate::tool::ToolContext,
+    milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -833,6 +834,12 @@ pub(crate) async fn run_agent_loop(
                 id:        tool_call.id.clone(),
                 arguments: args.clone(),
             });
+            if let Some(ref mtx) = milestone_tx {
+                let _ = mtx.send(crate::io::AgentEvent::Milestone {
+                    stage: "tool_call_start".to_string(),
+                    detail: Some(tool_call.name.clone()),
+                }).await;
+            }
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
         }
 
@@ -966,6 +973,12 @@ pub(crate) async fn run_agent_loop(
                 success:        *success,
                 error:          err.clone(),
             });
+            if let Some(ref mtx) = milestone_tx {
+                let _ = mtx.send(crate::io::AgentEvent::Milestone {
+                    stage: "tool_call_end".to_string(),
+                    detail: Some(format!("{}: {}", name, if *success { "ok" } else { "error" })),
+                }).await;
+            }
 
             tool_call_traces.push(ToolCallTrace {
                 name: name.clone(),
