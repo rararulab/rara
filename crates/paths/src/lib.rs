@@ -281,6 +281,25 @@ pub fn staging_dir() -> &'static PathBuf {
     })
 }
 
+/// Returns the path to the workspace directory used by the agent.
+///
+/// Resolves to `<config_dir>/workspace/`. The directory is created if it
+/// does not already exist.
+///
+/// # Panics
+///
+/// Panics if the directory cannot be created.
+pub fn workspace_dir() -> &'static PathBuf {
+    static WORKSPACE_DIR: OnceLock<PathBuf> = OnceLock::new();
+    WORKSPACE_DIR.get_or_init(|| {
+        let dir = config_dir().join("workspace");
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
+            panic!("failed to create workspace directory {}: {e}", dir.display())
+        });
+        dir
+    })
+}
+
 /// Returns the path to the main YAML configuration file.
 ///
 /// Resolves to `<config_dir>/config.yaml`.

@@ -68,10 +68,15 @@ impl AgentTool for EditFileTool {
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let file_path = params
+        let raw_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
+        let file_path = if std::path::Path::new(raw_path).is_absolute() {
+            std::path::PathBuf::from(raw_path)
+        } else {
+            rara_paths::workspace_dir().join(raw_path)
+        };
 
         let old_string = params
             .get("old_string")
@@ -88,20 +93,24 @@ impl AgentTool for EditFileTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let content = tokio::fs::read_to_string(file_path)
+        let content = tokio::fs::read_to_string(&file_path)
             .await
-            .context(format!("failed to read file {file_path}"))?;
+            .context(format!("failed to read file {}", file_path.display()))?;
 
         let count = content.matches(old_string).count();
 
         if count == 0 {
-            bail!("old_string not found in {file_path}. Make sure the string matches exactly.");
+            bail!(
+                "old_string not found in {}. Make sure the string matches exactly.",
+                file_path.display()
+            );
         }
 
         if !replace_all && count > 1 {
             bail!(
-                "old_string found {count} times in {file_path}. Use replace_all=true to replace \
-                 all occurrences, or provide a more specific old_string."
+                "old_string found {count} times in {}. Use replace_all=true to replace \
+                 all occurrences, or provide a more specific old_string.",
+                file_path.display()
             );
         }
 
@@ -111,13 +120,13 @@ impl AgentTool for EditFileTool {
             content.replacen(old_string, new_string, 1)
         };
 
-        tokio::fs::write(file_path, &new_content)
+        tokio::fs::write(&file_path, &new_content)
             .await
-            .context(format!("failed to write file {file_path}"))?;
+            .context(format!("failed to write file {}", file_path.display()))?;
 
         Ok(json!({
             "replacements": if replace_all { count } else { 1 },
-            "file_path": file_path,
+            "file_path": file_path.display().to_string(),
         }))
     }
 }

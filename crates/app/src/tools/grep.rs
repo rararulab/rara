@@ -85,7 +85,14 @@ impl AgentTool for GrepTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: pattern"))?;
 
-        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let workspace = rara_paths::workspace_dir();
+        let raw_path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let resolved = if std::path::Path::new(raw_path).is_absolute() {
+            std::path::PathBuf::from(raw_path)
+        } else {
+            workspace.join(raw_path)
+        };
+        let path = resolved.to_str().unwrap_or(".");
 
         let glob_filter = params.get("glob").and_then(|v| v.as_str());
 

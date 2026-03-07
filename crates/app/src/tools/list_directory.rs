@@ -58,14 +58,19 @@ impl AgentTool for ListDirectoryTool {
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let path = params
+        let raw_path = params
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: path"))?;
+        let path = if std::path::Path::new(raw_path).is_absolute() {
+            std::path::PathBuf::from(raw_path)
+        } else {
+            rara_paths::workspace_dir().join(raw_path)
+        };
 
-        let mut read_dir = tokio::fs::read_dir(path)
+        let mut read_dir = tokio::fs::read_dir(&path)
             .await
-            .context(format!("failed to read directory {path}"))?;
+            .context(format!("failed to read directory {}", path.display()))?;
 
         let mut entries = Vec::new();
         let mut total = 0usize;

@@ -77,10 +77,15 @@ impl AgentTool for ReadFileTool {
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let file_path = params
+        let raw_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
+        let file_path = if std::path::Path::new(raw_path).is_absolute() {
+            std::path::PathBuf::from(raw_path)
+        } else {
+            rara_paths::workspace_dir().join(raw_path)
+        };
 
         let offset = params
             .get("offset")
@@ -94,9 +99,9 @@ impl AgentTool for ReadFileTool {
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_LIMIT);
 
-        let raw_bytes = tokio::fs::read(file_path)
+        let raw_bytes = tokio::fs::read(&file_path)
             .await
-            .context(format!("failed to read file {file_path}"))?;
+            .context(format!("failed to read file {}", file_path.display()))?;
 
         // Binary detection: check for null bytes in the first BINARY_CHECK_BYTES.
         let check_len = raw_bytes.len().min(BINARY_CHECK_BYTES);

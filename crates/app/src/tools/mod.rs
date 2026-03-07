@@ -14,7 +14,7 @@
 
 //! Tool implementations and registration.
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
@@ -84,7 +84,7 @@ pub struct ToolRegistrationResult {
 /// wired after kernel startup (e.g. the `DispatchRaraTool` needs a
 /// `KernelHandle`).
 pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistrationResult {
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let project_root = rara_paths::workspace_dir().clone();
 
     // Mita tools — constructed first so we can capture the dispatch handle.
     let dispatch_rara = Arc::new(DispatchRaraTool::new(deps.tape_service.clone()));

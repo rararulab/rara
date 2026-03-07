@@ -91,6 +91,8 @@ impl AgentTool for BashTool {
 
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
+        } else {
+            cmd.current_dir(rara_paths::workspace_dir());
         }
 
         let timeout_dur = std::time::Duration::from_secs(timeout_secs);

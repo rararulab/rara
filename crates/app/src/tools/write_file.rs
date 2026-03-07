@@ -17,8 +17,6 @@
 //! Writes content to a file, automatically creating parent directories if they
 //! do not exist.
 
-use std::path::Path;
-
 use anyhow::Context;
 use async_trait::async_trait;
 use rara_kernel::tool::AgentTool;
@@ -62,10 +60,15 @@ impl AgentTool for WriteFileTool {
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let file_path = params
+        let raw_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
+        let file_path = if std::path::Path::new(raw_path).is_absolute() {
+            std::path::PathBuf::from(raw_path)
+        } else {
+            rara_paths::workspace_dir().join(raw_path)
+        };
 
         let content = params
             .get("content")
@@ -73,22 +76,23 @@ impl AgentTool for WriteFileTool {
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
 
         // Create parent directories if necessary.
-        if let Some(parent) = Path::new(file_path).parent() {
+        if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() {
                 tokio::fs::create_dir_all(parent).await.context(format!(
-                    "failed to create parent directories for {file_path}"
+                    "failed to create parent directories for {}",
+                    file_path.display()
                 ))?;
             }
         }
 
         let bytes = content.as_bytes();
-        tokio::fs::write(file_path, bytes)
+        tokio::fs::write(&file_path, bytes)
             .await
-            .context(format!("failed to write file {file_path}"))?;
+            .context(format!("failed to write file {}", file_path.display()))?;
 
         Ok(json!({
             "bytes_written": bytes.len(),
-            "file_path": file_path,
+            "file_path": file_path.display().to_string(),
         }))
     }
 }

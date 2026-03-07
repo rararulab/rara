@@ -72,7 +72,16 @@ impl AgentTool for FindFilesTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: pattern"))?;
 
-        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let workspace = rara_paths::workspace_dir();
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+        let resolved_path = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            workspace.join(path)
+        };
 
         let limit = params
             .get("limit")
@@ -83,7 +92,7 @@ impl AgentTool for FindFilesTool {
         // Use `find` with `-name` for the glob pattern, sorted by mtime.
         // -printf "%T@\t%p\n" gives epoch time + path for sorting.
         let output = tokio::process::Command::new("find")
-            .arg(path)
+            .arg(&resolved_path)
             .arg("-type")
             .arg("f")
             .arg("-name")
@@ -92,7 +101,7 @@ impl AgentTool for FindFilesTool {
             .arg("-path")
             .arg("*/.git/*")
             .arg("-print0")
-            .current_dir(path)
+            .current_dir(&resolved_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
