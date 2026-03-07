@@ -29,6 +29,7 @@ rara-git = { workspace = true }
 rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
+rara-symphony = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skills = { workspace = true }
 reqwest = { workspace = true }

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use tracing::{error, info, warn};
 
 use crate::agent::{AgentHandle, AgentTask, CodingAgent};
@@ -8,6 +9,9 @@ use crate::config::SymphonyConfig;
 use crate::error::Result;
 use crate::event::{IssueState, SymphonyEvent, TrackedIssue, WorkspaceInfo};
 use crate::queue::EventQueue;
+use crate::status::{
+    ConfigSummary, RetryInfo, RunInfo, SymphonyEventLog, SymphonySnapshot, SymphonyStatusHandle,
+};
 use crate::tracker::IssueTracker;
 use crate::workspace::{run_hook, WorkspaceManager};
 
@@ -38,6 +42,7 @@ pub struct Orchestrator {
     running: HashMap<String, RunState>,
     claimed: HashSet<String>,
     retries: HashMap<String, RetryEntry>,
+    status_handle: SymphonyStatusHandle,
 }
 
 impl Orchestrator {
@@ -47,6 +52,7 @@ impl Orchestrator {
         workspace_mgr: WorkspaceManager,
         agent: Box<dyn CodingAgent>,
         config: SymphonyConfig,
+        status_handle: SymphonyStatusHandle,
     ) -> Self {
         Self {
             tracker,
@@ -57,6 +63,7 @@ impl Orchestrator {
             running: HashMap::new(),
             claimed: HashSet::new(),
             retries: HashMap::new(),
+            status_handle,
         }
     }
 
@@ -80,17 +87,23 @@ impl Orchestrator {
         loop {
             tokio::select! {
                 _ = poll_interval.tick() => {
+                    self.log_event("poll_tick", None, "polling for active issues");
                     if let Err(e) = self.handle_poll_tick().await {
                         error!(error = %e, "poll tick failed");
                     }
+                    self.publish_snapshot().await;
                 }
                 _ = stall_interval.tick() => {
+                    self.log_event("stall_check", None, "checking for stalled agents");
                     self.handle_stall_check();
+                    self.publish_snapshot().await;
                 }
                 event = self.queue.pop() => {
+                    self.log_event_for(&event);
                     match event {
                         SymphonyEvent::Shutdown => {
                             info!("received shutdown signal, stopping orchestrator");
+                            self.publish_snapshot().await;
                             break;
                         }
                         SymphonyEvent::IssueDiscovered { issue } => {
@@ -123,6 +136,7 @@ impl Orchestrator {
                             info!(issue_id = %issue_id, path = %path.display(), "workspace cleaned");
                         }
                     }
+                    self.publish_snapshot().await;
                 }
             }
         }
@@ -434,6 +448,103 @@ impl Orchestrator {
 
     }
 
+    // ── Status publishing ─────────────────────────────────────────────
+
+    /// Publish a snapshot of the current orchestrator state to the status handle.
+    async fn publish_snapshot(&self) {
+        let now = Utc::now();
+
+        let running: Vec<RunInfo> = self
+            .running
+            .iter()
+            .map(|(id, rs)| {
+                // Approximate DateTime<Utc> from Instant by computing elapsed.
+                let elapsed = rs.started_at.elapsed();
+                let started_at = now - chrono::Duration::from_std(elapsed).unwrap_or_default();
+
+                RunInfo {
+                    issue_id: id.clone(),
+                    repo: rs.issue.repo.clone(),
+                    title: rs.issue.title.clone(),
+                    workspace_path: rs.workspace.path.display().to_string(),
+                    branch: rs.workspace.branch.clone(),
+                    started_at,
+                }
+            })
+            .collect();
+
+        let retries: Vec<RetryInfo> = self
+            .retries
+            .iter()
+            .map(|(id, r)| RetryInfo {
+                issue_id: id.clone(),
+                attempt: r.attempt,
+            })
+            .collect();
+
+        let snapshot = SymphonySnapshot {
+            running,
+            claimed: self.claimed.iter().cloned().collect(),
+            retries,
+            config_summary: ConfigSummary {
+                enabled: self.config.enabled,
+                poll_interval_secs: self.config.poll_interval.as_secs(),
+                max_concurrent_agents: self.config.max_concurrent_agents,
+                repos: self.config.repos.iter().map(|r| r.name.clone()).collect(),
+            },
+            updated_at: now,
+        };
+
+        self.status_handle.update_snapshot(snapshot).await;
+    }
+
+    /// Log an event to the broadcast channel.
+    fn log_event(&self, kind: &str, issue_id: Option<&str>, detail: &str) {
+        self.status_handle.log_event(SymphonyEventLog {
+            timestamp: Utc::now(),
+            kind: kind.to_string(),
+            issue_id: issue_id.map(String::from),
+            detail: detail.to_string(),
+        });
+    }
+
+    /// Log a structured event from a `SymphonyEvent`.
+    fn log_event_for(&self, event: &SymphonyEvent) {
+        let (kind, issue_id, detail) = match event {
+            SymphonyEvent::IssueDiscovered { issue } => {
+                ("issue_discovered", Some(issue.id.as_str()), issue.title.as_str())
+            }
+            SymphonyEvent::AgentCompleted { issue_id, .. } => {
+                ("agent_completed", Some(issue_id.as_str()), "")
+            }
+            SymphonyEvent::AgentFailed {
+                issue_id, reason, ..
+            } => ("agent_failed", Some(issue_id.as_str()), reason.as_str()),
+            SymphonyEvent::AgentStalled { issue_id } => {
+                ("agent_stalled", Some(issue_id.as_str()), "")
+            }
+            SymphonyEvent::RetryReady { issue_id } => {
+                ("retry_ready", Some(issue_id.as_str()), "")
+            }
+            SymphonyEvent::IssueStateChanged {
+                issue_id,
+                new_state,
+            } => {
+                let detail_str = match new_state {
+                    IssueState::Active => "active",
+                    IssueState::Terminal => "terminal",
+                };
+                ("issue_state_changed", Some(issue_id.as_str()), detail_str)
+            }
+            SymphonyEvent::WorkspaceCleaned { issue_id, .. } => {
+                ("workspace_cleaned", Some(issue_id.as_str()), "")
+            }
+            SymphonyEvent::Shutdown => ("shutdown", None, ""),
+        };
+
+        self.log_event(kind, issue_id, detail);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     /// Check if there are global slots available.
@@ -561,11 +672,13 @@ mod tests {
         let workspace_mgr = WorkspaceManager::new(&config.repos);
         let agent = MockAgent;
 
+        let status_handle = SymphonyStatusHandle::new(&config);
         let mut orchestrator = Orchestrator::new(
             Box::new(tracker),
             workspace_mgr,
             Box::new(agent),
             config,
+            status_handle,
         );
 
         // Schedule a shutdown after the first poll tick fires.
@@ -600,6 +713,7 @@ mod tests {
             .repos(vec![])
             .build();
 
+        let status_handle = SymphonyStatusHandle::new(&config);
         let orchestrator = Orchestrator::new(
             Box::new(MockTracker {
                 polled: Arc::new(AtomicBool::new(false)),
@@ -607,6 +721,7 @@ mod tests {
             WorkspaceManager::new(&[]),
             Box::new(MockAgent),
             config,
+            status_handle,
         );
 
         // 10s * 2^0 = 10s

@@ -70,6 +70,7 @@ impl BackendState {
         kernel_handle: &rara_kernel::handle::KernelHandle,
         skill_registry: &rara_skills::registry::InMemoryRegistry,
         mcp_manager: &rara_mcp::manager::mgr::McpManager,
+        symphony_handle: Option<rara_symphony::SymphonyStatusHandle>,
     ) -> (axum::Router, utoipa::openapi::OpenApi) {
         let mut api = Self::api_doc();
 
@@ -97,6 +98,11 @@ impl BackendState {
 
         // Kernel observability routes (stats, sessions, approvals, audit).
         router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
+
+        // Symphony observability routes (plain axum::Router, no OpenAPI metadata).
+        if let Some(handle) = symphony_handle {
+            router = router.merge(crate::symphony::symphony_routes(handle));
+        }
 
         (router, api)
     }

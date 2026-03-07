@@ -310,8 +310,19 @@ pub async fn start_with_options(
         *lock = Some(kernel_handle.clone());
     }
 
-    let (domain_routes, openapi) =
-        backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
+    // Create symphony status handle early so it can be wired into HTTP routes.
+    let symphony_status_handle = config
+        .symphony
+        .as_ref()
+        .filter(|c| c.enabled)
+        .map(rara_symphony::SymphonyStatusHandle::new);
+
+    let (domain_routes, openapi) = backend.routes(
+        &kernel_handle,
+        &rara.skill_registry,
+        &rara.mcp_manager,
+        symphony_status_handle.clone(),
+    );
     let swagger_ui =
         utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
 
@@ -414,11 +425,12 @@ pub async fn start_with_options(
 
     // -- Symphony orchestrator ------------------------------------------------
     if let Some(ref symphony_config) = config.symphony {
-        if symphony_config.enabled {
-            let symphony = rara_symphony::SymphonyService::new(
+        if let Some(handle) = symphony_status_handle {
+            let symphony = rara_symphony::SymphonyService::with_status_handle(
                 symphony_config.clone(),
                 cancellation_token.clone(),
                 std::env::var("GITHUB_TOKEN").ok(),
+                handle,
             );
             tokio::spawn(async move {
                 if let Err(e) = symphony.run().await {

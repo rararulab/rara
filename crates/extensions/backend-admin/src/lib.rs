@@ -24,4 +24,5 @@ pub mod mcp;
 pub mod settings;
 pub mod skills;
 pub mod state;
+pub mod symphony;
 pub mod system_routes;
