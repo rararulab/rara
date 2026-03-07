@@ -550,6 +550,7 @@ pub(crate) async fn run_agent_loop(
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
     let mut llm_error_recovery_used = false;
+    let mut consecutive_silent_iters: usize = 0;
 
     for iteration in 0..max_iterations {
         messages = sanitize_messages_for_llm(&messages);
@@ -944,6 +945,20 @@ pub(crate) async fn run_agent_loop(
                 },
                 tool_calls: tool_call_traces,
             });
+        }
+
+        // Track consecutive silent (tool-only, no text) iterations and emit
+        // a Progress event so the user knows we're still working.
+        if accumulated_text.len() == last_accumulated_text.len() {
+            consecutive_silent_iters += 1;
+        } else {
+            consecutive_silent_iters = 0;
+        }
+        if consecutive_silent_iters >= 3 {
+            stream_handle.emit(StreamEvent::Progress {
+                stage: format!("Processing... ({tool_calls_made} steps completed)"),
+            });
+            consecutive_silent_iters = 0;
         }
     }
 
