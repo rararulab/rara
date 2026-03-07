@@ -203,10 +203,13 @@ impl Orchestrator {
         let workflow_path = workspace.path.join(&workflow_file);
         let workflow_content = std::fs::read_to_string(&workflow_path).ok();
 
+        // Determine retry attempt from retry tracking.
+        let attempt = self.retries.get(&issue.id).map(|r| r.attempt);
+
         // Build the agent task.
         let task = AgentTask {
             issue: issue.clone(),
-            prompt: String::new(),
+            attempt,
             workflow_content,
         };
 

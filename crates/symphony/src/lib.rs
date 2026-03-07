@@ -6,6 +6,7 @@ pub mod orchestrator;
 pub mod queue;
 pub mod service;
 pub mod tracker;
+pub mod workflow;
 pub mod workspace;
 
 pub use config::SymphonyConfig;

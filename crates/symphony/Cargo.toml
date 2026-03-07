@@ -21,6 +21,7 @@ humantime-serde = "1"
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 snafu.workspace = true
 tokio = { workspace = true, features = ["process", "time", "sync"] }
 tokio-util.workspace = true
