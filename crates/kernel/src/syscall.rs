@@ -105,6 +105,9 @@ impl SyscallDispatcher {
 
     pub fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
 
+    /// Access the notification bus for publishing kernel events.
+    pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
+
     /// Access the job wheel (for tick-based drain in the event loop).
     pub fn job_wheel(&self) -> &std::sync::Mutex<crate::schedule::JobWheel> { &self.job_wheel }
 

@@ -414,7 +414,7 @@ impl Kernel {
         info!(processor_id = id, "event processor stopped");
     }
 
-    /// Drain expired scheduled jobs and inject them as `UserMessage` events.
+    /// Drain expired scheduled jobs and inject them as `ScheduledTask` events.
     fn drain_scheduled_jobs(&self) {
         let now = jiff::Timestamp::now();
         let expired = {
@@ -438,12 +438,7 @@ impl Kernel {
                 session = %job.session_key,
                 "scheduled job fired"
             );
-            let msg = InboundMessage::scheduled(
-                job.message,
-                job.session_key,
-                &job.principal,
-            );
-            let _ = self.event_queue.push(KernelEventEnvelope::user_message(msg));
+            let _ = self.event_queue.push(KernelEventEnvelope::scheduled_task(job));
         }
     }
 
@@ -512,6 +507,9 @@ impl Kernel {
                         &kernel_handle,
                     )
                     .await;
+            }
+            KernelEvent::ScheduledTask { job } => {
+                self.handle_scheduled_task(job).await;
             }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
@@ -1004,6 +1002,99 @@ impl Kernel {
             Err(e) => {
                 error!(session_id = %session_id, error = %e, "failed to spawn agent");
             }
+        }
+    }
+
+    /// Handle a scheduled task event.
+    ///
+    /// Scheduled tasks are system-initiated events — they reuse the same
+    /// session/agent pipeline as `UserMessage` but enter through a dedicated
+    /// code path so that observability and notifications distinguish them from
+    /// user-initiated interactions.
+    #[tracing::instrument(
+        skip(self, job),
+        fields(
+            job_id = %job.id,
+            session_key = %job.session_key,
+        )
+    )]
+    async fn handle_scheduled_task(&self, job: crate::schedule::JobEntry) {
+        use crate::notification::KernelNotification;
+
+        let session_key = job.session_key;
+        let job_id = job.id;
+
+        // Publish ScheduledTaskFired notification.
+        self.syscall
+            .event_bus()
+            .publish(KernelNotification::ScheduledTaskFired {
+                job_id:      job_id.clone(),
+                session_key: session_key.clone(),
+                message:     job.message.clone(),
+                timestamp:   jiff::Timestamp::now(),
+            })
+            .await;
+
+        // Build a synthetic InboundMessage to feed into the existing turn
+        // pipeline, using Internal channel type.
+        let msg = InboundMessage::synthetic(
+            job.message,
+            job.principal.user_id.clone(),
+            session_key,
+        );
+
+        // Route through the same logic as handle_user_message:
+        // check if a process already exists for this session → deliver,
+        // otherwise spawn a new agent via role-based default.
+        let process_info = self
+            .process_table
+            .with(&session_key, |p| (p.session_key, p.state));
+
+        if let Some((_session_key_found, state)) = process_info {
+            if !state.is_terminal() {
+                self.deliver_to_session(session_key, msg).await;
+                return;
+            }
+            // Terminal process — fall through to respawn below.
+        }
+
+        // No active process for this session — spawn via role-based default.
+        let user = msg.user.clone();
+        let manifest = match self
+            .agent_registry
+            .agent_for_role(self.security.resolve_user_role(&user).await)
+        {
+            Some(m) => m,
+            None => {
+                error!(
+                    session_key = %session_key,
+                    job_id = %job_id,
+                    "no default agent registered for user role — cannot run scheduled task"
+                );
+                return;
+            }
+        };
+
+        let principal = crate::identity::Principal::lookup(user.0.clone());
+        let spawn_result = self
+            .handle_spawn_agent(
+                manifest,
+                msg.content.as_text(),
+                principal,
+                None,
+                None,
+                Some(session_key),
+                None,
+            )
+            .await;
+
+        if let Err(e) = spawn_result {
+            error!(
+                session_key = %session_key,
+                job_id = %job_id,
+                error = %e,
+                "failed to spawn agent for scheduled task"
+            );
         }
     }
 

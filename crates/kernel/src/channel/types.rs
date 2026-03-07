@@ -57,9 +57,6 @@ pub enum ChannelType {
     /// REST/gRPC API call.
     #[strum(serialize = "api")]
     Api,
-    /// Internally-triggered scheduled task.
-    #[strum(serialize = "scheduled")]
-    Scheduled,
     /// Internally-triggered proactive task.
     #[strum(serialize = "proactive")]
     Proactive,

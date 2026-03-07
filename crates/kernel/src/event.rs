@@ -30,6 +30,7 @@ use crate::{
     identity::{Principal, UserId},
     io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter},
     kv::KvScope,
+    schedule::JobEntry,
     session::{AgentRunLoopResult, SessionKey, Signal},
     tool::ToolRegistry,
 };
@@ -306,6 +307,13 @@ pub enum KernelEvent {
     /// state.
     SessionCommand(SyscallEnvelope),
 
+    // === Scheduled ===
+    /// A scheduled task has fired. Unlike `UserMessage`, this is a
+    /// system-initiated event and is not routed through the ingress pipeline.
+    ScheduledTask {
+        job: JobEntry,
+    },
+
     // === System ===
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
@@ -329,6 +337,7 @@ impl KernelEvent {
             Self::UserMessage(_)
             | Self::GroupMessage(_)
             | Self::CreateSession { .. }
+            | Self::ScheduledTask { .. }
             | Self::IdleCheck => EventPriority::Low,
         }
     }
@@ -383,6 +392,15 @@ impl KernelEventEnvelope {
         Self {
             base: EventBase::from(base_key),
             kind: KernelEvent::GroupMessage(msg),
+        }
+    }
+
+    /// Create a `ScheduledTask` event.
+    pub fn scheduled_task(job: JobEntry) -> Self {
+        let session_key = job.session_key;
+        Self {
+            base: EventBase::from(session_key),
+            kind: KernelEvent::ScheduledTask { job },
         }
     }
 
@@ -551,6 +569,12 @@ impl KernelEventEnvelope {
                 format!(
                     "deliver outbound message for session {}",
                     envelope.session_key
+                )
+            }
+            KernelEvent::ScheduledTask { job } => {
+                format!(
+                    "scheduled task {} fired for session {}",
+                    job.id, job.session_key
                 )
             }
             KernelEvent::SessionCommand(envelope) => envelope.payload.summary(),
