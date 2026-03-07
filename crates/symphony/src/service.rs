@@ -2,12 +2,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::agent::ClaudeCodeAgent;
-use crate::config::SymphonyConfig;
+use crate::config::{SymphonyConfig, TrackerConfig};
 use crate::error::Result;
 use crate::event::SymphonyEvent;
 use crate::orchestrator::Orchestrator;
 use crate::status::SymphonyStatusHandle;
-use crate::tracker::GitHubIssueTracker;
+use crate::tracker::{GitHubIssueTracker, LinearIssueTracker};
 use crate::workspace::WorkspaceManager;
 
 /// Top-level service that wires together the symphony subsystem components
@@ -70,10 +70,38 @@ impl SymphonyService {
     pub async fn run(self) -> Result<()> {
         info!("starting symphony service");
 
-        let tracker = Box::new(GitHubIssueTracker::new(
-            self.config.repos.clone(),
-            self.github_token,
-        ));
+        let tracker: Box<dyn crate::tracker::IssueTracker> = match &self.config.tracker {
+            Some(TrackerConfig::Linear {
+                api_key,
+                project_slug,
+                active_states,
+                terminal_states,
+                repo_label_prefix,
+                ..
+            }) => {
+                let resolved_key = resolve_env_var(api_key);
+                let repo_names = self.config.repos.iter().map(|r| r.name.clone()).collect();
+                Box::new(LinearIssueTracker::new(
+                    &resolved_key,
+                    project_slug.clone(),
+                    active_states.clone(),
+                    terminal_states.clone(),
+                    repo_label_prefix.clone(),
+                    repo_names,
+                )?)
+            }
+            Some(TrackerConfig::Github { api_key }) => {
+                let token = api_key.as_ref().map(|k| resolve_env_var(k));
+                Box::new(GitHubIssueTracker::new(
+                    self.config.repos.clone(),
+                    token,
+                ))
+            }
+            None => Box::new(GitHubIssueTracker::new(
+                self.config.repos.clone(),
+                self.github_token.clone(),
+            )),
+        };
         let workspace_mgr = WorkspaceManager::new(&self.config.repos);
         let agent = Box::new(ClaudeCodeAgent::new(self.config.agent.clone()));
 
@@ -93,5 +121,14 @@ impl SymphonyService {
                 Ok(())
             }
         }
+    }
+}
+
+/// Resolve a `$ENV_VAR` reference to its value, or return the string as-is.
+fn resolve_env_var(value: &str) -> String {
+    if let Some(var_name) = value.strip_prefix('$') {
+        std::env::var(var_name).unwrap_or_default()
+    } else {
+        value.to_owned()
     }
 }
