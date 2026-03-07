@@ -168,6 +168,7 @@ lettre = { version = "0.11", default-features = false, features = [
 llmfit-core = { git = "https://github.com/AlexsJones/llmfit" }
 md5 = "0.7"
 moka = { version = "0.12", features = ["future"] }
+notify = "7"
 oauth2 = "5"
 once_cell = "^1.20"
 opendal = { version = "0.52", features = ["services-fs", "services-memory"] }

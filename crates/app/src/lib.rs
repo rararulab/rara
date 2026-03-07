@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod boot;
+pub mod config_sync;
 pub mod flatten;
 pub mod gateway;
 mod mita;
