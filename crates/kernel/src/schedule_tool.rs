@@ -102,7 +102,12 @@ impl AgentTool for ScheduleAddTool {
 
         let now = jiff::Timestamp::now();
 
-        let trigger = match (p.after_seconds, p.interval_seconds, p.cron) {
+        // Treat 0 as "not provided" — LLMs often send 0 or null for unused fields.
+        let after = p.after_seconds.filter(|&s| s > 0);
+        let interval = p.interval_seconds.filter(|&s| s > 0);
+        let cron = p.cron.filter(|s| !s.is_empty());
+
+        let trigger = match (after, interval, cron) {
             (Some(secs), None, None) => {
                 let run_at = now
                     .checked_add(jiff::SignedDuration::from_secs(secs as i64))
@@ -110,9 +115,6 @@ impl AgentTool for ScheduleAddTool {
                 Trigger::Once { run_at }
             }
             (None, Some(secs), None) => {
-                if secs == 0 {
-                    return Err(anyhow::anyhow!("interval_seconds must be > 0"));
-                }
                 let next_at = now
                     .checked_add(jiff::SignedDuration::from_secs(secs as i64))
                     .map_err(|e| anyhow::anyhow!("timestamp overflow: {e}"))?;
