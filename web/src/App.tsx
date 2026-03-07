@@ -25,6 +25,7 @@ import AgentConsole from '@/pages/AgentConsole';
 import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
 import KernelTop from '@/pages/KernelTop';
+import Symphony from '@/pages/Symphony';
 
 const queryClient = new QueryClient();
 
@@ -46,6 +47,7 @@ export default function App() {
                   <Route path="docs" element={<Docs />} />
                   <Route path="settings" element={<Settings />} />
                   <Route path="kernel-top" element={<KernelTop />} />
+                  <Route path="symphony" element={<Symphony />} />
 
                   {/* Redirects for old routes */}
                   <Route path="chat" element={<Navigate to="/agent?tab=chat" replace />} />

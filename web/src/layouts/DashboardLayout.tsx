@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, LogOut } from 'lucide-react';
+import { Activity, Bot, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { settingsApi } from '@/api/client';
@@ -113,6 +113,15 @@ export default function DashboardLayout() {
           >
             <Activity className="h-3.5 w-3.5" />
             Kernel
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => navigate('/symphony')}
+          >
+            <Bot className="h-3.5 w-3.5" />
+            Symphony
           </Button>
           <Button
             variant="ghost"
