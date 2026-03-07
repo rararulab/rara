@@ -27,6 +27,7 @@ struct RunState {
 /// Retry tracking for a failed issue.
 struct RetryEntry {
     attempt: u32,
+    issue: TrackedIssue,
 }
 
 /// The core event-loop driven orchestrator for symphony.
@@ -325,13 +326,18 @@ impl Orchestrator {
     fn handle_agent_failed(&mut self, issue_id: &str, reason: &str) {
         warn!(issue_id = %issue_id, reason = %reason, "agent failed");
 
-        self.running.remove(issue_id);
+        let run_state = self.running.remove(issue_id);
 
         let entry = self
             .retries
             .entry(issue_id.to_owned())
-            .or_insert(RetryEntry { attempt: 0 });
-        entry.attempt += 1;
+            .and_modify(|e| e.attempt += 1)
+            .or_insert_with(|| RetryEntry {
+                attempt: 1,
+                issue: run_state
+                    .expect("run_state must exist for failed agent")
+                    .issue,
+            });
         let attempt = entry.attempt;
 
         let backoff = self.compute_backoff(attempt);
@@ -391,30 +397,22 @@ impl Orchestrator {
     async fn handle_retry(&mut self, issue_id: &str) -> Result<()> {
         info!(issue_id = %issue_id, "processing retry");
 
-        // Remove from claimed so dispatch can re-claim.
         self.claimed.remove(issue_id);
         self.running.remove(issue_id);
 
-        // Parse repo and number from issue_id (format: "owner/repo#number").
-        let (repo, number) = match issue_id.rsplit_once('#') {
-            Some((r, n)) => match n.parse::<u64>() {
-                Ok(num) => (r, num),
-                Err(_) => {
-                    warn!(issue_id = %issue_id, "cannot parse issue number from id");
-                    return Ok(());
-                }
-            },
+        let entry = match self.retries.get(issue_id) {
+            Some(e) => e,
             None => {
-                warn!(issue_id = %issue_id, "cannot parse repo from issue id");
+                warn!(issue_id = %issue_id, "no retry entry found, dropping");
                 return Ok(());
             }
         };
+        let repo = entry.issue.repo.clone();
+        let number = entry.issue.number;
 
-        // Re-check issue state.
-        match self.tracker.fetch_issue_state(repo, number).await {
+        match self.tracker.fetch_issue_state(&repo, number).await {
             Ok(IssueState::Active) => {
                 info!(issue_id = %issue_id, "issue still active, triggering re-poll");
-                // Trigger a fresh poll to rediscover the issue.
                 if let Err(e) = self.handle_poll_tick().await {
                     error!(error = %e, "re-poll after retry failed");
                 }
