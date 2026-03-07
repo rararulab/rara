@@ -32,7 +32,7 @@ impl TapeHandoffTool {
 
 #[async_trait]
 impl AgentTool for TapeHandoffTool {
-    fn name(&self) -> &str { "tape_handoff" }
+    fn name(&self) -> &str { "tape-handoff" }
 
     fn description(&self) -> &str {
         "Create a handoff anchor in the session tape to truncate context. \

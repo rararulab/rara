@@ -49,7 +49,7 @@ fn mime_from_extension(ext: &str) -> Option<&'static str> {
 
 #[async_trait]
 impl AgentTool for SendImageTool {
-    fn name(&self) -> &str { "send_image" }
+    fn name(&self) -> &str { "send-image" }
 
     fn description(&self) -> &str {
         "Send an image file to the user in the current conversation. Supports PNG, JPEG, WebP, \

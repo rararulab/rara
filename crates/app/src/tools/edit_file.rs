@@ -31,7 +31,7 @@ impl EditFileTool {
 
 #[async_trait]
 impl AgentTool for EditFileTool {
-    fn name(&self) -> &str { "edit_file" }
+    fn name(&self) -> &str { "edit-file" }
 
     fn description(&self) -> &str {
         "Edit a file by replacing an exact string with a new string. By default, the old_string \

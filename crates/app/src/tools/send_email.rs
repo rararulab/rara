@@ -39,7 +39,7 @@ impl SendEmailTool {
 
 #[async_trait]
 impl AgentTool for SendEmailTool {
-    fn name(&self) -> &str { "send_email" }
+    fn name(&self) -> &str { "send-email" }
 
     fn description(&self) -> &str {
         "Send an email via Gmail SMTP. Requires Gmail address and App Password to be configured in \

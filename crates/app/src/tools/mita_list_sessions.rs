@@ -37,7 +37,7 @@ impl ListSessionsTool {
 
 #[async_trait]
 impl AgentTool for ListSessionsTool {
-    fn name(&self) -> &str { "list_sessions" }
+    fn name(&self) -> &str { "list-sessions" }
 
     fn description(&self) -> &str {
         "List all active sessions with metadata (key, title, message count, timestamps). Use this \

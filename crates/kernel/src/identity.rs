@@ -165,24 +165,24 @@ mod tests {
     fn root_can_use_any_tool() {
         let user = root_user();
         assert!(user.can_use_tool("bash"));
-        assert!(user.can_use_tool("write_file"));
-        assert!(user.can_use_tool("http_fetch"));
+        assert!(user.can_use_tool("write-file"));
+        assert!(user.can_use_tool("http-fetch"));
     }
 
     #[test]
     fn admin_can_use_any_tool() {
         let user = admin_user();
         assert!(user.can_use_tool("bash"));
-        assert!(user.can_use_tool("write_file"));
+        assert!(user.can_use_tool("write-file"));
     }
 
     #[test]
     fn regular_user_cannot_use_any_tool() {
         let user = regular_user();
         assert!(!user.can_use_tool("bash"));
-        assert!(!user.can_use_tool("write_file"));
-        assert!(!user.can_use_tool("http_fetch"));
-        assert!(!user.can_use_tool("read_file"));
+        assert!(!user.can_use_tool("write-file"));
+        assert!(!user.can_use_tool("http-fetch"));
+        assert!(!user.can_use_tool("read-file"));
     }
 
     #[test]
@@ -190,10 +190,10 @@ mod tests {
         let user = KernelUser {
             name:        "limited".into(),
             role:        Role::User,
-            permissions: vec![Permission::Spawn, Permission::UseTool("http_fetch".into())],
+            permissions: vec![Permission::Spawn, Permission::UseTool("http-fetch".into())],
             enabled:     true,
         };
-        assert!(user.can_use_tool("http_fetch"));
+        assert!(user.can_use_tool("http-fetch"));
         assert!(!user.can_use_tool("bash"));
     }
 
@@ -206,6 +206,6 @@ mod tests {
             enabled:     true,
         };
         assert!(user.can_use_tool("bash"));
-        assert!(user.can_use_tool("write_file"));
+        assert!(user.can_use_tool("write-file"));
     }
 }

@@ -33,7 +33,7 @@ impl ListDirectoryTool {
 
 #[async_trait]
 impl AgentTool for ListDirectoryTool {
-    fn name(&self) -> &str { "list_directory" }
+    fn name(&self) -> &str { "list-directory" }
 
     fn description(&self) -> &str {
         "List the contents of a directory. Returns each entry's name, type (file/dir/symlink), and \

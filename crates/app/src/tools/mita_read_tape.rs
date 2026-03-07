@@ -35,7 +35,7 @@ impl ReadTapeTool {
 
 #[async_trait]
 impl AgentTool for ReadTapeTool {
-    fn name(&self) -> &str { "read_tape" }
+    fn name(&self) -> &str { "read-tape" }
 
     fn description(&self) -> &str {
         "Read tape entries from a specific session. Returns message history including user \

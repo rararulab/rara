@@ -49,7 +49,7 @@ impl TapeTool {
             .tape_service
             .info(&self.tape_name)
             .await
-            .context("tape_info")?;
+            .context("tape-info")?;
         Ok(serde_json::json!({
             "tape_name": info.name,
             "total_entries": info.entries,

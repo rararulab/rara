@@ -59,7 +59,7 @@ struct ScheduleAddParams {
 
 #[async_trait]
 impl AgentTool for ScheduleAddTool {
-    fn name(&self) -> &str { "schedule.add" }
+    fn name(&self) -> &str { "schedule-add" }
 
     fn description(&self) -> &str {
         "Schedule a task to run later. Provide exactly one of: after_seconds (one-shot delay), \
@@ -98,7 +98,7 @@ impl AgentTool for ScheduleAddTool {
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
         let p: ScheduleAddParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid schedule.add params: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("invalid schedule-add params: {e}"))?;
 
         let now = jiff::Timestamp::now();
 
@@ -196,7 +196,7 @@ struct ScheduleRemoveParams {
 
 #[async_trait]
 impl AgentTool for ScheduleRemoveTool {
-    fn name(&self) -> &str { "schedule.remove" }
+    fn name(&self) -> &str { "schedule-remove" }
 
     fn description(&self) -> &str {
         "Remove a previously scheduled task by its job ID."
@@ -221,7 +221,7 @@ impl AgentTool for ScheduleRemoveTool {
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
         let p: ScheduleRemoveParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid schedule.remove params: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("invalid schedule-remove params: {e}"))?;
 
         let event_queue = context
             .event_queue
@@ -260,7 +260,7 @@ pub struct ScheduleListTool;
 
 #[async_trait]
 impl AgentTool for ScheduleListTool {
-    fn name(&self) -> &str { "schedule.list" }
+    fn name(&self) -> &str { "schedule-list" }
 
     fn description(&self) -> &str {
         "List all scheduled tasks for the current session."

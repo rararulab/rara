@@ -39,7 +39,7 @@ impl InstallMcpServerTool {
 
 #[async_trait]
 impl AgentTool for InstallMcpServerTool {
-    fn name(&self) -> &str { "install_mcp_server" }
+    fn name(&self) -> &str { "install-mcp-server" }
 
     fn description(&self) -> &str {
         "Install and start an MCP server. The server's tools become available immediately for \
@@ -165,7 +165,7 @@ impl ListMcpServersTool {
 
 #[async_trait]
 impl AgentTool for ListMcpServersTool {
-    fn name(&self) -> &str { "list_mcp_servers" }
+    fn name(&self) -> &str { "list-mcp-servers" }
 
     fn description(&self) -> &str {
         "List all registered MCP servers with their status (enabled, connected) and available \
@@ -259,7 +259,7 @@ impl RemoveMcpServerTool {
 
 #[async_trait]
 impl AgentTool for RemoveMcpServerTool {
-    fn name(&self) -> &str { "remove_mcp_server" }
+    fn name(&self) -> &str { "remove-mcp-server" }
 
     fn description(&self) -> &str {
         "Remove an MCP server from the registry and stop it. Its tools will no longer be available."

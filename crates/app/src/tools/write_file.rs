@@ -31,7 +31,7 @@ impl WriteFileTool {
 
 #[async_trait]
 impl AgentTool for WriteFileTool {
-    fn name(&self) -> &str { "write_file" }
+    fn name(&self) -> &str { "write-file" }
 
     fn description(&self) -> &str {
         "Write content to a file on the filesystem. Automatically creates parent directories if \

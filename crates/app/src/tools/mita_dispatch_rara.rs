@@ -59,7 +59,7 @@ impl DispatchRaraTool {
 
 #[async_trait]
 impl AgentTool for DispatchRaraTool {
-    fn name(&self) -> &str { "dispatch_rara" }
+    fn name(&self) -> &str { "dispatch-rara" }
 
     fn description(&self) -> &str {
         "Dispatch a proactive instruction to Rara for a specific session. Rara will receive the \
@@ -108,7 +108,7 @@ impl AgentTool for DispatchRaraTool {
         self.tape_service
             .append_event(
                 mita_tape,
-                "dispatch_rara",
+                "dispatch-rara",
                 json!({
                     "target_session": session_id_str,
                     "instruction": instruction,

@@ -42,7 +42,7 @@ impl HttpFetchTool {
 
 #[async_trait]
 impl AgentTool for HttpFetchTool {
-    fn name(&self) -> &str { "http_fetch" }
+    fn name(&self) -> &str { "http-fetch" }
 
     fn description(&self) -> &str {
         "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body (truncated \

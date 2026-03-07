@@ -41,7 +41,7 @@ impl MitaWriteUserNoteTool {
 
 #[async_trait]
 impl AgentTool for MitaWriteUserNoteTool {
-    fn name(&self) -> &str { "write_user_note" }
+    fn name(&self) -> &str { "write-user-note" }
 
     fn description(&self) -> &str {
         "Write a structured note into a specific user's tape. This is a system-level tool for \

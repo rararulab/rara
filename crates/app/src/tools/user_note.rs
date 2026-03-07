@@ -39,7 +39,7 @@ impl UserNoteTool {
 
 #[async_trait]
 impl AgentTool for UserNoteTool {
-    fn name(&self) -> &str { "user_note" }
+    fn name(&self) -> &str { "user-note" }
 
     fn description(&self) -> &str {
         "Record a note about the current user for future reference. The user is automatically \

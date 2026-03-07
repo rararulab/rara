@@ -32,7 +32,7 @@ pub fn tool_arguments_summary(tool_name: &str, arguments: &serde_json::Value) ->
         "shell_execute" => arguments.get("command").and_then(|v| v.as_str()),
         "web_search" => arguments.get("query").and_then(|v| v.as_str()),
         "web_fetch" => arguments.get("url").and_then(|v| v.as_str()),
-        "read_file" | "write_file" => arguments.get("path").and_then(|v| v.as_str()),
+        "read-file" | "write-file" => arguments.get("path").and_then(|v| v.as_str()),
         _ => {
             // Try common field names, then fall back to the first string value.
             ["query", "command", "input", "path", "url"]
@@ -72,7 +72,7 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
     let raw = match tool_name {
         "web_search" => arguments.get("query").and_then(|v| v.as_str()),
         "web_fetch" => arguments.get("url").and_then(|v| v.as_str()),
-        "read_file" | "write_file" => arguments.get("path").and_then(|v| v.as_str()),
+        "read-file" | "write-file" => arguments.get("path").and_then(|v| v.as_str()),
         _ => ["query", "command", "input", "path", "url"]
             .iter()
             .find_map(|key| arguments.get(*key).and_then(|v| v.as_str()))
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(tool_display_name("shell_execute"), "shell");
         assert_eq!(tool_display_name("web_search"), "search");
         assert_eq!(tool_display_name("web_fetch"), "fetch");
-        assert_eq!(tool_display_name("read_file"), "read_file");
+        assert_eq!(tool_display_name("read-file"), "read-file");
     }
 
     #[test]

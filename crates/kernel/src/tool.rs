@@ -194,7 +194,7 @@ mod tests {
 
     fn build_registry() -> ToolRegistry {
         let mut reg = ToolRegistry::new();
-        for name in ["bash", "http_fetch", "read_file", "write_file"] {
+        for name in ["bash", "http-fetch", "read-file", "write-file"] {
             reg.register(Arc::new(DummyTool {
                 name: name.into(),
             }));
@@ -236,16 +236,16 @@ mod tests {
             role:        Role::User,
             permissions: vec![
                 Permission::Spawn,
-                Permission::UseTool("http_fetch".into()),
-                Permission::UseTool("read_file".into()),
+                Permission::UseTool("http-fetch".into()),
+                Permission::UseTool("read-file".into()),
             ],
             enabled:     true,
         };
         let filtered = reg.filtered_by_user(&user);
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.get("http_fetch").is_some());
-        assert!(filtered.get("read_file").is_some());
+        assert!(filtered.get("http-fetch").is_some());
+        assert!(filtered.get("read-file").is_some());
         assert!(filtered.get("bash").is_none());
-        assert!(filtered.get("write_file").is_none());
+        assert!(filtered.get("write-file").is_none());
     }
 }

@@ -59,7 +59,7 @@ impl ListSkillsTool {
 
 #[async_trait]
 impl AgentTool for ListSkillsTool {
-    fn name(&self) -> &str { "list_skills" }
+    fn name(&self) -> &str { "list-skills" }
 
     fn description(&self) -> &str {
         "List all available skills with their metadata (name, description, allowed_tools, source, \
@@ -117,7 +117,7 @@ impl CreateSkillTool {
 
 #[async_trait]
 impl AgentTool for CreateSkillTool {
-    fn name(&self) -> &str { "create_skill" }
+    fn name(&self) -> &str { "create-skill" }
 
     fn description(&self) -> &str {
         "Create a new skill by writing a SKILL.md file with frontmatter and prompt body."
@@ -223,7 +223,7 @@ impl DeleteSkillTool {
 
 #[async_trait]
 impl AgentTool for DeleteSkillTool {
-    fn name(&self) -> &str { "delete_skill" }
+    fn name(&self) -> &str { "delete-skill" }
 
     fn description(&self) -> &str {
         "Delete a skill by removing its directory and unregistering it."

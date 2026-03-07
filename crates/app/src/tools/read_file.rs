@@ -43,7 +43,7 @@ impl ReadFileTool {
 
 #[async_trait]
 impl AgentTool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
+    fn name(&self) -> &str { "read-file" }
 
     fn description(&self) -> &str {
         "Read a file from the filesystem. Returns content with line number prefixes (like cat -n). \

@@ -34,7 +34,7 @@ impl FindFilesTool {
 
 #[async_trait]
 impl AgentTool for FindFilesTool {
-    fn name(&self) -> &str { "find_files" }
+    fn name(&self) -> &str { "find-files" }
 
     fn description(&self) -> &str {
         "Find files matching a glob pattern (e.g. '*.rs', '**/*.toml'). Results are sorted by \
