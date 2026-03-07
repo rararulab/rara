@@ -586,6 +586,7 @@ pub(crate) async fn run_agent_loop(
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
     let mut llm_error_recovery_used = false;
+    let mut context_window_recovery_used = false;
     let mut consecutive_silent_iters: usize = 0;
 
     for iteration in 0..max_iterations {
@@ -739,6 +740,51 @@ pub(crate) async fn run_agent_loop(
         };
 
         if let Err(ref e) = driver_result {
+            // Auto-handoff on context window overflow — truncate and retry.
+            if !context_window_recovery_used && matches!(e, KernelError::ContextWindow) {
+                warn!(
+                    iteration,
+                    model = model.as_str(),
+                    "context window exceeded, performing auto-handoff and retry"
+                );
+                context_window_recovery_used = true;
+
+                // Create an automatic handoff anchor to truncate context.
+                let state = crate::memory::HandoffState {
+                    phase: None,
+                    summary: Some(
+                        "Context window exceeded — automatic handoff to truncate history."
+                            .to_owned(),
+                    ),
+                    next_steps: None,
+                    source_ids: vec![],
+                    owner: Some("system".to_owned()),
+                    extra: None,
+                };
+                if let Err(he) = tape.handoff(tape_name, "auto-compact", state).await {
+                    warn!(error = %he, "auto-handoff failed, cannot recover from context window error");
+                    return Err(KernelError::AgentExecution {
+                        message: format!(
+                            "Context window exceeded and auto-handoff failed: {he}"
+                        ),
+                    });
+                }
+
+                // Rebuild messages from the truncated context.
+                let rebuilt =
+                    tape.build_llm_context(tape_name).await.map_err(|e| {
+                        KernelError::AgentExecution {
+                            message: format!(
+                                "failed to rebuild context after handoff: {e}"
+                            ),
+                        }
+                    })?;
+                messages = rebuilt;
+                // Re-add the user's current message that triggered this turn.
+                messages.push(llm::Message::user(&input_text));
+                continue;
+            }
+
             if !llm_error_recovery_used && crate::error::is_retryable_provider_error(e) {
                 warn!(
                     iteration,
