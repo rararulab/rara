@@ -48,12 +48,6 @@ pub struct WorkspaceInfo {
 /// Events that flow through the symphony event loop.
 #[derive(Debug, Clone)]
 pub enum SymphonyEvent {
-    /// Time to poll repositories for new/changed issues.
-    PollTick,
-
-    /// Time to check for stalled agents.
-    StallCheck,
-
     /// A new issue matching active labels was discovered.
     IssueDiscovered { issue: TrackedIssue },
 

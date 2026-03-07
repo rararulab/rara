@@ -66,63 +66,63 @@ impl Orchestrator {
     }
 
     /// Run the main event loop until a `Shutdown` event is received.
+    ///
+    /// Uses `tokio::select!` to multiplex periodic timers (poll, stall check)
+    /// with async events from the queue (agent completion, failures, retries).
     pub async fn run(&mut self) -> Result<()> {
-        // Seed the loop with an initial poll tick and stall check.
-        self.queue.push(SymphonyEvent::PollTick);
-        self.queue
-            .schedule_after(self.config.stall_timeout, SymphonyEvent::StallCheck);
+        let mut poll_interval = tokio::time::interval(self.config.poll_interval);
+        let mut stall_interval = tokio::time::interval(self.config.stall_timeout);
+
+        // First tick fires immediately for poll, skip for stall (wait one full period first).
+        poll_interval.tick().await;
+        stall_interval.tick().await;
 
         loop {
-            let event = self.queue.pop().await;
-
-            match event {
-                SymphonyEvent::Shutdown => {
-                    info!("received shutdown signal, stopping orchestrator");
-                    break;
-                }
-                SymphonyEvent::PollTick => {
+            tokio::select! {
+                _ = poll_interval.tick() => {
                     if let Err(e) = self.handle_poll_tick().await {
                         error!(error = %e, "poll tick failed");
                     }
                 }
-                SymphonyEvent::IssueDiscovered { issue } => {
-                    if let Err(e) = self.handle_dispatch(issue).await {
-                        error!(error = %e, "dispatch failed");
-                    }
-                }
-                SymphonyEvent::AgentCompleted { issue_id, workspace } => {
-                    if let Err(e) = self.handle_agent_completed(&issue_id, &workspace).await {
-                        error!(issue_id = %issue_id, error = %e, "agent completed handler failed");
-                    }
-                }
-                SymphonyEvent::AgentFailed {
-                    issue_id,
-                    workspace: _,
-                    reason,
-                } => {
-                    self.handle_agent_failed(&issue_id, &reason);
-                }
-                SymphonyEvent::AgentStalled { issue_id } => {
-                    self.handle_agent_stalled(&issue_id);
-                }
-                SymphonyEvent::IssueStateChanged {
-                    issue_id,
-                    new_state,
-                } => {
-                    if let Err(e) = self.handle_state_changed(&issue_id, &new_state) {
-                        error!(issue_id = %issue_id, error = %e, "state change handler failed");
-                    }
-                }
-                SymphonyEvent::RetryReady { issue_id } => {
-                    if let Err(e) = self.handle_retry(&issue_id).await {
-                        error!(issue_id = %issue_id, error = %e, "retry handler failed");
-                    }
-                }
-                SymphonyEvent::StallCheck => {
+                _ = stall_interval.tick() => {
                     self.handle_stall_check();
                 }
-                SymphonyEvent::WorkspaceCleaned { issue_id, path } => {
-                    info!(issue_id = %issue_id, path = %path.display(), "workspace cleaned");
+                event = self.queue.pop() => {
+                    match event {
+                        SymphonyEvent::Shutdown => {
+                            info!("received shutdown signal, stopping orchestrator");
+                            break;
+                        }
+                        SymphonyEvent::IssueDiscovered { issue } => {
+                            if let Err(e) = self.handle_dispatch(issue).await {
+                                error!(error = %e, "dispatch failed");
+                            }
+                        }
+                        SymphonyEvent::AgentCompleted { issue_id, workspace } => {
+                            if let Err(e) = self.handle_agent_completed(&issue_id, &workspace).await {
+                                error!(issue_id = %issue_id, error = %e, "agent completed handler failed");
+                            }
+                        }
+                        SymphonyEvent::AgentFailed { issue_id, workspace: _, reason } => {
+                            self.handle_agent_failed(&issue_id, &reason);
+                        }
+                        SymphonyEvent::AgentStalled { issue_id } => {
+                            self.handle_agent_stalled(&issue_id);
+                        }
+                        SymphonyEvent::IssueStateChanged { issue_id, new_state } => {
+                            if let Err(e) = self.handle_state_changed(&issue_id, &new_state) {
+                                error!(issue_id = %issue_id, error = %e, "state change handler failed");
+                            }
+                        }
+                        SymphonyEvent::RetryReady { issue_id } => {
+                            if let Err(e) = self.handle_retry(&issue_id).await {
+                                error!(issue_id = %issue_id, error = %e, "retry handler failed");
+                            }
+                        }
+                        SymphonyEvent::WorkspaceCleaned { issue_id, path } => {
+                            info!(issue_id = %issue_id, path = %path.display(), "workspace cleaned");
+                        }
+                    }
                 }
             }
         }
@@ -145,10 +145,6 @@ impl Orchestrator {
             self.queue
                 .push(SymphonyEvent::IssueDiscovered { issue });
         }
-
-        // Schedule the next poll tick.
-        self.queue
-            .schedule_after(self.config.poll_interval, SymphonyEvent::PollTick);
 
         Ok(())
     }
@@ -403,10 +399,11 @@ impl Orchestrator {
         // Re-check issue state.
         match self.tracker.fetch_issue_state(repo, number).await {
             Ok(IssueState::Active) => {
-                info!(issue_id = %issue_id, "issue still active, re-dispatching");
-                // We need to fetch the full issue again. Trigger a poll to pick it up.
-                // Or we could fetch active issues — for simplicity, just push a PollTick.
-                self.queue.push(SymphonyEvent::PollTick);
+                info!(issue_id = %issue_id, "issue still active, triggering re-poll");
+                // Trigger a fresh poll to rediscover the issue.
+                if let Err(e) = self.handle_poll_tick().await {
+                    error!(error = %e, "re-poll after retry failed");
+                }
             }
             Ok(IssueState::Terminal) => {
                 info!(issue_id = %issue_id, "issue is now terminal, dropping retry");
@@ -435,9 +432,6 @@ impl Orchestrator {
                 .push(SymphonyEvent::AgentStalled { issue_id });
         }
 
-        // Schedule the next stall check.
-        self.queue
-            .schedule_after(stall_timeout, SymphonyEvent::StallCheck);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -539,7 +533,7 @@ mod tests {
 
         let config = SymphonyConfig::builder()
             .enabled(true)
-            .poll_interval(Duration::from_secs(60))
+            .poll_interval(Duration::from_millis(50))
             .max_concurrent_agents(2)
             .stall_timeout(Duration::from_secs(300))
             .max_retry_backoff(Duration::from_secs(600))
@@ -574,10 +568,10 @@ mod tests {
             config,
         );
 
-        // Schedule a shutdown after a short delay.
+        // Schedule a shutdown after the first poll tick fires.
         orchestrator
             .queue()
-            .schedule_after(Duration::from_millis(200), SymphonyEvent::Shutdown);
+            .schedule_after(Duration::from_millis(150), SymphonyEvent::Shutdown);
 
         orchestrator.run().await.expect("orchestrator should run");
 

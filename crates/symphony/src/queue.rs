@@ -74,16 +74,16 @@ mod tests {
     #[tokio::test]
     async fn push_and_pop() {
         let q = EventQueue::new();
-        q.push(SymphonyEvent::PollTick);
-        q.push(SymphonyEvent::StallCheck);
+        q.push(SymphonyEvent::Shutdown);
+        q.push(SymphonyEvent::AgentStalled { issue_id: "test".into() });
 
         assert_eq!(q.len(), 2);
 
         let first = q.pop().await;
-        assert!(matches!(first, SymphonyEvent::PollTick));
+        assert!(matches!(first, SymphonyEvent::Shutdown));
 
         let second = q.pop().await;
-        assert!(matches!(second, SymphonyEvent::StallCheck));
+        assert!(matches!(second, SymphonyEvent::AgentStalled { .. }));
 
         assert!(q.is_empty());
     }
@@ -108,7 +108,7 @@ mod tests {
     #[tokio::test]
     async fn schedule_after_delivers() {
         let q = EventQueue::new();
-        q.schedule_after(Duration::from_millis(50), SymphonyEvent::PollTick);
+        q.schedule_after(Duration::from_millis(50), SymphonyEvent::Shutdown);
 
         // Should be empty immediately.
         assert!(q.is_empty());
@@ -117,6 +117,6 @@ mod tests {
         let event = tokio::time::timeout(Duration::from_secs(2), q.pop())
             .await
             .expect("timed out waiting for scheduled event");
-        assert!(matches!(event, SymphonyEvent::PollTick));
+        assert!(matches!(event, SymphonyEvent::Shutdown));
     }
 }
