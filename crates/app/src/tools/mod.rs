@@ -36,6 +36,8 @@ mod send_email;
 mod send_image;
 mod settings;
 mod skill_tools;
+mod tape_handoff;
+mod tape_info;
 mod user_note;
 mod write_file;
 
@@ -57,6 +59,8 @@ use send_email::SendEmailTool;
 use send_image::SendImageTool;
 use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
+use tape_handoff::TapeHandoffTool;
+use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
 use write_file::WriteFileTool;
 
@@ -116,6 +120,9 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
         Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
         Arc::new(RemoveMcpServerTool::new(deps.mcp_manager)),
+        // Tape management tools
+        Arc::new(TapeInfoTool::new(deps.tape_service.clone())),
+        Arc::new(TapeHandoffTool::new(deps.tape_service.clone())),
         // User memory
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
         // Mita-exclusive tools

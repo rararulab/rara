@@ -347,9 +347,11 @@ impl TapeService {
         };
 
         let last_token_usage = entries.iter().rev().find_map(|entry| {
-            if entry.kind != TapEntryKind::Event
-                || entry.payload.get("name") != Some(&Value::String("run".to_owned()))
-            {
+            if entry.kind != TapEntryKind::Event {
+                return None;
+            }
+            let event_name = entry.payload.get("name").and_then(Value::as_str);
+            if !matches!(event_name, Some("run" | "llm.run")) {
                 return None;
             }
             entry

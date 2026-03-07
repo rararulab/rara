@@ -533,6 +533,14 @@ pub(crate) async fn run_agent_loop(
         Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
         None => manifest.system_prompt.clone(),
     };
+    let effective_prompt = format!(
+        "{effective_prompt}\n\n\
+         <context_contract>\n\
+         Excessively long context may cause model call failures. \
+         In this case, you SHOULD first use tape_handoff tool to \
+         shorten the length of the retrieved history.\n\
+         </context_contract>"
+    );
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
@@ -692,8 +700,23 @@ pub(crate) async fn run_agent_loop(
                         tc.arguments_buf.push_str(&arguments);
                     }
                 }
-                llm::StreamDelta::Done { stop_reason, .. } => {
+                llm::StreamDelta::Done { stop_reason, usage } => {
                     has_tool_calls = stop_reason == llm::StopReason::ToolCalls;
+                    if let Some(u) = usage {
+                        if let Err(e) = tape.append_event(
+                            tape_name,
+                            "llm.run",
+                            serde_json::json!({
+                                "usage": {
+                                    "prompt_tokens": u.prompt_tokens,
+                                    "completion_tokens": u.completion_tokens,
+                                    "total_tokens": u.total_tokens
+                                }
+                            }),
+                        ).await {
+                            warn!(error = %e, "failed to persist llm usage event");
+                        }
+                    }
                     break;
                 }
             }
