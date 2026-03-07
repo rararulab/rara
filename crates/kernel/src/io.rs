@@ -46,7 +46,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -960,16 +960,29 @@ pub trait IdentityResolver: Send + Sync + 'static {
     ) -> Result<UserId, IOError>;
 }
 
+/// Events sent from a child agent to its parent during execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// A key execution milestone (tool call, iteration boundary, etc.).
+    Milestone {
+        stage:  String,
+        detail: Option<String>,
+    },
+    /// Agent execution completed.
+    Done(AgentRunLoopResult),
+}
+
 /// Handle returned from spawn — allows waiting for agent completion.
 ///
-/// Holds the spawned agent's ID and a oneshot receiver that resolves when
-/// the agent finishes execution (successfully or with failure).
-// TODO: deprecate me
+/// Holds the spawned agent's ID and an mpsc receiver that carries
+/// [`AgentEvent`]s (milestones followed by the final result).
 pub struct AgentHandle {
     /// The ID of the spawned agent process.
     pub session_key: SessionKey,
-    /// Receiver for the agent's result. Resolves when the agent finishes.
-    pub result_rx:   oneshot::Receiver<AgentRunLoopResult>,
+    /// Receiver for agent events. Yields milestones during execution and
+    /// a final [`AgentEvent::Done`] when the agent finishes.
+    pub result_rx:   mpsc::Receiver<AgentEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,5 +1410,37 @@ impl IOSubsystem {
             }
         });
         futures::future::join_all(futs).await;
+    }
+}
+
+#[cfg(test)]
+mod agent_event_tests {
+    use super::*;
+    use crate::session::AgentRunLoopResult;
+
+    #[test]
+    fn milestone_serializes_to_json() {
+        let event = AgentEvent::Milestone {
+            stage:  "tool_call_start".to_string(),
+            detail: Some("mobile_screenshot".to_string()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "milestone");
+        assert_eq!(json["stage"], "tool_call_start");
+        assert_eq!(json["detail"], "mobile_screenshot");
+    }
+
+    #[test]
+    fn done_wraps_result() {
+        let result = AgentRunLoopResult {
+            output:     "done".to_string(),
+            iterations: 3,
+            tool_calls: 5,
+        };
+        let event = AgentEvent::Done(result);
+        match event {
+            AgentEvent::Done(r) => assert_eq!(r.output, "done"),
+            _ => panic!("expected Done"),
+        }
     }
 }

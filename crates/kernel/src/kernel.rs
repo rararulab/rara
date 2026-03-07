@@ -741,9 +741,9 @@ impl Kernel {
                     tool_calls: 0,
                 });
 
-                // Send result through oneshot channel if spawn_child is waiting.
+                // Send final result through mpsc channel if spawn_child is waiting.
                 if let Some(tx) = rt.result_tx {
-                    let _ = tx.send(result.clone());
+                    let _ = tx.send(crate::io::AgentEvent::Done(result.clone())).await;
                 }
 
                 let event = KernelEventEnvelope::child_session_done(parent_id, session_key, result);
