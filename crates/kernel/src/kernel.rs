@@ -508,6 +508,9 @@ impl Kernel {
                     )
                     .await;
             }
+            KernelEvent::SendNotification { message } => {
+                self.io.send_notification(message);
+            }
             KernelEvent::ScheduledTask { job } => {
                 self.handle_scheduled_task(job).await;
             }
@@ -1019,26 +1022,18 @@ impl Kernel {
         )
     )]
     async fn handle_scheduled_task(&self, job: crate::schedule::JobEntry) {
-        use crate::notification::KernelNotification;
-
         let session_key = job.session_key;
         let job_id = job.id;
         let trigger_summary = job.trigger.summary();
 
-        // 1. Publish ScheduledTaskFired notification.
-        self.syscall
-            .event_bus()
-            .publish(KernelNotification::ScheduledTaskFired {
-                job_id:          job_id.clone(),
-                session_key:     session_key.clone(),
-                message:         job.message.clone(),
-                trigger_summary: trigger_summary.clone(),
-                timestamp:       jiff::Timestamp::now(),
-            })
-            .await;
+        info!(
+            job_id = %job_id,
+            session_key = %session_key,
+            "scheduled task fired"
+        );
 
-        // 2. Build a dedicated ScheduledJobAgent manifest with job context
-        //    baked into the system prompt.
+        // Build a dedicated ScheduledJobAgent manifest with job context
+        // baked into the system prompt.
         let manifest = AgentManifest {
             name:               "scheduled_job".to_string(),
             role:               AgentRole::Worker,
@@ -1052,7 +1047,12 @@ impl Kernel {
                  Task: {message}\n\n\
                  ## Instructions\n\
                  1. Execute the task described above using available tools.\n\
-                 2. After completion, provide a brief summary of what you did and the outcome.\n",
+                 2. After completion, provide a brief summary of what you did and the outcome.\n\n\
+                 ## After Completion\n\
+                 When you finish the task, call the `kernel` tool with:\n\
+                 - action: \"publish\"\n\
+                 - event_type: \"scheduled_task_done\"\n\
+                 - payload: {{ \"message\": \"<your summary of what was done and the outcome>\" }}\n",
                 message = job.message,
             ),
             soul_prompt:        None,
@@ -1086,9 +1086,8 @@ impl Kernel {
                     session_key = %spawned_key,
                     "scheduled job agent spawned"
                 );
-                // TODO: ScheduledTaskDone(success: true) should be sent when
-                // the agent turn completes. This requires propagating job
-                // metadata through TurnCompleted, which is a larger change.
+                // The agent will send a notification via PublishEvent
+                // (SendNotification) when it completes.
             }
             Err(e) => {
                 error!(
@@ -1096,18 +1095,6 @@ impl Kernel {
                     error = %e,
                     "failed to spawn scheduled job agent"
                 );
-                // Publish ScheduledTaskDone with failure.
-                self.syscall
-                    .event_bus()
-                    .publish(KernelNotification::ScheduledTaskDone {
-                        job_id:          job_id.clone(),
-                        session_key:     session_key.clone(),
-                        message:         job.message.clone(),
-                        trigger_summary: trigger_summary.clone(),
-                        success:         false,
-                        timestamp:       jiff::Timestamp::now(),
-                    })
-                    .await;
             }
         }
     }

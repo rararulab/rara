@@ -153,7 +153,12 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
              Task: {message}\n\n\
              ## Instructions\n\
              1. Execute the task described above using available tools.\n\
-             2. After completion, provide a brief summary of what you did and the outcome.\n"
+             2. After completion, provide a brief summary of what you did and the outcome.\n\n\
+             ## After Completion\n\
+             When you finish the task, call the `kernel` tool with:\n\
+             - action: \"publish\"\n\
+             - event_type: \"scheduled_task_done\"\n\
+             - payload: {{ \"message\": \"<your summary of what was done and the outcome>\" }}\n"
         ),
         soul_prompt:        None,
         provider_hint:      None,

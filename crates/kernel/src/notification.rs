@@ -55,23 +55,6 @@ pub enum KernelNotification {
         reason:    String,
         timestamp: Timestamp,
     },
-    /// A scheduled task has fired and is being processed.
-    ScheduledTaskFired {
-        job_id:          JobId,
-        session_key:     SessionKey,
-        message:         String,
-        trigger_summary: String,
-        timestamp:       Timestamp,
-    },
-    /// A scheduled task's agent turn has completed.
-    ScheduledTaskDone {
-        job_id:          JobId,
-        session_key:     SessionKey,
-        message:         String,
-        trigger_summary: String,
-        success:         bool,
-        timestamp:       Timestamp,
-    },
 }
 
 /// Filter for subscribing to specific events.
@@ -135,4 +118,4 @@ impl NotificationBus for BroadcastNotificationBus {
     }
 }
 
-use crate::{schedule::JobId, session::SessionKey};
+use crate::session::SessionKey;

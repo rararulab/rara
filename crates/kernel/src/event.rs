@@ -314,6 +314,10 @@ pub enum KernelEvent {
         job: JobEntry,
     },
 
+    // === Notification ===
+    /// Send a notification message to the notification channel.
+    SendNotification { message: String },
+
     // === System ===
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
@@ -333,7 +337,8 @@ impl KernelEvent {
             Self::TurnCompleted { .. }
             | Self::ChildSessionDone { .. }
             | Self::Deliver(_)
-            | Self::SessionCommand(_) => EventPriority::Normal,
+            | Self::SessionCommand(_)
+            | Self::SendNotification { .. } => EventPriority::Normal,
             Self::UserMessage(_)
             | Self::GroupMessage(_)
             | Self::CreateSession { .. }
@@ -508,6 +513,14 @@ impl KernelEventEnvelope {
         Self::session_command(session_key, syscall)
     }
 
+    /// Create a `SendNotification` event.
+    pub fn send_notification(message: String) -> Self {
+        Self {
+            base: EventBase::from(SessionKey::new()),
+            kind: KernelEvent::SendNotification { message },
+        }
+    }
+
     /// Create an `IdleCheck` event.
     pub fn idle_check() -> Self {
         Self {
@@ -578,6 +591,14 @@ impl KernelEventEnvelope {
                 )
             }
             KernelEvent::SessionCommand(envelope) => envelope.payload.summary(),
+            KernelEvent::SendNotification { message } => {
+                let preview = if message.len() > 50 {
+                    format!("{}...", &message[..50])
+                } else {
+                    message.clone()
+                };
+                format!("send notification: {preview}")
+            }
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }

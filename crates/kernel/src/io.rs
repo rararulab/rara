@@ -1167,11 +1167,13 @@ pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 /// Constructed at the app/boot layer and injected into
 /// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
 pub struct IOSubsystem {
-    identity_resolver: IdentityResolverRef,
-    session_index:     Arc<dyn SessionIndex>,
-    stream_hub:        StreamHubRef,
-    adapters:          HashMap<ChannelType, ChannelAdapterRef>,
-    endpoint_registry: EndpointRegistryRef,
+    identity_resolver:       IdentityResolverRef,
+    session_index:           Arc<dyn SessionIndex>,
+    stream_hub:              StreamHubRef,
+    adapters:                HashMap<ChannelType, ChannelAdapterRef>,
+    endpoint_registry:       EndpointRegistryRef,
+    /// Telegram channel ID for agent-initiated notifications.
+    notification_channel_id: Option<i64>,
 }
 
 impl IOSubsystem {
@@ -1183,6 +1185,7 @@ impl IOSubsystem {
     pub fn new(
         identity_resolver: IdentityResolverRef,
         session_index: Arc<dyn SessionIndex>,
+        notification_channel_id: Option<i64>,
     ) -> Self {
         Self {
             identity_resolver,
@@ -1190,6 +1193,7 @@ impl IOSubsystem {
             stream_hub: Arc::new(StreamHub::new(256)),
             adapters: HashMap::new(),
             endpoint_registry: Arc::new(EndpointRegistry::new()),
+            notification_channel_id,
         }
     }
 
@@ -1312,6 +1316,45 @@ impl IOSubsystem {
         tokio::spawn(
             async move {
                 this.deliver_to_endpoints(envelope).await;
+            }
+            .instrument(span),
+        );
+    }
+
+    /// Send a notification message to the configured notification channel.
+    ///
+    /// Delivers via the Telegram adapter to `notification_channel_id`.
+    /// If no channel ID is configured or no Telegram adapter is registered,
+    /// the notification is silently dropped with a warning.
+    pub fn send_notification(self: &Arc<Self>, message: String) {
+        let Some(chat_id) = self.notification_channel_id else {
+            tracing::warn!("send_notification: no notification_channel_id configured, dropping");
+            return;
+        };
+        let Some(adapter) = self.adapters.get(&ChannelType::Telegram).cloned() else {
+            tracing::warn!("send_notification: no Telegram adapter registered, dropping");
+            return;
+        };
+
+        let endpoint = Endpoint {
+            channel_type: ChannelType::Telegram,
+            address:      EndpointAddress::Telegram {
+                chat_id,
+                thread_id: None,
+            },
+        };
+
+        let span = tracing::info_span!("send_notification", %chat_id);
+        tokio::spawn(
+            async move {
+                let outbound = PlatformOutbound::Reply {
+                    content:       message,
+                    attachments:   vec![],
+                    reply_context: None,
+                };
+                if let Err(e) = adapter.send(&endpoint, outbound).await {
+                    tracing::warn!(%e, "send_notification: delivery failed");
+                }
             }
             .instrument(span),
         );

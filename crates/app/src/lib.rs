@@ -288,9 +288,14 @@ pub async fn start_with_options(
     };
 
     // Build IOSubsystem with all adapters before passing to Kernel.
+    let notification_channel_id = settings_provider
+        .get(rara_domain_shared::settings::keys::TELEGRAM_NOTIFICATION_CHANNEL_ID)
+        .await
+        .and_then(|s| s.parse::<i64>().ok());
     let mut io = rara_kernel::io::IOSubsystem::new(
         rara.identity_resolver.clone(),
         rara.session_index.clone(),
+        notification_channel_id,
     );
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);

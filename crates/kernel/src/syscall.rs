@@ -289,17 +289,17 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(Arc::new(registry));
             }
             Syscall::PublishEvent {
-                event_type,
-                payload: _,
+                event_type: _,
+                payload,
             } => {
-                self.event_bus
-                    .publish(crate::notification::KernelNotification::ToolExecuted {
-                        session_key: syscall_sender,
-                        tool_name:   format!("event:{event_type}"),
-                        success:     true,
-                        timestamp:   Timestamp::now(),
-                    })
-                    .await;
+                let message = payload
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(empty notification)")
+                    .to_string();
+                let _ = kernel_handle.event_queue().try_push(
+                    crate::event::KernelEventEnvelope::send_notification(message),
+                );
             }
             Syscall::RegisterJob {
                 trigger,
