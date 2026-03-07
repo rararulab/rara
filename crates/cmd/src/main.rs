@@ -142,7 +142,9 @@ impl GatewayArgs {
             None,
         );
 
-        let gateway_config = config.gateway.clone().unwrap_or_default();
+        let Some(gateway_config) = config.gateway.clone() else {
+            whatever!("Gateway requires [gateway] config section");
+        };
 
         // Extract port from HTTP bind_address (e.g. "127.0.0.1:25555" -> "25555").
         let bind_addr = &config.http.bind_address;
@@ -176,7 +178,7 @@ impl GatewayArgs {
             .parse()
             .whatever_context("telegram.notification_channel_id must be a valid i64")?;
         let notifier = std::sync::Arc::new(
-            rara_app::gateway::UpdateNotifier::new(bot_token, channel_id, build_info::FULL_VERSION),
+            rara_app::gateway::UpdateNotifier::new(bot_token, channel_id, build_info::FULL_VERSION, &gateway_config.repo_url),
         );
 
         // 1. Create supervisor + handle.

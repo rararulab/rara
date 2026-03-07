@@ -112,6 +112,8 @@ pub struct GatewayConfig {
     /// Bind address for the gateway admin HTTP API.
     #[serde(default = "gateway_defaults::bind_address")]
     pub bind_address:        String,
+    /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
+    pub repo_url:            String,
 }
 
 mod gateway_defaults {
@@ -122,19 +124,6 @@ mod gateway_defaults {
     pub fn max_restart_attempts() -> u32 { 3 }
     pub fn auto_update() -> bool { true }
     pub fn bind_address() -> String { "127.0.0.1:25556".to_owned() }
-}
-
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            check_interval:       gateway_defaults::check_interval(),
-            health_timeout:       gateway_defaults::health_timeout(),
-            health_poll_interval: gateway_defaults::health_poll_interval(),
-            max_restart_attempts: gateway_defaults::max_restart_attempts(),
-            auto_update:          gateway_defaults::auto_update(),
-            bind_address:         gateway_defaults::bind_address(),
-        }
-    }
 }
 
 /// General OTLP telemetry configuration.

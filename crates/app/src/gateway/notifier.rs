@@ -51,6 +51,8 @@ pub struct UpdateNotifier {
     /// Version/revision of the currently running agent binary.
     /// Initially same as gateway version; updated after each successful update.
     agent_version: std::sync::Mutex<String>,
+    /// Repository URL for building commit links (e.g. "https://github.com/rararulab/rara").
+    repo_url: String,
 }
 
 impl UpdateNotifier {
@@ -58,7 +60,7 @@ impl UpdateNotifier {
     ///
     /// System information (hostname, OS, CPU, memory) is gathered automatically
     /// via `sysinfo` at construction time.
-    pub fn new(bot_token: &str, channel_id: i64, version: &str) -> Self {
+    pub fn new(bot_token: &str, channel_id: i64, version: &str, repo_url: &str) -> Self {
         let bot = Bot::new(bot_token);
 
         let hostname = System::host_name().unwrap_or_else(|| "unknown".into());
@@ -88,7 +90,16 @@ impl UpdateNotifier {
             agent_generation: AtomicU32::new(0),
             agent_started_at: std::sync::Mutex::new(None),
             agent_version: std::sync::Mutex::new(version.to_owned()),
+            repo_url: repo_url.to_owned(),
         }
+    }
+
+    /// Build an HTML link to a commit on GitHub.
+    ///
+    /// Shows the first 7 characters of the revision as the visible text.
+    fn commit_link(&self, rev: &str) -> String {
+        let short = if rev.len() >= 7 { &rev[..7] } else { rev };
+        format!("<a href=\"{}/commit/{rev}\">{short}</a>", self.repo_url)
     }
 
     // -- lifecycle events -----------------------------------------------------
@@ -105,7 +116,8 @@ impl UpdateNotifier {
     pub async fn update_started(&self, rev: &str) {
         self.send(&format!(
             "🔄 <b>Auto-update: starting build</b>\n\
-             target: <code>{rev}</code>\n{}",
+             target: {}\n{}",
+            self.commit_link(rev),
             self.status_block(),
         )).await;
     }
@@ -121,7 +133,8 @@ impl UpdateNotifier {
         *self.agent_version.lock().unwrap() = new_rev.to_owned();
         self.send(&format!(
             "✅ <b>Auto-update: updated, restarting agent</b>\n\
-             new rev: <code>{new_rev}</code>\n{}",
+             new rev: {}\n{}",
+            self.commit_link(new_rev),
             self.status_block(),
         )).await;
     }
@@ -138,7 +151,8 @@ impl UpdateNotifier {
     pub async fn build_failed(&self, rev: &str, reason: &str) {
         self.send(&format!(
             "❌ <b>Auto-update: build failed</b>\n\
-             target: <code>{rev}</code>\n{}\n<pre>{reason}</pre>",
+             target: {}\n{}\n<pre>{reason}</pre>",
+            self.commit_link(rev),
             self.status_block(),
         )).await;
     }
@@ -176,7 +190,7 @@ impl UpdateNotifier {
              🧠 cpu: <code>{}</code>\n\
              💾 mem: <code>{}</code>\n\
              📦 gateway: <code>{}</code>\n\
-             🤖 agent: <code>{}</code>\n\
+             🤖 agent: {}\n\
              ⏱ gateway since: {}\n\
              🔄 agent generation: {}\n\
              🕐 agent since: {}",
@@ -185,7 +199,7 @@ impl UpdateNotifier {
             self.cpu,
             self.memory,
             self.version,
-            agent_ver,
+            self.commit_link(&agent_ver),
             self.started_at.format("%Y-%m-%d %H:%M:%S"),
             generation,
             agent_since,
