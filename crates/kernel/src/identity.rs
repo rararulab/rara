@@ -129,3 +129,83 @@ pub trait UserStore: Send + Sync {
     async fn get_by_name(&self, name: &str) -> Result<Option<KernelUser>>;
     async fn list(&self) -> Result<Vec<KernelUser>>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root_user() -> KernelUser {
+        KernelUser {
+            name:        "root".into(),
+            role:        Role::Root,
+            permissions: vec![Permission::All],
+            enabled:     true,
+        }
+    }
+
+    fn admin_user() -> KernelUser {
+        KernelUser {
+            name:        "admin".into(),
+            role:        Role::Admin,
+            permissions: vec![Permission::All],
+            enabled:     true,
+        }
+    }
+
+    fn regular_user() -> KernelUser {
+        KernelUser {
+            name:        "user".into(),
+            role:        Role::User,
+            permissions: vec![],
+            enabled:     true,
+        }
+    }
+
+    #[test]
+    fn root_can_use_any_tool() {
+        let user = root_user();
+        assert!(user.can_use_tool("bash"));
+        assert!(user.can_use_tool("write_file"));
+        assert!(user.can_use_tool("http_fetch"));
+    }
+
+    #[test]
+    fn admin_can_use_any_tool() {
+        let user = admin_user();
+        assert!(user.can_use_tool("bash"));
+        assert!(user.can_use_tool("write_file"));
+    }
+
+    #[test]
+    fn regular_user_cannot_use_any_tool() {
+        let user = regular_user();
+        assert!(!user.can_use_tool("bash"));
+        assert!(!user.can_use_tool("write_file"));
+        assert!(!user.can_use_tool("http_fetch"));
+        assert!(!user.can_use_tool("read_file"));
+    }
+
+    #[test]
+    fn user_with_specific_tool_permission() {
+        let user = KernelUser {
+            name:        "limited".into(),
+            role:        Role::User,
+            permissions: vec![Permission::Spawn, Permission::UseTool("http_fetch".into())],
+            enabled:     true,
+        };
+        assert!(user.can_use_tool("http_fetch"));
+        assert!(!user.can_use_tool("bash"));
+    }
+
+    #[test]
+    fn user_with_use_all_tools_permission() {
+        let user = KernelUser {
+            name:        "power_user".into(),
+            role:        Role::User,
+            permissions: vec![Permission::Spawn, Permission::UseAllTools],
+            enabled:     true,
+        };
+        assert!(user.can_use_tool("bash"));
+        assert!(user.can_use_tool("write_file"));
+    }
+}

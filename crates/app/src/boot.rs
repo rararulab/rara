@@ -355,7 +355,7 @@ fn parse_role(s: &str) -> Role {
 fn default_permissions(role: Role) -> Vec<Permission> {
     match role {
         Role::Root | Role::Admin => vec![Permission::All],
-        Role::User => vec![Permission::Spawn],
+        Role::User => vec![],
     }
 }
 

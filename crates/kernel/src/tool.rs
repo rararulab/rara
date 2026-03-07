@@ -121,6 +121,19 @@ impl ToolRegistry {
     #[must_use]
     pub fn tool_names(&self) -> Vec<String> { self.tools.keys().cloned().collect() }
 
+    /// Create a new registry containing only tools the user is authorized to
+    /// use (based on [`KernelUser::can_use_tool`]).
+    #[must_use]
+    pub fn filtered_by_user(&self, user: &crate::identity::KernelUser) -> Self {
+        let mut new = Self::new();
+        for (name, tool) in &self.tools {
+            if user.can_use_tool(name) {
+                new.register(Arc::clone(tool));
+            }
+        }
+        new
+    }
+
     /// Create a new registry containing only the named tools.
     /// If `tool_names` is empty, returns a clone of all tools.
     #[must_use]
@@ -140,4 +153,87 @@ impl ToolRegistry {
 
 impl Default for ToolRegistry {
     fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::{KernelUser, Permission, Role};
+
+    struct DummyTool {
+        name: String,
+    }
+
+    #[async_trait]
+    impl AgentTool for DummyTool {
+        fn name(&self) -> &str { &self.name }
+        fn description(&self) -> &str { "test tool" }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _context: &ToolContext,
+        ) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
+
+    fn build_registry() -> ToolRegistry {
+        let mut reg = ToolRegistry::new();
+        for name in ["bash", "http_fetch", "read_file", "write_file"] {
+            reg.register(Arc::new(DummyTool {
+                name: name.into(),
+            }));
+        }
+        reg
+    }
+
+    #[test]
+    fn filtered_by_user_removes_unauthorized_tools() {
+        let reg = build_registry();
+        let user = KernelUser {
+            name:        "regular".into(),
+            role:        Role::User,
+            permissions: vec![],
+            enabled:     true,
+        };
+        let filtered = reg.filtered_by_user(&user);
+        assert!(filtered.is_empty(), "Role::User with no permissions should have no tools");
+    }
+
+    #[test]
+    fn filtered_by_user_keeps_all_for_admin() {
+        let reg = build_registry();
+        let user = KernelUser {
+            name:        "admin".into(),
+            role:        Role::Admin,
+            permissions: vec![Permission::All],
+            enabled:     true,
+        };
+        let filtered = reg.filtered_by_user(&user);
+        assert_eq!(filtered.len(), 4);
+    }
+
+    #[test]
+    fn filtered_by_user_keeps_specific_tools() {
+        let reg = build_registry();
+        let user = KernelUser {
+            name:        "limited".into(),
+            role:        Role::User,
+            permissions: vec![
+                Permission::Spawn,
+                Permission::UseTool("http_fetch".into()),
+                Permission::UseTool("read_file".into()),
+            ],
+            enabled:     true,
+        };
+        let filtered = reg.filtered_by_user(&user);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.get("http_fetch").is_some());
+        assert!(filtered.get("read_file").is_some());
+        assert!(filtered.get("bash").is_none());
+        assert!(filtered.get("write_file").is_none());
+    }
 }

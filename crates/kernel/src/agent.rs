@@ -498,7 +498,34 @@ pub(crate) async fn run_agent_loop(
         })?;
 
     // Filter tools by manifest.tools whitelist.
-    let tools = Arc::new(full_tools.filtered(&manifest.tools));
+    let manifest_filtered = full_tools.filtered(&manifest.tools);
+
+    // Filter tools by user permissions — users can only see tools they are
+    // authorized to use.  This prevents the LLM from even attempting to call
+    // tools the user lacks permission for.
+    let tools = if let Some(ref user_id) = tool_context.user_id {
+        match handle.security().user_store().get_by_name(user_id).await {
+            Ok(Some(user)) => {
+                let filtered = manifest_filtered.filtered_by_user(&user);
+                if filtered.len() < manifest_filtered.len() {
+                    let denied: Vec<String> = manifest_filtered
+                        .iter()
+                        .filter(|(name, _)| !user.can_use_tool(name))
+                        .map(|(name, _)| name.to_string())
+                        .collect();
+                    info!(
+                        user_id,
+                        ?denied,
+                        "filtered tools by user permissions"
+                    );
+                }
+                Arc::new(filtered)
+            }
+            _ => Arc::new(manifest_filtered),
+        }
+    } else {
+        Arc::new(manifest_filtered)
+    };
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     let effective_prompt = match &manifest.soul_prompt {
@@ -836,6 +863,19 @@ pub(crate) async fn run_agent_loop(
 
         iter_span.record("tool_count", valid_tool_calls.len());
 
+        // Resolve user for runtime permission guard (defense in depth).
+        let runtime_user = if let Some(ref uid) = tool_context.user_id {
+            handle
+                .security()
+                .user_store()
+                .get_by_name(uid)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
@@ -844,6 +884,7 @@ pub(crate) async fn run_agent_loop(
                 let args = args.clone();
                 let name = name.clone();
                 let tc = tool_context.clone();
+                let user_ref = runtime_user.clone();
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -852,6 +893,18 @@ pub(crate) async fn run_agent_loop(
                 async move {
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
+
+                    // Runtime permission guard — deny if user cannot use this tool.
+                    if let Some(ref user) = user_ref {
+                        if !user.can_use_tool(&name) {
+                            tool_span.record("success", false);
+                            let err = format!("permission denied: user '{}' cannot use tool '{name}'", user.name);
+                            warn!("{err}");
+                            let dur = tool_start.elapsed().as_millis() as u64;
+                            return (false, serde_json::json!({ "error": &err }), Some(err), dur);
+                        }
+                    }
+
                     if let Some(tool) = tool {
                         match tool.execute(args, &tc).await {
                             Ok(result) => {
