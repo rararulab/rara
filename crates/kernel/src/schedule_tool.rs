@@ -14,10 +14,12 @@
 
 //! Schedule tools — LLM-callable tools for managing scheduled tasks.
 //!
-//! Three tools are provided:
-//! - `schedule.add` — create a new scheduled job
-//! - `schedule.remove` — remove a scheduled job by ID
-//! - `schedule.list` — list all scheduled jobs for the current session
+//! Five tools are provided:
+//! - `schedule-once` — fire once after N seconds
+//! - `schedule-interval` — fire every N seconds (repeating)
+//! - `schedule-cron` — fire according to a cron expression
+//! - `schedule-remove` — remove a scheduled job by ID
+//! - `schedule-list` — list all scheduled jobs for the current session
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -30,63 +32,78 @@ use crate::{
     tool::{AgentTool, ToolContext},
 };
 
+// -- shared helper ------------------------------------------------------------
+
+async fn register_job(
+    trigger: Trigger,
+    message: String,
+    context: &ToolContext,
+) -> anyhow::Result<serde_json::Value> {
+    let next_at = trigger.next_at();
+
+    let event_queue = context
+        .event_queue
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no event queue in tool context"))?;
+    let session_key = context
+        .session_key
+        .ok_or_else(|| anyhow::anyhow!("no session key in tool context"))?;
+
+    let (tx, rx) = oneshot::channel();
+    let _ = event_queue.push(KernelEventEnvelope::session_command(
+        session_key,
+        Syscall::RegisterJob {
+            trigger,
+            message,
+            reply_tx: tx,
+        },
+    ));
+
+    let job_id = rx
+        .await
+        .map_err(|_| anyhow::anyhow!("kernel dropped reply channel"))?
+        .map_err(|e| anyhow::anyhow!("register job failed: {e}"))?;
+
+    debug!(job_id = %job_id, "scheduled job registered via tool");
+
+    Ok(serde_json::json!({
+        "job_id": job_id.to_string(),
+        "next_run": next_at.to_string(),
+    }))
+}
+
 // ============================================================================
-// ScheduleAddTool
+// ScheduleOnceTool
 // ============================================================================
 
-/// Tool for adding a scheduled task.
-///
-/// Accepts one of three trigger modes (mutually exclusive):
-/// - `after_seconds` — fire once after N seconds
-/// - `interval_seconds` — fire every N seconds
-/// - `cron` — fire according to a cron expression
-pub struct ScheduleAddTool;
+pub struct ScheduleOnceTool;
 
 #[derive(Debug, Deserialize)]
-struct ScheduleAddParams {
-    /// Fire once after this many seconds.
-    #[serde(default)]
-    after_seconds:    Option<u64>,
-    /// Fire every N seconds (repeating).
-    #[serde(default)]
-    interval_seconds: Option<u64>,
-    /// Cron expression (e.g. "0 9 * * *").
-    #[serde(default)]
-    cron:             Option<String>,
-    /// The message to inject when the job fires.
-    message:          String,
+struct ScheduleOnceParams {
+    after_seconds: u64,
+    message:       String,
 }
 
 #[async_trait]
-impl AgentTool for ScheduleAddTool {
-    fn name(&self) -> &str { "schedule-add" }
+impl AgentTool for ScheduleOnceTool {
+    fn name(&self) -> &str { "schedule-once" }
 
     fn description(&self) -> &str {
-        "Schedule a task to run later. Provide exactly one of: after_seconds (one-shot delay), \
-         interval_seconds (repeating), or cron (cron expression). The message will be sent to the \
-         current session when the job fires."
+        "Schedule a one-shot task. It fires once after the specified delay in seconds."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
-            "required": ["message"],
+            "required": ["after_seconds", "message"],
             "properties": {
                 "after_seconds": {
                     "type": "integer",
-                    "description": "Fire once after this many seconds (one-shot)"
-                },
-                "interval_seconds": {
-                    "type": "integer",
-                    "description": "Fire every N seconds (repeating)"
-                },
-                "cron": {
-                    "type": "string",
-                    "description": "Cron expression (e.g. '0 9 * * *' for daily at 9am UTC)"
+                    "description": "Fire once after this many seconds"
                 },
                 "message": {
                     "type": "string",
-                    "description": "The message to inject when the job fires"
+                    "description": "The task description to execute when the job fires"
                 }
             }
         })
@@ -97,90 +114,167 @@ impl AgentTool for ScheduleAddTool {
         params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let p: ScheduleAddParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid schedule-add params: {e}"))?;
+        let p: ScheduleOnceParams = serde_json::from_value(params)
+            .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+
+        if p.after_seconds == 0 {
+            return Err(anyhow::anyhow!("after_seconds must be > 0"));
+        }
 
         let now = jiff::Timestamp::now();
+        let run_at = now
+            .checked_add(jiff::SignedDuration::from_secs(p.after_seconds as i64))
+            .map_err(|e| anyhow::anyhow!("timestamp overflow: {e}"))?;
 
-        // Treat 0 as "not provided" — LLMs often send 0 or null for unused fields.
-        let after = p.after_seconds.filter(|&s| s > 0);
-        let interval = p.interval_seconds.filter(|&s| s > 0);
-        let cron = p.cron.filter(|s| !s.is_empty());
+        register_job(Trigger::Once { run_at }, p.message, context).await
+    }
+}
 
-        let trigger = match (after, interval, cron) {
-            (Some(secs), None, None) => {
-                let run_at = now
-                    .checked_add(jiff::SignedDuration::from_secs(secs as i64))
-                    .map_err(|e| anyhow::anyhow!("timestamp overflow: {e}"))?;
-                Trigger::Once { run_at }
-            }
-            (None, Some(secs), None) => {
-                let next_at = now
-                    .checked_add(jiff::SignedDuration::from_secs(secs as i64))
-                    .map_err(|e| anyhow::anyhow!("timestamp overflow: {e}"))?;
-                Trigger::Interval {
-                    every_secs: secs,
-                    next_at,
+// ============================================================================
+// ScheduleIntervalTool
+// ============================================================================
+
+pub struct ScheduleIntervalTool;
+
+#[derive(Debug, Deserialize)]
+struct ScheduleIntervalParams {
+    interval_seconds: u64,
+    message:          String,
+}
+
+#[async_trait]
+impl AgentTool for ScheduleIntervalTool {
+    fn name(&self) -> &str { "schedule-interval" }
+
+    fn description(&self) -> &str {
+        "Schedule a repeating task. It fires every N seconds."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "required": ["interval_seconds", "message"],
+            "properties": {
+                "interval_seconds": {
+                    "type": "integer",
+                    "description": "Fire every N seconds (repeating)"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The task description to execute when the job fires"
                 }
             }
-            (None, None, Some(expr)) => {
-                // Validate the cron expression.
-                use std::str::FromStr;
-                let schedule = cron::Schedule::from_str(&expr)
-                    .map_err(|e| anyhow::anyhow!("invalid cron expression '{expr}': {e}"))?;
-                let now_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(
-                    now.as_second(),
-                    now.subsec_nanosecond() as u32,
-                )
-                .ok_or_else(|| anyhow::anyhow!("failed to convert timestamp"))?;
-                let next_chrono = schedule
-                    .upcoming(chrono::Utc)
-                    .find(|t| *t > now_chrono)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("cron expression '{expr}' yields no future time")
-                    })?;
-                let next_at = jiff::Timestamp::from_second(next_chrono.timestamp())
-                    .map_err(|e| anyhow::anyhow!("timestamp conversion error: {e}"))?;
-                Trigger::Cron { expr, next_at }
-            }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "provide exactly one of: after_seconds, interval_seconds, or cron"
-                ));
-            }
-        };
+        })
+    }
 
-        let next_at = trigger.next_at();
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        context: &ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
+        let p: ScheduleIntervalParams = serde_json::from_value(params)
+            .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
-        let event_queue = context
-            .event_queue
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no event queue in tool context"))?;
-        let session_key = context
-            .session_key
-            .ok_or_else(|| anyhow::anyhow!("no session key in tool context"))?;
+        if p.interval_seconds == 0 {
+            return Err(anyhow::anyhow!("interval_seconds must be > 0"));
+        }
 
-        let (tx, rx) = oneshot::channel();
-        let _ = event_queue.push(KernelEventEnvelope::session_command(
-            session_key,
-            Syscall::RegisterJob {
-                trigger,
-                message: p.message,
-                reply_tx: tx,
+        let now = jiff::Timestamp::now();
+        let next_at = now
+            .checked_add(jiff::SignedDuration::from_secs(p.interval_seconds as i64))
+            .map_err(|e| anyhow::anyhow!("timestamp overflow: {e}"))?;
+
+        register_job(
+            Trigger::Interval {
+                every_secs: p.interval_seconds,
+                next_at,
             },
-        ));
+            p.message,
+            context,
+        )
+        .await
+    }
+}
 
-        let job_id = rx
-            .await
-            .map_err(|_| anyhow::anyhow!("kernel dropped reply channel"))?
-            .map_err(|e| anyhow::anyhow!("register job failed: {e}"))?;
+// ============================================================================
+// ScheduleCronTool
+// ============================================================================
 
-        debug!(job_id = %job_id, "scheduled job registered via tool");
+pub struct ScheduleCronTool;
 
-        Ok(serde_json::json!({
-            "job_id": job_id.to_string(),
-            "next_run": next_at.to_string(),
-        }))
+#[derive(Debug, Deserialize)]
+struct ScheduleCronParams {
+    cron:    String,
+    message: String,
+}
+
+#[async_trait]
+impl AgentTool for ScheduleCronTool {
+    fn name(&self) -> &str { "schedule-cron" }
+
+    fn description(&self) -> &str {
+        "Schedule a task using a cron expression (e.g. '0 9 * * *' for daily at 9am UTC)."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "required": ["cron", "message"],
+            "properties": {
+                "cron": {
+                    "type": "string",
+                    "description": "Cron expression (e.g. '0 9 * * *' for daily at 9am UTC, '*/5 * * * *' for every 5 minutes)"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The task description to execute when the job fires"
+                }
+            }
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        context: &ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
+        let p: ScheduleCronParams = serde_json::from_value(params)
+            .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+
+        if p.cron.is_empty() {
+            return Err(anyhow::anyhow!("cron expression must not be empty"));
+        }
+
+        use std::str::FromStr;
+        let schedule = cron::Schedule::from_str(&p.cron)
+            .map_err(|e| anyhow::anyhow!("invalid cron expression '{}': {e}", p.cron))?;
+
+        let now = jiff::Timestamp::now();
+        let now_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(
+            now.as_second(),
+            now.subsec_nanosecond() as u32,
+        )
+        .ok_or_else(|| anyhow::anyhow!("failed to convert timestamp"))?;
+
+        let next_chrono = schedule
+            .upcoming(chrono::Utc)
+            .find(|t| *t > now_chrono)
+            .ok_or_else(|| {
+                anyhow::anyhow!("cron expression '{}' yields no future time", p.cron)
+            })?;
+
+        let next_at = jiff::Timestamp::from_second(next_chrono.timestamp())
+            .map_err(|e| anyhow::anyhow!("timestamp conversion error: {e}"))?;
+
+        register_job(
+            Trigger::Cron {
+                expr: p.cron,
+                next_at,
+            },
+            p.message,
+            context,
+        )
+        .await
     }
 }
 

@@ -276,7 +276,9 @@ impl SyscallDispatcher {
                     let tape_tool = TapeTool::new(self.tape_service.clone(), tape_name);
                     registry.register(Arc::new(tape_tool));
                     // Schedule tools
-                    registry.register(Arc::new(crate::schedule_tool::ScheduleAddTool));
+                    registry.register(Arc::new(crate::schedule_tool::ScheduleOnceTool));
+                    registry.register(Arc::new(crate::schedule_tool::ScheduleIntervalTool));
+                    registry.register(Arc::new(crate::schedule_tool::ScheduleCronTool));
                     registry.register(Arc::new(crate::schedule_tool::ScheduleRemoveTool));
                     registry.register(Arc::new(crate::schedule_tool::ScheduleListTool));
                 }
