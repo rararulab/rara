@@ -56,5 +56,8 @@ utoipa-swagger-ui = { workspace = true }
 uuid.workspace = true
 yunara-store = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

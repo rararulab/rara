@@ -23,7 +23,7 @@ pub struct DBStore {
 }
 
 impl DBStore {
-    pub(crate) fn new(pool: SqlitePool) -> Self { Self { pool } }
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 
     /// Get a KV store instance.
     pub fn kv_store(&self) -> KVStore { KVStore::new(self.pool.clone()) }
