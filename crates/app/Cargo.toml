@@ -38,6 +38,7 @@ rara-pg-credential-store.workspace = true
 rara-server = { workspace = true }
 rara-sessions.workspace = true
 rara-skills.workspace = true
+rara-symphony.workspace = true
 reqwest = { workspace = true }
 humantime-serde = "1"
 serde = { workspace = true, features = ["derive"] }

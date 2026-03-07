@@ -81,6 +81,9 @@ pub struct AppConfig {
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default)]
     pub gateway:     Option<GatewayConfig>,
+    /// Symphony autonomous coding agent orchestrator (optional).
+    #[serde(default)]
+    pub symphony:    Option<rara_symphony::SymphonyConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -407,6 +410,23 @@ pub async fn start_with_options(
             heartbeat_interval = ?config.mita.heartbeat_interval,
             "Mita heartbeat worker started"
         );
+    }
+
+    // -- Symphony orchestrator ------------------------------------------------
+    if let Some(ref symphony_config) = config.symphony {
+        if symphony_config.enabled {
+            let symphony = rara_symphony::SymphonyService::new(
+                symphony_config.clone(),
+                cancellation_token.clone(),
+                std::env::var("GITHUB_TOKEN").ok(),
+            );
+            tokio::spawn(async move {
+                if let Err(e) = symphony.run().await {
+                    error!(error = %e, "symphony service failed");
+                }
+            });
+            info!("Symphony service started");
+        }
     }
 
     info!("Application started successfully");
