@@ -195,6 +195,25 @@ impl Orchestrator {
         // Claim the issue.
         self.claimed.insert(issue.id.clone());
 
+        // Run the actual dispatch logic; on ANY error, release the claim
+        // so the issue can be retried on a future poll tick.
+        match self.do_dispatch(issue.clone()).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                error!(
+                    issue_id = %issue.id,
+                    error = %e,
+                    "dispatch failed, releasing claim"
+                );
+                self.claimed.remove(&issue.id);
+                Err(e)
+            }
+        }
+    }
+
+    /// Inner dispatch logic, separated so that `handle_dispatch` can clean up
+    /// the `claimed` set on error.
+    async fn do_dispatch(&mut self, issue: TrackedIssue) -> Result<()> {
         let repo_name = self.repo_name_for(&issue.repo);
 
         // Create or reuse a worktree.
@@ -212,20 +231,25 @@ impl Orchestrator {
             "dispatching agent"
         );
 
-        // Run lifecycle hooks.
+        // Run lifecycle hooks (with timeout to prevent hanging the event loop).
+        let hook_timeout = Duration::from_secs(60);
         if let Some(hooks) = self.workspace_mgr.hooks_for(&repo_name) {
             if workspace.created_now {
                 if let Some(script) = &hooks.after_create {
                     info!(issue_id = %issue.id, "running after_create hook");
-                    if let Err(e) = run_hook(script, &workspace.path).await {
-                        warn!(issue_id = %issue.id, error = %e, "after_create hook failed");
+                    match tokio::time::timeout(hook_timeout, run_hook(script, &workspace.path)).await {
+                        Ok(Ok(())) => info!(issue_id = %issue.id, "after_create hook completed"),
+                        Ok(Err(e)) => warn!(issue_id = %issue.id, error = %e, "after_create hook failed"),
+                        Err(_) => warn!(issue_id = %issue.id, "after_create hook timed out after 60s"),
                     }
                 }
             }
             if let Some(script) = &hooks.before_run {
                 info!(issue_id = %issue.id, "running before_run hook");
-                if let Err(e) = run_hook(script, &workspace.path).await {
-                    warn!(issue_id = %issue.id, error = %e, "before_run hook failed");
+                match tokio::time::timeout(hook_timeout, run_hook(script, &workspace.path)).await {
+                    Ok(Ok(())) => info!(issue_id = %issue.id, "before_run hook completed"),
+                    Ok(Err(e)) => warn!(issue_id = %issue.id, error = %e, "before_run hook failed"),
+                    Err(_) => warn!(issue_id = %issue.id, "before_run hook timed out after 60s"),
                 }
             }
         }
@@ -234,6 +258,11 @@ impl Orchestrator {
         let workflow_file = self.workflow_file_for(&repo_name);
         let workflow_path = workspace.path.join(&workflow_file);
         let workflow_content = std::fs::read_to_string(&workflow_path).ok();
+        info!(
+            issue_id = %issue.id,
+            has_workflow = workflow_content.is_some(),
+            "workflow file check"
+        );
 
         // Determine retry attempt from retry tracking.
         let attempt = self.retries.get(&issue.id).map(|r| r.attempt);
@@ -246,7 +275,9 @@ impl Orchestrator {
         };
 
         // Start the agent.
+        info!(issue_id = %issue.id, "starting agent process");
         let handle: AgentHandle = self.agent.start(&task, &workspace).await?;
+        info!(issue_id = %issue.id, "agent process spawned successfully");
 
         // Take ownership of the child process for the watcher.
         let AgentHandle {
@@ -254,14 +285,16 @@ impl Orchestrator {
             started_at,
         } = handle;
 
-        let issue_id = issue.id.clone();
+        let watcher_issue_id = issue.id.clone();
         let ws_clone = workspace.clone();
         let queue = self.queue.clone();
 
         // Spawn a watcher task to monitor the child process.
         tokio::spawn(async move {
+            let issue_id = watcher_issue_id;
             match child.wait_with_output().await {
                 Ok(output) if output.status.success() => {
+                    info!(issue_id = %issue_id, "agent process exited successfully");
                     queue.push(SymphonyEvent::AgentCompleted {
                         issue_id,
                         workspace: ws_clone,
@@ -274,6 +307,7 @@ impl Orchestrator {
                         output.status.code(),
                         stderr.trim()
                     );
+                    warn!(issue_id = %issue_id, reason = %reason, "agent process failed");
                     queue.push(SymphonyEvent::AgentFailed {
                         issue_id,
                         workspace: ws_clone,
@@ -281,6 +315,7 @@ impl Orchestrator {
                     });
                 }
                 Err(e) => {
+                    error!(issue_id = %issue_id, error = %e, "failed to wait on agent process");
                     queue.push(SymphonyEvent::AgentFailed {
                         issue_id,
                         workspace: ws_clone,
@@ -292,6 +327,7 @@ impl Orchestrator {
 
         // Store the run state (without the child, which has been moved).
         let now = Instant::now();
+        let log_issue_id = issue.id.clone();
         self.running.insert(
             issue.id.clone(),
             RunState {
@@ -302,6 +338,7 @@ impl Orchestrator {
             },
         );
 
+        info!(issue_id = %log_issue_id, "dispatch complete, agent running");
         Ok(())
     }
 
@@ -317,14 +354,17 @@ impl Orchestrator {
         self.claimed.remove(issue_id);
         self.retries.remove(issue_id);
 
-        // Run after_run hook.
+        // Run after_run hook (with timeout).
         if let Some(rs) = &run_state {
             let repo_name = self.repo_name_for(&rs.issue.repo);
             if let Some(hooks) = self.workspace_mgr.hooks_for(&repo_name) {
                 if let Some(script) = &hooks.after_run {
                     info!(issue_id = %issue_id, "running after_run hook");
-                    if let Err(e) = run_hook(script, &workspace.path).await {
-                        warn!(issue_id = %issue_id, error = %e, "after_run hook failed");
+                    let hook_timeout = Duration::from_secs(60);
+                    match tokio::time::timeout(hook_timeout, run_hook(script, &workspace.path)).await {
+                        Ok(Ok(())) => info!(issue_id = %issue_id, "after_run hook completed"),
+                        Ok(Err(e)) => warn!(issue_id = %issue_id, error = %e, "after_run hook failed"),
+                        Err(_) => warn!(issue_id = %issue_id, "after_run hook timed out after 60s"),
                     }
                 }
             }
