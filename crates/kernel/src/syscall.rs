@@ -85,7 +85,7 @@ impl SyscallDispatcher {
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
-        let jobs_path = rara_paths::data_dir().join("jobs.json");
+        let jobs_path = rara_paths::config_dir().join("scheduler").join("jobs.json");
         let job_wheel = std::sync::Mutex::new(crate::schedule::JobWheel::load(jobs_path));
         Self {
             shared_kv,
