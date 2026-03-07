@@ -1,13 +1,20 @@
 # Symphony — Autonomous Coding Agent Orchestrator
 
-Symphony is rara's built-in system for autonomously dispatching coding agents to work on GitHub issues. It polls configured repositories for issues with specific labels, creates isolated git worktrees, and spawns Claude Code (or other CLI agents) as subprocesses to implement the work.
+Symphony is rara's built-in system for autonomously dispatching coding agents to work on issues from **Linear** or **GitHub**. It polls the configured issue tracker for eligible issues, creates isolated git worktrees, and spawns Claude Code (or other CLI agents) as subprocesses to implement the work.
+
+Inspired by [OpenAI Symphony](https://github.com/openai/symphony) — teams manage work on a kanban board, agents pick up tasks and execute them autonomously.
 
 ## How It Works
 
 ```
-GitHub Issues (label: symphony:ready)
+Linear / GitHub Issues
         │
         ▼
+  ┌─────────────────┐
+  │  IssueTracker    │◄── LinearIssueTracker (GraphQL)
+  │  (pluggable)     │    GitHubIssueTracker (REST)
+  └────────┬────────┘
+           ▼
   ┌─────────────┐
   │  Orchestrator │◄── event loop (tokio::select!)
   │               │
@@ -29,10 +36,20 @@ GitHub Issues (label: symphony:ready)
   └───────────────┘     └──────────────────┘
 ```
 
-## Quick Start
+## Quick Start (Linear)
 
-1. Add the `symphony` section to your config file (see [Configuration](#configuration) below).
-2. Create a `WORKFLOW.md` in your repository root (optional — a default prompt is used if absent).
+1. Create a [Linear Personal API key](https://linear.app/settings/account/security).
+2. Set the environment variable: `export LINEAR_API_KEY=lin_api_...`
+3. Add a `symphony` section to your config (see [Linear Configuration](#linear-configuration) below).
+4. In your Linear project, add labels with the `repo:` prefix to map issues to repos (e.g. `repo:myorg/myrepo`).
+5. Create a `WORKFLOW.md` in your repository root (optional — a default prompt is used if absent).
+6. Start rara: `rara server`.
+7. Move a Linear issue to "Todo" or "In Progress" — symphony picks it up, creates a worktree, and dispatches an agent.
+
+## Quick Start (GitHub)
+
+1. Add the `symphony` section to your config file (see [GitHub Configuration](#github-configuration) below).
+2. Create a `WORKFLOW.md` in your repository root (optional).
 3. Label a GitHub issue with `symphony:ready`.
 4. Start rara: `rara server`.
 5. Symphony will pick up the issue, create a worktree, and dispatch an agent.
@@ -90,11 +107,12 @@ Available template variables:
 
 | Variable | Description |
 |----------|-------------|
-| `{{issue.number}}` | Issue number |
+| `{{issue.number}}` | Issue number (numeric) |
+| `{{issue.identifier}}` | Human-readable ID (GitHub: `"42"`, Linear: `"RAR-42"`) |
 | `{{issue.title}}` | Issue title |
 | `{{issue.body}}` | Issue body/description |
-| `{{issue.repo}}` | Repository name (owner/repo) |
-| `{{issue.id}}` | Full issue ID (owner/repo#number) |
+| `{{issue.repo}}` | Target repository name (owner/repo) |
+| `{{issue.id}}` | Internal ID (GitHub: `owner/repo#42`, Linear: GraphQL UUID) |
 | `{{attempt}}` | Retry attempt number (absent on first try) |
 
 If no `WORKFLOW.md` is found or its body is empty, a built-in default prompt is used.
@@ -192,7 +210,89 @@ Event kinds: `IssueDiscovered`, `IssueStateChanged`, `AgentCompleted`, `AgentFai
 
 ## Configuration
 
-Add an optional `symphony` section to your YAML config:
+Symphony supports two issue tracker backends: **Linear** (recommended) and **GitHub**.
+
+### Linear Configuration
+
+```yaml
+symphony:
+  enabled: true
+  poll_interval: 30s
+  max_concurrent_agents: 2
+  stall_timeout: 30m
+  max_retry_backoff: 1h
+  workflow_file: WORKFLOW.md
+  tracker:
+    kind: linear
+    api_key: $LINEAR_API_KEY        # supports $ENV_VAR syntax
+    project_slug: my-project        # Linear project slugId
+    # endpoint: https://api.linear.app/graphql  # override for self-hosted
+    # active_states: [Todo, In Progress]        # default
+    # terminal_states: [Done, Cancelled, Canceled, Closed, Duplicate]
+    # repo_label_prefix: "repo:"               # default
+  agent:
+    command: claude
+    args: []
+    allowed_tools: []
+  repos:
+    - name: myorg/backend
+      url: https://github.com/myorg/backend
+      repo_path: /code/backend
+      workspace_root: /code/backend/.worktrees
+    - name: myorg/frontend
+      url: https://github.com/myorg/frontend
+      repo_path: /code/frontend
+      workspace_root: /code/frontend/.worktrees
+```
+
+#### Linear 工作流程
+
+1. **创建 API Key** — 在 [Linear Settings > Security](https://linear.app/settings/account/security) 生成 Personal API key
+2. **配置 label 映射** — 在 Linear project 中创建以 `repo:` 为前缀的 label（如 `repo:myorg/backend`）
+3. **给 issue 打 label** — 每个 issue 必须有一个 `repo:xxx` label，symphony 据此决定在哪个 repo 的 worktree 中执行
+4. **状态驱动** — issue 进入 `Todo` 或 `In Progress` 状态时被 symphony 拉取；进入 `Done`/`Cancelled` 时自动停止
+
+```
+Linear Board                          Symphony
+┌────────┬────────────┬──────────┐
+│ Backlog│   Todo     │In Progress│
+│        │            │          │
+│        │  RAR-42 ◄──┼──────────┼── symphony 拉取
+│        │ repo:myorg │          │   → 创建 worktree
+│        │ /backend   │          │   → 启动 agent
+│        │            │          │
+│        │            │  RAR-43  │── agent 正在工作
+│        │            │          │
+└────────┴────────────┴──────────┘
+                                     agent 完成 → 创建 PR
+                                     你在 Linear 上 review → 移到 Done
+```
+
+#### Tracker Settings (Linear)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `kind` | — (required) | `linear` |
+| `api_key` | — (required) | Linear API key，支持 `$ENV_VAR` 语法 |
+| `project_slug` | — (required) | Linear project 的 slugId |
+| `endpoint` | `https://api.linear.app/graphql` | GraphQL endpoint（自托管时覆盖） |
+| `active_states` | `["Todo", "In Progress"]` | 触发 dispatch 的 issue 状态 |
+| `terminal_states` | `["Done", "Closed", "Cancelled", ...]` | 终止状态 |
+| `repo_label_prefix` | `"repo:"` | label 前缀，用于 issue → repo 映射 |
+
+#### Linear 优先级映射
+
+Linear 内置优先级直接映射：
+
+| Linear Priority | Symphony Priority | 行为 |
+|----------------|-------------------|------|
+| Urgent (1) | 1 | 最先被 dispatch |
+| High (2) | 2 | |
+| Medium (3) | 3 | |
+| Low (4) | 4 | |
+| No priority (0) | 最低 | 最后被 dispatch |
+
+### GitHub Configuration
 
 ```yaml
 symphony:
@@ -202,20 +302,22 @@ symphony:
   stall_timeout: 30m
   max_retry_backoff: 1h
   workflow_file: WORKFLOW.md
+  tracker:
+    kind: github
+    api_key: $GITHUB_TOKEN           # optional, supports $ENV_VAR
   agent:
     command: claude
     args: []
     allowed_tools: []
-    # turn_timeout: 10m   # optional per-turn timeout
   repos:
-    - name: rararulab/rara
-      url: https://github.com/rararulab/rara
+    - name: myorg/myrepo
+      url: https://github.com/myorg/myrepo
       repo_path: /path/to/local/repo
       workspace_root: /path/to/local/repo/.worktrees
       active_labels:
         - symphony:ready
-      # max_concurrent_agents: 1   # per-repo override
-      # workflow_file: custom.md   # per-repo override
+      # max_concurrent_agents: 1
+      # workflow_file: custom.md
       # hooks:
       #   after_create: "./scripts/setup-worktree.sh"
       #   before_run: "./scripts/pre-agent.sh"
@@ -223,12 +325,21 @@ symphony:
       #   before_remove: "./scripts/cleanup-worktree.sh"
 ```
 
+> **Note:** 如果省略 `tracker` 字段，默认使用 GitHub tracker（向后兼容）。
+
+#### Tracker Settings (GitHub)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `kind` | — | `github` |
+| `api_key` | none | GitHub PAT，支持 `$ENV_VAR` 语法 |
+
 ### Global Settings
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `false` | Whether symphony is active |
-| `poll_interval` | — (required) | How often to poll GitHub for new issues |
+| `poll_interval` | — (required) | How often to poll for new issues |
 | `max_concurrent_agents` | `2` | Max agents running simultaneously across all repos |
 | `stall_timeout` | — (required) | Time before an agent is considered stalled |
 | `max_retry_backoff` | — (required) | Upper bound on retry backoff duration |
@@ -251,35 +362,37 @@ symphony:
 | `url` | — (required) | Remote URL |
 | `repo_path` | — (required) | Local path to the repository checkout |
 | `workspace_root` | — (required) | Directory for worktrees |
-| `active_labels` | `["symphony:ready"]` | Labels that mark an issue as ready |
+| `active_labels` | `["symphony:ready"]` | Labels that mark an issue as ready (GitHub only) |
 | `max_concurrent_agents` | inherits global | Per-repo agent limit |
 | `workflow_file` | inherits global | Per-repo prompt template override |
 | `hooks` | none | Lifecycle hook scripts |
 
 ## Multi-Repo Support
 
-Symphony can track multiple repositories simultaneously. Each repo has its own:
+Symphony can track multiple repositories simultaneously.
 
-- Workspace root for worktrees
-- Active labels filter
-- Optional per-repo concurrency limit
-- Optional per-repo workflow template
-- Optional lifecycle hooks
+**Linear 多 repo**：在同一个 Linear project 中用 label 区分（`repo:myorg/backend`, `repo:myorg/frontend`）。未打 `repo:` label 的 issue 会被跳过并输出警告。
+
+**GitHub 多 repo**：每个 repo 单独配置 `active_labels`。
 
 Agent slots are managed both globally (`max_concurrent_agents`) and per-repo. An issue is only dispatched when both the global and per-repo limits have available capacity.
 
 ```yaml
+# Linear 多 repo 示例
 symphony:
   max_concurrent_agents: 4
+  tracker:
+    kind: linear
+    api_key: $LINEAR_API_KEY
+    project_slug: my-team
   repos:
-    - name: org/frontend
+    - name: myorg/frontend
       repo_path: /code/frontend
       workspace_root: /code/frontend/.worktrees
       max_concurrent_agents: 2
-      active_labels: ["symphony:ready", "frontend"]
-    - name: org/backend
+    - name: myorg/backend
       repo_path: /code/backend
       workspace_root: /code/backend/.worktrees
       max_concurrent_agents: 2
-      active_labels: ["symphony:ready", "backend"]
+# Linear issue 打 label "repo:myorg/frontend" 或 "repo:myorg/backend" 即可路由
 ```
