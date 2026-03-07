@@ -123,31 +123,58 @@ impl ProgressMessage {
     }
 }
 
-/// Render tool progress lines for display in Telegram.
-fn render_progress(tools: &[ToolProgress]) -> String {
-    tools
-        .iter()
-        .map(|t| {
-            let label = if t.summary.is_empty() {
-                t.name.clone()
-            } else {
-                format!("{}: {}", t.name, t.summary)
-            };
-            if t.finished {
-                if t.success {
-                    format!("\u{2705} {label}")
-                } else {
-                    format!("\u{274c} {label}")
-                }
-            } else {
-                format!("\u{1f527} {label}...")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Format a single tool-progress line.
+fn format_tool_line(t: &ToolProgress) -> String {
+    let label = if t.summary.is_empty() {
+        t.name.clone()
+    } else {
+        format!("{}: {}", t.name, t.summary)
+    };
+    if t.finished {
+        if t.success {
+            format!("\u{2705} {label}")
+        } else {
+            format!("\u{274c} {label}")
+        }
+    } else {
+        format!("\u{1f527} {label}...")
+    }
 }
 
-use crate::tool_display::{tool_arguments_summary, tool_display_name};
+/// Render tool progress lines for display in Telegram.
+///
+/// When there are more than 5 tools, older completed steps are collapsed into a
+/// single "\u{22ef} N earlier steps" line to keep the message compact.
+fn render_progress(tools: &[ToolProgress]) -> String {
+    let total = tools.len();
+    if total <= 5 {
+        return tools.iter().map(format_tool_line).collect::<Vec<_>>().join("\n");
+    }
+
+    let mut lines = Vec::new();
+
+    let finished_count = tools.iter().filter(|t| t.finished).count();
+    let last_finished: Vec<_> = tools.iter().filter(|t| t.finished).rev().take(2).collect();
+    let collapsed = finished_count.saturating_sub(last_finished.len());
+
+    if collapsed > 0 {
+        lines.push(format!("\u{22ef} {} earlier steps", collapsed));
+    }
+
+    // Last 2 finished (in original order).
+    for t in last_finished.into_iter().rev() {
+        lines.push(format_tool_line(t));
+    }
+
+    // In-progress tools.
+    for t in tools.iter().filter(|t| !t.finished) {
+        lines.push(format_tool_line(t));
+    }
+
+    lines.join("\n")
+}
+
+use crate::tool_display::tool_display_info;
 
 /// Per-chat streaming state for progressive `editMessageText` updates.
 struct StreamingMessage {
@@ -1140,8 +1167,7 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
-                            let display = tool_display_name(&name).to_owned();
-                            let summary = tool_arguments_summary(&name, &arguments);
+                            let (display, summary) = tool_display_info(&name, &arguments);
                             progress.tools.push(ToolProgress {
                                 id,
                                 name: display,

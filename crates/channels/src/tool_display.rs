@@ -48,6 +48,73 @@ pub fn tool_arguments_summary(tool_name: &str, arguments: &serde_json::Value) ->
     }
 }
 
+/// Return a `(display_name, summary)` pair with richer heuristics.
+///
+/// For `shell_execute` commands starting with `agent-browser`, the display name
+/// becomes `"browser"` and the summary shows only the sub-command.  Shell noise
+/// like trailing `2>&1` and pipe suffixes is stripped.  The summary is truncated
+/// to 60 characters (suitable for Telegram's narrower viewport).
+pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (String, String) {
+    if tool_name == "shell_execute" {
+        if let Some(cmd) = arguments.get("command").and_then(|v| v.as_str()) {
+            let cleaned = clean_shell_command(cmd);
+            if let Some(rest) = cleaned
+                .strip_prefix("agent-browser ")
+                .or_else(|| cleaned.strip_prefix("agent-browser\t"))
+            {
+                return ("browser".to_owned(), truncate_summary(rest.trim(), 60));
+            }
+            return ("shell".to_owned(), truncate_summary(&cleaned, 60));
+        }
+    }
+
+    let name = tool_display_name(tool_name).to_owned();
+    let raw = match tool_name {
+        "web_search" => arguments.get("query").and_then(|v| v.as_str()),
+        "web_fetch" => arguments.get("url").and_then(|v| v.as_str()),
+        "read_file" | "write_file" => arguments.get("path").and_then(|v| v.as_str()),
+        _ => ["query", "command", "input", "path", "url"]
+            .iter()
+            .find_map(|key| arguments.get(*key).and_then(|v| v.as_str()))
+            .or_else(|| first_string_value(arguments)),
+    };
+
+    let summary = match raw {
+        Some(s) => truncate_summary(s, 60),
+        None => String::new(),
+    };
+
+    (name, summary)
+}
+
+/// Strip common shell noise from a command string.
+///
+/// Removes trailing `2>&1` redirections and pipe suffixes like `| head -N`,
+/// `| tail -N`, `| grep ...`.
+fn clean_shell_command(cmd: &str) -> String {
+    // Remove trailing 2>&1
+    let s = cmd.trim();
+    let s = s.strip_suffix("2>&1").unwrap_or(s).trim_end();
+
+    // Remove trailing pipe segments: `| head ...`, `| tail ...`, `| grep ...`
+    let mut result = s;
+    loop {
+        if let Some(pos) = result.rfind('|') {
+            let after_pipe = result[pos + 1..].trim();
+            if after_pipe.starts_with("head")
+                || after_pipe.starts_with("tail")
+                || after_pipe.starts_with("grep")
+            {
+                result = result[..pos].trim_end();
+                continue;
+            }
+        }
+        break;
+    }
+
+    result.to_owned()
+}
+
 /// Return the first string value found in a JSON object (top-level only).
 fn first_string_value(value: &serde_json::Value) -> Option<&str> {
     value
@@ -111,5 +178,50 @@ mod tests {
     fn truncate_multiline() {
         let s = "first line\nsecond line";
         assert_eq!(truncate_summary(s, 80), "first line");
+    }
+
+    #[test]
+    fn clean_shell_strips_redirect() {
+        assert_eq!(clean_shell_command("ls -la 2>&1"), "ls -la");
+    }
+
+    #[test]
+    fn clean_shell_strips_pipes() {
+        assert_eq!(
+            clean_shell_command("cat file.txt | grep foo | head -20 2>&1"),
+            "cat file.txt"
+        );
+    }
+
+    #[test]
+    fn clean_shell_preserves_meaningful_pipes() {
+        assert_eq!(
+            clean_shell_command("cat file.txt | sort | uniq"),
+            "cat file.txt | sort | uniq"
+        );
+    }
+
+    #[test]
+    fn display_info_agent_browser() {
+        let args = json!({"command": "agent-browser click @e1 2>&1"});
+        let (name, summary) = tool_display_info("shell_execute", &args);
+        assert_eq!(name, "browser");
+        assert_eq!(summary, "click @e1");
+    }
+
+    #[test]
+    fn display_info_regular_shell() {
+        let args = json!({"command": "ls -la /tmp | head -5 2>&1"});
+        let (name, summary) = tool_display_info("shell_execute", &args);
+        assert_eq!(name, "shell");
+        assert_eq!(summary, "ls -la /tmp");
+    }
+
+    #[test]
+    fn display_info_non_shell() {
+        let args = json!({"query": "rust async"});
+        let (name, summary) = tool_display_info("web_search", &args);
+        assert_eq!(name, "search");
+        assert_eq!(summary, "rust async");
     }
 }
