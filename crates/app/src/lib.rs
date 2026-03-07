@@ -223,17 +223,24 @@ pub async fn start_with_options(
         rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
             .await
             .whatever_context("Failed to initialize runtime settings")?;
-    let config_defaults = flatten::flatten_config_sections(&config);
-    if !config_defaults.is_empty() {
-        settings_svc
-            .seed_defaults(config_defaults)
-            .await
-            .whatever_context("Failed to seed config defaults")?;
-    }
 
     let settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider> =
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
+
+    // Resolve config file path (same logic as AppConfig::new)
+    let config_path = {
+        let mut path = std::env::current_dir().unwrap_or_default();
+        path.push("config.yaml");
+        path
+    };
+    let config_file_sync = config_sync::ConfigFileSync::new(
+        settings_provider.clone(),
+        config.clone(),
+        config_path,
+    )
+    .await
+    .whatever_context("Failed to initialize config file sync")?;
 
     let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
         .await
@@ -303,6 +310,15 @@ pub async fn start_with_options(
     );
 
     let cancellation_token = CancellationToken::new();
+
+    // Start bidirectional config <-> settings sync
+    {
+        let cancel = cancellation_token.clone();
+        tokio::spawn(async move {
+            config_file_sync.start(cancel).await;
+        });
+    }
+
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
     // Wire DispatchRaraTool with the now-available KernelHandle.
