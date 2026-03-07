@@ -27,7 +27,10 @@ pub struct SymphonyConfig {
     pub enabled: bool,
 
     /// How often to poll for new issues.
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub poll_interval: Duration,
 
     /// Maximum number of concurrent coding agents across all repos.
@@ -35,11 +38,17 @@ pub struct SymphonyConfig {
     pub max_concurrent_agents: usize,
 
     /// How long before an agent is considered stalled.
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub stall_timeout: Duration,
 
     /// Maximum backoff duration for retries.
-    #[serde(deserialize_with = "humantime_serde::deserialize")]
+    #[serde(
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize",
+    )]
     pub max_retry_backoff: Duration,
 
     /// Path to the workflow file template.
@@ -71,7 +80,8 @@ pub struct AgentConfig {
     #[serde(
         default,
         deserialize_with = "humantime_serde::deserialize",
-        skip_serializing_if = "Option::is_none"
+        serialize_with = "humantime_serde::serialize",
+        skip_serializing_if = "Option::is_none",
     )]
     pub turn_timeout: Option<Duration>,
 }
