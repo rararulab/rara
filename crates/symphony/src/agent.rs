@@ -73,34 +73,31 @@ impl ClaudeCodeAgent {
 
     /// Build the default hardcoded prompt when no workflow template is available.
     fn default_prompt(&self, task: &AgentTask) -> String {
-        let mut prompt = format!(
-            "Issue #{}: {}\n",
-            task.issue.number, task.issue.title
-        );
+        let body_section = task.issue.body.as_deref().map_or(String::new(), |body| {
+            format!("\n## Description\n\n{body}\n")
+        });
 
-        if let Some(body) = &task.issue.body {
-            prompt.push_str("\n## Description\n\n");
-            prompt.push_str(body);
-            prompt.push('\n');
-        }
+        let retry_section = task.attempt.map_or(String::new(), |attempt| {
+            format!(
+                "\nThis is retry attempt {attempt}. \
+                 The previous attempt failed. Please review what went wrong and try a different approach.\n"
+            )
+        });
 
-        if let Some(attempt) = task.attempt {
-            prompt.push_str(&format!(
-                "\nThis is retry attempt {attempt}. The previous attempt failed. \
-                 Please review what went wrong and try a different approach.\n"
-            ));
-        }
+        format!(
+            "\
+Issue #{number}: {title}
+{body_section}{retry_section}
+## Instructions
 
-        prompt.push_str("\n## Instructions\n\n");
-        prompt.push_str("- Work in the current working directory (the worktree).\n");
-        prompt.push_str("- Use conventional commits (feat, fix, refactor, etc.).\n");
-        prompt.push_str(&format!(
-            "- Include issue reference (#{}) in commit messages.\n",
-            task.issue.number
-        ));
-        prompt.push_str("- When finished, create a PR with your changes.\n");
-
-        prompt
+- Work in the current working directory (the worktree).
+- Use conventional commits (feat, fix, refactor, etc.).
+- Include issue reference (#{number}) in commit messages.
+- When finished, create a PR with your changes.
+",
+            number = task.issue.number,
+            title = task.issue.title,
+        )
     }
 }
 
