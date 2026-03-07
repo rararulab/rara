@@ -962,6 +962,41 @@ async fn handle_update(
     };
     drop(username_guard);
 
+    // If the Telegram message has a photo, download and compress it for LLM vision.
+    let raw = if let Some(photos) = msg.photo() {
+        if let Some(largest) = photos.last() {
+            match download_and_compress_photo(&bot, &largest.file.id).await {
+                Ok((media_type, b64_data)) => {
+                    // Combine text + image into multimodal content.
+                    let text = match raw.content {
+                        MessageContent::Text(ref t) => t.clone(),
+                        _ => String::new(),
+                    };
+                    let mut blocks = vec![];
+                    if !text.is_empty() {
+                        blocks.push(rara_kernel::channel::types::ContentBlock::Text { text });
+                    }
+                    blocks.push(rara_kernel::channel::types::ContentBlock::ImageBase64 {
+                        media_type,
+                        data: b64_data,
+                    });
+                    RawPlatformMessage {
+                        content: MessageContent::Multimodal(blocks),
+                        ..raw
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to download/compress photo, using text only");
+                    raw
+                }
+            }
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+
     let msg = match handle.resolve(raw).await {
         Ok(msg) => msg,
         Err(IOError::SystemBusy) => {
@@ -1562,6 +1597,29 @@ pub fn telegram_to_raw_platform_message(
         reply_context,
         metadata,
     })
+}
+
+/// Download a photo from Telegram and compress it for LLM vision input.
+///
+/// Returns `(media_type, base64_data)`.
+async fn download_and_compress_photo(
+    bot: &teloxide::Bot,
+    file_id: &teloxide::types::FileId,
+) -> anyhow::Result<(String, String)> {
+    use base64::Engine;
+    use rara_kernel::llm::image::{DEFAULT_MAX_EDGE, DEFAULT_QUALITY};
+    use teloxide::net::Download;
+
+    let file = bot.get_file(file_id.clone()).send().await?;
+    let mut buf = Vec::new();
+    bot.download_file(&file.path, &mut buf).await?;
+
+    let (compressed, media_type) =
+        rara_kernel::llm::image::compress_image(&buf, DEFAULT_MAX_EDGE, DEFAULT_QUALITY)?;
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+
+    Ok((media_type, b64))
 }
 
 #[cfg(test)]

@@ -155,6 +155,7 @@ eventsource-stream = "0.2"
 futures = "^0.3"
 http = "^1"
 hyper = { version = "1", features = ["full"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 indexmap = "2"
 jiff = { version = "^0.2", features = ["serde"] }
 jsonwebtoken = "9"

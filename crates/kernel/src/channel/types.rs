@@ -105,6 +105,8 @@ pub enum ContentBlock {
     Text { text: String },
     /// A reference to an image by URL.
     ImageUrl { url: String },
+    /// Inline base64-encoded image data.
+    ImageBase64 { media_type: String, data: String },
 }
 
 /// Message content — either plain text or multimodal blocks.
@@ -133,7 +135,7 @@ impl MessageContent {
                 .iter()
                 .filter_map(|b| match b {
                     ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::ImageUrl { .. } => None,
+                    ContentBlock::ImageUrl { .. } | ContentBlock::ImageBase64 { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),

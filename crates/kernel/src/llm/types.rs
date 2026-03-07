@@ -45,6 +45,7 @@ pub enum Role {
 pub enum ContentBlock {
     Text { text: String },
     ImageUrl { url: String },
+    ImageBase64 { media_type: String, data: String },
 }
 
 /// Message content — either plain text or multimodal blocks.

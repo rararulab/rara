@@ -12,6 +12,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 dashmap = "6"
 futures = { workspace = true }
+image = { workspace = true }
 jiff = { workspace = true }
 rand = { workspace = true }
 rara-kernel = { workspace = true }

@@ -22,6 +22,7 @@
 //! - [`OpenAiDriver`] — reqwest-based OpenAI-compatible driver with SSE parsing
 
 pub mod driver;
+pub mod image;
 pub mod openai;
 pub mod registry;
 pub mod stream;
