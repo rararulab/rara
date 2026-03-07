@@ -124,7 +124,7 @@ impl Orchestrator {
                             self.handle_agent_stalled(&issue_id);
                         }
                         SymphonyEvent::IssueStateChanged { issue_id, new_state } => {
-                            if let Err(e) = self.handle_state_changed(&issue_id, &new_state) {
+                            if let Err(e) = self.handle_state_changed(&issue_id, &new_state).await {
                                 error!(issue_id = %issue_id, error = %e, "state change handler failed");
                             }
                         }
@@ -216,10 +216,16 @@ impl Orchestrator {
     async fn do_dispatch(&mut self, issue: TrackedIssue) -> Result<()> {
         let repo_name = self.repo_name_for(&issue.repo);
 
-        // Create or reuse a worktree.
-        let workspace =
-            self.workspace_mgr
-                .ensure_worktree(&repo_name, issue.number, &issue.title)?;
+        // Create or reuse a worktree (blocking git2 I/O — offload to spawn_blocking).
+        let mgr = self.workspace_mgr.clone();
+        let rn = repo_name.clone();
+        let issue_number = issue.number;
+        let issue_title = issue.title.clone();
+        let workspace = tokio::task::spawn_blocking(move || {
+            mgr.ensure_worktree(&rn, issue_number, &issue_title)
+        })
+        .await
+        .expect("spawn_blocking panicked")?;
 
         info!(
             issue_id = %issue.id,
@@ -254,10 +260,14 @@ impl Orchestrator {
             }
         }
 
-        // Read WORKFLOW.md from the workspace if it exists.
+        // Read WORKFLOW.md from the workspace if it exists (offload blocking I/O).
         let workflow_file = self.workflow_file_for(&repo_name);
         let workflow_path = workspace.path.join(&workflow_file);
-        let workflow_content = std::fs::read_to_string(&workflow_path).ok();
+        let workflow_content = tokio::task::spawn_blocking(move || {
+            std::fs::read_to_string(workflow_path).ok()
+        })
+        .await
+        .expect("spawn_blocking panicked");
         info!(
             issue_id = %issue.id,
             has_workflow = workflow_content.is_some(),
@@ -369,8 +379,16 @@ impl Orchestrator {
                 }
             }
 
-            // Cleanup the worktree.
-            if let Err(e) = self.workspace_mgr.cleanup_worktree(&repo_name, workspace) {
+            // Cleanup the worktree (blocking git2 I/O — offload).
+            let mgr = self.workspace_mgr.clone();
+            let rn = repo_name.clone();
+            let ws = workspace.clone();
+            let cleanup_result = tokio::task::spawn_blocking(move || {
+                mgr.cleanup_worktree(&rn, &ws)
+            })
+            .await
+            .expect("spawn_blocking panicked");
+            if let Err(e) = cleanup_result {
                 warn!(issue_id = %issue_id, error = %e, "worktree cleanup failed");
             }
         }
@@ -424,7 +442,7 @@ impl Orchestrator {
     }
 
     /// Handle an issue state change — if terminal, cleanup.
-    fn handle_state_changed(&mut self, issue_id: &str, new_state: &IssueState) -> Result<()> {
+    async fn handle_state_changed(&mut self, issue_id: &str, new_state: &IssueState) -> Result<()> {
         info!(issue_id = %issue_id, state = ?new_state, "issue state changed");
 
         if *new_state == IssueState::Terminal {
@@ -433,10 +451,15 @@ impl Orchestrator {
                 self.retries.remove(issue_id);
 
                 let repo_name = self.repo_name_for(&run_state.issue.repo);
-                if let Err(e) = self
-                    .workspace_mgr
-                    .cleanup_worktree(&repo_name, &run_state.workspace)
-                {
+                let mgr = self.workspace_mgr.clone();
+                let rn = repo_name.clone();
+                let ws = run_state.workspace.clone();
+                let cleanup_result = tokio::task::spawn_blocking(move || {
+                    mgr.cleanup_worktree(&rn, &ws)
+                })
+                .await
+                .expect("spawn_blocking panicked");
+                if let Err(e) = cleanup_result {
                     warn!(issue_id = %issue_id, error = %e, "worktree cleanup failed");
                 }
 

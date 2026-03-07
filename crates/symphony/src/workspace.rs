@@ -16,7 +16,7 @@ struct RepoWorkspaceConfig {
 }
 
 /// Manages git worktree lifecycles for symphony-tracked repositories.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WorkspaceManager {
     repos: HashMap<String, RepoWorkspaceConfig>,
 }

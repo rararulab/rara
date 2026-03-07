@@ -385,7 +385,7 @@ impl Kernel {
                     }
                 }
                 _ = schedule_tick.tick(), if id == 0 => {
-                    self.drain_scheduled_jobs();
+                    self.drain_scheduled_jobs().await;
                 }
                 _ = shutdown.cancelled() => {
                     info!(processor_id = id, "event processor shutting down");
@@ -415,14 +415,18 @@ impl Kernel {
     }
 
     /// Drain expired scheduled jobs and inject them as `ScheduledTask` events.
-    fn drain_scheduled_jobs(&self) {
-        let now = jiff::Timestamp::now();
-        let expired = {
-            let mut wheel = match self.syscall.job_wheel().lock() {
+    ///
+    /// The mutex lock + file persist are blocking I/O, so they run on the
+    /// blocking thread-pool to avoid starving the tokio runtime.
+    async fn drain_scheduled_jobs(&self) {
+        let wheel_ref = self.syscall.job_wheel().clone();
+        let expired = tokio::task::spawn_blocking(move || {
+            let now = jiff::Timestamp::now();
+            let mut wheel = match wheel_ref.lock() {
                 Ok(w) => w,
                 Err(e) => {
                     warn!(error = %e, "failed to lock job wheel for drain");
-                    return;
+                    return vec![];
                 }
             };
             let expired = wheel.drain_expired(now);
@@ -430,7 +434,9 @@ impl Kernel {
                 wheel.persist();
             }
             expired
-        };
+        })
+        .await
+        .unwrap_or_default();
 
         for job in expired {
             info!(

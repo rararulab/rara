@@ -70,7 +70,7 @@ pub(crate) struct SyscallDispatcher {
     /// Optional provider of dynamically discovered tools (e.g. MCP servers).
     dynamic_tool_provider:   Option<DynamicToolProviderRef>,
     /// Scheduled task wheel for job scheduling.
-    job_wheel:               std::sync::Mutex<crate::schedule::JobWheel>,
+    job_wheel:               Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
 }
 
 impl SyscallDispatcher {
@@ -86,7 +86,7 @@ impl SyscallDispatcher {
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         let jobs_path = rara_paths::config_dir().join("scheduler").join("jobs.json");
-        let job_wheel = std::sync::Mutex::new(crate::schedule::JobWheel::load(jobs_path));
+        let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(jobs_path)));
         Self {
             shared_kv,
             pipe_registry,
@@ -109,7 +109,7 @@ impl SyscallDispatcher {
     pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
 
     /// Access the job wheel (for tick-based drain in the event loop).
-    pub fn job_wheel(&self) -> &std::sync::Mutex<crate::schedule::JobWheel> { &self.job_wheel }
+    pub fn job_wheel(&self) -> &Arc<std::sync::Mutex<crate::schedule::JobWheel>> { &self.job_wheel }
 
     // -- Dispatch -----------------------------------------------------------
 
