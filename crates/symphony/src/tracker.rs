@@ -5,7 +5,7 @@ use serde::Deserialize;
 use snafu::ensure;
 
 use crate::config::RepoConfig;
-use crate::error::{GitHubSnafu, Result};
+use crate::error::{GitHubSnafu, LinearSnafu, Result};
 use crate::event::{IssueState, TrackedIssue};
 
 /// Trait for fetching issues from a remote tracker.
@@ -240,6 +240,248 @@ struct GitHubLabel {
     name: String,
 }
 
+// ── Linear-backed issue tracker ──────────────────────────────────────
+
+/// Linear-backed issue tracker using the GraphQL API.
+pub struct LinearIssueTracker {
+    client: lineark_sdk::Client,
+    project_slug: String,
+    active_states: Vec<String>,
+    terminal_states: Vec<String>,
+    repo_label_prefix: String,
+    repos: Vec<String>,
+}
+
+impl LinearIssueTracker {
+    /// Create a new Linear issue tracker.
+    pub fn new(
+        api_key: &str,
+        project_slug: String,
+        active_states: Vec<String>,
+        terminal_states: Vec<String>,
+        repo_label_prefix: String,
+        repos: Vec<String>,
+    ) -> Result<Self> {
+        let client = lineark_sdk::Client::from_token(api_key).map_err(|e| {
+            LinearSnafu {
+                message: format!("failed to create Linear client: {e}"),
+            }
+            .build()
+        })?;
+        Ok(Self {
+            client,
+            project_slug,
+            active_states,
+            terminal_states,
+            repo_label_prefix,
+            repos,
+        })
+    }
+
+    /// Extract repository name from issue labels using the configured prefix.
+    fn extract_repo(&self, labels: &[String]) -> Option<String> {
+        for label in labels {
+            if let Some(repo) = label.strip_prefix(&self.repo_label_prefix) {
+                if self.repos.contains(&repo.to_owned()) {
+                    return Some(repo.to_owned());
+                }
+            }
+        }
+        None
+    }
+
+    /// Parse the numeric issue number from a Linear identifier like `"RAR-42"`.
+    fn parse_number(identifier: &str) -> u64 {
+        identifier
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Map Linear priority (0 = no priority) to our ordering (lower = higher priority).
+    fn map_priority(linear_priority: u32) -> u32 {
+        match linear_priority {
+            0 => u32::MAX,
+            n => n,
+        }
+    }
+}
+
+#[async_trait]
+impl IssueTracker for LinearIssueTracker {
+    async fn fetch_active_issues(&self) -> Result<Vec<TrackedIssue>> {
+        const QUERY: &str = r#"
+            query($projectSlug: String!, $states: [String!]!, $first: Int!, $after: String) {
+                issues(
+                    filter: {
+                        project: { slugId: { eq: $projectSlug } }
+                        state: { name: { in: $states } }
+                    }
+                    first: $first
+                    after: $after
+                ) {
+                    nodes {
+                        id
+                        identifier
+                        title
+                        description
+                        priority
+                        createdAt
+                        state { name }
+                        labels { nodes { name } }
+                    }
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+        "#;
+
+        let mut all_issues = Vec::new();
+        let mut after: Option<String> = None;
+
+        loop {
+            let variables = serde_json::json!({
+                "projectSlug": self.project_slug,
+                "states": self.active_states,
+                "first": 50,
+                "after": after,
+            });
+
+            let conn = self
+                .client
+                .execute_connection::<serde_json::Value>(QUERY, variables, "issues")
+                .await
+                .map_err(|e| {
+                    LinearSnafu {
+                        message: format!("failed to fetch issues: {e}"),
+                    }
+                    .build()
+                })?;
+
+            for node in &conn.nodes {
+                // Extract label names.
+                let labels: Vec<String> = node
+                    .get("labels")
+                    .and_then(|l| l.get("nodes"))
+                    .and_then(|n| n.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+                            .map(|s| s.to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let repo = match self.extract_repo(&labels) {
+                    Some(r) => r,
+                    None => {
+                        let ident = node
+                            .get("identifier")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        tracing::warn!(
+                            identifier = ident,
+                            "no matching repo label, skipping issue"
+                        );
+                        continue;
+                    }
+                };
+
+                let identifier = node
+                    .get("identifier")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let number = Self::parse_number(&identifier);
+                let linear_priority = node
+                    .get("priority")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let priority = Self::map_priority(linear_priority);
+                let created_at: DateTime<Utc> = node
+                    .get("createdAt")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_default();
+
+                all_issues.push(TrackedIssue {
+                    id: node
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned(),
+                    identifier,
+                    repo,
+                    number,
+                    title: node
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned(),
+                    body: node
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_owned()),
+                    labels,
+                    priority,
+                    state: IssueState::Active,
+                    created_at,
+                });
+            }
+
+            if conn.page_info.has_next_page {
+                after = conn.page_info.end_cursor;
+            } else {
+                break;
+            }
+        }
+
+        sort_issues(&mut all_issues);
+        Ok(all_issues)
+    }
+
+    async fn fetch_issue_state(&self, repo: &str, _number: u64) -> Result<IssueState> {
+        // For Linear, `repo` is the GraphQL issue ID.
+        const QUERY: &str = r#"
+            query($id: String!) {
+                issue(id: $id) {
+                    state { name }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "id": repo });
+
+        let issue: serde_json::Value =
+            self.client.execute(QUERY, variables, "issue").await.map_err(|e| {
+                LinearSnafu {
+                    message: format!("failed to fetch issue state: {e}"),
+                }
+                .build()
+            })?;
+
+        let state_name = issue
+            .get("state")
+            .and_then(|s| s.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("");
+
+        let is_terminal = self
+            .terminal_states
+            .iter()
+            .any(|ts| ts.eq_ignore_ascii_case(state_name));
+
+        if is_terminal {
+            Ok(IssueState::Terminal)
+        } else {
+            Ok(IssueState::Active)
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -319,5 +561,22 @@ mod tests {
             state: IssueState::Active,
             created_at,
         }
+    }
+
+    #[test]
+    fn linear_parse_number() {
+        assert_eq!(LinearIssueTracker::parse_number("RAR-42"), 42);
+        assert_eq!(LinearIssueTracker::parse_number("PROJ-1"), 1);
+        assert_eq!(LinearIssueTracker::parse_number("X-0"), 0);
+        assert_eq!(LinearIssueTracker::parse_number("invalid"), 0);
+    }
+
+    #[test]
+    fn linear_map_priority() {
+        assert_eq!(LinearIssueTracker::map_priority(0), u32::MAX);
+        assert_eq!(LinearIssueTracker::map_priority(1), 1);
+        assert_eq!(LinearIssueTracker::map_priority(2), 2);
+        assert_eq!(LinearIssueTracker::map_priority(3), 3);
+        assert_eq!(LinearIssueTracker::map_priority(4), 4);
     }
 }
