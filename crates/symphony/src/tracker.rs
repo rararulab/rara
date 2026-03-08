@@ -2,11 +2,44 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
-use snafu::ensure;
+use snafu::{ensure, ResultExt};
 
 use crate::config::RepoConfig;
-use crate::error::{GitHubSnafu, LinearSnafu, Result};
-use crate::event::{IssueState, TrackedIssue};
+use crate::error::{GitHubRequestSnafu, GitHubStatusSnafu, LinearSnafu, Result};
+
+/// Represents the lifecycle state of a tracked issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueState {
+    /// Issue is actively being worked on or waiting for an agent.
+    Active,
+    /// Issue has reached a terminal state (closed, merged, etc.).
+    Terminal,
+}
+
+/// An issue that symphony is tracking.
+#[derive(Debug, Clone)]
+pub struct TrackedIssue {
+    /// Unique identifier (owner/repo#number).
+    pub id: String,
+    /// Human-readable identifier. GitHub: "42", Linear: "RAR-42".
+    pub identifier: String,
+    /// Repository name (owner/repo).
+    pub repo: String,
+    /// Issue number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue body/description.
+    pub body: Option<String>,
+    /// Labels attached to the issue.
+    pub labels: Vec<String>,
+    /// Priority (lower = higher priority).
+    pub priority: u32,
+    /// Current lifecycle state.
+    pub state: IssueState,
+    /// When the issue was created.
+    pub created_at: DateTime<Utc>,
+}
 
 /// Trait for fetching issues from a remote tracker.
 #[async_trait]
@@ -16,6 +49,12 @@ pub trait IssueTracker: Send + Sync {
 
     /// Fetch the current state of a single issue.
     async fn fetch_issue_state(&self, issue: &TrackedIssue) -> Result<IssueState>;
+
+    /// Transition an issue to a new state (e.g. "In Progress").
+    ///
+    /// Implementations should be best-effort — a failure here should not
+    /// block agent dispatch.
+    async fn transition_issue(&self, issue: &TrackedIssue, state_name: &str) -> Result<()>;
 }
 
 /// GitHub-backed issue tracker using the REST API.
@@ -65,30 +104,19 @@ impl GitHubIssueTracker {
              ?state=open&labels={labels}&per_page=100"
         );
 
-        let resp = self.get(&url).send().await.map_err(|e| {
-            GitHubSnafu {
-                message: format!("request failed for {}: {e}", repo.name),
-            }
-            .build()
-        })?;
+        let resp = self.get(&url).send().await
+            .context(GitHubRequestSnafu { repo: repo.name.clone() })?;
 
         ensure!(
             resp.status().is_success(),
-            GitHubSnafu {
-                message: format!(
-                    "GitHub API returned {} for {}",
-                    resp.status(),
-                    repo.name
-                ),
+            GitHubStatusSnafu {
+                repo: repo.name.clone(),
+                status: resp.status(),
             }
         );
 
-        let items: Vec<GitHubIssue> = resp.json().await.map_err(|e| {
-            GitHubSnafu {
-                message: format!("failed to parse response for {}: {e}", repo.name),
-            }
-            .build()
-        })?;
+        let items: Vec<GitHubIssue> = resp.json().await
+            .context(GitHubRequestSnafu { repo: repo.name.clone() })?;
 
         let issues = items
             .into_iter()
@@ -146,35 +174,35 @@ impl IssueTracker for GitHubIssueTracker {
         );
 
         let repo = &issue.repo;
-        let resp = self.get(&url).send().await.map_err(|e| {
-            GitHubSnafu {
-                message: format!("request failed for {repo}#{number}: {e}"),
-            }
-            .build()
-        })?;
+        let resp = self.get(&url).send().await
+            .context(GitHubRequestSnafu { repo: repo.clone() })?;
 
         ensure!(
             resp.status().is_success(),
-            GitHubSnafu {
-                message: format!(
-                    "GitHub API returned {} for {repo}#{number}",
-                    resp.status()
-                ),
+            GitHubStatusSnafu {
+                repo: repo.clone(),
+                status: resp.status(),
             }
         );
 
-        let item: GitHubIssue = resp.json().await.map_err(|e| {
-            GitHubSnafu {
-                message: format!("failed to parse issue {repo}#{number}: {e}"),
-            }
-            .build()
-        })?;
+        let item: GitHubIssue = resp.json().await
+            .context(GitHubRequestSnafu { repo: repo.clone() })?;
 
         if item.state == "closed" {
             Ok(IssueState::Terminal)
         } else {
             Ok(IssueState::Active)
         }
+    }
+
+    async fn transition_issue(&self, issue: &TrackedIssue, state_name: &str) -> Result<()> {
+        // GitHub doesn't have workflow states — log and skip.
+        tracing::debug!(
+            issue_id = %issue.id,
+            state = state_name,
+            "github: state transitions not supported, skipping"
+        );
+        Ok(())
     }
 }
 
@@ -267,12 +295,8 @@ impl LinearIssueTracker {
         repo_label_prefix: String,
         repos: Vec<String>,
     ) -> Result<Self> {
-        let mut client = lineark_sdk::Client::from_token(api_key).map_err(|e| {
-            LinearSnafu {
-                message: format!("failed to create Linear client: {e}"),
-            }
-            .build()
-        })?;
+        let mut client = lineark_sdk::Client::from_token(api_key)
+            .context(LinearSnafu { message: "failed to create client" })?;
         client.set_base_url(endpoint.to_owned());
         Ok(Self {
             client,
@@ -320,7 +344,7 @@ impl LinearIssueTracker {
 #[async_trait]
 impl IssueTracker for LinearIssueTracker {
     async fn fetch_active_issues(&self) -> Result<Vec<TrackedIssue>> {
-        tracing::info!(
+        tracing::debug!(
             team_key = %self.team_key,
             project_slug = ?self.project_slug,
             active_states = ?self.active_states,
@@ -397,12 +421,7 @@ impl IssueTracker for LinearIssueTracker {
                 .client
                 .execute_connection::<serde_json::Value>(query, variables, "issues")
                 .await
-                .map_err(|e| {
-                    LinearSnafu {
-                        message: format!("failed to fetch issues: {e}"),
-                    }
-                    .build()
-                })?;
+                .context(LinearSnafu { message: "failed to fetch issues" })?;
 
             tracing::debug!(
                 page_size = conn.nodes.len(),
@@ -500,7 +519,7 @@ impl IssueTracker for LinearIssueTracker {
             }
         }
 
-        tracing::info!(
+        tracing::debug!(
             total = all_issues.len(),
             "linear: fetch complete"
         );
@@ -528,12 +547,8 @@ impl IssueTracker for LinearIssueTracker {
         let variables = serde_json::json!({ "id": original_issue_id });
 
         let issue: serde_json::Value =
-            self.client.execute(QUERY, variables, "issue").await.map_err(|e| {
-                LinearSnafu {
-                    message: format!("failed to fetch issue state: {e}"),
-                }
-                .build()
-            })?;
+            self.client.execute(QUERY, variables, "issue").await
+                .context(LinearSnafu { message: "failed to fetch issue state" })?;
 
         let state_name = issue
             .get("state")
@@ -557,6 +572,105 @@ impl IssueTracker for LinearIssueTracker {
         } else {
             Ok(IssueState::Active)
         }
+    }
+
+    async fn transition_issue(&self, issue: &TrackedIssue, state_name: &str) -> Result<()> {
+        // 1. Look up the target state ID by name for this team.
+        let state_id = self.resolve_state_id(state_name).await?;
+
+        // 2. Update the issue state.
+        const MUTATION: &str = r#"
+            mutation($id: String!, $stateId: String!) {
+                issueUpdate(id: $id, input: { stateId: $stateId }) {
+                    success
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "id": issue.id,
+            "stateId": state_id,
+        });
+
+        let result: serde_json::Value = self
+            .client
+            .execute(MUTATION, variables, "issueUpdate")
+            .await
+            .context(LinearSnafu {
+                message: format!("failed to transition issue {} to '{state_name}'", issue.identifier),
+            })?;
+
+        let success = result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if success {
+            tracing::info!(
+                issue_id = %issue.id,
+                identifier = %issue.identifier,
+                state = state_name,
+                "linear: transitioned issue"
+            );
+        } else {
+            tracing::warn!(
+                issue_id = %issue.id,
+                identifier = %issue.identifier,
+                state = state_name,
+                "linear: issueUpdate returned success=false"
+            );
+        }
+
+        Ok(())
+    }
+}
+
+impl LinearIssueTracker {
+    /// Resolve a workflow state name (e.g. "In Progress") to its Linear state ID.
+    async fn resolve_state_id(&self, state_name: &str) -> Result<String> {
+        const QUERY: &str = r#"
+            query($teamKey: String!, $stateName: String!) {
+                workflowStates(
+                    filter: {
+                        team: { key: { eq: $teamKey } }
+                        name: { eq: $stateName }
+                    }
+                    first: 1
+                ) {
+                    nodes { id name }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "teamKey": self.team_key,
+            "stateName": state_name,
+        });
+
+        let conn = self
+            .client
+            .execute_connection::<serde_json::Value>(QUERY, variables, "workflowStates")
+            .await
+            .context(LinearSnafu {
+                message: format!("failed to resolve state '{state_name}'"),
+            })?;
+
+        let state_id = conn
+            .nodes
+            .first()
+            .and_then(|n| n.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+
+        state_id.ok_or_else(|| {
+            crate::error::ConfigSnafu {
+                message: format!(
+                    "workflow state '{state_name}' not found for team '{}'",
+                    self.team_key
+                ),
+            }
+            .build()
+        })
     }
 }
 
