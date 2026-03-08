@@ -1,10 +1,9 @@
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::agent::ClaudeCodeAgent;
+use crate::agent::RalphAgent;
 use crate::config::{SymphonyConfig, TrackerConfig};
 use crate::error::Result;
-use crate::event::SymphonyEvent;
 use crate::orchestrator::Orchestrator;
 use crate::status::SymphonyStatusHandle;
 use crate::tracker::{GitHubIssueTracker, LinearIssueTracker};
@@ -109,24 +108,44 @@ impl SymphonyService {
             )),
         };
         let workspace_mgr = WorkspaceManager::new(&self.config.repos);
-        let agent = Box::new(ClaudeCodeAgent::new(self.config.agent.clone()));
+        let agent = RalphAgent::new(self.config.agent.clone());
 
         let mut orchestrator = Orchestrator::new(
             tracker,
             workspace_mgr,
             agent,
-            self.config,
+            self.config.clone(),
             self.status_handle,
+            self.shutdown,
         );
-        let queue = orchestrator.queue().clone();
 
-        tokio::select! {
-            result = orchestrator.run() => result,
-            _ = self.shutdown.cancelled() => {
-                queue.push(SymphonyEvent::Shutdown);
-                Ok(())
+        let _ralph_web_child = if let Some(ref web_config) = self.config.ralph_web {
+            if web_config.enabled {
+                let mut cmd = tokio::process::Command::new(&self.config.agent.command);
+                cmd.arg("web")
+                    .arg("--backend-port").arg(web_config.port.to_string())
+                    .arg("--no-open");
+                cmd.stdin(std::process::Stdio::null());
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::piped());
+                match cmd.spawn() {
+                    Ok(child) => {
+                        info!(port = web_config.port, "ralph web dashboard started");
+                        Some(child)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to start ralph web dashboard (non-fatal)");
+                        None
+                    }
+                }
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
+
+        orchestrator.run().await
     }
 }
 
