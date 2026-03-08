@@ -1081,7 +1081,7 @@ impl Kernel {
                 principal,
                 None,              // no parent
                 None,              // no resume
-                Some(session_key), // use the job's session key
+                None,              // independent session, don't pollute the original tape
                 None,              // no origin endpoint
             )
             .await
@@ -1438,16 +1438,21 @@ impl Kernel {
         // received and the agent is working. On Telegram this shows the
         // "typing..." bubble.
         let egress_session_key = session_key;
-        let _ = &self.event_queue.try_push(KernelEventEnvelope::deliver(
-            OutboundEnvelope::progress(
-                msg_id.clone(),
-                user.clone(),
-                egress_session_key.clone(),
-                crate::io::stages::THINKING,
-                None,
-            )
-            .with_origin(origin_endpoint.clone()),
-        ));
+        // Only send typing indicator when there's an origin endpoint to
+        // deliver to. Headless agents (scheduled tasks, subagents) have no
+        // user-facing channel.
+        if origin_endpoint.is_some() {
+            let _ = &self.event_queue.try_push(KernelEventEnvelope::deliver(
+                OutboundEnvelope::progress(
+                    msg_id.clone(),
+                    user.clone(),
+                    egress_session_key.clone(),
+                    crate::io::stages::THINKING,
+                    None,
+                )
+                .with_origin(origin_endpoint.clone()),
+            ));
+        }
 
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
             metrics.record_message();
@@ -1556,6 +1561,8 @@ impl Kernel {
             // Why: Telegram's typing indicator expires after ~5s. Re-sending it
             // every 4s keeps the "typing..." bubble visible for the entire
             // duration of the LLM turn.
+            // Headless agents (no origin_endpoint) skip the refresh loop
+            // entirely — there's no user-facing channel to send indicators to.
             let typing_refresh = {
                 let eq = event_queue.clone();
                 let sid = typing_session_key.clone();
@@ -1563,6 +1570,10 @@ impl Kernel {
                 let mid = msg_id.clone();
                 let oe = origin_endpoint.clone();
                 tokio::spawn(async move {
+                    let oe = match oe {
+                        Some(ep) => Some(ep),
+                        None => return, // no endpoint — nothing to refresh
+                    };
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
                     interval.tick().await; // skip the immediate first tick
                     loop {
@@ -1833,19 +1844,25 @@ impl Kernel {
                 let _ = self.process_table.set_result(session_key, result.clone());
 
                 // Push Deliver event for the reply — use egress session for routing.
-                let envelope = OutboundEnvelope::reply(
-                    in_reply_to,
-                    user.clone(),
-                    egress_session_key.clone(),
-                    crate::channel::types::MessageContent::Text(turn.text),
-                    vec![],
-                )
-                .with_origin(origin_endpoint.clone());
-                if let Err(e) = &self
-                    .event_queue
-                    .try_push(KernelEventEnvelope::deliver(envelope))
-                {
-                    error!(%e, "failed to push Deliver event");
+                // When origin_endpoint is None (e.g. scheduled tasks, subagents),
+                // skip delivery to avoid broadcasting to all user endpoints.
+                // These agents communicate results via other channels
+                // (PublishEvent/SendNotification or result_tx).
+                if origin_endpoint.is_some() {
+                    let envelope = OutboundEnvelope::reply(
+                        in_reply_to,
+                        user.clone(),
+                        egress_session_key.clone(),
+                        crate::channel::types::MessageContent::Text(turn.text),
+                        vec![],
+                    )
+                    .with_origin(origin_endpoint.clone());
+                    if let Err(e) = &self
+                        .event_queue
+                        .try_push(KernelEventEnvelope::deliver(envelope))
+                    {
+                        error!(%e, "failed to push Deliver event");
+                    }
                 }
 
                 info!(
@@ -1887,19 +1904,23 @@ impl Kernel {
                 }
 
                 // Deliver error — use egress session for routing.
-                let envelope = OutboundEnvelope::error(
-                    in_reply_to,
-                    user.clone(),
-                    egress_session_key.clone(),
-                    "agent_error",
-                    err_msg.clone(),
-                )
-                .with_origin(origin_endpoint.clone());
-                if let Err(e) = &self
-                    .event_queue
-                    .try_push(KernelEventEnvelope::deliver(envelope))
-                {
-                    error!(%e, "failed to push error Deliver event");
+                // Skip when origin_endpoint is None (same rationale as reply
+                // delivery above).
+                if origin_endpoint.is_some() {
+                    let envelope = OutboundEnvelope::error(
+                        in_reply_to,
+                        user.clone(),
+                        egress_session_key.clone(),
+                        "agent_error",
+                        err_msg.clone(),
+                    )
+                    .with_origin(origin_endpoint.clone());
+                    if let Err(e) = &self
+                        .event_queue
+                        .try_push(KernelEventEnvelope::deliver(envelope))
+                    {
+                        error!(%e, "failed to push error Deliver event");
+                    }
                 }
             }
         }
