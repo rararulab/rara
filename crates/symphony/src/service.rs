@@ -1,75 +1,118 @@
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-use crate::agent::RalphAgent;
 use crate::config::{SymphonyConfig, TrackerConfig};
 use crate::error::Result;
-use crate::orchestrator::Orchestrator;
-use crate::status::SymphonyStatusHandle;
-use crate::tracker::{GitHubIssueTracker, LinearIssueTracker};
-use crate::workspace::WorkspaceManager;
+use crate::supervisor::RalphSupervisor;
+use crate::syncer::IssueSyncer;
+use crate::tracker::{GitHubIssueTracker, IssueTracker, LinearIssueTracker};
 
-/// Top-level service that wires together the symphony subsystem components
-/// and runs the orchestrator event loop until shutdown.
+/// Top-level service that bridges issue trackers with ralph's task API.
+///
+/// Spawns and supervises a ralph-api process, then runs a poll loop that
+/// syncs issues to ralph tasks.
 pub struct SymphonyService {
     config: SymphonyConfig,
     shutdown: CancellationToken,
     github_token: Option<String>,
-    status_handle: SymphonyStatusHandle,
 }
 
 impl SymphonyService {
-    /// Create a new `SymphonyService`.
-    ///
-    /// # Arguments
-    /// * `config` — symphony configuration
-    /// * `shutdown` — cancellation token for graceful shutdown
-    /// * `github_token` — optional GitHub PAT for API authentication
     #[must_use]
     pub fn new(
         config: SymphonyConfig,
         shutdown: CancellationToken,
         github_token: Option<String>,
     ) -> Self {
-        let status_handle = SymphonyStatusHandle::new(&config);
         Self {
             config,
             shutdown,
             github_token,
-            status_handle,
         }
-    }
-
-    /// Create a new `SymphonyService` with an externally-created status handle.
-    ///
-    /// Use this when the handle must exist before the service is created
-    /// (e.g. to wire HTTP routes that are built before the service starts).
-    #[must_use]
-    pub fn with_status_handle(
-        config: SymphonyConfig,
-        shutdown: CancellationToken,
-        github_token: Option<String>,
-        status_handle: SymphonyStatusHandle,
-    ) -> Self {
-        Self {
-            config,
-            shutdown,
-            github_token,
-            status_handle,
-        }
-    }
-
-    /// Return a clone of the status handle for use by HTTP routes.
-    #[must_use]
-    pub fn status_handle(&self) -> SymphonyStatusHandle {
-        self.status_handle.clone()
     }
 
     /// Run the symphony service until shutdown is requested.
     pub async fn run(self) -> Result<()> {
         info!("starting symphony service");
 
-        let tracker: Box<dyn crate::tracker::IssueTracker> = match &self.config.tracker {
+        // 1. Build issue tracker.
+        let tracker: Box<dyn IssueTracker> = self.build_tracker()?;
+
+        // 2. Start ralph-api supervisor.
+        let mut supervisor = RalphSupervisor::new();
+        supervisor.start().await?;
+        let syncer = IssueSyncer::new(supervisor.client());
+
+        info!("symphony sync loop started");
+
+        // 3. Poll loop.
+        loop {
+            tokio::select! {
+                _ = self.shutdown.cancelled() => {
+                    info!("symphony shutting down");
+                    break;
+                }
+                _ = tokio::time::sleep(self.config.poll_interval) => {
+                    self.poll_cycle(&*tracker, &syncer, &mut supervisor).await;
+                }
+            }
+        }
+
+        // 4. Shutdown.
+        supervisor.stop().await?;
+        info!("symphony service stopped");
+        Ok(())
+    }
+
+    /// Run one poll cycle: ensure ralph is alive, fetch issues, sync.
+    async fn poll_cycle(
+        &self,
+        tracker: &dyn IssueTracker,
+        syncer: &IssueSyncer,
+        supervisor: &mut RalphSupervisor,
+    ) {
+        // Ensure ralph-api is running.
+        if let Err(e) = supervisor.ensure_alive().await {
+            error!(error = %e, "failed to ensure ralph-api is alive, skipping cycle");
+            return;
+        }
+
+        // Fetch active issues.
+        let issues = match tracker.fetch_active_issues().await {
+            Ok(issues) => issues,
+            Err(e) => {
+                warn!(error = %e, "failed to fetch issues, skipping cycle");
+                return;
+            }
+        };
+
+        // Sync.
+        match syncer.sync(tracker, &issues).await {
+            Ok(report) => {
+                if !report.created.is_empty()
+                    || !report.completed.is_empty()
+                    || !report.cancelled.is_empty()
+                    || !report.failed.is_empty()
+                {
+                    info!(
+                        created = report.created.len(),
+                        completed = report.completed.len(),
+                        cancelled = report.cancelled.len(),
+                        failed = report.failed.len(),
+                        unchanged = report.unchanged,
+                        "sync cycle completed"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "sync cycle failed");
+            }
+        }
+    }
+
+    /// Build the issue tracker from config.
+    fn build_tracker(&self) -> Result<Box<dyn IssueTracker>> {
+        match &self.config.tracker {
             Some(TrackerConfig::Linear {
                 api_key,
                 team_key,
@@ -81,7 +124,7 @@ impl SymphonyService {
             }) => {
                 let resolved_key = resolve_env_var(api_key)?;
                 let repo_names = self.config.repos.iter().map(|r| r.name.clone()).collect();
-                Box::new(LinearIssueTracker::new(
+                Ok(Box::new(LinearIssueTracker::new(
                     &resolved_key,
                     endpoint,
                     team_key.clone(),
@@ -90,62 +133,23 @@ impl SymphonyService {
                     terminal_states.clone(),
                     repo_label_prefix.clone(),
                     repo_names,
-                )?)
+                )?))
             }
             Some(TrackerConfig::Github { api_key }) => {
                 let token = match api_key {
                     Some(k) => Some(resolve_env_var(k)?),
                     None => self.github_token.clone(),
                 };
-                Box::new(GitHubIssueTracker::new(
+                Ok(Box::new(GitHubIssueTracker::new(
                     self.config.repos.clone(),
                     token,
-                ))
+                )))
             }
-            None => Box::new(GitHubIssueTracker::new(
+            None => Ok(Box::new(GitHubIssueTracker::new(
                 self.config.repos.clone(),
                 self.github_token.clone(),
-            )),
-        };
-        let workspace_mgr = WorkspaceManager::new(&self.config.repos);
-        let agent = RalphAgent::new(self.config.agent.clone());
-
-        let mut orchestrator = Orchestrator::new(
-            tracker,
-            workspace_mgr,
-            agent,
-            self.config.clone(),
-            self.status_handle,
-            self.shutdown,
-        );
-
-        let _ralph_web_child = if let Some(ref web_config) = self.config.ralph_web {
-            if web_config.enabled {
-                let mut cmd = tokio::process::Command::new(&self.config.agent.command);
-                cmd.arg("web")
-                    .arg("--backend-port").arg(web_config.port.to_string())
-                    .arg("--no-open");
-                cmd.stdin(std::process::Stdio::null());
-                cmd.stdout(std::process::Stdio::null());
-                cmd.stderr(std::process::Stdio::piped());
-                match cmd.spawn() {
-                    Ok(child) => {
-                        info!(port = web_config.port, "ralph web dashboard started");
-                        Some(child)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to start ralph web dashboard (non-fatal)");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        orchestrator.run().await
+            ))),
+        }
     }
 }
 
