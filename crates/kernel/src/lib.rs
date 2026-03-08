@@ -49,6 +49,7 @@ pub mod security;
 pub mod session;
 pub(crate) mod syscall;
 pub(crate) mod tape_tool;
+pub(crate) mod title;
 pub mod tool;
 
 pub use error::{KernelError, Result};

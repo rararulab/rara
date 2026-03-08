@@ -1796,6 +1796,8 @@ impl Kernel {
         // Track whether the turn errored so we can choose the right terminal
         // state below (Completed vs Failed).
         let mut _turn_failed = false;
+        // Captured for async title generation after the match block.
+        let mut title_gen_texts: Option<(String, String)> = None;
 
         let agent_name = self
             .process_table
@@ -1834,6 +1836,11 @@ impl Kernel {
                     metrics.record_tool_calls(turn.tool_calls as u64);
                     let estimated_tokens = (turn.text.len() as u64).saturating_div(4).max(1);
                     metrics.record_tokens(estimated_tokens);
+                }
+
+                // Capture texts for async title generation.
+                if let Some(input) = turn.trace.input_text.as_ref() {
+                    title_gen_texts = Some((input.clone(), turn.text.clone()));
                 }
 
                 let result = AgentRunLoopResult {
@@ -2046,6 +2053,43 @@ impl Kernel {
                         tracing::warn!(user = %user_id, %e, "knowledge extraction failed");
                     }
                 }
+            });
+        }
+
+        // -- Title generation (async, best-effort) --------------------------------
+        // On the first successful turn of a session with no title, spawn a
+        // lightweight LLM call to generate a short title from the conversation.
+        if let Some((user_text, assistant_text)) = title_gen_texts {
+            let session_index = self.session_index.clone();
+            let driver_registry = Arc::clone(self.syscall.driver_registry());
+            let sk = session_key;
+            tokio::spawn(async move {
+                // Only generate if the session has no title yet.
+                match session_index.get_session(&sk).await {
+                    Ok(Some(s)) if s.title.is_some() => return,
+                    Ok(Some(_)) => {}
+                    _ => return,
+                }
+                let (driver, model) = match driver_registry.resolve(
+                    "title_generator",
+                    None,
+                    None,
+                ) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::warn!(%e, "title generation: cannot resolve model");
+                        return;
+                    }
+                };
+                crate::title::generate_and_set_title(
+                    sk,
+                    user_text,
+                    assistant_text,
+                    driver,
+                    model,
+                    session_index,
+                )
+                .await;
             });
         }
 
