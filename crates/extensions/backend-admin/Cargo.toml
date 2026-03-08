@@ -29,7 +29,6 @@ rara-git = { workspace = true }
 rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
-rara-symphony = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skills = { workspace = true }
 reqwest = { workspace = true }
@@ -40,7 +39,6 @@ sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = { workspace = true }
 tracing-opentelemetry = "0.32.0"
 utoipa = { workspace = true }
