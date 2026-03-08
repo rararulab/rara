@@ -135,6 +135,7 @@ mod error;
 pub mod knowledge;
 mod service;
 mod store;
+pub(crate) mod title;
 
 pub use anchors::{AnchorSummary, HandoffState};
 pub use context::{anchor_context, default_tape_context, user_tape_context};

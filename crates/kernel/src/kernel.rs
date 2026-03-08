@@ -1942,6 +1942,60 @@ impl Kernel {
         // the session transitions to Ready (idle) instead of a terminal state.
         // The next user message will be routed to the same session via Path 2.
 
+        // -- Session title generation (async, best-effort) ----------------------
+        // On the first successful turn, if the session has no title yet, spawn
+        // a lightweight LLM call to generate one. The title is persisted via
+        // SessionIndex and displayed in session listings.
+        if !_turn_failed {
+            let session_index = Arc::clone(&self.session_index);
+            let tape_service_title = self.tape_service.clone();
+            let driver_registry_title = Arc::clone(self.syscall.driver_registry());
+            let title_session_key = session_key;
+            tokio::spawn(async move {
+                // Only generate if no title exists yet.
+                let entry = match session_index.get_session(&title_session_key).await {
+                    Ok(Some(e)) if e.title.is_some() => return,
+                    Ok(Some(e)) => e,
+                    Ok(None) => return,
+                    Err(e) => {
+                        tracing::warn!(%e, "title generation: failed to read session");
+                        return;
+                    }
+                };
+                let tape_name = title_session_key.to_string();
+                let entries = match tape_service_title.from_last_anchor(&tape_name, None).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(%e, "title generation: failed to read tape");
+                        return;
+                    }
+                };
+                let (driver, model) = match driver_registry_title.resolve(
+                    "title_generator",
+                    None,
+                    None,
+                ) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::warn!(%e, "title generation: cannot resolve model");
+                        return;
+                    }
+                };
+                if let Some(title) =
+                    crate::memory::title::generate_session_title(&entries, driver.as_ref(), &model)
+                        .await
+                {
+                    let mut updated = entry;
+                    updated.title = Some(title.clone());
+                    if let Err(e) = session_index.update_session(&updated).await {
+                        tracing::warn!(%e, "title generation: failed to persist title");
+                    } else {
+                        tracing::info!(session = %title_session_key, %title, "session title generated");
+                    }
+                }
+            });
+        }
+
         // -- Knowledge extraction (async, best-effort) -------------------------
         // After each successful turn, spawn an async task to extract long-term
         // memories from the conversation tape. Failures are logged but never
