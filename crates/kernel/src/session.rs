@@ -228,6 +228,30 @@ pub struct AgentRunLoopResult {
     pub tool_calls: usize,
 }
 
+/// Status of a detachable background tool run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BackgroundToolStatus {
+    /// Tool execution is still in progress.
+    Running,
+    /// Tool execution completed successfully.
+    Succeeded { summary: String },
+    /// Tool execution completed with an error.
+    Failed { error: String },
+}
+
+/// Session-scoped record of a detachable background tool run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackgroundToolRun {
+    /// Stable identifier used to correlate progress and completion.
+    pub id:         String,
+    /// Tool name as seen by the agent and UI surfaces.
+    pub tool_name:  String,
+    /// When the background run was registered.
+    pub started_at: Timestamp,
+    /// Current status of the run.
+    pub status:     BackgroundToolStatus,
+}
+
 /// Control signals for agent processes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]
 #[strum(serialize_all = "snake_case")]
@@ -285,6 +309,8 @@ pub struct Session {
     pub paused:          bool,
     /// Buffered events received while the session was paused or busy.
     pub pause_buffer:    Vec<KernelEventEnvelope>,
+    /// Detached background tool runs owned by this session.
+    pub background_runs: Vec<BackgroundToolRun>,
     /// The channel endpoint that originated this session (e.g. a specific
     /// Telegram chat). Used as a fallback for reply routing when the
     /// triggering message is synthetic (no platform origin).
@@ -699,8 +725,158 @@ impl SessionTable {
             vec![]
         }
     }
+
+    /// Register a detached background tool run without affecting turn state.
+    pub fn insert_background_run(
+        &self,
+        session_key: &SessionKey,
+        run: BackgroundToolRun,
+    ) -> KernelResult<()> {
+        let mut entry = self
+            .runtimes
+            .get_mut(session_key)
+            .ok_or(crate::error::KernelError::SessionNotFound { key: *session_key })?;
+        entry.background_runs.push(run);
+        Ok(())
+    }
+
+    /// Mark a detached background tool run as completed.
+    pub fn complete_background_run(
+        &self,
+        session_key: &SessionKey,
+        run_id: &str,
+        status: BackgroundToolStatus,
+    ) -> KernelResult<bool> {
+        let mut entry = self
+            .runtimes
+            .get_mut(session_key)
+            .ok_or(crate::error::KernelError::SessionNotFound { key: *session_key })?;
+        if let Some(run) = entry
+            .background_runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+        {
+            run.status = status;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Snapshot of detached background tool runs for a session.
+    pub fn background_runs(&self, session_key: &SessionKey) -> Vec<BackgroundToolRun> {
+        self.runtimes
+            .get(session_key)
+            .map(|entry| entry.background_runs.clone())
+            .unwrap_or_default()
+    }
 }
 
 impl Default for SessionTable {
     fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        agent::{AgentManifest, Priority},
+        identity::Principal,
+    };
+
+    fn test_session(session_key: SessionKey) -> Session {
+        let manifest = AgentManifest {
+            name:               "test-agent".into(),
+            role:               Default::default(),
+            description:        "test agent".into(),
+            model:              None,
+            system_prompt:      "You are a test agent.".into(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     None,
+            tools:              vec![],
+            max_children:       None,
+            max_context_tokens: None,
+            priority:           Priority::Normal,
+            metadata:           serde_json::Value::Null,
+            sandbox:            None,
+        };
+        let permit = Arc::new(Semaphore::new(1))
+            .try_acquire_owned()
+            .expect("semaphore permit");
+
+        Session {
+            session_key,
+            parent_id: None,
+            manifest,
+            principal: Principal::lookup("tester"),
+            env: AgentEnv::default(),
+            state: SessionState::Ready,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+            result_tx: None,
+            created_files: vec![],
+            metrics: Arc::new(RuntimeMetrics::new()),
+            turn_traces: vec![],
+            turn_cancel: CancellationToken::new(),
+            process_cancel: CancellationToken::new(),
+            paused: false,
+            pause_buffer: vec![],
+            background_runs: vec![],
+            origin_endpoint: None,
+            child_semaphore: Arc::new(Semaphore::new(1)),
+            _global_permit: permit,
+        }
+    }
+
+    #[test]
+    fn session_tracks_background_runs_independently_of_turn_state() {
+        let table = SessionTable::new();
+        let key = SessionKey::new();
+        table.insert(test_session(key));
+
+        let run = BackgroundToolRun {
+            id:         "run-1".into(),
+            tool_name:  "long-job".into(),
+            started_at: Timestamp::now(),
+            status:     BackgroundToolStatus::Running,
+        };
+
+        table
+            .insert_background_run(&key, run)
+            .expect("background run should be inserted");
+
+        assert_eq!(
+            table.with(&key, |session| session.state),
+            Some(SessionState::Ready)
+        );
+
+        let inserted = table.background_runs(&key);
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0].tool_name, "long-job");
+        assert_eq!(inserted[0].status, BackgroundToolStatus::Running);
+
+        let completed = table
+            .complete_background_run(
+                &key,
+                "run-1",
+                BackgroundToolStatus::Succeeded {
+                    summary: "finished".into(),
+                },
+            )
+            .expect("background run should exist");
+        assert!(completed);
+        assert_eq!(
+            table.with(&key, |session| session.state),
+            Some(SessionState::Ready)
+        );
+
+        let finished = table.background_runs(&key);
+        assert_eq!(
+            finished[0].status,
+            BackgroundToolStatus::Succeeded {
+                summary: "finished".into(),
+            }
+        );
+    }
 }

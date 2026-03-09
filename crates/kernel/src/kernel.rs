@@ -503,6 +503,23 @@ impl Kernel {
                 self.handle_child_completed(base.session_key, child_id, result)
                     .await;
             }
+            KernelEvent::BackgroundToolCompleted {
+                run_id,
+                tool_name,
+                success,
+                summary,
+                result,
+            } => {
+                self.handle_background_tool_completed(
+                    base.session_key,
+                    run_id,
+                    tool_name,
+                    success,
+                    summary,
+                    result,
+                )
+                .await;
+            }
             KernelEvent::Deliver(envelope) => {
                 self.io.deliver(envelope);
             }
@@ -611,8 +628,9 @@ impl Kernel {
             turn_cancel: CancellationToken::new(),
             process_cancel,
             paused: false,
-            origin_endpoint,
             pause_buffer: Vec::new(),
+            background_runs: Vec::new(),
+            origin_endpoint,
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _global_permit: global_permit,
         };
@@ -772,6 +790,62 @@ impl Kernel {
         {
             warn!(%e, "failed to persist child result message to tape");
         }
+    }
+
+    fn background_tool_completion_text(
+        run_id: &str,
+        tool_name: &str,
+        success: bool,
+        summary: &str,
+        result: &serde_json::Value,
+    ) -> String {
+        let status = if success { "succeeded" } else { "failed" };
+        let rendered_result = match result {
+            serde_json::Value::String(text) => text.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+        };
+        format!(
+            "[background_tool_completed]\nrun_id={run_id}\ntool={tool_name}\nstatus={status}\\
+             nsummary={summary}\nresult={rendered_result}"
+        )
+    }
+
+    #[tracing::instrument(skip_all, fields(session_key = %session_key, run_id = %run_id, tool_name = %tool_name, success))]
+    async fn handle_background_tool_completed(
+        &self,
+        session_key: SessionKey,
+        run_id: String,
+        tool_name: String,
+        success: bool,
+        summary: String,
+        result: serde_json::Value,
+    ) {
+        let Some((user, state)) = self.process_table.with(&session_key, |session| {
+            (session.principal.user_id.clone(), session.state)
+        }) else {
+            warn!(
+                session_key = %session_key,
+                run_id,
+                "dropping background tool completion for missing session"
+            );
+            return;
+        };
+
+        info!(
+            session_key = %session_key,
+            run_id,
+            tool_name,
+            success,
+            state = %state,
+            "re-entering session from background tool completion"
+        );
+
+        let inbound = InboundMessage::synthetic(
+            Self::background_tool_completion_text(&run_id, &tool_name, success, &summary, &result),
+            user,
+            session_key,
+        );
+        self.deliver_to_session(session_key, inbound).await;
     }
 
     /// Clean up a process runtime entry.

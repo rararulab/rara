@@ -163,6 +163,10 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
             success,
             error,
         }),
+        StreamEvent::BackgroundToolStarted { summary, .. }
+        | StreamEvent::BackgroundToolFinished { summary, .. } => {
+            Some(WebEvent::Progress { stage: summary })
+        }
         StreamEvent::Progress { stage } => Some(WebEvent::Progress { stage }),
         StreamEvent::TurnMetrics {
             duration_ms,
