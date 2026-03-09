@@ -771,14 +771,45 @@ pub(crate) async fn run_agent_loop(
                 );
                 context_window_recovery_used = true;
 
+                // Build a meaningful summary from the conversation so far.
+                let auto_summary = {
+                    let mut parts = Vec::new();
+
+                    // 1. User's original request.
+                    parts.push(format!("User request: {}", truncate_preview(&input_text, 300)));
+
+                    // 2. Tool calls made so far.
+                    if tool_calls_made > 0 {
+                        let tool_names: Vec<&str> = iteration_traces
+                            .iter()
+                            .flat_map(|t| t.tool_calls.iter().map(|tc| tc.name.as_str()))
+                            .collect();
+                        parts.push(format!(
+                            "Tools used ({tool_calls_made} calls): {}",
+                            tool_names.join(", ")
+                        ));
+                    }
+
+                    // 3. Last assistant text (if any).
+                    if !last_accumulated_text.is_empty() {
+                        parts.push(format!(
+                            "Last assistant response: {}",
+                            truncate_preview(&last_accumulated_text, 500)
+                        ));
+                    }
+
+                    parts.push("(Auto-handoff: context window exceeded)".to_owned());
+                    parts.join("\n")
+                };
+
                 // Create an automatic handoff anchor to truncate context.
                 let state = crate::memory::HandoffState {
                     phase:      None,
-                    summary:    Some(
-                        "Context window exceeded — automatic handoff to truncate history."
-                            .to_owned(),
-                    ),
-                    next_steps: None,
+                    summary:    Some(auto_summary),
+                    next_steps: Some(format!(
+                        "Continue working on the user's request: {}",
+                        truncate_preview(&input_text, 200)
+                    )),
                     source_ids: vec![],
                     owner:      Some("system".to_owned()),
                     extra:      None,
