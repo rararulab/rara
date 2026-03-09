@@ -21,7 +21,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{AgentTool, ToolCapabilities, ToolExecutionMode, ToolOutput};
 use tracing::instrument;
 
 use crate::manager::mgr::McpManager;
@@ -86,6 +86,13 @@ impl AgentTool for McpToolBridge {
     fn description(&self) -> &str { &self.description }
 
     fn parameters_schema(&self) -> serde_json::Value { self.input_schema.clone() }
+
+    fn capabilities(&self) -> ToolCapabilities {
+        ToolCapabilities {
+            execution_mode: ToolExecutionMode::Detachable,
+            status_label:   Some("MCP tool running in background".into()),
+        }
+    }
 
     async fn execute(
         &self,

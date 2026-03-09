@@ -18,7 +18,7 @@
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
 use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{AgentTool, ToolCapabilities, ToolExecutionMode, ToolOutput};
 use serde_json::json;
 
 /// Maximum output size in bytes (50 KB).
@@ -65,6 +65,13 @@ impl AgentTool for BashTool {
             },
             "required": ["command"]
         })
+    }
+
+    fn capabilities(&self) -> ToolCapabilities {
+        ToolCapabilities {
+            execution_mode: ToolExecutionMode::Detachable,
+            status_label:   Some("shell command running in background".into()),
+        }
     }
 
     async fn execute(
@@ -188,5 +195,23 @@ fn truncate_output(output: &str) -> (String, bool) {
         (format!("... [output truncated]\n{text}"), truncated)
     } else {
         (text.to_owned(), truncated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_tool_defaults_to_detached_execution() {
+        let caps = BashTool::new().capabilities();
+        assert!(matches!(
+            caps.execution_mode,
+            ToolExecutionMode::Detachable
+        ));
+        assert_eq!(
+            caps.status_label.as_deref(),
+            Some("shell command running in background")
+        );
     }
 }
