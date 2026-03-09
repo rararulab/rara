@@ -172,6 +172,18 @@ impl Message {
         }
     }
 
+    pub fn tool_result_multimodal(
+        tool_call_id: impl Into<String>,
+        blocks: Vec<ContentBlock>,
+    ) -> Self {
+        Self {
+            role:         Role::Tool,
+            content:      MessageContent::Multimodal(blocks),
+            tool_calls:   Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+
     /// Rough character-count estimate for context size budgeting.
     pub fn estimated_char_len(&self) -> usize {
         let content_len = match &self.content {
