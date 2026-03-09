@@ -31,31 +31,34 @@ use tracing::{error, info, warn};
 
 use crate::{
     agent::{AgentTask, RalphAgent},
-    config::{RepoConfig, SymphonyConfig, TrackerConfig},
-    error::{ConfigSnafu, IoSnafu, Result},
+    config::{
+        RepoConfig, SymphonyConfig, TrackerConfig, default_active_labels,
+        default_repo_checkout_root, default_repo_url,
+    },
+    error::{IoSnafu, Result},
     tracker::{GitHubIssueTracker, IssueState, IssueTracker, LinearIssueTracker, TrackedIssue},
     workspace::{WorkspaceInfo, WorkspaceManager, workflow_file},
 };
 
 struct RunningIssue {
-    issue:      TrackedIssue,
-    workspace:  WorkspaceInfo,
-    child:      Child,
+    issue: TrackedIssue,
+    workspace: WorkspaceInfo,
+    child: Child,
     started_at: Instant,
-    log_path:   PathBuf,
-    output:     ProcessOutputSummaryHandle,
+    log_path: PathBuf,
+    output: ProcessOutputSummaryHandle,
 }
 
 struct FinishedIssue {
-    issue:     TrackedIssue,
+    issue: TrackedIssue,
     workspace: WorkspaceInfo,
 }
 
 /// Top-level service that polls issue trackers, manages per-issue `ralph run`
 /// subprocesses, and advances issue state in the external tracker.
 pub struct SymphonyService {
-    config:       SymphonyConfig,
-    shutdown:     CancellationToken,
+    config: SymphonyConfig,
+    shutdown: CancellationToken,
     github_token: Option<String>,
 }
 
@@ -113,7 +116,6 @@ impl SymphonyService {
                 ..
             }) => {
                 let resolved_key = resolve_env_var(api_key)?;
-                let repo_names = self.config.repos.iter().map(|r| r.name.clone()).collect();
                 Ok(Box::new(LinearIssueTracker::new(
                     &resolved_key,
                     endpoint,
@@ -122,7 +124,6 @@ impl SymphonyService {
                     active_states.clone(),
                     terminal_states.clone(),
                     repo_label_prefix.clone(),
-                    repo_names,
                 )?))
             }
             Some(TrackerConfig::Github { api_key, .. }) => {
@@ -144,11 +145,11 @@ impl SymphonyService {
 }
 
 struct IssueRuntime {
-    config:            SymphonyConfig,
+    config: SymphonyConfig,
     workspace_manager: WorkspaceManager,
-    agent:             RalphAgent,
-    running:           HashMap<String, RunningIssue>,
-    failed:            HashMap<String, FinishedIssue>,
+    agent: RalphAgent,
+    running: HashMap<String, RunningIssue>,
+    failed: HashMap<String, FinishedIssue>,
 }
 
 impl IssueRuntime {
@@ -250,7 +251,7 @@ impl IssueRuntime {
                     self.failed.insert(
                         issue_id,
                         FinishedIssue {
-                            issue:     run.issue,
+                            issue: run.issue,
                             workspace: run.workspace,
                         },
                     );
@@ -271,7 +272,7 @@ impl IssueRuntime {
                 self.failed.insert(
                     issue_id,
                     FinishedIssue {
-                        issue:     run.issue,
+                        issue: run.issue,
                         workspace: run.workspace,
                     },
                 );
@@ -410,12 +411,7 @@ impl IssueRuntime {
             .iter()
             .find(|repo| repo.name == repo_name)
             .cloned()
-            .ok_or_else(|| {
-                ConfigSnafu {
-                    message: format!("unknown repo: {repo_name}"),
-                }
-                .build()
-            })?;
+            .unwrap_or_else(|| self.derived_repo_config(repo_name));
 
         let mut resolved = repo;
         if resolved.repo_path.is_none() {
@@ -427,6 +423,15 @@ impl IssueRuntime {
             resolved.repo_path = Some(cwd.clone());
         }
         Ok(resolved)
+    }
+
+    fn derived_repo_config(&self, repo_name: &str) -> RepoConfig {
+        RepoConfig::builder()
+            .name(repo_name.to_owned())
+            .url(default_repo_url(repo_name))
+            .repo_path(default_repo_checkout_root(repo_name))
+            .active_labels(default_active_labels())
+            .build()
     }
 
     fn max_concurrent_for_repo(&self, repo_name: &str) -> usize {
@@ -496,7 +501,7 @@ impl IssueLogWriter {
             .send(entry)
             .await
             .map_err(|_| crate::error::SymphonyError::Workspace {
-                message:  String::from("issue log writer closed unexpectedly"),
+                message: String::from("issue log writer closed unexpectedly"),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })
     }
@@ -511,7 +516,7 @@ async fn spawn_issue_log_writer(
     let parent = log_path
         .parent()
         .ok_or_else(|| crate::error::SymphonyError::Workspace {
-            message:  format!("issue log path has no parent: {}", log_path.display()),
+            message: format!("issue log path has no parent: {}", log_path.display()),
             location: snafu::Location::new(file!(), line!(), column!()),
         })?;
     tokio::fs::create_dir_all(parent).await.context(IoSnafu)?;
@@ -575,14 +580,16 @@ impl ProcessOutputSummaryHandle {
         self.0.lock().await.record(stream_name, line);
     }
 
-    async fn snapshot(&self) -> ProcessOutputSummary { self.0.lock().await.clone() }
+    async fn snapshot(&self) -> ProcessOutputSummary {
+        self.0.lock().await.clone()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 struct ProcessOutputSummary {
     stdout_line_count: usize,
     stderr_line_count: usize,
-    stderr_tail:       VecDeque<String>,
+    stderr_tail: VecDeque<String>,
 }
 
 impl ProcessOutputSummary {
@@ -633,7 +640,12 @@ fn resolve_env_var(value: &str) -> crate::error::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessOutputSummary, issue_log_path, lnav_hint};
+    use std::time::Duration;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::{IssueRuntime, ProcessOutputSummary, SymphonyService, issue_log_path, lnav_hint};
+    use crate::config::{AgentConfig, RepoConfig, SymphonyConfig};
 
     #[test]
     fn process_output_summary_keeps_only_recent_stderr_lines() {
@@ -667,5 +679,69 @@ mod tests {
         let hint = lnav_hint();
         assert!(hint.contains("lnav"));
         assert!(hint.contains("/ralpha/logs"));
+    }
+
+    #[test]
+    fn repo_config_derives_unknown_repo() {
+        let service = SymphonyService::new(
+            SymphonyConfig::builder()
+                .enabled(true)
+                .poll_interval(Duration::from_secs(30))
+                .max_concurrent_agents(2)
+                .stall_timeout(Duration::from_secs(30 * 60))
+                .max_retry_backoff(Duration::from_secs(60 * 60))
+                .workflow_file("WORKFLOW.md".to_owned())
+                .agent(AgentConfig::default())
+                .repos(vec![])
+                .build(),
+            CancellationToken::new(),
+            None,
+        );
+
+        let repo = IssueRuntime::new(
+            service.config.clone(),
+            crate::agent::RalphAgent::new(AgentConfig::default()),
+        )
+        .repo_config("crrowbot/rara-notes")
+        .expect("fallback repo config should resolve");
+
+        assert_eq!(repo.name, "crrowbot/rara-notes");
+        assert_eq!(repo.url, "https://github.com/crrowbot/rara-notes");
+        assert_eq!(
+            repo.repo_path,
+            Some(
+                rara_paths::config_dir()
+                    .join("ralpha/repos")
+                    .join("crrowbot/rara-notes")
+            )
+        );
+    }
+
+    #[test]
+    fn repo_config_prefers_explicit_repo_settings() {
+        let configured = RepoConfig::builder()
+            .name("rararulab/rara".to_owned())
+            .url("https://example.com/custom.git".to_owned())
+            .active_labels(vec!["symphony:ready".to_owned()])
+            .build();
+        let runtime = IssueRuntime::new(
+            SymphonyConfig::builder()
+                .enabled(true)
+                .poll_interval(Duration::from_secs(30))
+                .max_concurrent_agents(2)
+                .stall_timeout(Duration::from_secs(30 * 60))
+                .max_retry_backoff(Duration::from_secs(60 * 60))
+                .workflow_file("WORKFLOW.md".to_owned())
+                .agent(AgentConfig::default())
+                .repos(vec![configured])
+                .build(),
+            crate::agent::RalphAgent::new(AgentConfig::default()),
+        );
+
+        let repo = runtime
+            .repo_config("rararulab/rara")
+            .expect("configured repo should resolve");
+
+        assert_eq!(repo.url, "https://example.com/custom.git");
     }
 }

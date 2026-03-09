@@ -18,6 +18,7 @@ use std::{
 };
 
 use snafu::{Location, ensure};
+use tracing::info;
 
 use crate::{
     config::RepoConfig,
@@ -26,8 +27,8 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceInfo {
-    pub path:        PathBuf,
-    pub branch:      String,
+    pub path: PathBuf,
+    pub branch: String,
     pub created_now: bool,
 }
 
@@ -35,6 +36,48 @@ pub struct WorkspaceInfo {
 pub struct WorkspaceManager;
 
 impl WorkspaceManager {
+    fn ensure_repo_checkout(&self, repo: &RepoConfig) -> Result<(git2::Repository, PathBuf)> {
+        ensure!(
+            repo.repo_path.is_some(),
+            crate::error::WorkspaceSnafu {
+                message: format!("repo {} is missing repo_path", repo.name),
+            }
+        );
+        let repo_path = repo.repo_path.clone().expect("checked repo_path above");
+
+        if repo_path.exists() {
+            let checkout =
+                git2::Repository::open(&repo_path).map_err(|source| SymphonyError::Git {
+                    source,
+                    location: Location::new(file!(), line!(), column!()),
+                })?;
+            return Ok((checkout, repo_path));
+        }
+
+        if let Some(parent) = repo_path.parent() {
+            fs::create_dir_all(parent).map_err(|source| SymphonyError::Io {
+                source,
+                location: Location::new(file!(), line!(), column!()),
+            })?;
+        }
+
+        info!(
+            repo = %repo.name,
+            url = %repo.url,
+            path = %repo_path.display(),
+            "cloning missing repository checkout for symphony"
+        );
+
+        let checkout = git2::Repository::clone(&repo.url, &repo_path).map_err(|source| {
+            SymphonyError::Git {
+                source,
+                location: Location::new(file!(), line!(), column!()),
+            }
+        })?;
+
+        Ok((checkout, repo_path))
+    }
+
     /// Ensure the issue branch is checked out in a dedicated worktree under the
     /// configured workspace root. Existing worktrees are reused.
     pub fn ensure_worktree(
@@ -55,7 +98,6 @@ impl WorkspaceManager {
                 message: format!("repo {} is missing workspace_root", repo.name),
             }
         );
-        let repo_path = repo.repo_path.clone().expect("checked repo_path above");
         let workspace_root = repo
             .effective_workspace_root()
             .expect("checked workspace_root above");
@@ -75,10 +117,7 @@ impl WorkspaceManager {
             location: Location::new(file!(), line!(), column!()),
         })?;
 
-        let repo = git2::Repository::open(&repo_path).map_err(|source| SymphonyError::Git {
-            source,
-            location: Location::new(file!(), line!(), column!()),
-        })?;
+        let (repo, _) = self.ensure_repo_checkout(repo)?;
         let head_ref = repo.head().map_err(|source| SymphonyError::Git {
             source,
             location: Location::new(file!(), line!(), column!()),
@@ -100,7 +139,7 @@ impl WorkspaceManager {
                 })?,
             Err(err) => {
                 return Err(SymphonyError::Git {
-                    source:   err,
+                    source: err,
                     location: Location::new(file!(), line!(), column!()),
                 });
             }
@@ -130,11 +169,7 @@ impl WorkspaceManager {
                 message: format!("repo {} is missing repo_path", repo.name),
             }
         );
-        let repo_path = repo.repo_path.clone().expect("checked repo_path above");
-        let repo = git2::Repository::open(repo_path).map_err(|source| SymphonyError::Git {
-            source,
-            location: Location::new(file!(), line!(), column!()),
-        })?;
+        let (repo, _) = self.ensure_repo_checkout(repo)?;
 
         if workspace.path.exists() {
             fs::remove_dir_all(&workspace.path).map_err(|source| SymphonyError::Io {
@@ -220,5 +255,33 @@ mod tests {
 
         manager.cleanup_worktree(&repo, &workspace).unwrap();
         assert!(!workspace.path.exists());
+    }
+
+    #[test]
+    fn clones_missing_repo_before_creating_worktree() {
+        let source_dir = TempDir::new().unwrap();
+        let source_repo = git2::Repository::init(source_dir.path()).unwrap();
+        let mut index = source_repo.index().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = source_repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        source_repo
+            .commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+
+        let checkout_root = TempDir::new().unwrap();
+        let repo_path = checkout_root.path().join("clones/repo");
+        let repo = RepoConfig::builder()
+            .name("crrowbot/rara-notes".to_owned())
+            .url(source_dir.path().display().to_string())
+            .repo_path(repo_path.clone())
+            .active_labels(vec!["symphony:ready".to_owned()])
+            .build();
+
+        let manager = WorkspaceManager;
+        let workspace = manager.ensure_worktree(&repo, 11, "Dynamic repo").unwrap();
+
+        assert!(repo_path.exists());
+        assert!(workspace.path.exists());
     }
 }
