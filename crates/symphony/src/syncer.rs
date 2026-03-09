@@ -4,6 +4,7 @@ use tracing::{debug, info, warn};
 
 use crate::client::{RalphClient, TaskRecord};
 use crate::error::Result;
+use crate::supervisor::RalphSupervisor;
 use crate::tracker::{IssueState, IssueTracker, TrackedIssue};
 
 /// What action to take for a given issue ↔ task pair.
@@ -26,32 +27,68 @@ pub struct SyncReport {
     pub completed: Vec<String>,
     pub cancelled: Vec<String>,
     pub failed: Vec<String>,
+    pub skipped: Vec<String>,
     pub unchanged: usize,
 }
 
 /// Synchronizes issue tracker state with ralph task state.
-pub struct IssueSyncer {
-    client: RalphClient,
-}
+///
+/// Uses the supervisor to get per-repo ralph clients, since each
+/// ralph instance is scoped to a single workspace.
+pub struct IssueSyncer;
 
 impl IssueSyncer {
-    #[must_use]
-    pub fn new(client: RalphClient) -> Self {
-        Self { client }
-    }
-
     /// Run a full sync cycle: compare issues against ralph tasks and take action.
     pub async fn sync(
-        &self,
+        supervisor: &RalphSupervisor,
         tracker: &dyn IssueTracker,
         issues: &[TrackedIssue],
     ) -> Result<SyncReport> {
-        // Fetch all non-archived tasks from ralph.
-        let tasks = self.client.task_list(Option::None).await?;
+        let mut report = SyncReport::default();
+
+        // Group issues by repo so we can batch-fetch tasks per ralph instance.
+        let mut by_repo: HashMap<&str, Vec<&TrackedIssue>> = HashMap::new();
+        for issue in issues {
+            by_repo.entry(issue.repo.as_str()).or_default().push(issue);
+        }
+
+        for (repo_name, repo_issues) in &by_repo {
+            let client = match supervisor.client(repo_name) {
+                Some(c) => c,
+                None => {
+                    warn!(repo = %repo_name, "no ralph instance for repo, skipping");
+                    for issue in repo_issues {
+                        report.skipped.push(issue.identifier.clone());
+                    }
+                    continue;
+                }
+            };
+
+            Self::sync_repo(&client, tracker, repo_issues, &mut report).await;
+        }
+
+        Ok(report)
+    }
+
+    async fn sync_repo(
+        client: &RalphClient,
+        tracker: &dyn IssueTracker,
+        issues: &[&TrackedIssue],
+        report: &mut SyncReport,
+    ) {
+        // Fetch all non-archived tasks from this ralph instance.
+        let tasks = match client.task_list(Option::None).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(error = %e, "failed to fetch ralph tasks, skipping repo");
+                for issue in issues {
+                    report.failed.push(issue.identifier.clone());
+                }
+                return;
+            }
+        };
         let task_map: HashMap<&str, &TaskRecord> =
             tasks.iter().map(|t| (t.id.as_str(), t)).collect();
-
-        let mut report = SyncReport::default();
 
         for issue in issues {
             let task_status = task_map
@@ -62,8 +99,7 @@ impl IssueSyncer {
             match action {
                 SyncAction::CreateTask => {
                     let priority = issue.priority.min(5) as u8;
-                    match self
-                        .client
+                    match client
                         .task_create(&issue.identifier, &issue.title, priority, true)
                         .await
                     {
@@ -72,7 +108,6 @@ impl IssueSyncer {
                             report.created.push(issue.identifier.clone());
                         }
                         Err(e) => {
-                            // CONFLICT means task already exists — treat as idempotent success.
                             if e.to_string().contains("CONFLICT") {
                                 debug!(issue = %issue.identifier, "ralph task already exists");
                                 report.unchanged += 1;
@@ -96,7 +131,7 @@ impl IssueSyncer {
                     }
                 }
                 SyncAction::CancelTask => {
-                    match self.client.task_cancel(&issue.identifier).await {
+                    match client.task_cancel(&issue.identifier).await {
                         Ok(_) => {
                             info!(issue = %issue.identifier, "cancelled ralph task");
                             report.cancelled.push(issue.identifier.clone());
@@ -112,8 +147,6 @@ impl IssueSyncer {
                 }
             }
         }
-
-        Ok(report)
     }
 }
 

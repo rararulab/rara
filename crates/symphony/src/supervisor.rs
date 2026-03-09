@@ -1,13 +1,15 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
 use crate::client::RalphClient;
+use crate::config::RepoConfig;
 use crate::error::{RalphSnafu, Result};
 
-/// Default port for the ralph RPC API server.
-const RALPH_API_PORT: u16 = 13781;
+/// Base port — each repo gets BASE + index.
+const BASE_PORT: u16 = 13781;
 
 /// Default command for starting ralph.
 const RALPH_COMMAND: &str = "ralph";
@@ -15,48 +17,35 @@ const RALPH_COMMAND: &str = "ralph";
 /// How long to wait between health check retries during startup.
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Maximum time to wait for ralph API to become healthy on startup.
+/// Maximum time to wait for ralph to become healthy on startup.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Delay before restarting a crashed ralph-api process.
+/// Delay before restarting a crashed ralph process.
 const RESTART_DELAY: Duration = Duration::from_secs(3);
 
-/// Manages the ralph RPC API child process lifecycle.
-///
-/// Spawns `ralph web` as a subprocess, monitors health via HTTP,
-/// and restarts automatically on crash.
-pub struct RalphSupervisor {
+/// A single ralph instance managing one repo workspace.
+struct RalphInstance {
     child: Option<Child>,
     port: u16,
+    repo_name: String,
     workspace_root: String,
     client: RalphClient,
 }
 
-impl RalphSupervisor {
-    /// Create a new supervisor. Does not start the process yet.
-    ///
-    /// `workspace_root` is the directory ralph uses for task/loop storage.
-    #[must_use]
-    pub fn new(workspace_root: &str) -> Self {
-        let port = RALPH_API_PORT;
+impl RalphInstance {
+    fn new(repo_name: &str, workspace_root: &str, port: u16) -> Self {
         let client = RalphClient::new(&format!("http://127.0.0.1:{port}"));
         Self {
             child: None,
             port,
+            repo_name: repo_name.to_owned(),
             workspace_root: workspace_root.to_owned(),
             client,
         }
     }
 
-    /// Return a clone of the ralph client for use by other components.
-    #[must_use]
-    pub fn client(&self) -> RalphClient {
-        self.client.clone()
-    }
-
-    /// Start the ralph-api process and wait until it's healthy.
-    pub async fn start(&mut self) -> Result<()> {
-        info!(port = self.port, "starting ralph-api");
+    async fn start(&mut self) -> Result<()> {
+        info!(repo = %self.repo_name, port = self.port, "starting ralph");
 
         let child = Command::new(RALPH_COMMAND)
             .arg("web")
@@ -71,22 +60,24 @@ impl RalphSupervisor {
             .spawn()
             .map_err(|e| {
                 RalphSnafu {
-                    message: format!("failed to spawn ralph-api: {e}"),
+                    message: format!(
+                        "failed to spawn ralph for {}: {e}",
+                        self.repo_name
+                    ),
                 }
                 .build()
             })?;
 
         self.child = Some(child);
 
-        // Wait for health check to pass.
         let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
         loop {
             if tokio::time::Instant::now() > deadline {
-                // Kill the process if it never became healthy.
                 self.stop().await.ok();
                 return Err(RalphSnafu {
                     message: format!(
-                        "ralph-api did not become healthy within {}s",
+                        "ralph for {} did not become healthy within {}s",
+                        self.repo_name,
                         STARTUP_TIMEOUT.as_secs()
                     ),
                 }
@@ -94,15 +85,17 @@ impl RalphSupervisor {
             }
 
             if self.client.health().await {
-                info!(port = self.port, "ralph-api is healthy");
+                info!(repo = %self.repo_name, port = self.port, "ralph is healthy");
                 return Ok(());
             }
 
-            // Check if process exited early.
             if let Some(ref mut child) = self.child {
                 if let Ok(Some(status)) = child.try_wait() {
                     return Err(RalphSnafu {
-                        message: format!("ralph-api exited during startup with {status}"),
+                        message: format!(
+                            "ralph for {} exited during startup with {status}",
+                            self.repo_name
+                        ),
                     }
                     .build());
                 }
@@ -112,21 +105,18 @@ impl RalphSupervisor {
         }
     }
 
-    /// Check health and restart if the process has died.
-    pub async fn ensure_alive(&mut self) -> Result<()> {
-        // Fast path: health check passes.
+    async fn ensure_alive(&mut self) -> Result<()> {
         if self.client.health().await {
             return Ok(());
         }
 
-        // Process might have crashed — check.
         let needs_restart = match &mut self.child {
             Some(child) => matches!(child.try_wait(), Ok(Some(_))),
             None => true,
         };
 
         if needs_restart {
-            warn!("ralph-api is not healthy, restarting after delay");
+            warn!(repo = %self.repo_name, "ralph is not healthy, restarting after delay");
             tokio::time::sleep(RESTART_DELAY).await;
             self.start().await?;
         }
@@ -134,13 +124,11 @@ impl RalphSupervisor {
         Ok(())
     }
 
-    /// Gracefully stop the ralph-api process.
-    pub async fn stop(&mut self) -> Result<()> {
+    async fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
-            info!("stopping ralph-api");
-            // Try graceful kill first.
+            info!(repo = %self.repo_name, "stopping ralph");
             if let Err(e) = child.kill().await {
-                warn!(error = %e, "failed to kill ralph-api (may have already exited)");
+                warn!(repo = %self.repo_name, error = %e, "failed to kill ralph");
             }
             child.wait().await.ok();
         }
@@ -148,11 +136,67 @@ impl RalphSupervisor {
     }
 }
 
-impl Drop for RalphSupervisor {
+impl Drop for RalphInstance {
     fn drop(&mut self) {
-        // Best-effort sync kill on drop.
         if let Some(ref mut child) = self.child {
             child.start_kill().ok();
         }
+    }
+}
+
+/// Manages one ralph process per repo.
+///
+/// Each repo gets its own `ralph web` instance on a unique port,
+/// since ralph is scoped to a single workspace root per server.
+pub struct RalphSupervisor {
+    instances: HashMap<String, RalphInstance>,
+}
+
+impl RalphSupervisor {
+    /// Create a new supervisor from repo configs. Does not start processes yet.
+    #[must_use]
+    pub fn new(repos: &[RepoConfig]) -> Self {
+        let mut instances = HashMap::new();
+        for (i, repo) in repos.iter().enumerate() {
+            let port = BASE_PORT + i as u16;
+            // Use repo URL as workspace identifier for ralph.
+            // In production the repo should be cloned locally; for now
+            // we use the repo name as a stable workspace path under cwd.
+            let workspace_root = format!(".ralph-workspaces/{}", repo.name.replace('/', "-"));
+            instances.insert(
+                repo.name.clone(),
+                RalphInstance::new(&repo.name, &workspace_root, port),
+            );
+        }
+        Self { instances }
+    }
+
+    /// Return the ralph client for a specific repo.
+    pub fn client(&self, repo_name: &str) -> Option<RalphClient> {
+        self.instances.get(repo_name).map(|i| i.client.clone())
+    }
+
+    /// Start all ralph instances and wait until healthy.
+    pub async fn start(&mut self) -> Result<()> {
+        for instance in self.instances.values_mut() {
+            instance.start().await?;
+        }
+        Ok(())
+    }
+
+    /// Ensure all ralph instances are alive, restarting any that crashed.
+    pub async fn ensure_alive(&mut self) -> Result<()> {
+        for instance in self.instances.values_mut() {
+            instance.ensure_alive().await?;
+        }
+        Ok(())
+    }
+
+    /// Stop all ralph instances.
+    pub async fn stop(&mut self) -> Result<()> {
+        for instance in self.instances.values_mut() {
+            instance.stop().await?;
+        }
+        Ok(())
     }
 }

@@ -9,8 +9,8 @@ use crate::tracker::{GitHubIssueTracker, IssueTracker, LinearIssueTracker};
 
 /// Top-level service that bridges issue trackers with ralph's task API.
 ///
-/// Spawns and supervises a ralph-api process, then runs a poll loop that
-/// syncs issues to ralph tasks.
+/// Spawns one `ralph web` process per repo (ralph is per-workspace),
+/// then runs a poll loop that syncs issues to ralph tasks.
 pub struct SymphonyService {
     config: SymphonyConfig,
     shutdown: CancellationToken,
@@ -38,14 +38,9 @@ impl SymphonyService {
         // 1. Build issue tracker.
         let tracker: Box<dyn IssueTracker> = self.build_tracker()?;
 
-        // 2. Start ralph RPC API supervisor.
-        let workspace_root = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .to_string_lossy()
-            .into_owned();
-        let mut supervisor = RalphSupervisor::new(&workspace_root);
+        // 2. Start one ralph instance per repo.
+        let mut supervisor = RalphSupervisor::new(&self.config.repos);
         supervisor.start().await?;
-        let syncer = IssueSyncer::new(supervisor.client());
 
         info!("symphony sync loop started");
 
@@ -57,7 +52,7 @@ impl SymphonyService {
                     break;
                 }
                 _ = tokio::time::sleep(self.config.poll_interval) => {
-                    self.poll_cycle(&*tracker, &syncer, &mut supervisor).await;
+                    self.poll_cycle(&*tracker, &mut supervisor).await;
                 }
             }
         }
@@ -68,16 +63,15 @@ impl SymphonyService {
         Ok(())
     }
 
-    /// Run one poll cycle: ensure ralph is alive, fetch issues, sync.
+    /// Run one poll cycle: ensure ralph instances are alive, fetch issues, sync.
     async fn poll_cycle(
         &self,
         tracker: &dyn IssueTracker,
-        syncer: &IssueSyncer,
         supervisor: &mut RalphSupervisor,
     ) {
-        // Ensure ralph-api is running.
+        // Ensure all ralph instances are running.
         if let Err(e) = supervisor.ensure_alive().await {
-            error!(error = %e, "failed to ensure ralph-api is alive, skipping cycle");
+            error!(error = %e, "failed to ensure ralph is alive, skipping cycle");
             return;
         }
 
@@ -91,7 +85,7 @@ impl SymphonyService {
         };
 
         // Sync.
-        match syncer.sync(tracker, &issues).await {
+        match IssueSyncer::sync(supervisor, tracker, &issues).await {
             Ok(report) => {
                 if !report.created.is_empty()
                     || !report.completed.is_empty()
