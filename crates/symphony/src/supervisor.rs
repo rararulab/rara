@@ -52,8 +52,8 @@ impl RalphSupervisor {
         info!(port = self.port, "starting ralph-api");
 
         let child = Command::new("ralph-api")
-            .arg("--port")
-            .arg(self.port.to_string())
+            .env("RALPH_API_PORT", self.port.to_string())
+            .env("RALPH_API_HOST", "127.0.0.1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

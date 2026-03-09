@@ -17,6 +17,10 @@ pub struct TaskRecord {
     #[serde(default)]
     pub archived_at: Option<String>,
     #[serde(default)]
+    pub queued_task_id: Option<String>,
+    #[serde(default)]
+    pub merge_loop_prompt: Option<String>,
+    #[serde(default)]
     pub error_message: Option<String>,
     pub created_at: String,
     pub updated_at: String,
