@@ -23,22 +23,90 @@ use rara_kernel::{
     memory::TapeService,
     session::{self as ks, SessionIndex, SessionKey},
 };
+use reqwest::{Client, Method};
+use serde::de::DeserializeOwned;
 
 use super::client::{
-    BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
-    SessionListItem,
+    BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, GatewayCommandOutcome,
+    GatewayStatus, McpServerInfo, SessionDetail, SessionListItem,
 };
 
 /// A [`BotServiceClient`] that calls [`SessionIndex`] and [`TapeService`]
 /// directly, bypassing any HTTP layer.
 pub struct KernelBotServiceClient {
     sessions: Arc<dyn SessionIndex>,
-    tape:     TapeService,
+    tape: TapeService,
+    gateway_admin: Option<GatewayAdminClient>,
 }
 
 impl KernelBotServiceClient {
-    pub fn new(sessions: Arc<dyn SessionIndex>, tape: TapeService) -> Self {
-        Self { sessions, tape }
+    pub fn new(
+        sessions: Arc<dyn SessionIndex>,
+        tape: TapeService,
+        gateway_admin: Option<GatewayAdminClient>,
+    ) -> Self {
+        Self {
+            sessions,
+            tape,
+            gateway_admin,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct GatewayAdminClient {
+    client: Client,
+    base_url: String,
+    owner_token: String,
+}
+
+impl GatewayAdminClient {
+    pub fn new(base_url: impl Into<String>, owner_token: impl Into<String>) -> Self {
+        Self {
+            client: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            owner_token: owner_token.into(),
+        }
+    }
+
+    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, BotServiceError> {
+        self.request(Method::GET, path).await
+    }
+
+    async fn post<T: DeserializeOwned>(&self, path: &str) -> Result<T, BotServiceError> {
+        self.request(Method::POST, path).await
+    }
+
+    async fn request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+    ) -> Result<T, BotServiceError> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .request(method, &url)
+            .bearer_auth(&self.owner_token)
+            .send()
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("gateway request failed: {e}"),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response.text().await.unwrap_or_else(|_| String::new());
+            return Err(BotServiceError::Service {
+                message: format!("gateway request failed with {}: {}", status, detail.trim()),
+            });
+        }
+
+        response
+            .json::<T>()
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("gateway response decode failed: {e}"),
+            })
     }
 }
 
@@ -54,22 +122,22 @@ fn map_session_err(e: ks::SessionError) -> BotServiceError {
 
 fn entry_to_list_item(e: &ks::SessionEntry) -> SessionListItem {
     SessionListItem {
-        key:           e.key.to_string(),
-        title:         e.title.clone(),
+        key: e.key.to_string(),
+        title: e.title.clone(),
         message_count: e.message_count,
-        updated_at:    e.updated_at.to_rfc3339(),
+        updated_at: e.updated_at.to_rfc3339(),
     }
 }
 
 fn entry_to_detail(e: &ks::SessionEntry) -> SessionDetail {
     SessionDetail {
-        key:           e.key.to_string(),
-        title:         e.title.clone(),
-        model:         e.model.clone(),
+        key: e.key.to_string(),
+        title: e.title.clone(),
+        model: e.model.clone(),
         message_count: e.message_count,
-        preview:       e.preview.clone(),
-        created_at:    e.created_at.to_rfc3339(),
-        updated_at:    e.updated_at.to_rfc3339(),
+        preview: e.preview.clone(),
+        created_at: e.created_at.to_rfc3339(),
+        updated_at: e.updated_at.to_rfc3339(),
     }
 }
 
@@ -77,6 +145,14 @@ fn binding_to_client(b: &ks::ChannelBinding) -> ChannelBinding {
     ChannelBinding {
         session_key: b.session_key.to_string(),
     }
+}
+
+fn gateway_client(
+    client: &Option<GatewayAdminClient>,
+) -> Result<&GatewayAdminClient, BotServiceError> {
+    client.as_ref().ok_or_else(|| BotServiceError::Service {
+        message: "gateway operations are unavailable: gateway.bind_address or owner_token is not configured".to_owned(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -110,10 +186,10 @@ impl BotServiceClient for KernelBotServiceClient {
         let now = Utc::now();
         let binding = ks::ChannelBinding {
             channel_type: channel_type.to_owned(),
-            chat_id:      chat_id.to_owned(),
-            session_key:  key,
-            created_at:   now,
-            updated_at:   now,
+            chat_id: chat_id.to_owned(),
+            session_key: key,
+            created_at: now,
+            updated_at: now,
         };
         self.sessions
             .bind_channel(&binding)
@@ -125,15 +201,15 @@ impl BotServiceClient for KernelBotServiceClient {
     async fn create_session(&self, title: Option<&str>) -> Result<String, BotServiceError> {
         let now = Utc::now();
         let entry = ks::SessionEntry {
-            key:           SessionKey::new(),
-            title:         title.map(String::from),
-            model:         None,
+            key: SessionKey::new(),
+            title: title.map(String::from),
+            model: None,
             system_prompt: None,
             message_count: 0,
-            preview:       None,
-            metadata:      None,
-            created_at:    now,
-            updated_at:    now,
+            preview: None,
+            metadata: None,
+            created_at: now,
+            updated_at: now,
         };
         let created = self
             .sessions
@@ -260,5 +336,23 @@ impl BotServiceClient for KernelBotServiceClient {
         Err(BotServiceError::Service {
             message: "MCP management not available via kernel client".to_owned(),
         })
+    }
+
+    async fn gateway_status(&self) -> Result<GatewayStatus, BotServiceError> {
+        gateway_client(&self.gateway_admin)?
+            .get("/gateway/status")
+            .await
+    }
+
+    async fn gateway_restart(&self) -> Result<GatewayCommandOutcome, BotServiceError> {
+        gateway_client(&self.gateway_admin)?
+            .post("/gateway/restart")
+            .await
+    }
+
+    async fn gateway_update(&self) -> Result<GatewayCommandOutcome, BotServiceError> {
+        gateway_client(&self.gateway_admin)?
+            .post("/gateway/update")
+            .await
     }
 }

@@ -33,11 +33,13 @@ pub mod callbacks;
 pub mod client;
 pub mod kernel_client;
 pub mod mcp;
+pub mod ops;
 pub mod session;
 
 pub use basic::BasicCommandHandler;
 pub use callbacks::SessionSwitchCallbackHandler;
 pub use client::BotServiceClient;
-pub use kernel_client::KernelBotServiceClient;
+pub use kernel_client::{GatewayAdminClient, KernelBotServiceClient};
 pub use mcp::McpCommandHandler;
+pub use ops::GatewayOpsCommandHandler;
 pub use session::{SessionCommandHandler, StopCommandHandler};

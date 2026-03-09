@@ -46,33 +46,33 @@ pub struct ChannelBinding {
 /// Summary of a chat session (used in list views).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionListItem {
-    pub key:           String,
-    pub title:         Option<String>,
+    pub key: String,
+    pub title: Option<String>,
     pub message_count: i64,
-    pub updated_at:    String,
+    pub updated_at: String,
 }
 
 /// Detailed information about a single chat session.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionDetail {
-    pub key:           String,
-    pub title:         Option<String>,
-    pub model:         Option<String>,
+    pub key: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
     pub message_count: i64,
-    pub preview:       Option<String>,
-    pub created_at:    String,
-    pub updated_at:    String,
+    pub preview: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// A job discovered through the search API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscoveryJob {
-    pub title:           String,
-    pub company:         String,
-    pub location:        Option<String>,
-    pub url:             Option<String>,
-    pub salary_min:      Option<i32>,
-    pub salary_max:      Option<i32>,
+    pub title: String,
+    pub company: String,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub salary_min: Option<i32>,
+    pub salary_max: Option<i32>,
     pub salary_currency: Option<String>,
 }
 
@@ -80,7 +80,7 @@ pub struct DiscoveryJob {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerInfo {
-    pub name:   String,
+    pub name: String,
     pub status: McpServerStatus,
 }
 
@@ -92,6 +92,42 @@ pub enum McpServerStatus {
     Connecting,
     Disconnected,
     Error { message: String },
+}
+
+/// Gateway supervisor and update status snapshot.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayStatus {
+    pub agent: GatewayAgentStatus,
+    pub update: GatewayUpdateStatus,
+}
+
+/// Agent runtime status exposed by the gateway admin API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayAgentStatus {
+    pub running: bool,
+    pub restart_count: u32,
+    pub pid: Option<u32>,
+}
+
+/// Update detector status exposed by the gateway admin API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayUpdateStatus {
+    pub current_rev: String,
+    pub upstream_rev: Option<String>,
+    pub update_available: bool,
+    pub last_check_time: Option<String>,
+}
+
+/// Result of a gateway operation such as restart or update.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GatewayCommandOutcome {
+    pub ok: bool,
+    pub action: String,
+    pub status: String,
+    pub detail: String,
+    pub target_rev: Option<String>,
+    pub active_rev: Option<String>,
+    pub rolled_back: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,4 +209,15 @@ pub trait BotServiceClient: Send + Sync {
 
     /// Remove an MCP server configuration.
     async fn remove_mcp_server(&self, name: &str) -> Result<(), BotServiceError>;
+
+    // -- Gateway operations ---------------------------------------------------
+
+    /// Fetch gateway supervisor and update status.
+    async fn gateway_status(&self) -> Result<GatewayStatus, BotServiceError>;
+
+    /// Trigger a gateway-managed restart.
+    async fn gateway_restart(&self) -> Result<GatewayCommandOutcome, BotServiceError>;
+
+    /// Trigger a gateway-managed update flow.
+    async fn gateway_update(&self) -> Result<GatewayCommandOutcome, BotServiceError>;
 }

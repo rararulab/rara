@@ -56,36 +56,36 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
     #[serde(default = "default_database_config")]
-    pub database:    DatabaseConfig,
+    pub database: DatabaseConfig,
     /// HTTP server bind / limits.
-    pub http:        RestServerConfig,
+    pub http: RestServerConfig,
     /// gRPC server bind / limits.
-    pub grpc:        GrpcServerConfig,
+    pub grpc: GrpcServerConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
-    pub telemetry:   TelemetryConfig,
+    pub telemetry: TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_token: Option<String>,
     /// LLM provider configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm:         Option<flatten::LlmConfig>,
+    pub llm: Option<flatten::LlmConfig>,
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub telegram:    Option<flatten::TelegramConfig>,
+    pub telegram: Option<flatten::TelegramConfig>,
     /// Configured users with platform identity mappings (required).
-    pub users:       Vec<crate::boot::UserConfig>,
+    pub users: Vec<crate::boot::UserConfig>,
     /// Mita proactive agent configuration (required).
-    pub mita:        MitaConfig,
+    pub mita: MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub knowledge:   Option<flatten::KnowledgeConfig>,
+    pub knowledge: Option<flatten::KnowledgeConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gateway:     Option<GatewayConfig>,
+    pub gateway: Option<GatewayConfig>,
     /// Symphony autonomous coding agent orchestrator (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symphony:    Option<rara_symphony::SymphonyConfig>,
+    pub symphony: Option<rara_symphony::SymphonyConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -108,10 +108,10 @@ pub struct GatewayConfig {
         deserialize_with = "humantime_serde::deserialize",
         serialize_with = "humantime_serde::serialize"
     )]
-    pub check_interval:       Duration,
+    pub check_interval: Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
-    pub health_timeout:       u64,
+    pub health_timeout: u64,
     /// HTTP health poll interval (e.g. "2s").
     #[serde(
         default = "gateway_defaults::health_poll_interval",
@@ -124,22 +124,34 @@ pub struct GatewayConfig {
     pub max_restart_attempts: u32,
     /// Whether to auto-apply upstream updates.
     #[serde(default = "gateway_defaults::auto_update")]
-    pub auto_update:          bool,
+    pub auto_update: bool,
     /// Bind address for the gateway admin HTTP API.
     #[serde(default = "gateway_defaults::bind_address")]
-    pub bind_address:         String,
+    pub bind_address: String,
     /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
-    pub repo_url:             String,
+    pub repo_url: String,
 }
 
 mod gateway_defaults {
     use std::time::Duration;
-    pub fn check_interval() -> Duration { Duration::from_secs(300) }
-    pub fn health_timeout() -> u64 { 30 }
-    pub fn health_poll_interval() -> Duration { Duration::from_secs(2) }
-    pub fn max_restart_attempts() -> u32 { 3 }
-    pub fn auto_update() -> bool { true }
-    pub fn bind_address() -> String { "127.0.0.1:25556".to_owned() }
+    pub fn check_interval() -> Duration {
+        Duration::from_secs(300)
+    }
+    pub fn health_timeout() -> u64 {
+        30
+    }
+    pub fn health_poll_interval() -> Duration {
+        Duration::from_secs(2)
+    }
+    pub fn max_restart_attempts() -> u32 {
+        3
+    }
+    pub fn auto_update() -> bool {
+        true
+    }
+    pub fn bind_address() -> String {
+        "127.0.0.1:25556".to_owned()
+    }
 }
 
 /// General OTLP telemetry configuration.
@@ -153,7 +165,19 @@ pub struct TelemetryConfig {
     pub otlp_protocol: Option<String>,
 }
 
-fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
+fn default_database_config() -> DatabaseConfig {
+    DatabaseConfig::builder().build()
+}
+
+fn owner_telegram_user_ids(users: &[crate::boot::UserConfig]) -> std::collections::HashSet<String> {
+    users
+        .iter()
+        .filter(|user| matches!(user.role.as_str(), "root" | "admin"))
+        .flat_map(|user| user.platforms.iter())
+        .filter(|binding| binding.channel_type.eq_ignore_ascii_case("telegram"))
+        .map(|binding| binding.user_id.clone())
+        .collect()
+}
 
 // ---------------------------------------------------------------------------
 // StartOptions
@@ -397,7 +421,7 @@ pub async fn start_with_options(
             .whatever_context("Failed to create worker runtime")?,
     );
     let manager_config = common_worker::ManagerConfig {
-        runtime:          Some(worker_runtime),
+        runtime: Some(worker_runtime),
         shutdown_timeout: Duration::from_secs(30),
     };
     let mut worker_manager = common_worker::Manager::with_state_and_config((), manager_config);
@@ -406,17 +430,35 @@ pub async fn start_with_options(
         // Wire command handlers now that KernelHandle is available.
         {
             use rara_channels::telegram::commands::{
-                KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
+                GatewayAdminClient, GatewayOpsCommandHandler, KernelBotServiceClient,
+                SessionCommandHandler, StopCommandHandler,
             };
+            let gateway_admin = config.gateway.as_ref().and_then(|gateway| {
+                config.owner_token.as_ref().map(|owner_token| {
+                    GatewayAdminClient::new(
+                        format!("http://{}", gateway.bind_address),
+                        owner_token.clone(),
+                    )
+                })
+            });
             let bot_client: std::sync::Arc<
                 dyn rara_channels::telegram::commands::BotServiceClient,
             > = std::sync::Arc::new(KernelBotServiceClient::new(
                 rara.session_index.clone(),
                 rara.tape_service.clone(),
+                gateway_admin,
             ));
+            let owner_telegram_user_ids = owner_telegram_user_ids(&config.users);
             let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = vec![
                 std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
-                std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
+                std::sync::Arc::new(StopCommandHandler::new(
+                    bot_client.clone(),
+                    kernel_handle.clone(),
+                )),
+                std::sync::Arc::new(GatewayOpsCommandHandler::new(
+                    bot_client,
+                    owner_telegram_user_ids,
+                )),
             ];
             tg_adapter.set_command_handlers(handlers);
         }
@@ -471,10 +513,10 @@ pub async fn start_with_options(
     info!("Application started successfully");
 
     let app_handle = AppHandle {
-        shutdown_tx:        Some(shutdown_tx),
-        running:            Arc::clone(&running),
+        shutdown_tx: Some(shutdown_tx),
+        running: Arc::clone(&running),
         cancellation_token: cancellation_token.clone(),
-        kernel_handle:      Some(kernel_handle),
+        kernel_handle: Some(kernel_handle),
     };
 
     let running_clone = Arc::clone(&running);
@@ -605,12 +647,12 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:        Option<oneshot::Sender<()>>,
-    running:            Arc<AtomicBool>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    running: Arc<AtomicBool>,
     cancellation_token: CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:  Option<rara_kernel::handle::KernelHandle>,
+    pub kernel_handle: Option<rara_kernel::handle::KernelHandle>,
 }
 
 #[allow(dead_code)]
@@ -628,10 +670,14 @@ impl AppHandle {
 
     /// Check if the application is still running.
     #[must_use]
-    pub fn is_running(&self) -> bool { self.running.load(Ordering::SeqCst) }
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
 
     /// Wait for the application to shutdown.
-    pub async fn wait_for_shutdown(&self) { self.cancellation_token.cancelled().await; }
+    pub async fn wait_for_shutdown(&self) {
+        self.cancellation_token.cancelled().await;
+    }
 }
 
 async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
