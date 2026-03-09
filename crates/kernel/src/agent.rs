@@ -857,7 +857,17 @@ fn build_runtime_contract_prompt(
          good handoff preserves your progress — a missing summary means lost context\n5. For \
          exact tokens, IDs, codes, names, or quoted details from pre-anchor context, search first \
          and only then answer\n\nFailing to use the tape system when needed will cause context \
-         window overflow and task failure.\n</context_contract>"
+         window overflow and task failure.\n</context_contract>\n\n<tool_execution_contract>\n\
+         Some tools run in the background by default, especially external execution tools such as \
+         `bash` and MCP-backed tools.\n\n## How background tools behave:\n- A background tool may \
+         return a tool result like `{{\"status\":\"running\",\"run_id\":\"...\"}}` instead of the \
+         final payload\n- When that happens, the work is still running and you MUST NOT pretend \
+         it already finished\n- Acknowledge that the job is running, tell the user what is \
+         happening, and keep the conversation moving instead of waiting synchronously\n- When the \
+         kernel later injects a `[background_tool_completed]` message, treat that as the real \
+         completion signal and continue from the included result\n- Prefer background execution \
+         for long-running shell commands, installs, builds, downloads, and remote MCP actions\n\
+         </tool_execution_contract>"
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
@@ -1664,11 +1674,15 @@ mod tests {
     fn runtime_contract_prompt_includes_tape_and_delegation_rules() {
         let prompt = build_runtime_contract_prompt("base", true, None);
         assert!(prompt.contains("<context_contract>"));
+        assert!(prompt.contains("<tool_execution_contract>"));
         assert!(prompt.contains("`tape`"));
         assert!(prompt.contains("action: \"anchor\""));
         assert!(prompt.contains("action: \"search\""));
         assert!(prompt.contains("search the tape"));
         assert!(prompt.contains("Never answer a pre-anchor factual question from memory alone"));
+        assert!(prompt.contains("\"status\":\"running\""));
+        assert!(prompt.contains("[background_tool_completed]"));
+        assert!(prompt.contains("`bash` and MCP-backed tools"));
         assert!(prompt.contains("<delegation_contract>"));
         assert!(prompt.contains("action: \"spawn\""));
         assert!(prompt.contains("action: \"spawn_parallel\""));
@@ -1679,6 +1693,7 @@ mod tests {
     fn runtime_contract_prompt_keeps_tape_rules_without_kernel() {
         let prompt = build_runtime_contract_prompt("base", false, None);
         assert!(prompt.contains("<context_contract>"));
+        assert!(prompt.contains("<tool_execution_contract>"));
         assert!(!prompt.contains("<delegation_contract>"));
         assert!(!prompt.contains("action: \"spawn_parallel\""));
     }
