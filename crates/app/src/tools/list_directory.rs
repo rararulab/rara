@@ -18,7 +18,7 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Maximum number of directory entries to return.
@@ -57,7 +57,7 @@ impl AgentTool for ListDirectoryTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("path")
             .and_then(|v| v.as_str())
@@ -127,6 +127,7 @@ impl AgentTool for ListDirectoryTool {
             "entries": entries,
             "total": total,
             "truncated": truncated,
-        }))
+        })
+        .into())
     }
 }

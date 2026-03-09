@@ -19,7 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rara_kernel::{
     session::SessionIndex,
-    tool::{AgentTool, ToolContext},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::{Value, json};
 
@@ -58,7 +58,7 @@ impl AgentTool for ListSessionsTool {
         })
     }
 
-    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<Value> {
+    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let limit = params.get("limit").and_then(|v| v.as_i64()).unwrap_or(50);
 
         let sessions = self
@@ -84,6 +84,7 @@ impl AgentTool for ListSessionsTool {
         Ok(json!({
             "total": entries.len(),
             "sessions": entries,
-        }))
+        })
+        .into())
     }
 }

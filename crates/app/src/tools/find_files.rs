@@ -19,7 +19,7 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Default maximum number of file entries to return.
@@ -66,7 +66,7 @@ impl AgentTool for FindFilesTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -134,6 +134,7 @@ impl AgentTool for FindFilesTool {
             "files": files,
             "total_found": total_found,
             "truncated": truncated,
-        }))
+        })
+        .into())
     }
 }

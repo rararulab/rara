@@ -18,7 +18,7 @@
 //! type, and body (truncated to 100 KB).
 
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Maximum response body size in bytes (100 KB).
@@ -71,7 +71,7 @@ impl AgentTool for HttpFetchTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let url = params
             .get("url")
             .and_then(|v| v.as_str())
@@ -109,11 +109,13 @@ impl AgentTool for HttpFetchTool {
                     "status": status,
                     "content_type": content_type,
                     "body": body,
-                }))
+                })
+                .into())
             }
             Err(e) => Ok(json!({
                 "error": format!("{e}"),
-            })),
+            })
+            .into()),
         }
     }
 }

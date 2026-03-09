@@ -56,6 +56,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import {
+  formatCompletedToolLine,
+  formatLiveReasoning,
+  formatToolCallSummary,
+} from "@/lib/chat-progress";
 import { useServerStatus } from "@/hooks/use-server-status";
 
 // ---------------------------------------------------------------------------
@@ -1040,34 +1045,43 @@ function ChangeModelDialog({
 // ---------------------------------------------------------------------------
 
 function ActivityTree({ stream }: { stream: StreamState }) {
-  if (stream.activeTools.length === 0 && stream.completedTools.length === 0) {
+  const liveReasoning = formatLiveReasoning(stream.reasoning);
+
+  if (
+    stream.activeTools.length === 0 &&
+    stream.completedTools.length === 0 &&
+    !liveReasoning
+  ) {
     return null;
   }
   return (
     <div className="mb-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs font-mono text-muted-foreground space-y-1">
+      {liveReasoning && (
+        <div className="rounded-md border border-border/40 bg-background/60 px-2 py-1.5">
+          <div className="mb-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground/60">
+            Thinking
+          </div>
+          <div className="font-sans text-xs leading-5 text-foreground/85">
+            {liveReasoning}
+          </div>
+        </div>
+      )}
       {stream.completedTools.map((t) => (
         <div key={t.id}>
-          <div className="flex items-center gap-1.5">
-            <span className={t.success ? "text-green-500" : "text-red-500"}>
-              {t.success ? "\u2713" : "\u2717"}
+          <div className="flex items-start gap-1.5">
+            <span className="break-words">
+              {formatCompletedToolLine(t)}
             </span>
-            <span>{t.name}</span>
           </div>
-          {t.error && (
-            <div className="ml-5 text-red-400">{t.error}</div>
-          )}
         </div>
       ))}
       {stream.activeTools.map((t) => (
         <div key={t.id}>
           <div className="flex items-center gap-1.5">
             <span className="inline-block h-1.5 w-1.5 animate-spin rounded-full border border-blue-500 border-t-transparent" />
-            <span>{t.name}</span>
-            {Object.keys(t.arguments).length > 0 && (
-              <span className="text-muted-foreground/60 truncate max-w-[200px]">
-                ({Object.keys(t.arguments).join(", ")})
-              </span>
-            )}
+            <span className="break-words">
+              {formatToolCallSummary(t.name, t.arguments)}
+            </span>
           </div>
         </div>
       ))}
@@ -1076,12 +1090,25 @@ function ActivityTree({ stream }: { stream: StreamState }) {
 }
 
 function StreamingBubble({ stream }: { stream: StreamState }) {
+  const liveReasoning = formatLiveReasoning(stream.reasoning);
+
   return (
     <div className="flex gap-3">
       <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/60 text-muted-foreground">
         <Bot className="h-4 w-4" />
       </div>
       <div className="w-full max-w-[min(78ch,calc(100%-4rem))] px-1 py-1 text-foreground">
+        {liveReasoning && (
+          <div className="mb-3 rounded-2xl border border-border/50 bg-background/55 px-3 py-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground/60">
+              Thinking
+            </div>
+            <p className="text-sm leading-6 text-foreground/85">
+              {liveReasoning}
+            </p>
+          </div>
+        )}
+
         {/* Tool call indicators */}
         {stream.activeTools.length > 0 && (
           <div className="mb-2 space-y-1">
@@ -1091,19 +1118,24 @@ function StreamingBubble({ stream }: { stream: StreamState }) {
                 className="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
                 <Wrench className="h-3 w-3 animate-pulse" />
-                <span className="font-mono">{tool.name}</span>
+                <span className="font-mono">
+                  {formatToolCallSummary(tool.name, tool.arguments)}
+                </span>
               </div>
             ))}
           </div>
         )}
 
         {/* Thinking indicator */}
-        {stream.isThinking && !stream.text && (
+        {stream.isThinking &&
+          !stream.text &&
+          !liveReasoning &&
+          stream.activeTools.length === 0 && (
           <div className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Thinking...</span>
           </div>
-        )}
+          )}
 
         {/* Streaming text content */}
         {stream.text && (

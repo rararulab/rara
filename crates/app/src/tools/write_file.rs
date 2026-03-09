@@ -19,7 +19,7 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Layer 1 primitive: write content to a file.
@@ -59,7 +59,7 @@ impl AgentTool for WriteFileTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -93,6 +93,7 @@ impl AgentTool for WriteFileTool {
         Ok(json!({
             "bytes_written": bytes.len(),
             "file_path": file_path.display().to_string(),
-        }))
+        })
+        .into())
     }
 }

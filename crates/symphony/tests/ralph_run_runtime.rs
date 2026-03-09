@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use rara_symphony::{
-    agent::{merge_core_config, AgentTask, RalphAgent},
+    agent::{AgentTask, RalphAgent, merge_core_config},
     config::{AgentConfig, RepoConfig, TrackerConfig},
     tracker::{IssueState, TrackedIssue},
 };
@@ -142,14 +142,14 @@ fn default_prompt_requires_push_pr_and_linear_comment() {
 #[test]
 fn tracker_config_defaults_completion_state_to_to_verify() {
     let tracker = TrackerConfig::Linear {
-        api_key: "token".to_owned(),
-        team_key: "RAR".to_owned(),
-        project_slug: None,
-        endpoint: "https://api.linear.app/graphql".to_owned(),
-        active_states: vec!["Todo".to_owned()],
-        terminal_states: vec!["Done".to_owned()],
-        repo_label_prefix: "repo:".to_owned(),
-        started_issue_state: "In Progress".to_owned(),
+        api_key:               "token".to_owned(),
+        team_key:              "RAR".to_owned(),
+        project_slug:          None,
+        endpoint:              "https://api.linear.app/graphql".to_owned(),
+        active_states:         vec!["Todo".to_owned()],
+        terminal_states:       vec!["Done".to_owned()],
+        repo_label_prefix:     "repo:".to_owned(),
+        started_issue_state:   "In Progress".to_owned(),
         completed_issue_state: "ToVerify".to_owned(),
     };
 
@@ -161,14 +161,14 @@ fn tracker_config_defaults_completion_state_to_to_verify() {
 #[test]
 fn tracker_config_allows_custom_completion_state() {
     let tracker = TrackerConfig::Linear {
-        api_key: "token".to_owned(),
-        team_key: "RAR".to_owned(),
-        project_slug: None,
-        endpoint: "https://api.linear.app/graphql".to_owned(),
-        active_states: vec!["Todo".to_owned()],
-        terminal_states: vec!["Done".to_owned()],
-        repo_label_prefix: "repo:".to_owned(),
-        started_issue_state: "In Dev".to_owned(),
+        api_key:               "token".to_owned(),
+        team_key:              "RAR".to_owned(),
+        project_slug:          None,
+        endpoint:              "https://api.linear.app/graphql".to_owned(),
+        active_states:         vec!["Todo".to_owned()],
+        terminal_states:       vec!["Done".to_owned()],
+        repo_label_prefix:     "repo:".to_owned(),
+        started_issue_state:   "In Dev".to_owned(),
         completed_issue_state: "QA".to_owned(),
     };
 

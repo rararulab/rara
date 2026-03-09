@@ -956,11 +956,11 @@ impl crate::tool::AgentTool for SyscallTool {
         &self,
         params: serde_json::Value,
         _context: &crate::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<crate::tool::ToolOutput> {
         let action: SyscallParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid kernel tool params: {e}"))?;
 
-        match action {
+        let result = match action {
             SyscallParams::Spawn { agent, task } => self.exec_spawn(&agent, &task).await,
             SyscallParams::SpawnParallel {
                 parallel,
@@ -984,6 +984,7 @@ impl crate::tool::AgentTool for SyscallTool {
                 event_type,
                 payload,
             } => self.exec_publish(&event_type, payload).await,
-        }
+        };
+        result.map(Into::into)
     }
 }

@@ -22,7 +22,7 @@ use rara_kernel::{
     event::KernelEventEnvelope,
     identity::UserId,
     io::{Attachment, OutboundEnvelope},
-    tool::{AgentTool, ToolContext},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::json;
 
@@ -77,7 +77,7 @@ impl AgentTool for SendImageTool {
         &self,
         params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         // Extract required context fields.
         let session_key = context
             .session_key
@@ -174,6 +174,7 @@ impl AgentTool for SendImageTool {
             "mime_type": mime_type,
             "file_size": file_size,
             "filename": filename,
-        }))
+        })
+        .into())
     }
 }

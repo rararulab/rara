@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 use tracing::info;
 use uuid::Uuid;
@@ -72,7 +72,7 @@ impl AgentTool for ScreenshotTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let url = params
             .get("url")
             .and_then(|v| v.as_str())
@@ -127,6 +127,7 @@ impl AgentTool for ScreenshotTool {
         Ok(json!({
             "success": true,
             "path": output_str,
-        }))
+        })
+        .into())
     }
 }

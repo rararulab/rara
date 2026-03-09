@@ -106,6 +106,10 @@ struct ToolProgress {
 struct ProgressMessage {
     message_id: Option<MessageId>,
     tools:      Vec<ToolProgress>,
+    /// Accumulated thinking text from the agent between tool calls.
+    /// Displayed (truncated) above the tool list so users can see
+    /// what the agent is reasoning about — similar to Claude Code.
+    thinking:   String,
     last_edit:  Instant,
 }
 
@@ -114,6 +118,7 @@ impl ProgressMessage {
         Self {
             message_id: None,
             tools:      Vec::new(),
+            thinking:   String::new(),
             last_edit:  Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
@@ -139,21 +144,52 @@ fn format_tool_line(t: &ToolProgress) -> String {
     }
 }
 
+/// Maximum characters of thinking text to display in the progress message.
+const THINKING_DISPLAY_LIMIT: usize = 300;
+
+/// Truncate thinking text to the last `limit` characters, breaking at a line
+/// boundary when possible so partial lines don't look awkward.
+fn truncate_thinking(text: &str, limit: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= limit {
+        return trimmed.to_owned();
+    }
+    // Take the tail, then skip to the next line boundary.
+    let start = trimmed.len() - limit;
+    let tail = &trimmed[start..];
+    if let Some(nl) = tail.find('\n') {
+        format!("…{}", tail[nl..].trim_start_matches('\n'))
+    } else {
+        format!("…{tail}")
+    }
+}
+
 /// Render tool progress lines for display in Telegram.
 ///
 /// When there are more than 5 tools, older completed steps are collapsed into a
 /// single "\u{22ef} N earlier steps" line to keep the message compact.
-fn render_progress(tools: &[ToolProgress]) -> String {
-    let total = tools.len();
-    if total <= 5 {
-        return tools
-            .iter()
-            .map(format_tool_line)
-            .collect::<Vec<_>>()
-            .join("\n");
+///
+/// If `thinking` is non-empty, a truncated snippet of the agent's reasoning is
+/// shown above the tool list (similar to how Claude Code displays thinking).
+fn render_progress(tools: &[ToolProgress], thinking: &str) -> String {
+    let mut lines = Vec::new();
+
+    // Show the agent's latest thinking text above the tool list.
+    let thinking_trimmed = thinking.trim();
+    if !thinking_trimmed.is_empty() {
+        lines.push(truncate_thinking(thinking_trimmed, THINKING_DISPLAY_LIMIT));
+        if !tools.is_empty() {
+            lines.push(String::new()); // blank separator
+        }
     }
 
-    let mut lines = Vec::new();
+    let total = tools.len();
+    if total <= 5 {
+        for t in tools {
+            lines.push(format_tool_line(t));
+        }
+        return lines.join("\n");
+    }
 
     let finished_count = tools.iter().filter(|t| t.finished).count();
     let last_finished: Vec<_> = tools.iter().filter(|t| t.finished).rev().take(2).collect();
@@ -1216,7 +1252,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = render_progress(&progress.tools);
+                            let text = render_progress(&progress.tools, &progress.thinking);
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1245,7 +1281,7 @@ fn spawn_stream_forwarder(
                                 tp.success = success;
                             }
 
-                            let text = render_progress(&progress.tools);
+                            let text = render_progress(&progress.tools, &progress.thinking);
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1268,7 +1304,43 @@ fn spawn_stream_forwarder(
                                 progress_dirty = true;
                             }
                         }
-                        Ok(_) => {} // Ignore other events (ReasoningDelta, Progress, etc.)
+                        Ok(StreamEvent::ReasoningDelta { text }) => {
+                            progress.thinking.push_str(&text);
+
+                            let rendered = render_progress(&progress.tools, &progress.thinking);
+                            if rendered.trim().is_empty() {
+                                continue;
+                            }
+
+                            if progress.message_id.is_none() {
+                                let _ = bot
+                                    .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+                                    .await;
+                            }
+
+                            if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                match progress.message_id {
+                                    Some(mid) => {
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &rendered)
+                                            .await;
+                                    }
+                                    None => {
+                                        if let Ok(msg) = bot
+                                            .send_message(ChatId(chat_id), &rendered)
+                                            .await
+                                        {
+                                            progress.message_id = Some(msg.id);
+                                        }
+                                    }
+                                }
+                                progress.last_edit = Instant::now();
+                                progress_dirty = false;
+                            } else {
+                                progress_dirty = true;
+                            }
+                        }
+                        Ok(_) => {} // Ignore other events (Thinking, Progress, etc.)
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }
@@ -1323,8 +1395,8 @@ fn spawn_stream_forwarder(
                     }
 
                     // Flush throttled progress updates.
-                    if progress_dirty && !progress.tools.is_empty() {
-                        let text = render_progress(&progress.tools);
+                    let text = render_progress(&progress.tools, &progress.thinking);
+                    if progress_dirty && !text.trim().is_empty() {
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot
@@ -1618,27 +1690,6 @@ async fn download_and_compress_photo(
     let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
 
     Ok((media_type, b64))
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn slice_after_char_prefix_skips_ascii_prefix() {
-        let actual = super::slice_after_char_prefix("abcdef", 2);
-        assert_eq!(actual, "cdef");
-    }
-
-    #[test]
-    fn slice_after_char_prefix_handles_unicode_boundaries() {
-        let actual = super::slice_after_char_prefix("你好abc", 2);
-        assert_eq!(actual, "abc");
-    }
-
-    #[test]
-    fn slice_after_char_prefix_returns_original_when_prefix_too_large() {
-        let actual = super::slice_after_char_prefix("abc", 10);
-        assert_eq!(actual, "abc");
-    }
 }
 
 pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }

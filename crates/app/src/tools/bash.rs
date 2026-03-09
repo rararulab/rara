@@ -18,7 +18,7 @@
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Maximum output size in bytes (50 KB).
@@ -71,7 +71,7 @@ impl AgentTool for BashTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
@@ -112,14 +112,16 @@ impl AgentTool for BashTool {
                     "stdout": truncated_output,
                     "timed_out": false,
                     "truncated": was_truncated,
-                }))
+                })
+                .into())
             }
             Ok(Err(e)) => Ok(json!({
                 "exit_code": -1,
                 "stdout": format!("failed to execute command: {e}"),
                 "timed_out": false,
                 "truncated": false,
-            })),
+            })
+            .into()),
             Err(_) => {
                 // Timeout — the child process was dropped which should kill it.
                 Ok(json!({
@@ -127,7 +129,8 @@ impl AgentTool for BashTool {
                     "stdout": format!("command timed out after {timeout_secs}s"),
                     "timed_out": true,
                     "truncated": false,
-                }))
+                })
+                .into())
             }
         }
     }

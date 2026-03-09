@@ -23,7 +23,7 @@ use rara_kernel::{
     io::InboundMessage,
     memory::TapeService,
     session::SessionKey,
-    tool::{AgentTool, ToolContext},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
@@ -84,7 +84,7 @@ impl AgentTool for DispatchRaraTool {
         })
     }
 
-    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<Value> {
+    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let session_id_str = params
             .get("session_id")
             .and_then(|v| v.as_str())
@@ -140,6 +140,7 @@ impl AgentTool for DispatchRaraTool {
             "target_session": session_id_str,
             "instruction": instruction,
             "message": format!("Instruction dispatched to Rara in session '{session_id_str}'.")
-        }))
+        })
+        .into())
     }
 }

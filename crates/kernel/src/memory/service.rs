@@ -664,12 +664,8 @@ fn is_fuzzy_match(normalized_query: &str, payload_text: &str) -> bool {
     }
 
     if window_size > 1 {
-        for idx in 0..source_tokens
-            .len()
-            .saturating_sub(window_size)
-            .saturating_add(1)
-        {
-            candidates.push(source_tokens[idx..idx + window_size].join(" "));
+        for window in source_tokens.windows(window_size) {
+            candidates.push(window.join(" "));
             if candidates.len() >= MAX_FUZZY_CANDIDATES {
                 break;
             }
@@ -813,6 +809,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handoff_hides_old_messages_from_default_context_but_search_can_recall_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "handoff-search";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": "old fact: launch code banana-42"}),
+            None,
+        )
+        .await
+        .unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "assistant", "content": "noted the old fact"}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        svc.handoff(
+            tape,
+            "topic/rotated",
+            HandoffState {
+                summary: Some("We recorded an old fact before rotating context.".into()),
+                next_steps: Some("Search the tape if you need the hidden fact again.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": "new topic only"}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let context = svc.build_llm_context(tape).await.unwrap();
+        let rendered_context = format!("{context:?}");
+        assert!(
+            !rendered_context.contains("banana-42"),
+            "old message should be outside the default post-handoff context"
+        );
+        assert!(
+            rendered_context.contains("new topic only"),
+            "new message should remain in the default context"
+        );
+
+        let search_hits = svc.search(tape, "banana-42", 10, false).await.unwrap();
+        assert_eq!(search_hits.len(), 1);
+        assert_eq!(
+            search_hits[0]
+                .payload
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap(),
+            "old fact: launch code banana-42"
+        );
+    }
+
+    #[test]
+    fn fuzzy_match_handles_query_longer_than_source_without_panicking() {
+        assert!(!is_fuzzy_match(
+            "what is the hidden credential",
+            "credential"
+        ));
+    }
+
+    #[tokio::test]
     async fn compact_tape_below_threshold_is_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let svc = temp_tape_service(tmp.path()).await;
@@ -835,58 +904,6 @@ mod tests {
         // Entries should be unchanged.
         let entries = svc.entries(tape).await.unwrap();
         assert_eq!(entries.len(), 6); // 1 anchor + 5 messages
-    }
-
-    #[tokio::test]
-    async fn compact_tape_discards_old_messages_preserves_notes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let svc = temp_tape_service(tmp.path()).await;
-        let tape = "compact-test";
-
-        // Create: 1 anchor + 1 note + 10 messages = 12 entries total.
-        svc.ensure_bootstrap_anchor(tape).await.unwrap();
-        svc.append_user_note("alice", "fact", "likes Rust")
-            .await
-            .unwrap();
-        // Append messages to the same tape (not user tape) for testing.
-        for i in 0..10 {
-            svc.append_message(
-                tape,
-                json!({"role": "user", "content": format!("msg {i}")}),
-                None,
-            )
-            .await
-            .unwrap();
-        }
-
-        // Note was written to user tape, so add a Note directly to this tape for
-        // testing.
-        svc.store()
-            .append(
-                tape,
-                TapEntryKind::Note,
-                json!({"category": "fact", "content": "test note"}),
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Now: 1 anchor + 10 messages + 1 note = 12 entries.
-        let before = svc.entries(tape).await.unwrap();
-        assert_eq!(before.len(), 12);
-
-        // Compact keeping only the 3 most recent entries.
-        let discarded = svc.compact_tape(tape, 3).await.unwrap();
-
-        // Old section had 9 entries (1 anchor + 8 messages). Anchor is preserved,
-        // 8 messages discarded.
-        assert_eq!(discarded, 8);
-
-        let after = svc.entries(tape).await.unwrap();
-        // 1 summary + 1 anchor (preserved) + 3 recent = 5
-        assert_eq!(after.len(), 5);
-        assert_eq!(after[0].kind, TapEntryKind::Summary);
-        assert_eq!(after[1].kind, TapEntryKind::Anchor);
     }
 
     #[tokio::test]

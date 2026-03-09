@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use rara_mcp::manager::{
     mgr::McpManager,
     registry::{McpServerConfig, TransportType},
@@ -86,7 +86,7 @@ impl AgentTool for InstallMcpServerTool {
         &self,
         params: Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let server_name = params
             .get("server_name")
             .and_then(|v| v.as_str())
@@ -146,7 +146,7 @@ impl AgentTool for InstallMcpServerTool {
             "status": "installed",
             "server_name": server_name,
             "message": format!("MCP server '{server_name}' installed and started. Its tools are now available."),
-        }))
+        }).into())
     }
 }
 
@@ -184,7 +184,7 @@ impl AgentTool for ListMcpServersTool {
         &self,
         _params: Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let registry = self.manager.registry().await;
         let all_names = registry
             .list()
@@ -240,7 +240,8 @@ impl AgentTool for ListMcpServersTool {
             "servers": servers,
             "total": total,
             "connected": connected_count,
-        }))
+        })
+        .into())
     }
 }
 
@@ -282,7 +283,7 @@ impl AgentTool for RemoveMcpServerTool {
         &self,
         params: Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let server_name = params
             .get("server_name")
             .and_then(|v| v.as_str())
@@ -299,13 +300,15 @@ impl AgentTool for RemoveMcpServerTool {
                 "status": "removed",
                 "server_name": server_name,
                 "message": format!("MCP server '{server_name}' removed and stopped."),
-            }))
+            })
+            .into())
         } else {
             Ok(json!({
                 "status": "not_found",
                 "server_name": server_name,
                 "message": format!("MCP server '{server_name}' was not found in the registry."),
-            }))
+            })
+            .into())
         }
     }
 }

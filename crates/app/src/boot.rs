@@ -436,6 +436,11 @@ impl PlatformIdentityResolver {
     fn new(users: &[UserConfig]) -> Self {
         let mut mappings = HashMap::new();
         for u in users {
+            mappings.insert(("cli".to_string(), u.name.clone()), u.name.clone());
+            mappings.insert(
+                ("cli".to_string(), format!("cli:{}", u.name)),
+                u.name.clone(),
+            );
             for p in &u.platforms {
                 mappings.insert(
                     (p.channel_type.to_lowercase(), p.user_id.clone()),

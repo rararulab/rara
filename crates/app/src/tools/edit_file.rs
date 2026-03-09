@@ -19,7 +19,7 @@
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Layer 1 primitive: edit a file by exact string replacement.
@@ -67,7 +67,7 @@ impl AgentTool for EditFileTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -127,6 +127,7 @@ impl AgentTool for EditFileTool {
         Ok(json!({
             "replacements": if replace_all { count } else { 1 },
             "file_path": file_path.display().to_string(),
-        }))
+        })
+        .into())
     }
 }

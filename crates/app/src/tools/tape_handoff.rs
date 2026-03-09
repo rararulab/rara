@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use rara_kernel::{
     memory::{HandoffState, TapeService},
-    tool::AgentTool,
+    tool::{AgentTool, ToolOutput},
 };
 use serde_json::json;
 
@@ -65,7 +65,7 @@ impl AgentTool for TapeHandoffTool {
         &self,
         params: serde_json::Value,
         context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let tape_name = context
             .session_key
             .as_ref()
@@ -101,6 +101,6 @@ impl AgentTool for TapeHandoffTool {
             .await
             .map_err(|e| anyhow::anyhow!("failed to create handoff: {e}"))?;
 
-        Ok(json!({ "output": format!("handoff created: {anchor_name}") }))
+        Ok(json!({ "output": format!("handoff created: {anchor_name}") }).into())
     }
 }

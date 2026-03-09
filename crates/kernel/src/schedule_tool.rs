@@ -29,7 +29,7 @@ use tracing::debug;
 use crate::{
     event::{KernelEventEnvelope, Syscall},
     schedule::{JobId, Trigger},
-    tool::{AgentTool, ToolContext},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 
 // -- shared helper ------------------------------------------------------------
@@ -38,7 +38,7 @@ async fn register_job(
     trigger: Trigger,
     message: String,
     context: &ToolContext,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<ToolOutput> {
     let next_at = trigger.next_at();
 
     let event_queue = context
@@ -69,7 +69,8 @@ async fn register_job(
     Ok(serde_json::json!({
         "job_id": job_id.to_string(),
         "next_run": next_at.to_string(),
-    }))
+    })
+    .into())
 }
 
 // ============================================================================
@@ -113,7 +114,7 @@ impl AgentTool for ScheduleOnceTool {
         &self,
         params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let p: ScheduleOnceParams =
             serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
@@ -169,7 +170,7 @@ impl AgentTool for ScheduleIntervalTool {
         &self,
         params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let p: ScheduleIntervalParams =
             serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
@@ -235,7 +236,7 @@ impl AgentTool for ScheduleCronTool {
         &self,
         params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let p: ScheduleCronParams =
             serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
@@ -309,7 +310,7 @@ impl AgentTool for ScheduleRemoveTool {
         &self,
         params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let p: ScheduleRemoveParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid schedule-remove params: {e}"))?;
 
@@ -337,7 +338,7 @@ impl AgentTool for ScheduleRemoveTool {
             .map_err(|_| anyhow::anyhow!("kernel dropped reply channel"))?
             .map_err(|e| anyhow::anyhow!("remove job failed: {e}"))?;
 
-        Ok(serde_json::json!({ "ok": true }))
+        Ok(serde_json::json!({ "ok": true }).into())
     }
 }
 
@@ -365,7 +366,7 @@ impl AgentTool for ScheduleListTool {
         &self,
         _params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let event_queue = context
             .event_queue
             .as_ref()
@@ -400,6 +401,7 @@ impl AgentTool for ScheduleListTool {
         Ok(serde_json::json!({
             "jobs": list,
             "count": list.len(),
-        }))
+        })
+        .into())
     }
 }

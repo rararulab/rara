@@ -21,7 +21,10 @@
 //! observations into arbitrary user tapes during heartbeat analysis.
 
 use async_trait::async_trait;
-use rara_kernel::{memory::TapeService, tool::AgentTool};
+use rara_kernel::{
+    memory::TapeService,
+    tool::{AgentTool, ToolOutput},
+};
 use serde_json::json;
 
 use super::user_note::NOTE_CATEGORIES;
@@ -81,7 +84,7 @@ impl AgentTool for MitaWriteUserNoteTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let user_id = params
             .get("user_id")
             .and_then(|v| v.as_str())
@@ -122,6 +125,7 @@ impl AgentTool for MitaWriteUserNoteTool {
             "user_id": user_id,
             "category": category,
             "message": format!("Note recorded for user '{user_id}' under category '{category}'.")
-        }))
+        })
+        .into())
     }
 }

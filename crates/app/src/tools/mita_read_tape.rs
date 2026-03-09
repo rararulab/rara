@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{AgentTool, ToolContext},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::{Value, json};
 
@@ -60,7 +60,7 @@ impl AgentTool for ReadTapeTool {
         })
     }
 
-    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<Value> {
+    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let session_id = params
             .get("session_id")
             .and_then(|v| v.as_str())
@@ -103,6 +103,7 @@ impl AgentTool for ReadTapeTool {
             "session_id": session_id,
             "entry_count": formatted.len(),
             "entries": formatted,
-        }))
+        })
+        .into())
     }
 }

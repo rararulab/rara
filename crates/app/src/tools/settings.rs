@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_domain_shared::settings::SettingsProvider;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Sensitive-key substrings. If a settings key contains any of these
@@ -89,7 +89,7 @@ impl AgentTool for SettingsTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let action = params
             .get("action")
             .and_then(|v| v.as_str())
@@ -105,7 +105,7 @@ impl AgentTool for SettingsTool {
                         (k, serde_json::Value::String(display))
                     })
                     .collect();
-                Ok(json!({ "settings": masked }))
+                Ok(json!({ "settings": masked }).into())
             }
             "get" => {
                 let key = params
@@ -115,9 +115,9 @@ impl AgentTool for SettingsTool {
                 match self.settings.get(key).await {
                     Some(value) => {
                         let display = maybe_mask(key, &value);
-                        Ok(json!({ "key": key, "value": display }))
+                        Ok(json!({ "key": key, "value": display }).into())
                     }
-                    None => Ok(json!({ "key": key, "value": null })),
+                    None => Ok(json!({ "key": key, "value": null }).into()),
                 }
             }
             "set" => {
@@ -130,9 +130,9 @@ impl AgentTool for SettingsTool {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("missing required parameter: value"))?;
                 self.settings.set(key, value).await?;
-                Ok(json!({ "key": key, "updated": true }))
+                Ok(json!({ "key": key, "updated": true }).into())
             }
-            other => Ok(json!({ "error": format!("unknown action: {other}") })),
+            other => Ok(json!({ "error": format!("unknown action: {other}") }).into()),
         }
     }
 }

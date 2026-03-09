@@ -296,11 +296,11 @@ impl crate::tool::AgentTool for TapeTool {
         &self,
         params: serde_json::Value,
         _context: &crate::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<crate::tool::ToolOutput> {
         let action: TapeParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid tape tool params: {e}"))?;
 
-        match action {
+        let json = match action {
             TapeParams::Info => self.exec_info().await,
             TapeParams::Search { query, limit } => self.exec_search(&query, limit).await,
             TapeParams::Anchor {
@@ -320,6 +320,8 @@ impl crate::tool::AgentTool for TapeTool {
             TapeParams::BetweenAnchors { start, end, kinds } => {
                 self.exec_between_anchors(&start, &end, kinds).await
             }
-        }
+        }?;
+
+        Ok(json.into())
     }
 }

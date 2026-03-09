@@ -15,7 +15,7 @@
 //! Layer 2 service tools for managing agent skills.
 
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use rara_skills::registry::InMemoryRegistry;
 use serde_json::{Value, json};
 
@@ -78,7 +78,7 @@ impl AgentTool for ListSkillsTool {
         &self,
         _params: Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let skills: Vec<Value> = self
             .registry
             .list_all()
@@ -97,7 +97,7 @@ impl AgentTool for ListSkillsTool {
             })
             .collect();
         let count = skills.len();
-        Ok(json!({ "skills": skills, "count": count }))
+        Ok(json!({ "skills": skills, "count": count }).into())
     }
 }
 
@@ -153,7 +153,7 @@ impl AgentTool for CreateSkillTool {
         &self,
         params: Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let name = params
             .get("name")
             .and_then(|v| v.as_str())
@@ -204,7 +204,8 @@ impl AgentTool for CreateSkillTool {
         Ok(json!({
             "created": name,
             "path": file_path.to_string_lossy(),
-        }))
+        })
+        .into())
     }
 }
 
@@ -246,7 +247,7 @@ impl AgentTool for DeleteSkillTool {
         &self,
         params: Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let name = params
             .get("name")
             .and_then(|v| v.as_str())
@@ -267,6 +268,6 @@ impl AgentTool for DeleteSkillTool {
         // Remove from registry.
         self.registry.remove(name);
 
-        Ok(json!({ "deleted": name }))
+        Ok(json!({ "deleted": name }).into())
     }
 }

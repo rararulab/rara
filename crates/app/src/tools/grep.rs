@@ -20,7 +20,7 @@
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Maximum output size in bytes (50 KB).
@@ -79,7 +79,7 @@ impl AgentTool for GrepTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -107,10 +107,12 @@ impl AgentTool for GrepTool {
         let result = try_ripgrep(pattern, path, glob_filter, context, ignore_case).await;
 
         match result {
-            Ok(output) => Ok(output),
+            Ok(output) => Ok(output.into()),
             Err(_) => {
                 // Fallback to grep -rn.
-                try_grep_fallback(pattern, path, ignore_case).await
+                try_grep_fallback(pattern, path, ignore_case)
+                    .await
+                    .map(Into::into)
             }
         }
     }

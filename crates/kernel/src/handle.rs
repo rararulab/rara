@@ -36,7 +36,9 @@ use crate::{
     kv::KvScope,
     queue::EventQueueRef,
     security::SecurityRef,
-    session::{SessionKey, SessionState, SessionStats, SessionTable, Signal, SystemStats},
+    session::{
+        SessionIndex, SessionKey, SessionState, SessionStats, SessionTable, Signal, SystemStats,
+    },
     tool::{ToolRegistry, ToolRegistryRef},
 };
 /// Public entry point for interacting with the kernel.
@@ -251,6 +253,9 @@ impl KernelHandle {
     /// Access the endpoint registry (WebAdapter needs this for connection
     /// tracking).
     pub fn endpoint_registry(&self) -> &EndpointRegistryRef { self.io.endpoint_registry() }
+
+    /// Access the session index for session and channel binding lookups.
+    pub fn session_index(&self) -> &Arc<dyn SessionIndex> { self.io.session_index() }
 
     /// Access the agent registry for looking up named manifests.
     pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }

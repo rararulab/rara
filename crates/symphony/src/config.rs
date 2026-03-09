@@ -222,11 +222,11 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            command:     default_command(),
-            backend:     default_backend(),
+            command:          default_command(),
+            backend:          default_backend(),
             core_config_file: default_core_config_file(),
-            extra_args:  Vec::new(),
-            run_timeout: None,
+            extra_args:       Vec::new(),
+            run_timeout:      None,
         }
     }
 }

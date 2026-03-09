@@ -61,7 +61,7 @@ use rara_kernel::{
     identity::UserId,
     io::{
         EgressError, Endpoint, EndpointAddress, EndpointRegistry, InteractionType,
-        PlatformOutbound, RawPlatformMessage, ReplyContext,
+        PlatformOutbound, RawPlatformMessage, ReplyContext, StreamEvent,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -138,6 +138,45 @@ pub struct SessionQuery {
 }
 
 fn default_user_id() -> String { "anonymous".to_owned() }
+
+fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
+    match event {
+        StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
+        StreamEvent::ReasoningDelta { text } => Some(WebEvent::ReasoningDelta { text }),
+        StreamEvent::ToolCallStart {
+            name,
+            id,
+            arguments,
+        } => Some(WebEvent::ToolCallStart {
+            name,
+            id,
+            arguments,
+        }),
+        StreamEvent::ToolCallEnd {
+            id,
+            result_preview,
+            success,
+            error,
+        } => Some(WebEvent::ToolCallEnd {
+            id,
+            result_preview,
+            success,
+            error,
+        }),
+        StreamEvent::Progress { stage } => Some(WebEvent::Progress { stage }),
+        StreamEvent::TurnMetrics {
+            duration_ms,
+            iterations,
+            tool_calls,
+            model,
+        } => Some(WebEvent::TurnMetrics {
+            duration_ms,
+            iterations,
+            tool_calls,
+            model,
+        }),
+    }
+}
 
 /// JSON body for POST /messages.
 #[derive(Debug, Deserialize)]
@@ -511,8 +550,6 @@ fn spawn_stream_forwarder(
     sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
     session_key: String,
 ) {
-    use rara_kernel::io::StreamEvent;
-
     tokio::spawn(async move {
         let hub = {
             let guard = stream_hub.read().await;
@@ -551,43 +588,8 @@ fn spawn_stream_forwarder(
             let session_key = session_key.clone();
             tokio::spawn(async move {
                 while let Ok(event) = rx.recv().await {
-                    let web_event = match event {
-                        StreamEvent::TextDelta { text: t } => WebEvent::TextDelta { text: t },
-                        StreamEvent::ReasoningDelta { text: t } => {
-                            WebEvent::ReasoningDelta { text: t }
-                        }
-                        StreamEvent::ToolCallStart {
-                            name,
-                            id,
-                            arguments,
-                        } => WebEvent::ToolCallStart {
-                            name,
-                            id,
-                            arguments,
-                        },
-                        StreamEvent::ToolCallEnd {
-                            id,
-                            result_preview,
-                            success,
-                            error,
-                        } => WebEvent::ToolCallEnd {
-                            id,
-                            result_preview,
-                            success,
-                            error,
-                        },
-                        StreamEvent::Progress { stage } => WebEvent::Progress { stage },
-                        StreamEvent::TurnMetrics {
-                            duration_ms,
-                            iterations,
-                            tool_calls,
-                            model,
-                        } => WebEvent::TurnMetrics {
-                            duration_ms,
-                            iterations,
-                            tool_calls,
-                            model,
-                        },
+                    let Some(web_event) = stream_event_to_web_event(event) else {
+                        continue;
                     };
                     WebAdapter::broadcast_event(&sessions, &session_key, &web_event);
                 }
@@ -832,5 +834,36 @@ impl ChannelAdapter for WebAdapter {
             },
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rara_kernel::io::StreamEvent;
+
+    use super::{WebEvent, stream_event_to_web_event};
+
+    #[test]
+    fn reasoning_deltas_are_forwarded_to_web_clients() {
+        let event = StreamEvent::ReasoningDelta {
+            text: "internal".to_owned(),
+        };
+
+        assert!(matches!(
+            stream_event_to_web_event(event),
+            Some(WebEvent::ReasoningDelta { text }) if text == "internal"
+        ));
+    }
+
+    #[test]
+    fn text_deltas_still_reach_web_clients() {
+        let event = StreamEvent::TextDelta {
+            text: "hello".to_owned(),
+        };
+
+        assert!(matches!(
+            stream_event_to_web_event(event),
+            Some(WebEvent::TextDelta { text }) if text == "hello"
+        ));
     }
 }

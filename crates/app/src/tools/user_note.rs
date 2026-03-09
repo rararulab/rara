@@ -19,7 +19,10 @@
 //! should be recalled across future sessions with the same user.
 
 use async_trait::async_trait;
-use rara_kernel::{memory::TapeService, tool::AgentTool};
+use rara_kernel::{
+    memory::TapeService,
+    tool::{AgentTool, ToolOutput},
+};
 use serde_json::json;
 
 /// Single source of truth for valid user-note categories.
@@ -76,7 +79,7 @@ impl AgentTool for UserNoteTool {
         &self,
         params: serde_json::Value,
         context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let user_id = context
             .user_id
             .as_deref()
@@ -114,6 +117,7 @@ impl AgentTool for UserNoteTool {
             "user_id": user_id,
             "category": category,
             "message": format!("Note recorded for user '{user_id}' under category '{category}'.")
-        }))
+        })
+        .into())
     }
 }

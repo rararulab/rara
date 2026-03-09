@@ -22,7 +22,7 @@ pub struct ResourceAttachment {
     /// MIME type of the resource (e.g. `"image/jpeg"`).
     pub media_type: String,
     /// Raw bytes of the resource (already compressed if applicable).
-    pub data: Vec<u8>,
+    pub data:       Vec<u8>,
 }
 
 /// Output of a tool execution — a JSON result plus optional resource
@@ -31,7 +31,7 @@ pub struct ResourceAttachment {
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     /// JSON payload visible to the LLM as text.
-    pub json: serde_json::Value,
+    pub json:      serde_json::Value,
     /// Binary resources to persist and inject as multimodal content.
     pub resources: Vec<ResourceAttachment>,
 }

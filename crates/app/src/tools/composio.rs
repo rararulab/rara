@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_composio::{ComposioAuthProvider, ComposioClient};
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Layer 1 primitive: call Composio managed tools.
@@ -97,7 +97,7 @@ impl AgentTool for ComposioTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let action = params
             .get("action")
             .and_then(|v| v.as_str())
@@ -118,8 +118,11 @@ impl AgentTool for ComposioTool {
                 Ok(actions) => Ok(json!({
                     "total": actions.len(),
                     "actions": actions,
-                })),
-                Err(error) => Ok(json!({ "error": format!("failed to list actions: {error}") })),
+                })
+                .into()),
+                Err(error) => {
+                    Ok(json!({ "error": format!("failed to list actions: {error}") }).into())
+                }
             },
             "list_accounts" | "connected_accounts" => {
                 match self
@@ -131,10 +134,12 @@ impl AgentTool for ComposioTool {
                         "total": accounts.len(),
                         "entity_id": resolved_entity_id,
                         "accounts": accounts,
-                    })),
+                    })
+                    .into()),
                     Err(error) => Ok(json!({
                         "error": format!("failed to list connected accounts: {error}")
-                    })),
+                    })
+                    .into()),
                 }
             }
             "execute" => {
@@ -160,9 +165,9 @@ impl AgentTool for ComposioTool {
                     )
                     .await
                 {
-                    Ok(result) => Ok(json!({ "result": result })),
+                    Ok(result) => Ok(json!({ "result": result }).into()),
                     Err(error) => {
-                        Ok(json!({ "error": format!("action execution failed: {error}") }))
+                        Ok(json!({ "error": format!("action execution failed: {error}") }).into())
                     }
                 }
             }
@@ -171,7 +176,8 @@ impl AgentTool for ComposioTool {
                 if app.is_none() && auth_config_id.is_none() {
                     return Ok(json!({
                         "error": "missing required parameter: app or auth_config_id"
-                    }));
+                    })
+                    .into());
                 }
 
                 match self
@@ -182,17 +188,19 @@ impl AgentTool for ComposioTool {
                     Ok(link) => Ok(json!({
                         "redirect_url": link.redirect_url,
                         "connected_account_id": link.connected_account_id,
-                    })),
-                    Err(error) => {
-                        Ok(json!({ "error": format!("failed to get connection URL: {error}") }))
-                    }
+                    })
+                    .into()),
+                    Err(error) => Ok(
+                        json!({ "error": format!("failed to get connection URL: {error}") }).into(),
+                    ),
                 }
             }
             other => Ok(json!({
                 "error": format!(
                     "unknown action '{other}'. Use list, list_accounts, execute, or connect."
                 ),
-            })),
+            })
+            .into()),
         }
     }
 }

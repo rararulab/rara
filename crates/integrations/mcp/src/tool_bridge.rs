@@ -21,7 +21,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use tracing::instrument;
 
 use crate::manager::mgr::McpManager;
@@ -91,7 +91,7 @@ impl AgentTool for McpToolBridge {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let result = self
             .manager
             .call_tool(&self.server_name, &self.tool_name, Some(params))
@@ -102,6 +102,6 @@ impl AgentTool for McpToolBridge {
             ))?;
 
         // Convert CallToolResult to a JSON value.
-        Ok(serde_json::to_value(&result)?)
+        Ok(serde_json::to_value(&result)?.into())
     }
 }

@@ -15,7 +15,10 @@
 //! Tool for querying tape metadata (entry count, anchors, token usage).
 
 use async_trait::async_trait;
-use rara_kernel::{memory::TapeService, tool::AgentTool};
+use rara_kernel::{
+    memory::TapeService,
+    tool::{AgentTool, ToolOutput},
+};
 use serde_json::json;
 
 /// Returns summary information about the current session tape.
@@ -48,7 +51,7 @@ impl AgentTool for TapeInfoTool {
         &self,
         _params: serde_json::Value,
         context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let tape_name = context
             .session_key
             .as_ref()
@@ -78,6 +81,6 @@ impl AgentTool for TapeInfoTool {
             usage_display,
         );
 
-        Ok(json!({ "output": output }))
+        Ok(json!({ "output": output }).into())
     }
 }

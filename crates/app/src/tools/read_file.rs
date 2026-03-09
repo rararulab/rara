@@ -19,7 +19,7 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Maximum total output size in bytes (50 KB).
@@ -76,7 +76,7 @@ impl AgentTool for ReadFileTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -110,7 +110,8 @@ impl AgentTool for ReadFileTool {
                 "content": "[binary file detected]",
                 "total_lines": 0,
                 "truncated": false,
-            }));
+            })
+            .into());
         }
 
         let content = String::from_utf8_lossy(&raw_bytes);
@@ -151,6 +152,7 @@ impl AgentTool for ReadFileTool {
             "content": output,
             "total_lines": total_lines,
             "truncated": truncated,
-        }))
+        })
+        .into())
     }
 }

@@ -38,10 +38,28 @@ use crate::{
 
 /// Estimated chars-per-token ratio for context size estimation.
 const CHARS_PER_TOKEN: usize = 4;
-/// Context usage threshold (fraction) at which a SHOULD-handoff hint is injected.
+/// Context usage threshold (fraction) at which a SHOULD-handoff hint is
+/// injected.
 const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
 /// Context usage threshold (fraction) at which a MUST-handoff hint is injected.
 const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
+/// Large tool outputs that should trigger an explicit anchor reminder.
+const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
+/// Multiple medium tool outputs in one phase should also trigger a reminder.
+const MEDIUM_TOOL_RESULT_CHARS: usize = 3_000;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ContextPressure {
+    Normal,
+    Warning {
+        estimated_tokens: usize,
+        usage_ratio:      f64,
+    },
+    Critical {
+        estimated_tokens: usize,
+        usage_ratio:      f64,
+    },
+}
 
 /// Classification of an agent's functional role.
 ///
@@ -461,6 +479,134 @@ fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
         .collect()
 }
 
+fn classify_context_pressure(
+    messages: &[llm::Message],
+    context_window_tokens: usize,
+) -> ContextPressure {
+    if context_window_tokens == 0 {
+        return ContextPressure::Normal;
+    }
+
+    let estimated_chars: usize = messages.iter().map(|m| m.estimated_char_len()).sum();
+    let estimated_tokens = estimated_chars / CHARS_PER_TOKEN;
+    let usage_ratio = estimated_tokens as f64 / context_window_tokens as f64;
+
+    if usage_ratio >= CONTEXT_CRITICAL_THRESHOLD {
+        ContextPressure::Critical {
+            estimated_tokens,
+            usage_ratio,
+        }
+    } else if usage_ratio >= CONTEXT_WARN_THRESHOLD {
+        ContextPressure::Warning {
+            estimated_tokens,
+            usage_ratio,
+        }
+    } else {
+        ContextPressure::Normal
+    }
+}
+
+fn should_remind_tape_search(input_text: &str) -> bool {
+    let normalized = input_text.to_lowercase();
+    let exact_fact_cues = [
+        "exact",
+        "credential",
+        "secret",
+        "token",
+        "code",
+        "id",
+        "password",
+        "quote",
+    ];
+    let history_cues = [
+        "beginning of this conversation",
+        "from the beginning",
+        "earlier",
+        "previous",
+        "before",
+        "first",
+        "earlier in this conversation",
+        "from earlier",
+    ];
+
+    exact_fact_cues.iter().any(|cue| normalized.contains(cue))
+        && history_cues.iter().any(|cue| normalized.contains(cue))
+}
+
+fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::Value]) -> bool {
+    let mut medium_results = 0usize;
+
+    for (name, result) in tool_names.iter().zip(tool_results.iter()) {
+        let serialized_len = result.to_string().len();
+        let is_large_result = serialized_len >= LARGE_TOOL_RESULT_CHARS;
+        let is_medium_result = serialized_len >= MEDIUM_TOOL_RESULT_CHARS;
+        let is_high_context_tool = matches!(
+            name.as_str(),
+            "read-file" | "grep" | "bash" | "http-fetch" | "list-directory" | "find-files"
+        );
+
+        if is_large_result && is_high_context_tool {
+            return true;
+        }
+
+        if is_medium_result && is_high_context_tool {
+            medium_results += 1;
+        }
+    }
+
+    medium_results >= 2
+}
+
+fn build_runtime_contract_prompt(
+    base_prompt: &str,
+    has_kernel_tool: bool,
+    max_children: Option<usize>,
+) -> String {
+    let mut prompt = format!(
+        "{base_prompt}\n\n<context_contract>\nYou have access to the `tape` tool — this is your \
+         memory system.\n\n## How tape works:\n- `tape` with `action: \"anchor\"` creates a \
+         handoff checkpoint and trims your default context window\n- Older entries are not \
+         deleted after an anchor; they remain searchable with `tape` + `action: \"search\"`\n- If \
+         you need details from before a handoff, search the tape instead of guessing\n- If the \
+         user asks about anything that may be before an anchor or outside your current window, \
+         you MUST call `tape` with `action: \"search\"` before answering\n- Never answer a \
+         pre-anchor factual question from memory alone; verify it from the tape first\n\n## When \
+         you MUST create an anchor:\n- Before your context becomes too long to complete the \
+         task\n- After receiving a very large tool result (>2000 chars of output)\n- When \
+         performing iterative tasks (screenshots, OCR, web scraping, file listing) that \
+         accumulate large outputs\n- When the system injects a [Context Usage Warning]\n\n## When \
+         you SHOULD create an anchor:\n- After completing a logical phase of work (discovery → \
+         implementation → verification)\n- When switching between unrelated subtasks\n- After \
+         processing multiple tool results in sequence\n\n## How to use the tape system \
+         effectively:\n1. Always provide a detailed `summary` of what happened so far\n2. Always \
+         provide `next_steps` with concrete actionable items\n3. After an anchor, use `tape` with \
+         `action: \"search\"` or `action: \"entries\"` to recall older details when needed\n4. A \
+         good handoff preserves your progress — a missing summary means lost context\n5. For \
+         exact tokens, IDs, codes, names, or quoted details from pre-anchor context, search first \
+         and only then answer\n\nFailing to use the tape system when needed will cause context \
+         window overflow and task failure.\n</context_contract>"
+    );
+
+    let can_delegate = has_kernel_tool && max_children != Some(0);
+    if can_delegate {
+        prompt.push_str(
+            "\n\n<delegation_contract>\nYou have access to the `kernel` tool and can delegate \
+             execution to child agents.\n\n## When you MUST delegate:\n- The task has 2+ \
+             independent subtasks that can run separately\n- The task requires broad discovery \
+             plus implementation plus verification across multiple files\n- The task is likely to \
+             require long tool-heavy execution that would otherwise bloat your context\n\n## How \
+             to delegate:\n- Use `kernel` with `action: \"spawn\"`, `agent: \"worker\"` for one \
+             focused execution task\n- Use `kernel` with `action: \"spawn_parallel\"` and \
+             multiple `worker` tasks for independent subtasks\n- Give each worker a narrow, \
+             explicit task and keep the final synthesis in the parent agent\n\nDo not keep large \
+             exploratory or implementation loops in your own context when a worker can do them \
+             more cheaply.\n</delegation_contract>",
+        );
+    }
+
+    prompt
+}
+
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
@@ -532,34 +678,13 @@ pub(crate) async fn run_agent_loop(
     };
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
+    let has_kernel_tool = tools.get("kernel").is_some();
     let effective_prompt = match &manifest.soul_prompt {
         Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
         None => manifest.system_prompt.clone(),
     };
-    let effective_prompt = format!(
-        "{effective_prompt}\n\n\
-         <context_contract>\n\
-         You have access to `tape-handoff` — a tool that creates a checkpoint and truncates conversation history.\n\
-         \n\
-         ## When you MUST use tape-handoff:\n\
-         - Before your context becomes too long to complete the task\n\
-         - After receiving a very large tool result (>2000 chars of output)\n\
-         - When performing iterative tasks (screenshots, OCR, web scraping, file listing) that accumulate large outputs\n\
-         - When the system injects a [Context Usage Warning]\n\
-         \n\
-         ## When you SHOULD use tape-handoff:\n\
-         - After completing a logical phase of work (discovery → implementation → verification)\n\
-         - When switching between unrelated subtasks\n\
-         - After processing multiple tool results in sequence\n\
-         \n\
-         ## How to use it effectively:\n\
-         1. Always provide a detailed `summary` of what happened so far\n\
-         2. Always provide `next_steps` with concrete actionable items\n\
-         3. A good handoff preserves your progress — a missing summary means lost context\n\
-         \n\
-         Failing to handoff when needed will cause context window overflow and task failure.\n\
-         </context_contract>"
-    );
+    let effective_prompt =
+        build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
@@ -582,6 +707,13 @@ pub(crate) async fn run_agent_loop(
             msgs.extend(hist);
         }
         msgs.push(llm::Message::user(user_text));
+        if should_remind_tape_search(&input_text) {
+            msgs.push(llm::Message::user(
+                "[Recall Verification] \
+                 用户在问一个可能来自更早上下文的精确事实。如果当前上下文里没有明确证据，\
+                 你必须先用 tape.search 验证，再回答。",
+            ));
+        }
         msgs
     };
 
@@ -610,6 +742,7 @@ pub(crate) async fn run_agent_loop(
 
     for iteration in 0..max_iterations {
         messages = sanitize_messages_for_llm(&messages);
+
         let iter_span = info_span!(
             "llm_iteration",
             iter = iteration,
@@ -762,75 +895,8 @@ pub(crate) async fn run_agent_loop(
         };
 
         if let Err(ref e) = driver_result {
-            // Auto-handoff on context window overflow — truncate and retry.
             if !context_window_recovery_used && matches!(e, KernelError::ContextWindow) {
-                warn!(
-                    iteration,
-                    model = model.as_str(),
-                    "context window exceeded, performing auto-handoff and retry"
-                );
                 context_window_recovery_used = true;
-
-                // Build a meaningful summary from the conversation so far.
-                let auto_summary = {
-                    let mut parts = Vec::new();
-
-                    // 1. User's original request.
-                    parts.push(format!("User request: {}", truncate_preview(&input_text, 300)));
-
-                    // 2. Tool calls made so far.
-                    if tool_calls_made > 0 {
-                        let tool_names: Vec<&str> = iteration_traces
-                            .iter()
-                            .flat_map(|t| t.tool_calls.iter().map(|tc| tc.name.as_str()))
-                            .collect();
-                        parts.push(format!(
-                            "Tools used ({tool_calls_made} calls): {}",
-                            tool_names.join(", ")
-                        ));
-                    }
-
-                    // 3. Last assistant text (if any).
-                    if !last_accumulated_text.is_empty() {
-                        parts.push(format!(
-                            "Last assistant response: {}",
-                            truncate_preview(&last_accumulated_text, 500)
-                        ));
-                    }
-
-                    parts.push("(Auto-handoff: context window exceeded)".to_owned());
-                    parts.join("\n")
-                };
-
-                // Create an automatic handoff anchor to truncate context.
-                let state = crate::memory::HandoffState {
-                    phase:      None,
-                    summary:    Some(auto_summary),
-                    next_steps: Some(format!(
-                        "Continue working on the user's request: {}",
-                        truncate_preview(&input_text, 200)
-                    )),
-                    source_ids: vec![],
-                    owner:      Some("system".to_owned()),
-                    extra:      None,
-                };
-                if let Err(he) = tape.handoff(tape_name, "auto-compact", state).await {
-                    warn!(error = %he, "auto-handoff failed, cannot recover from context window error");
-                    return Err(KernelError::AgentExecution {
-                        message: format!("Context window exceeded and auto-handoff failed: {he}"),
-                    });
-                }
-
-                // Rebuild messages from the truncated context.
-                let rebuilt = tape.build_llm_context(tape_name).await.map_err(|e| {
-                    KernelError::AgentExecution {
-                        message: format!("failed to rebuild context after handoff: {e}"),
-                    }
-                })?;
-                messages = rebuilt;
-                // Re-add the user's current message that triggered this turn.
-                messages.push(llm::Message::user(&input_text));
-                continue;
             }
 
             if !llm_error_recovery_used && crate::error::is_retryable_provider_error(e) {
@@ -1030,7 +1096,12 @@ pub(crate) async fn run_agent_loop(
                             );
                             warn!("{err}");
                             let dur = tool_start.elapsed().as_millis() as u64;
-                            return (false, serde_json::json!({ "error": &err }), Some(err), dur);
+                            return (
+                                false,
+                                crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+                                Some(err),
+                                dur,
+                            );
                         }
                     }
 
@@ -1046,7 +1117,9 @@ pub(crate) async fn run_agent_loop(
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 (
                                     false,
-                                    serde_json::json!({ "error": e.to_string() }),
+                                    crate::tool::ToolOutput::from(
+                                        serde_json::json!({ "error": e.to_string() }),
+                                    ),
                                     Some(e.to_string()),
                                     dur,
                                 )
@@ -1056,7 +1129,12 @@ pub(crate) async fn run_agent_loop(
                         tool_span.record("success", false);
                         let err = format!("tool not found: {name}");
                         let dur = tool_start.elapsed().as_millis() as u64;
-                        (false, serde_json::json!({ "error": &err }), Some(err), dur)
+                        (
+                            false,
+                            crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+                            Some(err),
+                            dur,
+                        )
                     }
                 }
             })
@@ -1068,15 +1146,27 @@ pub(crate) async fn run_agent_loop(
         if !results.is_empty() {
             let results_json: Vec<serde_json::Value> = results
                 .iter()
-                .map(|(_success, result, _err, _dur)| result.clone())
+                .map(|(_success, result, _err, _dur)| result.json.clone())
+                .collect();
+            let tool_names: Vec<String> = valid_tool_calls
+                .iter()
+                .map(|(_id, name, _args)| name.clone())
                 .collect();
             let _ = tape
                 .append_tool_result(
                     tape_name,
-                    serde_json::json!({ "results": results_json }),
+                    serde_json::json!({ "results": results_json.clone() }),
                     None,
                 )
                 .await;
+            if should_remind_tape_anchor(&tool_names, &results_json) {
+                messages.push(llm::Message::user(
+                    "[Large Tool Output] \
+                     你刚刚处理了会明显膨胀上下文的大工具结果。在继续回答前，优先使用 tape 的 \
+                     action:\"anchor\" 创建 handoff，写出 summary 和 \
+                     next_steps；后面需要旧细节时再用 tape.search。",
+                ));
+            }
         }
 
         // Build tool call traces from results
@@ -1086,7 +1176,7 @@ pub(crate) async fn run_agent_loop(
         for ((id, name, args), (success, result, err, duration_ms)) in
             valid_tool_calls.iter().zip(results.iter())
         {
-            let result_str = result.to_string();
+            let result_str = result.json.to_string();
             let result_preview = truncate_preview(&result_str, RESULT_PREVIEW_MAX_BYTES);
 
             stream_handle.emit(StreamEvent::ToolCallEnd {
@@ -1121,34 +1211,6 @@ pub(crate) async fn run_agent_loop(
             messages.push(llm::Message::tool_result(id, result_str));
         }
 
-        // ── Runtime context guard ──────────────────────────────────────
-        // Estimate current context size and inject a warning if it's
-        // approaching the model's context window limit.
-        {
-            let estimated_chars: usize =
-                messages.iter().map(|m| m.estimated_char_len()).sum();
-            let estimated_tokens = estimated_chars / CHARS_PER_TOKEN;
-            let usage_ratio =
-                estimated_tokens as f64 / capabilities.context_window_tokens as f64;
-
-            if usage_ratio >= CONTEXT_CRITICAL_THRESHOLD {
-                let warning = format!(
-                    "[Context Usage Critical] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。\
-                     你 MUST 立即使用 tape-handoff 工具：提供详细 summary 和 next_steps，然后继续工作。\
-                     不 handoff 将导致下一轮调用失败。",
-                    usage_ratio * 100.0
-                );
-                messages.push(llm::Message::user(warning));
-            } else if usage_ratio >= CONTEXT_WARN_THRESHOLD {
-                let warning = format!(
-                    "[Context Usage Warning] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。\
-                     你 SHOULD 考虑使用 tape-handoff 工具保存进度并截断上下文。",
-                    usage_ratio * 100.0
-                );
-                messages.push(llm::Message::user(warning));
-            }
-        }
-
         // Collect iteration trace (with tool calls)
         {
             let first_token_ms =
@@ -1167,6 +1229,34 @@ pub(crate) async fn run_agent_loop(
                 },
                 tool_calls: tool_call_traces,
             });
+        }
+
+        // ── Runtime context guard ──────────────────────────────────────
+        match classify_context_pressure(&messages, capabilities.context_window_tokens) {
+            ContextPressure::Critical {
+                estimated_tokens,
+                usage_ratio,
+            } => {
+                let warning = format!(
+                    "[Context Usage Critical] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。你 \
+                     MUST 立即使用 tape 工具创建 anchor，写好 summary 和 \
+                     next_steps；如果后面需要旧信息，就用 tape.search 找回。",
+                    usage_ratio * 100.0
+                );
+                messages.push(llm::Message::user(warning));
+            }
+            ContextPressure::Warning {
+                estimated_tokens,
+                usage_ratio,
+            } => {
+                let warning = format!(
+                    "[Context Usage Warning] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。你 \
+                     SHOULD 考虑立即使用 tape 工具创建 anchor，写好 summary 和 next_steps。",
+                    usage_ratio * 100.0
+                );
+                messages.push(llm::Message::user(warning));
+            }
+            ContextPressure::Normal => {}
         }
 
         // Track consecutive silent (tool-only, no text) iterations and emit
@@ -1206,4 +1296,95 @@ pub(crate) async fn run_agent_loop(
         model: model.clone(),
         trace,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
+        should_remind_tape_anchor, should_remind_tape_search,
+    };
+    use crate::llm::Message;
+
+    #[test]
+    fn classify_context_pressure_returns_normal_below_threshold() {
+        let messages = vec![Message::user("short")];
+        assert_eq!(
+            classify_context_pressure(&messages, 1_000),
+            ContextPressure::Normal
+        );
+    }
+
+    #[test]
+    fn classify_context_pressure_returns_warning_at_warn_threshold() {
+        let messages = vec![Message::user("x".repeat(3_000))];
+        assert!(matches!(
+            classify_context_pressure(&messages, 1_000),
+            ContextPressure::Warning { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_context_pressure_returns_critical_at_critical_threshold() {
+        let messages = vec![Message::user("x".repeat(4_000))];
+        assert!(matches!(
+            classify_context_pressure(&messages, 1_000),
+            ContextPressure::Critical { .. }
+        ));
+    }
+
+    #[test]
+    fn recall_questions_trigger_tape_search_reminder() {
+        assert!(should_remind_tape_search(
+            "What is the exact credential from the beginning of this conversation?"
+        ));
+        assert!(!should_remind_tape_search(
+            "Summarize the current implementation in two bullets."
+        ));
+    }
+
+    #[test]
+    fn large_file_results_trigger_anchor_reminder() {
+        assert!(should_remind_tape_anchor(
+            &[String::from("read-file")],
+            &[json!({ "content": "x".repeat(8_000) })]
+        ));
+        assert!(!should_remind_tape_anchor(
+            &[String::from("read-file")],
+            &[json!({ "content": "short" })]
+        ));
+    }
+
+    #[test]
+    fn runtime_contract_prompt_includes_tape_and_delegation_rules() {
+        let prompt = build_runtime_contract_prompt("base", true, None);
+        assert!(prompt.contains("<context_contract>"));
+        assert!(prompt.contains("`tape`"));
+        assert!(prompt.contains("action: \"anchor\""));
+        assert!(prompt.contains("action: \"search\""));
+        assert!(prompt.contains("search the tape"));
+        assert!(prompt.contains("Never answer a pre-anchor factual question from memory alone"));
+        assert!(prompt.contains("<delegation_contract>"));
+        assert!(prompt.contains("action: \"spawn\""));
+        assert!(prompt.contains("action: \"spawn_parallel\""));
+        assert!(prompt.contains("agent: \"worker\""));
+    }
+
+    #[test]
+    fn runtime_contract_prompt_keeps_tape_rules_without_kernel() {
+        let prompt = build_runtime_contract_prompt("base", false, None);
+        assert!(prompt.contains("<context_contract>"));
+        assert!(!prompt.contains("<delegation_contract>"));
+        assert!(!prompt.contains("action: \"spawn_parallel\""));
+    }
+
+    #[test]
+    fn runtime_contract_prompt_skips_delegation_when_children_disabled() {
+        let prompt = build_runtime_contract_prompt("base", true, Some(0));
+        assert!(prompt.contains("<context_contract>"));
+        assert!(!prompt.contains("<delegation_contract>"));
+        assert!(!prompt.contains("action: \"spawn\""));
+    }
 }

@@ -25,7 +25,7 @@ use lettre::{
     transport::smtp::authentication::Credentials,
 };
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::tool::AgentTool;
+use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
@@ -76,7 +76,7 @@ impl AgentTool for SendEmailTool {
         &self,
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<ToolOutput> {
         let to = params
             .get("to")
             .and_then(|v| v.as_str())
@@ -97,17 +97,19 @@ impl AgentTool for SendEmailTool {
         // Read gmail settings at call time.
         let auto_send = self.settings.get(keys::GMAIL_AUTO_SEND_ENABLED).await;
         if auto_send.as_deref() != Some("true") {
-            return Ok(json!({ "error": "auto send is disabled" }));
+            return Ok(json!({ "error": "auto send is disabled" }).into());
         }
 
         let from_address = match self.settings.get(keys::GMAIL_ADDRESS).await {
             Some(addr) if !addr.is_empty() => addr,
-            _ => return Ok(json!({ "error": "gmail not configured: missing address" })),
+            _ => return Ok(json!({ "error": "gmail not configured: missing address" }).into()),
         };
 
         let app_password = match self.settings.get(keys::GMAIL_APP_PASSWORD).await {
             Some(pw) if !pw.is_empty() => pw,
-            _ => return Ok(json!({ "error": "gmail not configured: missing app_password" })),
+            _ => {
+                return Ok(json!({ "error": "gmail not configured: missing app_password" }).into());
+            }
         };
 
         // Parse addresses.
@@ -185,7 +187,8 @@ impl AgentTool for SendEmailTool {
                     "to": to,
                     "subject": subject,
                     "smtp_code": response.code().to_string(),
-                }))
+                })
+                .into())
             }
             Err(e) => {
                 tracing::error!(
@@ -196,7 +199,8 @@ impl AgentTool for SendEmailTool {
                 );
                 Ok(json!({
                     "error": format!("smtp error: {e}"),
-                }))
+                })
+                .into())
             }
         }
     }

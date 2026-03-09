@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use super::{categories, embedding::EmbeddingService, items};
-use crate::tool::{AgentTool, ToolContext};
+use crate::tool::{AgentTool, ToolContext, ToolOutput};
 
 /// LLM-callable tool for querying the Knowledge Layer.
 pub struct MemoryTool {
@@ -75,7 +75,7 @@ impl AgentTool for MemoryTool {
         })
     }
 
-    async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<Value> {
+    async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let action = params.get("action").and_then(Value::as_str).unwrap_or("");
 
         let username = context.user_id.as_deref().unwrap_or("default");
@@ -84,19 +84,23 @@ impl AgentTool for MemoryTool {
             "search" => {
                 let query = params.get("query").and_then(Value::as_str).unwrap_or("");
                 if query.is_empty() {
-                    return Ok(json!({"error": "query is required for search action"}));
+                    return Ok(json!({"error": "query is required for search action"}).into());
                 }
-                self.exec_search(username, query).await
+                self.exec_search(username, query).await.map(Into::into)
             }
-            "categories" => self.exec_categories(username).await,
+            "categories" => self.exec_categories(username).await.map(Into::into),
             "read_category" => {
                 let category = params.get("category").and_then(Value::as_str).unwrap_or("");
                 if category.is_empty() {
-                    return Ok(json!({"error": "category is required for read_category action"}));
+                    return Ok(
+                        json!({"error": "category is required for read_category action"}).into(),
+                    );
                 }
-                self.exec_read_category(username, category).await
+                self.exec_read_category(username, category)
+                    .await
+                    .map(Into::into)
             }
-            _ => Ok(json!({"error": format!("unknown action: {action}")})),
+            _ => Ok(json!({"error": format!("unknown action: {action}")}).into()),
         }
     }
 }

@@ -144,7 +144,9 @@ impl RalphAgent {
             let generated = tokio::fs::read_to_string(&generated_path)
                 .await
                 .context(IoSnafu)?;
-            let core = tokio::fs::read_to_string(&core_path).await.context(IoSnafu)?;
+            let core = tokio::fs::read_to_string(&core_path)
+                .await
+                .context(IoSnafu)?;
             let merged = merge_core_config(&generated, &core)?;
             tokio::fs::write(&generated_path, merged)
                 .await
@@ -212,12 +214,14 @@ Issue #{number}: {title}
             "\
 ## Required Delivery
 
-- use the system-installed linear CLI (`linear`) to comment on the Linear issue before or during implementation.
+- use the system-installed linear CLI (`linear`) to comment on the Linear issue before or during \
+             implementation.
 - in that Linear comment, summarize your reasoning and implementation plan for the issue.
 - commit your changes.
 - push the branch to the remote repository.
 - create a GitHub pull request for this branch before finishing.
-- use the same linear CLI (`linear`) to comment on the Linear issue again with the GitHub pull request link and a short implementation summary before finishing.
+- use the same linear CLI (`linear`) to comment on the Linear issue again with the GitHub pull \
+             request link and a short implementation summary before finishing.
 - include the issue identifier `{}` in the commit message and pull request title or body.
 ",
             task.issue.identifier
