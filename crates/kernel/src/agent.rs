@@ -530,9 +530,28 @@ pub(crate) async fn run_agent_loop(
         None => manifest.system_prompt.clone(),
     };
     let effective_prompt = format!(
-        "{effective_prompt}\n\n<context_contract>\nExcessively long context may cause model call \
-         failures. In this case, you SHOULD first use tape_handoff tool to shorten the length of \
-         the retrieved history.\n</context_contract>"
+        "{effective_prompt}\n\n\
+         <context_contract>\n\
+         You have access to `tape-handoff` — a tool that creates a checkpoint and truncates conversation history.\n\
+         \n\
+         ## When you MUST use tape-handoff:\n\
+         - Before your context becomes too long to complete the task\n\
+         - After receiving a very large tool result (>2000 chars of output)\n\
+         - When performing iterative tasks (screenshots, OCR, web scraping, file listing) that accumulate large outputs\n\
+         - When the system injects a [Context Usage Warning]\n\
+         \n\
+         ## When you SHOULD use tape-handoff:\n\
+         - After completing a logical phase of work (discovery → implementation → verification)\n\
+         - When switching between unrelated subtasks\n\
+         - After processing multiple tool results in sequence\n\
+         \n\
+         ## How to use it effectively:\n\
+         1. Always provide a detailed `summary` of what happened so far\n\
+         2. Always provide `next_steps` with concrete actionable items\n\
+         3. A good handoff preserves your progress — a missing summary means lost context\n\
+         \n\
+         Failing to handoff when needed will cause context window overflow and task failure.\n\
+         </context_contract>"
     );
     let provider_hint = manifest.provider_hint.as_deref();
 

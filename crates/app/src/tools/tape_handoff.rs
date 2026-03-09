@@ -35,9 +35,9 @@ impl AgentTool for TapeHandoffTool {
     fn name(&self) -> &str { "tape-handoff" }
 
     fn description(&self) -> &str {
-        "Create a handoff anchor in the session tape to truncate context. Use this when context is \
-         getting too long and may cause model call failures. Provide a summary of the conversation \
-         so far and any next steps."
+        "Create a handoff anchor to checkpoint progress and truncate context history. This is a \
+         core workflow tool — use it proactively to manage context, not just when failures occur. \
+         You MUST provide a summary to preserve context across the handoff boundary."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -57,7 +57,7 @@ impl AgentTool for TapeHandoffTool {
                     "description": "Actionable items for the next phase"
                 }
             },
-            "required": []
+            "required": ["summary"]
         })
     }
 
