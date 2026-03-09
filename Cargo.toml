@@ -168,7 +168,7 @@ lettre = { version = "0.11", default-features = false, features = [
 ] }
 lineark-sdk = "1.1"
 llmfit-core = { git = "https://github.com/AlexsJones/llmfit" }
-md5 = "0.7"
+md5 = "0.8"
 moka = { version = "0.12", features = ["future"] }
 notify = "7"
 oauth2 = "5"
