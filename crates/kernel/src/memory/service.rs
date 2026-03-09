@@ -18,10 +18,11 @@
 //! handles bootstrap anchors, fork/merge convenience flows, anchor-relative
 //! queries, and search over persisted message entries.
 
-use std::{future::Future, sync::OnceLock};
+use std::future::Future;
 
-use regex::Regex;
+use rapidfuzz::fuzz::RatioBatchComparator;
 use serde_json::{Map, Value, json};
+use unicode_normalization::UnicodeNormalization;
 
 use super::{AnchorSummary, FileTapeStore, HandoffState, TapEntry, TapEntryKind, TapResult};
 
@@ -30,14 +31,23 @@ thread_local! {
     static TAPE_CONTEXT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Token-matching regex reused by the fuzzy search fallback.
-static WORD_PATTERN: OnceLock<Regex> = OnceLock::new();
 /// Queries shorter than this skip fuzzy matching to avoid noisy results.
 const MIN_FUZZY_QUERY_LENGTH: usize = 3;
-/// Minimum normalized similarity percentage for a fuzzy hit.
-const MIN_FUZZY_SCORE: usize = 80;
-/// Hard cap on fuzzy candidates checked per tape read.
-const MAX_FUZZY_CANDIDATES: usize = 128;
+/// Minimum normalized similarity ratio for a fuzzy hit.
+const MIN_FUZZY_SCORE: f64 = 0.80;
+/// Minimum number of query terms that should overlap before a partial hit is
+/// considered relevant.
+const MIN_QUERY_TERM_MATCHES: usize = 2;
+/// Minimum query term coverage required for multi-term fallback matches.
+const MIN_QUERY_TERM_COVERAGE: f64 = 0.60;
+/// Exact full-query substring matches outrank all partial and fuzzy hits.
+const EXACT_MATCH_BONUS: f64 = 1.0;
+
+#[derive(Debug)]
+struct SearchMatch {
+    score: f64,
+    entry: TapEntry,
+}
 
 /// Runtime tape info summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -494,8 +504,7 @@ impl TapeService {
             .collect())
     }
 
-    /// Search message entries using exact substring matching plus a lightweight
-    /// fuzzy fallback.
+    /// Search message entries using ranked Unicode-aware text matching.
     pub async fn search(
         &self,
         tape_name: &str,
@@ -503,10 +512,13 @@ impl TapeService {
         limit: usize,
         all_tapes: bool,
     ) -> TapResult<Vec<TapEntry>> {
-        let normalized_query = query.trim().to_lowercase();
+        let normalized_query = normalize_search_text(query);
         if normalized_query.is_empty() {
             return Ok(Vec::new());
         }
+        let query_terms = extract_query_terms(&normalized_query);
+        let query_scorer = (normalized_query.chars().count() >= MIN_FUZZY_QUERY_LENGTH)
+            .then(|| RatioBatchComparator::new(normalized_query.chars()));
 
         let tape_names = if all_tapes {
             self.store.list_tapes().await?
@@ -516,26 +528,36 @@ impl TapeService {
 
         let mut results = Vec::new();
         for name in tape_names {
-            let mut count = 0usize;
             let entries = self.store.read(&name).await?.unwrap_or_default();
             for entry in entries.into_iter().rev() {
                 if entry.kind != TapEntryKind::Message {
                     continue;
                 }
-                let payload_text = extract_searchable_text(&entry.payload);
-                if payload_text.to_lowercase().contains(&normalized_query)
-                    || is_fuzzy_match(&normalized_query, &payload_text)
-                {
-                    results.push(entry);
-                    count += 1;
-                    if count >= limit {
-                        break;
-                    }
-                }
+                let searchable_text = normalize_search_text(&extract_searchable_text(
+                    &entry.payload,
+                    entry.metadata.as_ref(),
+                ));
+                let Some(score) = score_search_candidate(
+                    &normalized_query,
+                    &query_terms,
+                    &searchable_text,
+                    query_scorer.as_ref(),
+                ) else {
+                    continue;
+                };
+                results.push(SearchMatch { score, entry });
             }
         }
 
-        Ok(results)
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| right.entry.id.cmp(&left.entry.id))
+        });
+        results.truncate(limit);
+
+        Ok(results.into_iter().map(|item| item.entry).collect())
     }
 
     /// Compact a tape by writing a compaction anchor that shrinks the default
@@ -630,91 +652,101 @@ fn kind_matches(entry: &TapEntry, kinds: Option<&[TapEntryKind]>) -> bool {
     kinds.is_none_or(|kinds| kinds.iter().any(|kind| kind == &entry.kind))
 }
 
-/// Check whether a message payload approximately matches the normalized query.
-fn is_fuzzy_match(normalized_query: &str, payload_text: &str) -> bool {
-    if normalized_query.len() < MIN_FUZZY_QUERY_LENGTH {
-        return false;
+fn score_search_candidate(
+    normalized_query: &str,
+    query_terms: &[String],
+    searchable_text: &str,
+    query_scorer: Option<&RatioBatchComparator<char>>,
+) -> Option<f64> {
+    if searchable_text.is_empty() {
+        return None;
     }
 
-    let word_pattern = WORD_PATTERN.get_or_init(|| Regex::new(r"[a-z0-9_/-]+").expect("regex"));
-    let query_tokens = word_pattern
-        .find_iter(normalized_query)
-        .map(|m| m.as_str().to_owned())
-        .collect::<Vec<_>>();
-    if query_tokens.is_empty() {
-        return false;
-    }
-    let query_phrase = query_tokens.join(" ");
-    let window_size = query_tokens.len();
-
-    let source_tokens = word_pattern
-        .find_iter(&payload_text.to_lowercase())
-        .map(|m| m.as_str().to_owned())
-        .collect::<Vec<_>>();
-    if source_tokens.is_empty() {
-        return false;
-    }
-
-    let mut candidates = Vec::new();
-    for token in &source_tokens {
-        candidates.push(token.clone());
-        if candidates.len() >= MAX_FUZZY_CANDIDATES {
-            break;
-        }
-    }
-
-    if window_size > 1 {
-        for window in source_tokens.windows(window_size) {
-            candidates.push(window.join(" "));
-            if candidates.len() >= MAX_FUZZY_CANDIDATES {
-                break;
-            }
-        }
-    }
-
-    candidates
+    let exact_match = searchable_text.contains(normalized_query);
+    let matched_terms = query_terms
         .iter()
-        .any(|candidate| similarity_percent(&query_phrase, candidate) >= MIN_FUZZY_SCORE)
-}
+        .filter(|term| searchable_text.contains(term.as_str()))
+        .count();
+    let term_coverage = if query_terms.is_empty() {
+        0.0
+    } else {
+        matched_terms as f64 / query_terms.len() as f64
+    };
+    let fuzzy_score = query_scorer.map_or(0.0, |scorer| scorer.similarity(searchable_text.chars()));
 
-/// Convert Levenshtein distance into a 0-100 similarity score.
-fn similarity_percent(a: &str, b: &str) -> usize {
-    let distance = levenshtein(a, b);
-    let max_len = a.chars().count().max(b.chars().count());
-    if max_len == 0 {
-        return 100;
+    let has_full_term_match = !query_terms.is_empty() && matched_terms == query_terms.len();
+    let has_partial_term_match = query_terms.len() >= MIN_QUERY_TERM_MATCHES
+        && matched_terms >= MIN_QUERY_TERM_MATCHES
+        && term_coverage >= MIN_QUERY_TERM_COVERAGE;
+    let has_fuzzy_match = fuzzy_score >= MIN_FUZZY_SCORE;
+
+    if !(exact_match || has_full_term_match || has_partial_term_match || has_fuzzy_match) {
+        return None;
     }
-    (((max_len.saturating_sub(distance)) * 100) / max_len).min(100)
+
+    let mut score = (term_coverage * 0.7) + (fuzzy_score * 0.3);
+    if exact_match {
+        score += EXACT_MATCH_BONUS;
+    }
+    if has_full_term_match {
+        score += 0.35;
+    }
+
+    Some(score)
 }
 
-/// Compute character-level edit distance for the fuzzy search fallback.
-fn levenshtein(a: &str, b: &str) -> usize {
-    let b_chars = b.chars().collect::<Vec<_>>();
-    let mut costs = (0..=b_chars.len()).collect::<Vec<_>>();
+fn extract_query_terms(normalized_query: &str) -> Vec<String> {
+    normalized_query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
 
-    for (i, a_char) in a.chars().enumerate() {
-        let mut last = i;
-        costs[0] = i + 1;
-        for (j, b_char) in b_chars.iter().enumerate() {
-            let current = costs[j + 1];
-            let substitution = if a_char == *b_char { last } else { last + 1 };
-            let insertion = current + 1;
-            let deletion = costs[j] + 1;
-            costs[j + 1] = substitution.min(insertion).min(deletion);
-            last = current;
+fn normalize_search_text(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut previous_was_space = true;
+
+    for ch in text.nfkc().flat_map(char::to_lowercase) {
+        if ch.is_whitespace() {
+            if !previous_was_space {
+                normalized.push(' ');
+            }
+            previous_was_space = true;
+            continue;
+        }
+
+        normalized.push(ch);
+        previous_was_space = false;
+    }
+
+    if normalized.ends_with(' ') {
+        normalized.pop();
+    }
+
+    normalized
+}
+
+/// Extract searchable text from a message payload and metadata.
+fn extract_searchable_text(payload: &Value, metadata: Option<&Value>) -> String {
+    let mut parts = Vec::new();
+    if let Some(text) = payload.get("content").and_then(Value::as_str) {
+        parts.push(text.to_owned());
+    }
+
+    let payload_json = serde_json::to_string(payload).unwrap_or_default();
+    if !payload_json.is_empty() {
+        parts.push(payload_json);
+    }
+
+    if let Some(metadata) = metadata {
+        let metadata_json = serde_json::to_string(metadata).unwrap_or_default();
+        if !metadata_json.is_empty() {
+            parts.push(metadata_json);
         }
     }
 
-    costs[b_chars.len()]
-}
-
-/// Extract searchable text from a message payload, preferring the `content`
-/// string field to avoid a full JSON serialization round-trip.
-fn extract_searchable_text(payload: &Value) -> String {
-    if let Some(text) = payload.get("content").and_then(Value::as_str) {
-        return text.to_owned();
-    }
-    serde_json::to_string(payload).unwrap_or_default()
+    parts.join("\n")
 }
 
 #[cfg(test)]
@@ -873,12 +905,87 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn search_matches_high_overlap_multiterm_chinese_queries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "search-chinese-overlap";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": "我看了下飞日本的机票价格 福冈要2748元，好贵"}),
+            None,
+        )
+        .await
+        .unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": "上海今天下雨，晚点再看别的安排"}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let hits = svc
+            .search(tape, "上海 福冈 机票 价格", 10, false)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0]
+                .payload
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap(),
+            "我看了下飞日本的机票价格 福冈要2748元，好贵"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_includes_message_metadata_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "search-message-metadata";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "assistant", "content": "记录好了"}),
+            Some(json!({
+                "tags": ["travel", "fare"],
+                "note": "上海 福冈 机票 价格 2748"
+            })),
+        )
+        .await
+        .unwrap();
+
+        let hits = svc
+            .search(tape, "上海 福冈 机票 价格", 10, false)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0]
+                .payload
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap(),
+            "记录好了"
+        );
+    }
+
     #[test]
-    fn fuzzy_match_handles_query_longer_than_source_without_panicking() {
-        assert!(!is_fuzzy_match(
-            "what is the hidden credential",
-            "credential"
-        ));
+    fn score_search_candidate_handles_query_longer_than_source_without_panicking() {
+        let query = normalize_search_text("what is the hidden credential");
+        let terms = extract_query_terms(&query);
+        let scorer = RatioBatchComparator::new(query.chars());
+
+        let score = score_search_candidate(&query, &terms, "credential", Some(&scorer));
+
+        assert!(score.is_none());
     }
 
     #[tokio::test]

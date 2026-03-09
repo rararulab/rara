@@ -36,6 +36,7 @@ md5.workspace = true
 opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 prometheus.workspace = true
+rapidfuzz.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
 regex.workspace = true
@@ -53,6 +54,7 @@ tokio-util = { workspace = true }
 tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true
+unicode-normalization.workspace = true
 urlencoding.workspace = true
 usearch = "2"
 uuid.workspace = true

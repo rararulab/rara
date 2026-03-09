@@ -247,7 +247,7 @@ impl crate::tool::AgentTool for TapeTool {
                 },
                 "query": {
                     "type": "string",
-                    "description": "[search] Text to search for in past conversations. Uses substring matching with fuzzy fallback."
+                    "description": "[search] Text to search for in past conversations. Uses ranked Unicode-aware matching across message payloads and metadata."
                 },
                 "name": {
                     "type": "string",
