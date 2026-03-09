@@ -16,6 +16,35 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
+/// A binary resource produced by a tool (e.g. a compressed screenshot).
+#[derive(Debug, Clone)]
+pub struct ResourceAttachment {
+    /// MIME type of the resource (e.g. `"image/jpeg"`).
+    pub media_type: String,
+    /// Raw bytes of the resource (already compressed if applicable).
+    pub data: Vec<u8>,
+}
+
+/// Output of a tool execution — a JSON result plus optional resource
+/// attachments (images, files) that should be persisted separately and
+/// fed to the LLM as multimodal content blocks.
+#[derive(Debug, Clone)]
+pub struct ToolOutput {
+    /// JSON payload visible to the LLM as text.
+    pub json: serde_json::Value,
+    /// Binary resources to persist and inject as multimodal content.
+    pub resources: Vec<ResourceAttachment>,
+}
+
+impl From<serde_json::Value> for ToolOutput {
+    fn from(json: serde_json::Value) -> Self {
+        Self {
+            json,
+            resources: vec![],
+        }
+    }
+}
+
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
@@ -79,7 +108,7 @@ pub trait AgentTool: Send + Sync {
         &self,
         params: serde_json::Value,
         context: &ToolContext,
-    ) -> anyhow::Result<serde_json::Value>;
+    ) -> anyhow::Result<ToolOutput>;
 }
 
 /// Registry of available tools for an agent run.
@@ -188,8 +217,8 @@ mod tests {
             &self,
             _params: serde_json::Value,
             _context: &ToolContext,
-        ) -> anyhow::Result<serde_json::Value> {
-            Ok(serde_json::json!({"ok": true}))
+        ) -> anyhow::Result<ToolOutput> {
+            Ok(serde_json::json!({"ok": true}).into())
         }
     }
 
