@@ -136,6 +136,7 @@ symphony:
   agent:
     command: ralph
     backend: codex
+    core_config_file: ralph.core.yml
 
   repos:
     - name: rararulab/rara
@@ -152,8 +153,11 @@ symphony:
 - `tracker.completed_issue_state` 控制 Ralph 成功完成后 issue 要切到哪个 tracker 状态，默认是 `ToVerify`
 - `tracker.active_states` 控制 symphony 会从 tracker 拉哪些状态；默认只拉 `Todo`
 - `agent.backend` 控制 symphony 在 issue worktree 里执行 `ralph init --force --backend <backend>` 时使用的 backend
+- `agent.core_config_file` 指向仓库根目录里的 Ralph core config；默认是 `ralph.core.yml`
 - agent 默认执行 `ralph run --autonomous`
-- symphony 不再依赖仓库内静态 `ralph.yml`；每个 issue worktree 的 Ralph 配置都由 `ralph init` 现场生成
+- symphony 会先执行 `ralph init --force --backend <backend> -c ralph.core.yml` 生成 worktree 本地 `ralph.yml`
+- init 完成后，symphony 会把 `ralph.core.yml` 的配置物化进生成的 `ralph.yml`
+- 随后执行 `ralph run`，只使用这个已经物化好的 worktree 本地 `ralph.yml`
 - 运行 symphony 前，需要确保 `codex` CLI 已安装，并通过 `OPENAI_API_KEY` 或 `CODEX_API_KEY` 完成认证
 
 ## Source Layout

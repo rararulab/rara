@@ -25,6 +25,8 @@ fn default_command() -> String { "ralph".to_owned() }
 
 fn default_backend() -> String { "codex".to_owned() }
 
+fn default_core_config_file() -> PathBuf { PathBuf::from("ralph.core.yml") }
+
 fn default_max_concurrent_agents() -> usize { 2 }
 
 fn default_stall_timeout() -> Duration { Duration::from_secs(30 * 60) }
@@ -199,6 +201,10 @@ pub struct AgentConfig {
     #[serde(default = "default_backend")]
     pub backend: String,
 
+    /// Repository-root Ralph core config layered onto generated `ralph.yml`.
+    #[serde(default = "default_core_config_file")]
+    pub core_config_file: PathBuf,
+
     /// Extra args to pass to `ralph run`.
     #[serde(default)]
     pub extra_args: Vec<String>,
@@ -218,6 +224,7 @@ impl Default for AgentConfig {
         Self {
             command:     default_command(),
             backend:     default_backend(),
+            core_config_file: default_core_config_file(),
             extra_args:  Vec::new(),
             run_timeout: None,
         }
@@ -232,6 +239,8 @@ impl AgentConfig {
             "--force".to_owned(),
             "--backend".to_owned(),
             self.backend.clone(),
+            "-c".to_owned(),
+            self.core_config_file.display().to_string(),
         ]
     }
 
@@ -248,6 +257,9 @@ impl AgentConfig {
         args.extend(self.extra_args.iter().cloned());
         args
     }
+
+    #[must_use]
+    pub fn doctor_args(&self) -> Vec<String> { vec!["doctor".to_owned()] }
 }
 
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]

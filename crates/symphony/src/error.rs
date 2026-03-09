@@ -48,6 +48,14 @@ pub enum SymphonyError {
         location: snafu::Location,
     },
 
+    #[snafu(display("config error: {message}: {source}"))]
+    ConfigYaml {
+        message:  String,
+        source:   serde_yaml::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
     #[snafu(display("git error: {source}"))]
     Git {
         source:   git2::Error,

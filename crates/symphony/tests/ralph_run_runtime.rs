@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use rara_symphony::{
-    agent::{AgentTask, RalphAgent},
+    agent::{merge_core_config, AgentTask, RalphAgent},
     config::{AgentConfig, RepoConfig, TrackerConfig},
     tracker::{IssueState, TrackedIssue},
 };
@@ -39,6 +39,7 @@ fn agent_config_builds_ralph_run_command() {
     let agent = AgentConfig::builder()
         .command("ralph".to_owned())
         .backend("codex".to_owned())
+        .core_config_file(PathBuf::from("ralph.core.yml"))
         .extra_args(vec!["--max-iterations".to_owned(), "5".to_owned()])
         .build();
 
@@ -60,6 +61,7 @@ fn agent_config_builds_ralph_init_command() {
     let agent = AgentConfig::builder()
         .command("ralph".to_owned())
         .backend("claude".to_owned())
+        .core_config_file(PathBuf::from("ralph.core.yml"))
         .extra_args(vec![])
         .build();
 
@@ -72,8 +74,24 @@ fn agent_config_builds_ralph_init_command() {
             "--force".to_owned(),
             "--backend".to_owned(),
             "claude".to_owned(),
+            "-c".to_owned(),
+            "ralph.core.yml".to_owned(),
         ]
     );
+}
+
+#[test]
+fn agent_config_builds_ralph_doctor_command() {
+    let agent = AgentConfig::builder()
+        .command("ralph".to_owned())
+        .backend("claude".to_owned())
+        .core_config_file(PathBuf::from("ralph.core.yml"))
+        .extra_args(vec![])
+        .build();
+
+    let args = agent.doctor_args();
+
+    assert_eq!(args, vec!["doctor".to_owned()]);
 }
 
 #[test]
@@ -82,6 +100,7 @@ fn default_agent_command_uses_autonomous_mode() {
     let args = agent.command_args();
 
     assert_eq!(agent.backend, "codex");
+    assert_eq!(agent.core_config_file, PathBuf::from("ralph.core.yml"));
     assert_eq!(args.first().map(String::as_str), Some("run"));
     assert!(args.iter().any(|arg| arg == "--autonomous"));
     assert!(!args.iter().any(|arg| arg == "--no-tui"));
@@ -155,4 +174,18 @@ fn tracker_config_allows_custom_completion_state() {
 
     assert_eq!(tracker.started_issue_state(), "In Dev");
     assert_eq!(tracker.completed_issue_state(), "QA");
+}
+
+#[test]
+fn merge_core_config_overlays_core_fields_onto_generated_config() {
+    let generated = "cli:\n  backend: codex\nevent_loop:\n  prompt_file: PROMPT.md\n";
+    let core = "RObot:\n  enabled: true\n  timeout_seconds: 120\n";
+
+    let merged = merge_core_config(generated, core).expect("merge should succeed");
+
+    assert!(merged.contains("cli:"));
+    assert!(merged.contains("backend: codex"));
+    assert!(merged.contains("RObot:"));
+    assert!(merged.contains("enabled: true"));
+    assert!(merged.contains("timeout_seconds: 120"));
 }

@@ -22,6 +22,7 @@ rara-paths = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 snafu.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "time", "sync"] }
 tokio-util.workspace = true
