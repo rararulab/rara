@@ -47,6 +47,7 @@ pub mod schedule;
 pub(crate) mod schedule_tool;
 pub mod security;
 pub mod session;
+pub(crate) mod session_title;
 pub(crate) mod syscall;
 pub(crate) mod tape_tool;
 pub mod tool;

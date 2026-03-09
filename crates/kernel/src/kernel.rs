@@ -1995,6 +1995,58 @@ impl Kernel {
             });
         }
 
+        // -- Session title generation (async, best-effort) ----------------------
+        // After the first successful turn on a session with no title, spawn an
+        // async task to generate a short title from the conversation tape.
+        if !_turn_failed {
+            let session_index = Arc::clone(self.io.session_index());
+            let tape_service = self.tape_service.clone();
+            let driver_registry = Arc::clone(self.syscall.driver_registry());
+            let extractor_model = self.knowledge.extractor_model.clone();
+            let sk = session_key.clone();
+            tokio::spawn(async move {
+                // Only generate if the session has no title yet.
+                let entry = match session_index.get_session(&sk).await {
+                    Ok(Some(e)) if e.title.is_some() => return,
+                    Ok(Some(e)) => e,
+                    Ok(None) | Err(_) => return,
+                };
+
+                let tape_name = sk.to_string();
+                let entries = match tape_service.from_last_anchor(&tape_name, None).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(%e, "session title: failed to read tape");
+                        return;
+                    }
+                };
+
+                let driver = match driver_registry.resolve(
+                    "session_title",
+                    None,
+                    Some(&extractor_model),
+                ) {
+                    Ok((d, _)) => d,
+                    Err(e) => {
+                        tracing::warn!(%e, "session title: cannot resolve model");
+                        return;
+                    }
+                };
+
+                if let Some(title) =
+                    crate::session_title::generate_title(&entries, driver.as_ref(), &extractor_model)
+                        .await
+                {
+                    let mut updated = entry;
+                    updated.title = Some(title);
+                    updated.updated_at = chrono::Utc::now();
+                    if let Err(e) = session_index.update_session(&updated).await {
+                        tracing::warn!(%e, "session title: failed to update session");
+                    }
+                }
+            });
+        }
+
         // Drain pause buffer — if the user sent messages while the turn was
         // running, re-inject them so they start a new turn on this session.
         let buffered = self.process_table.drain_pause_buffer(&session_key);
