@@ -1,233 +1,159 @@
-# Symphony — Issue Tracker ↔ Ralph Task 同步桥梁
+# Symphony
 
-Symphony 是 rara 内置的同步服务，负责将 **Linear** 或 **GitHub** 上的 issue 与 ralph 的 task API 双向同步。它轮询 issue tracker 获取活跃 issue，通过 HTTP JSON-RPC 调用 ralph API 创建/查询 task，并根据 task 状态同步回 issue tracker。
+Symphony 是 rara 内置的 issue runner。它轮询 Linear 或 GitHub issue，给每个 issue 创建独立 git worktree，在该 worktree 里启动一次 `ralph run`，并把 issue 状态同步到 tracker。
 
-Inspired by [OpenAI Symphony](https://github.com/openai/symphony) — teams manage work on a kanban board, ralph picks up tasks and executes them autonomously.
+当前实现不是 `ralph web` / task API 架构。主流程是：
 
-## How It Works
+1. 拉取活跃 issue
+2. 为 issue 创建或复用 worktree
+3. 生成 `PROMPT.md`
+4. `spawn ralph run --no-tui`
+5. 启动后把 issue 转到 `In Progress`
+6. 成功退出后把 issue 转到 `Verify`
+7. 失败时保留 workspace 供人工排查
 
+## Runtime Model
+
+```text
+Issue Tracker
+    |
+    v
+Symphony poll loop
+    |
+    +-- WorkspaceManager.ensure_worktree()
+    |
+    +-- RalphAgent.start()
+    |      writes PROMPT.md
+    |      spawns `ralph run --no-tui`
+    |
+    +-- stream stdout/stderr to per-issue log file
+    |
+    +-- transition issue -> In Progress
+    |
+    +-- wait for child exit
+           |
+           +-- success -> transition issue -> Verify
+           |
+           +-- failure -> keep workspace + log summary
 ```
-Linear / GitHub Issues
-        │
-        ▼
-  ┌─────────────────┐
-  │  IssueTracker    │◄── LinearIssueTracker (GraphQL)
-  │  (pluggable)     │    GitHubIssueTracker (REST)
-  └────────┬────────┘
-           ▼
-  ┌─────────────────┐
-  │  IssueSyncer     │◄── determine sync action per issue
-  │                  │
-  │  Active + no task│── task.create → ralph API
-  │  Active + closed │── transition issue → Done
-  │  Terminal + run  │── task.cancel → ralph API
-  └────────┬────────┘
-           ▼
-  ┌─────────────────┐     ┌──────────────────┐
-  │  RalphClient     │────▶│  ralph-api        │
-  │  (HTTP JSON-RPC) │     │  (subprocess)     │
-  └─────────────────┘     └──────────────────┘
-           ▲
-  ┌─────────────────┐
-  │ RalphSupervisor  │── spawn, health check, auto-restart
-  └─────────────────┘
+
+`ralph run` 是受管子进程，不会阻塞整个 symphony 服务。Symphony 只在 poll 周期里用非阻塞方式检查子进程状态。
+
+## Issue States
+
+Linear 的默认活跃状态是 `Todo` 和 `In Progress`，终止状态是 `Done`、`Closed`、`Cancelled`、`Canceled`、`Duplicate`。
+
+Symphony 对状态的约定是：
+
+- issue 被拾取并成功启动 `ralph run` 后，转到 `In Progress`
+- `ralph run` 成功退出后，转到 `Verify`
+- 不会自动转到 `Done`
+
+这意味着：
+
+- `Verify` 之后的人工验证、PR merge、最终关闭 issue 目前不由 symphony 自动处理
+- 如果 `ralph run` 启动失败，issue 不会被自动推进到 `In Progress`
+
+## Worktrees
+
+每个 issue 使用独立 branch 和 worktree。默认目录：
+
+```text
+~/.config/rara/ralpha/worktress/<repo>/worktrees/<branch>
 ```
 
-## Quick Start (Linear)
+branch 名由 issue number 和 title slug 组成，例如：
 
-1. Create a [Linear Personal API key](https://linear.app/settings/account/security).
-2. Set the environment variable: `export LINEAR_API_KEY=lin_api_...`
-3. Add a `symphony` section to your config (see [Linear Configuration](#linear-configuration) below).
-4. In your Linear project, add labels with the `repo:` prefix to map issues to repos (e.g. `repo:myorg/myrepo`).
-5. Start rara: `rara server`.
-6. Move a Linear issue to "Todo" or "In Progress" — symphony syncs it to ralph, which dispatches an agent.
+```text
+issue-42-fix-startup
+```
 
-## Quick Start (GitHub)
+如果同名 branch 已经被别的 worktree checkout，git 会拒绝再次创建，这通常意味着旧的 issue workspace 还在。
 
-1. Add the `symphony` section to your config file (see [GitHub Configuration](#github-configuration) below).
-2. Label a GitHub issue with `symphony:ready`.
-3. Start rara: `rara server`.
-4. Symphony syncs the issue to ralph, which dispatches an agent.
+## Logs
 
-## Sync Logic
+每个 issue 的 `ralph` 输出都会写入独立日志文件：
 
-每个 poll 周期，IssueSyncer 对每个 issue 执行以下决策：
+```text
+~/.config/rara/ralpha/logs/<repo>/<ISSUE_IDENTIFIER>.log
+```
 
-| Issue 状态 | Ralph Task 状态 | 动作 |
-|-----------|----------------|------|
-| Active | 无 task | `task.create` — 创建 ralph task |
-| Active | `open` / `pending` / `running` | 无操作 — task 正在处理 |
-| Active | `closed` | 转换 issue → Done |
-| Active | `failed` | 无操作 — 等待人工介入 |
-| Terminal | `open` / `pending` / `running` | `task.cancel` — 取消 ralph task |
-| Terminal | 其他 / 无 task | 无操作 |
+例如：
 
-## Ralph API Integration
+```text
+~/.config/rara/ralpha/logs/rararulab/rara/RAR-123.log
+```
 
-Symphony 通过 HTTP JSON-RPC 与 ralph-api 通信。RalphSupervisor 负责：
+日志文件包含：
 
-- **Spawn**: 启动 `ralph-api --port 13781` 子进程
-- **Health check**: 轮询 `/health` 端点等待就绪（最长 30 秒）
-- **Auto-restart**: 进程崩溃后自动重启（3 秒延迟）
-- **Graceful shutdown**: symphony 停止时终止 ralph-api
+- 一行 `meta` 头，记录 issue、repo、branch、workspace
+- 追加的 `stdout`
+- 追加的 `stderr`
 
-### RPC Methods
+查看日志：
 
-| Method | Description |
-|--------|-------------|
-| `task.create` | 创建新 task，可选 `autoExecute` 立即执行 |
-| `task.list` | 列出 task，可按 status 过滤 |
-| `task.get` | 按 ID 查询单个 task |
-| `task.cancel` | 取消运行中或等待中的 task |
+```bash
+lnav ~/.config/rara/ralpha/logs/**/*.log
+```
+
+Symphony 自己的 stdout 只保留摘要日志，不直接转发 `ralph` 的原始输出。
+
+## Prompt Contract
+
+Symphony 会在 issue worktree 中写入 `PROMPT.md`，然后在该目录里运行 `ralph run`。
+
+默认 prompt 要求 `ralph`：
+
+- 完成 issue 对应代码修改
+- 运行必要验证
+- commit 改动
+- push branch
+- 创建 GitHub pull request
+- 在 Linear issue 中评论 PR link
+
+Symphony 当前不会主动检查 PR 是否创建或是否已 merge，这些属于 agent 交付约束，不是服务端状态机的一部分。
 
 ## Configuration
 
-Symphony supports two issue tracker backends: **Linear** (recommended) and **GitHub**.
-
-### Linear Configuration
+示例：
 
 ```yaml
 symphony:
   enabled: true
   poll_interval: 30s
-  tracker:
-    kind: linear
-    api_key: $LINEAR_API_KEY        # supports $ENV_VAR syntax
-    team_key: RAR                   # Linear team key (issue prefix)
-    # project_slug: my-project      # optional, filter within team
-    # endpoint: https://api.linear.app/graphql  # override for self-hosted
-    # active_states: [Todo, In Progress]        # default
-    # terminal_states: [Done, Cancelled, Canceled, Closed, Duplicate]
-    # repo_label_prefix: "repo:"               # default
-  repos:
-    - name: myorg/backend
-      url: https://github.com/myorg/backend
-    - name: myorg/frontend
-      url: https://github.com/myorg/frontend
-```
+  max_concurrent_agents: 2
+  workflow_file: WORKFLOW.md
 
-#### Linear 工作流程
-
-1. **创建 API Key** — 在 [Linear Settings > Security](https://linear.app/settings/account/security) 生成 Personal API key
-2. **配置 label 映射** — 在 Linear project 中创建以 `repo:` 为前缀的 label（如 `repo:myorg/backend`）
-3. **给 issue 打 label** — 每个 issue 必须有一个 `repo:xxx` label，symphony 据此决定路由
-4. **状态驱动** — issue 进入 `Todo` 或 `In Progress` 状态时被 symphony 拉取并同步到 ralph
-
-```
-Linear Board                          Symphony
-┌────────┬────────────┬──────────┐
-│ Backlog│   Todo     │In Progress│
-│        │            │          │
-│        │  RAR-42 ◄──┼──────────┼── symphony 拉取
-│        │ repo:myorg │          │   → task.create → ralph
-│        │ /backend   │          │   → ralph dispatches agent
-│        │            │          │
-│        │            │  RAR-43  │── ralph agent 正在工作
-│        │            │          │
-└────────┴────────────┴──────────┘
-                                     ralph 完成 → task.closed
-                                     symphony 同步 → issue → Done
-```
-
-#### Tracker Settings (Linear)
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `kind` | — (required) | `linear` |
-| `api_key` | — (required) | Linear API key，支持 `$ENV_VAR` 语法 |
-| `team_key` | — (required) | Linear team key，如 `RAR`、`ENG`（issue 标识符前缀） |
-| `project_slug` | none | 可选，在 team 内按 project 进一步过滤 |
-| `endpoint` | `https://api.linear.app/graphql` | GraphQL endpoint（自托管时覆盖） |
-| `active_states` | `["Todo", "In Progress"]` | 触发 dispatch 的 issue 状态 |
-| `terminal_states` | `["Done", "Closed", "Cancelled", ...]` | 终止状态 |
-| `repo_label_prefix` | `"repo:"` | label 前缀，用于 issue → repo 映射 |
-
-#### Linear 优先级映射
-
-Linear 内置优先级直接映射：
-
-| Linear Priority | Symphony Priority | 行为 |
-|----------------|-------------------|------|
-| Urgent (1) | 1 | 最先被 dispatch |
-| High (2) | 2 | |
-| Medium (3) | 3 | |
-| Low (4) | 4 | |
-| No priority (0) | 最低 | 最后被 dispatch |
-
-### GitHub Configuration
-
-```yaml
-symphony:
-  enabled: true
-  poll_interval: 5m
-  tracker:
-    kind: github
-    api_key: $GITHUB_TOKEN           # optional, supports $ENV_VAR
-  repos:
-    - name: myorg/myrepo
-      url: https://github.com/myorg/myrepo
-      active_labels:
-        - symphony:ready
-```
-
-> **Note:** 如果省略 `tracker` 字段，默认使用 GitHub tracker（向后兼容）。
-
-#### Tracker Settings (GitHub)
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `kind` | — | `github` |
-| `api_key` | none | GitHub PAT，支持 `$ENV_VAR` 语法 |
-
-### Global Settings
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `enabled` | `false` | Whether symphony is active |
-| `poll_interval` | — (required) | How often to poll for new issues |
-
-### Per-Repo Settings
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `name` | — (required) | Repository identifier (owner/repo) |
-| `url` | — (required) | Remote URL |
-| `active_labels` | `["symphony:ready"]` | Labels that mark an issue as ready (GitHub only) |
-
-## Multi-Repo Support
-
-Symphony can track multiple repositories simultaneously.
-
-**Linear 多 repo**：在同一个 Linear project 中用 label 区分（`repo:myorg/backend`, `repo:myorg/frontend`）。未打 `repo:` label 的 issue 会被跳过并输出警告。
-
-**GitHub 多 repo**：每个 repo 单独配置 `active_labels`。
-
-```yaml
-# Linear 多 repo 示例
-symphony:
-  poll_interval: 30s
   tracker:
     kind: linear
     api_key: $LINEAR_API_KEY
     team_key: RAR
+
+  agent:
+    command: ralph
+    config_file: config/ralph.yml
+
   repos:
-    - name: myorg/frontend
-      url: https://github.com/myorg/frontend
-    - name: myorg/backend
-      url: https://github.com/myorg/backend
-# Linear issue 打 label "repo:myorg/frontend" 或 "repo:myorg/backend" 即可路由
+    - name: rararulab/rara
+      url: https://github.com/rararulab/rara
+      repo_path: /path/to/repo
 ```
 
-## Architecture
+说明：
 
-```
+- `repo_path` 是主仓库 checkout
+- `workspace_root` 可选；不填时默认落到 `~/.config/rara/ralpha/worktress/<repo>/worktrees`
+- `workflow_file` 默认为 `WORKFLOW.md`
+- agent 默认执行 `ralph run --no-tui`
+
+## Source Layout
+
+```text
 crates/symphony/src/
-├── client.rs       RalphClient — HTTP JSON-RPC client for ralph API
-├── config.rs       SymphonyConfig, TrackerConfig, RepoConfig
-├── error.rs        SymphonyError (snafu)
-├── lib.rs          Module exports
-├── service.rs      SymphonyService — top-level poll loop
-├── supervisor.rs   RalphSupervisor — ralph-api process guardian
-├── syncer.rs       IssueSyncer — issue ↔ task sync logic
-└── tracker.rs      IssueTracker trait + GitHub/Linear implementations
+├── agent.rs      RalphAgent: prompt rendering + child process spawn
+├── config.rs     symphony / tracker / repo config
+├── error.rs      snafu error types
+├── service.rs    poll loop, process lifecycle, issue transitions, log routing
+├── tracker.rs    GitHub and Linear issue tracker implementations
+└── workspace.rs  git worktree provisioning and cleanup
 ```

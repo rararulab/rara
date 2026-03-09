@@ -56,6 +56,28 @@ pub enum SymphonyError {
         location: snafu::Location,
     },
 
+    #[snafu(display("git error: {source}"))]
+    Git {
+        source: git2::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    #[snafu(display("workspace error: {message}"))]
+    Workspace {
+        message: String,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    #[snafu(display("hook failed: {hook} - {message}"))]
+    Hook {
+        hook: String,
+        message: String,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
     #[snafu(display("IO error: {source}"))]
     Io {
         source: std::io::Error,

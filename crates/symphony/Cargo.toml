@@ -15,18 +15,21 @@ description = "Issue tracker ↔ Ralph task synchronization bridge"
 async-trait.workspace = true
 bon.workspace = true
 chrono = { workspace = true, features = ["serde"] }
+git2.workspace = true
 humantime-serde = "1"
 lineark-sdk.workspace = true
+rara-paths = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
-tokio = { workspace = true, features = ["process", "time", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "time", "sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }
 
 [lints]

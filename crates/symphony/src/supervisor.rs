@@ -1,12 +1,13 @@
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
-use crate::client::RalphClient;
-use crate::config::RepoConfig;
-use crate::error::{RalphSnafu, Result};
+use crate::{
+    client::RalphClient,
+    config::RepoConfig,
+    error::{RalphSnafu, Result},
+};
 
 /// Base port — each repo gets BASE + index.
 const BASE_PORT: u16 = 13781;
@@ -25,21 +26,21 @@ const RESTART_DELAY: Duration = Duration::from_secs(3);
 
 /// A single ralph instance managing one repo workspace.
 struct RalphInstance {
-    child: Option<Child>,
-    port: u16,
-    repo_name: String,
+    child:          Option<Child>,
+    port:           u16,
+    repo_name:      String,
     workspace_root: String,
-    client: RalphClient,
+    client:         RalphClient,
 }
 
 impl RalphInstance {
-    fn new(repo_name: &str, workspace_root: &str, port: u16) -> Self {
+    fn new<P: AsRef<Path>>(repo_name: &str, workspace_root: P, port: u16) -> Self {
         let client = RalphClient::new(&format!("http://127.0.0.1:{port}"));
         Self {
             child: None,
             port,
             repo_name: repo_name.to_owned(),
-            workspace_root: workspace_root.to_owned(),
+            workspace_root: workspace_root.as_ref().to_string_lossy().into_owned(),
             client,
         }
     }
@@ -60,10 +61,7 @@ impl RalphInstance {
             .spawn()
             .map_err(|e| {
                 RalphSnafu {
-                    message: format!(
-                        "failed to spawn ralph for {}: {e}",
-                        self.repo_name
-                    ),
+                    message: format!("failed to spawn ralph for {}: {e}", self.repo_name),
                 }
                 .build()
             })?;
@@ -162,10 +160,12 @@ impl RalphSupervisor {
             // Use repo URL as workspace identifier for ralph.
             // In production the repo should be cloned locally; for now
             // we use the repo name as a stable workspace path under cwd.
-            let workspace_root = format!(".ralph-workspaces/{}", repo.name.replace('/', "-"));
+            let workspace_root = rara_paths::config_dir()
+                .join("ralph")
+                .join(format!("workspaces/{}", repo.name.replace('/', "-")));
             instances.insert(
                 repo.name.clone(),
-                RalphInstance::new(&repo.name, &workspace_root, port),
+                RalphInstance::new(&repo.name, workspace_root, port),
             );
         }
         Self { instances }

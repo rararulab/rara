@@ -1,16 +1,40 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use chrono::Utc;
+use snafu::ResultExt;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStderr, ChildStdout};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::config::{SymphonyConfig, TrackerConfig};
-use crate::error::Result;
-use crate::supervisor::RalphSupervisor;
-use crate::syncer::IssueSyncer;
-use crate::tracker::{GitHubIssueTracker, IssueTracker, LinearIssueTracker};
+use crate::agent::{AgentTask, RalphAgent};
+use crate::config::{RepoConfig, SymphonyConfig, TrackerConfig};
+use crate::error::{ConfigSnafu, IoSnafu, Result};
+use crate::tracker::{GitHubIssueTracker, IssueTracker, IssueState, LinearIssueTracker, TrackedIssue};
+use crate::workspace::{workflow_file, WorkspaceInfo, WorkspaceManager};
 
-/// Top-level service that bridges issue trackers with ralph's task API.
-///
-/// Spawns one `ralph web` process per repo (ralph is per-workspace),
-/// then runs a poll loop that syncs issues to ralph tasks.
+const STARTED_ISSUE_STATE: &str = "In Progress";
+
+struct RunningIssue {
+    issue: TrackedIssue,
+    workspace: WorkspaceInfo,
+    child: Child,
+    started_at: Instant,
+    log_path: PathBuf,
+    output: ProcessOutputSummaryHandle,
+}
+
+struct FinishedIssue {
+    issue: TrackedIssue,
+    workspace: WorkspaceInfo,
+}
+
+/// Top-level service that polls issue trackers, manages per-issue `ralph run`
+/// subprocesses, and advances issue state in the external tracker.
 pub struct SymphonyService {
     config: SymphonyConfig,
     shutdown: CancellationToken,
@@ -31,20 +55,16 @@ impl SymphonyService {
         }
     }
 
-    /// Run the symphony service until shutdown is requested.
     pub async fn run(self) -> Result<()> {
         info!("starting symphony service");
+        info!(lnav = %lnav_hint(), "ralpha issue logs are available");
 
-        // 1. Build issue tracker.
         let tracker: Box<dyn IssueTracker> = self.build_tracker()?;
+        let agent = RalphAgent::new(self.config.agent.clone());
+        let mut runtime = IssueRuntime::new(self.config.clone(), agent);
 
-        // 2. Start one ralph instance per repo.
-        let mut supervisor = RalphSupervisor::new(&self.config.repos);
-        supervisor.start().await?;
+        info!("symphony poll loop started");
 
-        info!("symphony sync loop started");
-
-        // 3. Poll loop.
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => {
@@ -52,63 +72,16 @@ impl SymphonyService {
                     break;
                 }
                 _ = tokio::time::sleep(self.config.poll_interval) => {
-                    self.poll_cycle(&*tracker, &mut supervisor).await;
+                    runtime.poll_cycle(&*tracker).await;
                 }
             }
         }
 
-        // 4. Shutdown.
-        supervisor.stop().await?;
+        runtime.shutdown().await;
         info!("symphony service stopped");
         Ok(())
     }
 
-    /// Run one poll cycle: ensure ralph instances are alive, fetch issues, sync.
-    async fn poll_cycle(
-        &self,
-        tracker: &dyn IssueTracker,
-        supervisor: &mut RalphSupervisor,
-    ) {
-        // Ensure all ralph instances are running.
-        if let Err(e) = supervisor.ensure_alive().await {
-            error!(error = %e, "failed to ensure ralph is alive, skipping cycle");
-            return;
-        }
-
-        // Fetch active issues.
-        let issues = match tracker.fetch_active_issues().await {
-            Ok(issues) => issues,
-            Err(e) => {
-                warn!(error = %e, "failed to fetch issues, skipping cycle");
-                return;
-            }
-        };
-
-        // Sync.
-        match IssueSyncer::sync(supervisor, tracker, &issues).await {
-            Ok(report) => {
-                if !report.created.is_empty()
-                    || !report.completed.is_empty()
-                    || !report.cancelled.is_empty()
-                    || !report.failed.is_empty()
-                {
-                    info!(
-                        created = report.created.len(),
-                        completed = report.completed.len(),
-                        cancelled = report.cancelled.len(),
-                        failed = report.failed.len(),
-                        unchanged = report.unchanged,
-                        "sync cycle completed"
-                    );
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "sync cycle failed");
-            }
-        }
-    }
-
-    /// Build the issue tracker from config.
     fn build_tracker(&self) -> Result<Box<dyn IssueTracker>> {
         match &self.config.tracker {
             Some(TrackerConfig::Linear {
@@ -151,6 +124,444 @@ impl SymphonyService {
     }
 }
 
+struct IssueRuntime {
+    config: SymphonyConfig,
+    workspace_manager: WorkspaceManager,
+    agent: RalphAgent,
+    running: HashMap<String, RunningIssue>,
+    failed: HashMap<String, FinishedIssue>,
+}
+
+impl IssueRuntime {
+    fn new(config: SymphonyConfig, agent: RalphAgent) -> Self {
+        Self {
+            config,
+            workspace_manager: WorkspaceManager,
+            agent,
+            running: HashMap::new(),
+            failed: HashMap::new(),
+        }
+    }
+
+    async fn poll_cycle(&mut self, tracker: &dyn IssueTracker) {
+        self.reap_finished(tracker).await;
+
+        let issues = match tracker.fetch_active_issues().await {
+            Ok(issues) => issues,
+            Err(err) => {
+                warn!(error = %err, "failed to fetch active issues");
+                return;
+            }
+        };
+
+        let active_ids: HashSet<String> = issues.iter().map(|issue| issue.id.clone()).collect();
+        self.cleanup_terminal_issues(tracker, &active_ids).await;
+
+        for issue in issues {
+            if self.running.contains_key(&issue.id) || self.failed.contains_key(&issue.id) {
+                continue;
+            }
+
+            if self.running.len() >= self.config.max_concurrent_agents {
+                info!(issue_id = %issue.id, "no global slot available");
+                break;
+            }
+
+            if self.running.values().filter(|run| run.issue.repo == issue.repo).count()
+                >= self.max_concurrent_for_repo(&issue.repo)
+            {
+                info!(issue_id = %issue.id, repo = %issue.repo, "no repo slot available");
+                continue;
+            }
+
+            if let Err(err) = self.start_issue(tracker, issue).await {
+                error!(error = %err, "failed to start issue run");
+            }
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        for (issue_id, run) in &mut self.running {
+            warn!(issue_id = %issue_id, "stopping active ralph run");
+            let _ = run.child.kill().await;
+        }
+        self.running.clear();
+    }
+
+    async fn reap_finished(&mut self, tracker: &dyn IssueTracker) {
+        let issue_ids: Vec<String> = self.running.keys().cloned().collect();
+        let mut completed = Vec::new();
+
+        for issue_id in issue_ids {
+            let Some(run) = self.running.get_mut(&issue_id) else {
+                continue;
+            };
+
+            match run.child.try_wait() {
+                Ok(Some(status)) => completed.push((issue_id, status)),
+                Ok(None) => {}
+                Err(err) => warn!(issue_id = %issue_id, error = %err, "failed to poll ralph child status"),
+            }
+        }
+
+        for (issue_id, status) in completed {
+            let Some(run) = self.running.remove(&issue_id) else {
+                continue;
+            };
+            let output = run.output.snapshot().await;
+
+            if status.success() {
+                info!(
+                    issue_id = %issue_id,
+                    elapsed_secs = run.started_at.elapsed().as_secs(),
+                    log_path = %run.log_path.display(),
+                    stdout_lines = output.stdout_line_count,
+                    stderr_lines = output.stderr_line_count,
+                    "ralph task runner completed"
+                );
+                if let Err(err) = tracker.transition_issue(&run.issue, "Verify").await {
+                    warn!(issue_id = %issue_id, error = %err, "failed to transition issue to Verify after success");
+                    self.failed.insert(
+                        issue_id,
+                        FinishedIssue {
+                            issue: run.issue,
+                            workspace: run.workspace,
+                        },
+                    );
+                    continue;
+                }
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            } else {
+                warn!(
+                    issue_id = %issue_id,
+                    status = ?status.code(),
+                    elapsed_secs = run.started_at.elapsed().as_secs(),
+                    log_path = %run.log_path.display(),
+                    stdout_lines = output.stdout_line_count,
+                    stderr_lines = output.stderr_line_count,
+                    stderr_tail = %output.render_stderr_tail(),
+                    "ralph task runner failed"
+                );
+                self.failed.insert(
+                    issue_id,
+                    FinishedIssue {
+                        issue: run.issue,
+                        workspace: run.workspace,
+                    },
+                );
+            }
+        }
+    }
+
+    async fn cleanup_terminal_issues(
+        &mut self,
+        tracker: &dyn IssueTracker,
+        active_ids: &HashSet<String>,
+    ) {
+        let known_ids: Vec<String> = self
+            .running
+            .keys()
+            .chain(self.failed.keys())
+            .cloned()
+            .collect();
+
+        for issue_id in known_ids {
+            if active_ids.contains(&issue_id) {
+                continue;
+            }
+
+            let issue = self
+                .running
+                .get(&issue_id)
+                .map(|run| run.issue.clone())
+                .or_else(|| self.failed.get(&issue_id).map(|run| run.issue.clone()));
+            let Some(issue) = issue else {
+                continue;
+            };
+
+            let state = match tracker.fetch_issue_state(&issue).await {
+                Ok(state) => state,
+                Err(err) => {
+                    warn!(issue_id = %issue_id, error = %err, "failed to refresh issue state");
+                    continue;
+                }
+            };
+
+            if state != IssueState::Terminal {
+                continue;
+            }
+
+            if let Some(mut run) = self.running.remove(&issue_id) {
+                let _ = run.child.kill().await;
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            }
+            if let Some(run) = self.failed.remove(&issue_id) {
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            }
+        }
+    }
+
+    /// Provision a worktree, start `ralph run`, attach raw output logging, and
+    /// transition the issue to `In Progress` once the child is live.
+    async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
+        let repo = self.repo_config(&issue.repo)?;
+        let workspace = self
+            .workspace_manager
+            .ensure_worktree(&repo, issue.number, &issue.title)?;
+        let workflow_path = workspace.path.join(workflow_file(&repo, &self.config.workflow_file));
+        let workflow_content = tokio::fs::read_to_string(&workflow_path).await.ok();
+
+        let task = AgentTask {
+            issue: issue.clone(),
+            attempt: None,
+            workflow_content,
+        };
+        let mut handle = self.agent.start(&task, &workspace.path).await?;
+        let log_path = issue_log_path(&issue.repo, &issue.identifier);
+        let log_writer = spawn_issue_log_writer(&log_path, &issue, &workspace).await?;
+        let output = ProcessOutputSummaryHandle::default();
+
+        info!(
+            issue_id = %issue.id,
+            repo = %issue.repo,
+            workspace = %workspace.path.display(),
+            branch = %workspace.branch,
+            log_path = %log_path.display(),
+            created_now = workspace.created_now,
+            "spawned ralph task runner"
+        );
+
+        if let Some(stdout) = handle.child.stdout.take() {
+            spawn_output_logger(output.clone(), log_writer.clone(), "stdout", stdout);
+        }
+        if let Some(stderr) = handle.child.stderr.take() {
+            spawn_error_logger(output.clone(), log_writer, "stderr", stderr);
+        }
+
+        if let Err(err) = tracker.transition_issue(&issue, STARTED_ISSUE_STATE).await {
+            warn!(
+                issue_id = %issue.id,
+                state = STARTED_ISSUE_STATE,
+                error = %err,
+                "failed to transition issue after starting ralph task runner"
+            );
+        }
+
+        self.running.insert(
+            issue.id.clone(),
+            RunningIssue {
+                issue,
+                workspace,
+                child: handle.child,
+                started_at: handle.started_at,
+                log_path,
+                output,
+            },
+        );
+        Ok(())
+    }
+
+    fn cleanup_workspace(&self, repo_name: &str, workspace: &WorkspaceInfo) {
+        match self.repo_config(repo_name) {
+            Ok(repo) => {
+                if let Err(err) = self.workspace_manager.cleanup_worktree(&repo, workspace) {
+                    warn!(repo = %repo_name, path = %workspace.path.display(), error = %err, "failed to cleanup workspace");
+                }
+            }
+            Err(err) => warn!(repo = %repo_name, error = %err, "failed to resolve repo for workspace cleanup"),
+        }
+    }
+
+    fn repo_config(&self, repo_name: &str) -> Result<RepoConfig> {
+        let repo = self
+            .config
+            .repos
+            .iter()
+            .find(|repo| repo.name == repo_name)
+            .cloned()
+            .ok_or_else(|| ConfigSnafu {
+                message: format!("unknown repo: {repo_name}"),
+            }
+            .build())?;
+
+        let mut resolved = repo;
+        if resolved.repo_path.is_none() {
+            let cwd = std::env::current_dir().map_err(|source| crate::error::SymphonyError::Io {
+                source,
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+            resolved.repo_path = Some(cwd.clone());
+        }
+        Ok(resolved)
+    }
+
+    fn max_concurrent_for_repo(&self, repo_name: &str) -> usize {
+        self.config
+            .repos
+            .iter()
+            .find(|repo| repo.name == repo_name)
+            .and_then(|repo| repo.max_concurrent_agents)
+            .unwrap_or(self.config.max_concurrent_agents)
+    }
+}
+
+fn spawn_output_logger(
+    output: ProcessOutputSummaryHandle,
+    log_writer: IssueLogWriter,
+    stream_name: &'static str,
+    stdout: ChildStdout,
+) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            output.record(stream_name, line.clone()).await;
+            let _ = log_writer.record(stream_name, &line).await;
+        }
+    });
+}
+
+fn spawn_error_logger(
+    output: ProcessOutputSummaryHandle,
+    log_writer: IssueLogWriter,
+    stream_name: &'static str,
+    stderr: ChildStderr,
+) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            output.record(stream_name, line.clone()).await;
+            let _ = log_writer.record(stream_name, &line).await;
+        }
+    });
+}
+
+/// Async file-backed sink for raw `ralph` stdout/stderr lines.
+#[derive(Clone, Debug)]
+struct IssueLogWriter {
+    sender: mpsc::Sender<String>,
+}
+
+impl IssueLogWriter {
+    async fn record(&self, stream_name: &'static str, line: &str) -> Result<()> {
+        let entry = format!("{} [{}] {}\n", Utc::now().to_rfc3339(), stream_name, line);
+        self.sender.send(entry).await.map_err(|_| crate::error::SymphonyError::Workspace {
+            message: String::from("issue log writer closed unexpectedly"),
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })
+    }
+}
+
+/// Create the per-issue log file and spawn a background append loop.
+async fn spawn_issue_log_writer(
+    log_path: &Path,
+    issue: &TrackedIssue,
+    workspace: &WorkspaceInfo,
+) -> Result<IssueLogWriter> {
+    let parent = log_path.parent().ok_or_else(|| crate::error::SymphonyError::Workspace {
+        message: format!("issue log path has no parent: {}", log_path.display()),
+        location: snafu::Location::new(file!(), line!(), column!()),
+    })?;
+    tokio::fs::create_dir_all(parent).await.context(IoSnafu)?;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .await
+        .context(IoSnafu)?;
+    let header = format!(
+        "{} [meta] issue={} repo={} branch={} workspace={}\n",
+        Utc::now().to_rfc3339(),
+        issue.identifier,
+        issue.repo,
+        workspace.branch,
+        workspace.path.display(),
+    );
+    file.write_all(header.as_bytes()).await.context(IoSnafu)?;
+
+    let (sender, mut receiver) = mpsc::channel::<String>(256);
+    let log_path = log_path.to_path_buf();
+    tokio::spawn(async move {
+        let open_result = OpenOptions::new().append(true).open(&log_path).await;
+        let Ok(mut file) = open_result else {
+            return;
+        };
+
+        while let Some(entry) = receiver.recv().await {
+            if file.write_all(entry.as_bytes()).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    Ok(IssueLogWriter { sender })
+}
+
+/// Log file layout: `~/.config/rara/ralpha/logs/<repo>/<ISSUE>.log`.
+fn issue_log_path(repo_name: &str, issue_identifier: &str) -> PathBuf {
+    rara_paths::config_dir()
+        .join("ralpha/logs")
+        .join(repo_name)
+        .join(format!("{issue_identifier}.log"))
+}
+
+/// Shell hint printed at startup so operators can inspect issue logs quickly.
+fn lnav_hint() -> String {
+    format!(
+        "lnav {}/**/*.log",
+        rara_paths::config_dir().join("ralpha/logs").display()
+    )
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProcessOutputSummaryHandle(std::sync::Arc<Mutex<ProcessOutputSummary>>);
+
+impl ProcessOutputSummaryHandle {
+    async fn record(&self, stream_name: &'static str, line: String) {
+        self.0.lock().await.record(stream_name, line);
+    }
+
+    async fn snapshot(&self) -> ProcessOutputSummary {
+        self.0.lock().await.clone()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProcessOutputSummary {
+    stdout_line_count: usize,
+    stderr_line_count: usize,
+    stderr_tail: VecDeque<String>,
+}
+
+impl ProcessOutputSummary {
+    fn record(&mut self, stream_name: &'static str, line: String) {
+        match stream_name {
+            "stdout" => {
+                self.stdout_line_count += 1;
+            }
+            "stderr" => {
+                self.stderr_line_count += 1;
+                if !line.trim().is_empty() {
+                    if self.stderr_tail.len() == 6 {
+                        self.stderr_tail.pop_front();
+                    }
+                    self.stderr_tail.push_back(line);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn render_stderr_tail(&self) -> String {
+        if self.stderr_tail.is_empty() {
+            String::from("<none>")
+        } else {
+            self.stderr_tail.iter().cloned().collect::<Vec<_>>().join(" | ")
+        }
+    }
+}
+
 /// Resolve a `$ENV_VAR` reference to its value, or return the string as-is.
 fn resolve_env_var(value: &str) -> crate::error::Result<String> {
     if let Some(var_name) = value.strip_prefix('$') {
@@ -162,5 +573,44 @@ fn resolve_env_var(value: &str) -> crate::error::Result<String> {
         })
     } else {
         Ok(value.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProcessOutputSummary, issue_log_path, lnav_hint};
+
+    #[test]
+    fn process_output_summary_keeps_only_recent_stderr_lines() {
+        let mut summary = ProcessOutputSummary::default();
+        summary.record("stdout", "boot".to_owned());
+        for i in 0..8 {
+            summary.record("stderr", format!("line-{i}"));
+        }
+
+        assert_eq!(summary.stdout_line_count, 1);
+        assert_eq!(summary.stderr_line_count, 8);
+        assert_eq!(
+            summary.render_stderr_tail(),
+            "line-2 | line-3 | line-4 | line-5 | line-6 | line-7"
+        );
+    }
+
+    #[test]
+    fn issue_log_path_is_scoped_per_repo_and_issue() {
+        assert_eq!(
+            issue_log_path("rararulab/rara", "RAR-123"),
+            rara_paths::config_dir()
+                .join("ralpha/logs")
+                .join("rararulab/rara")
+                .join("RAR-123.log")
+        );
+    }
+
+    #[test]
+    fn lnav_hint_points_at_ralpha_logs_dir() {
+        let hint = lnav_hint();
+        assert!(hint.contains("lnav"));
+        assert!(hint.contains("/ralpha/logs"));
     }
 }

@@ -84,8 +84,11 @@ impl AgentTool for BashTool {
 
         let cwd = params.get("cwd").and_then(|v| v.as_str());
 
+        // Attempt rtk rewrite for token-optimized output.
+        let effective_command = rtk_rewrite(command).await;
+
         let mut cmd = tokio::process::Command::new("/bin/bash");
-        cmd.arg("-c").arg(command);
+        cmd.arg("-c").arg(&effective_command);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
@@ -128,6 +131,28 @@ impl AgentTool for BashTool {
             }
         }
     }
+}
+
+/// Try to rewrite a command via `rtk rewrite` for token-optimized output.
+/// Falls back to the original command if rtk is unavailable or declines the rewrite.
+async fn rtk_rewrite(command: &str) -> String {
+    let result = tokio::process::Command::new("rtk")
+        .args(["rewrite", command])
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let rewritten = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !rewritten.is_empty() && rewritten != command {
+                tracing::debug!(original = command, rewritten = %rewritten, "rtk rewrite applied");
+                return rewritten;
+            }
+        }
+        _ => {}
+    }
+
+    command.to_string()
 }
 
 /// Truncate output to [`MAX_OUTPUT_BYTES`] and [`MAX_OUTPUT_LINES`], keeping

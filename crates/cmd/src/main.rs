@@ -51,6 +51,7 @@ enum Commands {
     Chat(ChatArgs),
     Top(top::TopCmd),
     Gateway(GatewayArgs),
+    Symphony(SymphonyArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -243,6 +244,62 @@ impl GatewayArgs {
                 Ok(())
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Symphony command
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Start the symphony orchestrator standalone")]
+struct SymphonyArgs {}
+
+impl SymphonyArgs {
+    async fn run() -> Result<(), Whatever> {
+        let config = AppConfig::new().whatever_context("Failed to load config")?;
+
+        let logs_dir = rara_paths::logs_dir();
+        std::fs::create_dir_all(logs_dir).whatever_context("Failed to create logs directory")?;
+
+        let _guards = common_telemetry::logging::init_global_logging(
+            "rara-symphony",
+            &common_telemetry::logging::LoggingOptions {
+                dir: logs_dir.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            &common_telemetry::logging::TracingOptions::default(),
+            None,
+        );
+
+        let Some(symphony_config) = config.symphony else {
+            whatever!("Symphony requires [symphony] config section");
+        };
+
+        if !symphony_config.enabled {
+            whatever!("Symphony is disabled in config (symphony.enabled = false)");
+        }
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_on_signal = cancel.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("received Ctrl+C, shutting down symphony gracefully…");
+            cancel_on_signal.cancel();
+
+            // Second Ctrl+C = force exit.
+            tokio::signal::ctrl_c().await.ok();
+            tracing::error!("received second Ctrl+C, force exiting");
+            std::process::exit(1);
+        });
+
+        let symphony = rara_symphony::SymphonyService::new(
+            symphony_config,
+            cancel,
+            std::env::var("GITHUB_TOKEN").ok(),
+        );
+
+        symphony.run().await.whatever_context("symphony service failed")
     }
 }
 
@@ -545,5 +602,6 @@ async fn main() -> Result<(), Whatever> {
         Commands::Chat(args) => args.run().await,
         Commands::Top(args) => args.run().await,
         Commands::Gateway(_) => GatewayArgs::run().await,
+        Commands::Symphony(_) => SymphonyArgs::run().await,
     }
 }

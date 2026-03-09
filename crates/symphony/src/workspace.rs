@@ -1,0 +1,187 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use snafu::{Location, ensure};
+
+use crate::config::RepoConfig;
+use crate::error::{Result, SymphonyError};
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceInfo {
+    pub path: PathBuf,
+    pub branch: String,
+    pub created_now: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceManager;
+
+impl WorkspaceManager {
+    /// Ensure the issue branch is checked out in a dedicated worktree under the
+    /// configured workspace root. Existing worktrees are reused.
+    pub fn ensure_worktree(&self, repo: &RepoConfig, issue_number: u64, issue_title: &str) -> Result<WorkspaceInfo> {
+        ensure!(
+            repo.repo_path.is_some(),
+            crate::error::WorkspaceSnafu {
+                message: format!("repo {} is missing repo_path", repo.name),
+            }
+        );
+        ensure!(
+            repo.effective_workspace_root().is_some(),
+            crate::error::WorkspaceSnafu {
+                message: format!("repo {} is missing workspace_root", repo.name),
+            }
+        );
+        let repo_path = repo.repo_path.clone().expect("checked repo_path above");
+        let workspace_root = repo
+            .effective_workspace_root()
+            .expect("checked workspace_root above");
+        let branch = branch_name(issue_number, issue_title);
+        let path = workspace_root.join(&branch);
+
+        if path.exists() {
+            return Ok(WorkspaceInfo {
+                path,
+                branch,
+                created_now: false,
+            });
+        }
+
+        fs::create_dir_all(&workspace_root).map_err(|source| SymphonyError::Io {
+            source,
+            location: Location::new(file!(), line!(), column!()),
+        })?;
+
+        let repo = git2::Repository::open(&repo_path).map_err(|source| SymphonyError::Git {
+            source,
+            location: Location::new(file!(), line!(), column!()),
+        })?;
+        let head_ref = repo.head().map_err(|source| SymphonyError::Git {
+            source,
+            location: Location::new(file!(), line!(), column!()),
+        })?;
+        let head = head_ref.peel_to_commit().map_err(|source| SymphonyError::Git {
+            source,
+            location: Location::new(file!(), line!(), column!()),
+        })?;
+
+        let branch_ref = match repo.branch(&branch, &head, false) {
+            Ok(branch_ref) => branch_ref,
+            Err(err) if err.code() == git2::ErrorCode::Exists => repo
+                .find_branch(&branch, git2::BranchType::Local)
+                .map_err(|source| SymphonyError::Git {
+                    source,
+                    location: Location::new(file!(), line!(), column!()),
+                })?,
+            Err(err) => {
+                return Err(SymphonyError::Git {
+                    source: err,
+                    location: Location::new(file!(), line!(), column!()),
+                });
+            }
+        };
+
+        let reference = branch_ref.into_reference();
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        repo.worktree(&branch, &path, Some(&options))
+            .map_err(|source| SymphonyError::Git {
+                source,
+                location: Location::new(file!(), line!(), column!()),
+            })?;
+
+        Ok(WorkspaceInfo {
+            path,
+            branch,
+            created_now: true,
+        })
+    }
+
+    /// Remove the issue worktree and prune the matching git worktree/branch.
+    pub fn cleanup_worktree(&self, repo: &RepoConfig, workspace: &WorkspaceInfo) -> Result<()> {
+        ensure!(
+            repo.repo_path.is_some(),
+            crate::error::WorkspaceSnafu {
+                message: format!("repo {} is missing repo_path", repo.name),
+            }
+        );
+        let repo_path = repo.repo_path.clone().expect("checked repo_path above");
+        let repo = git2::Repository::open(repo_path).map_err(|source| SymphonyError::Git {
+            source,
+            location: Location::new(file!(), line!(), column!()),
+        })?;
+
+        if workspace.path.exists() {
+            fs::remove_dir_all(&workspace.path).map_err(|source| SymphonyError::Io {
+                source,
+                location: Location::new(file!(), line!(), column!()),
+            })?;
+        }
+
+        if let Ok(wt) = repo.find_worktree(&workspace.branch) {
+            let _ = wt.prune(Some(git2::WorktreePruneOptions::new().valid(false).locked(false)));
+        }
+
+        if let Ok(mut branch) = repo.find_branch(&workspace.branch, git2::BranchType::Local) {
+            branch.delete().map_err(|source| SymphonyError::Git {
+                source,
+                location: Location::new(file!(), line!(), column!()),
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Generate a stable per-issue branch name from the issue number and title.
+fn branch_name(issue_number: u64, issue_title: &str) -> String {
+    let slug = issue_title
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|piece| !piece.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let slug = if slug.is_empty() { "task".to_owned() } else { slug };
+    format!("issue-{issue_number}-{slug}")
+}
+
+/// Resolve the repo-specific workflow file path relative to the worktree root.
+pub fn workflow_file(repo: &RepoConfig, default_workflow_file: &str) -> PathBuf {
+    Path::new(repo.workflow_file.as_deref().unwrap_or(default_workflow_file)).to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn creates_and_cleans_up_worktree() {
+        let repo_dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(repo_dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+
+        let repo = RepoConfig::builder()
+            .name("rararulab/rara".to_owned())
+            .url("https://github.com/rararulab/rara".to_owned())
+            .repo_path(repo_dir.path().to_path_buf())
+            .active_labels(vec!["symphony:ready".to_owned()])
+            .build();
+
+        let manager = WorkspaceManager;
+        let workspace = manager.ensure_worktree(&repo, 42, "Fix startup").unwrap();
+        assert!(workspace.path.exists());
+        assert_eq!(workspace.branch, "issue-42-fix-startup");
+
+        manager.cleanup_worktree(&repo, &workspace).unwrap();
+        assert!(!workspace.path.exists());
+    }
+}
