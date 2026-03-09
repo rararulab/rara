@@ -36,6 +36,13 @@ use crate::{
     session::SessionKey,
 };
 
+/// Estimated chars-per-token ratio for context size estimation.
+const CHARS_PER_TOKEN: usize = 4;
+/// Context usage threshold (fraction) at which a SHOULD-handoff hint is injected.
+const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
+/// Context usage threshold (fraction) at which a MUST-handoff hint is injected.
+const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
+
 /// Classification of an agent's functional role.
 ///
 /// Roles enable callers to look up agents by function rather than by name.
@@ -1062,6 +1069,34 @@ pub(crate) async fn run_agent_loop(
             });
 
             messages.push(llm::Message::tool_result(id, result_str));
+        }
+
+        // ── Runtime context guard ──────────────────────────────────────
+        // Estimate current context size and inject a warning if it's
+        // approaching the model's context window limit.
+        {
+            let estimated_chars: usize =
+                messages.iter().map(|m| m.estimated_char_len()).sum();
+            let estimated_tokens = estimated_chars / CHARS_PER_TOKEN;
+            let usage_ratio =
+                estimated_tokens as f64 / capabilities.context_window_tokens as f64;
+
+            if usage_ratio >= CONTEXT_CRITICAL_THRESHOLD {
+                let warning = format!(
+                    "[Context Usage Critical] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。\
+                     你 MUST 立即使用 tape-handoff 工具：提供详细 summary 和 next_steps，然后继续工作。\
+                     不 handoff 将导致下一轮调用失败。",
+                    usage_ratio * 100.0
+                );
+                messages.push(llm::Message::user(warning));
+            } else if usage_ratio >= CONTEXT_WARN_THRESHOLD {
+                let warning = format!(
+                    "[Context Usage Warning] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。\
+                     你 SHOULD 考虑使用 tape-handoff 工具保存进度并截断上下文。",
+                    usage_ratio * 100.0
+                );
+                messages.push(llm::Message::user(warning));
+            }
         }
 
         // Collect iteration trace (with tool calls)

@@ -171,6 +171,29 @@ impl Message {
             tool_call_id: Some(tool_call_id.into()),
         }
     }
+
+    /// Rough character-count estimate for context size budgeting.
+    pub fn estimated_char_len(&self) -> usize {
+        let content_len = match &self.content {
+            MessageContent::Text(s) => s.len(),
+            MessageContent::Multimodal(blocks) => blocks
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => text.len(),
+                    ContentBlock::ImageUrl { url } => url.len(),
+                    // base64 images are large but already counted by the provider;
+                    // use a small constant so we don't over-count.
+                    ContentBlock::ImageBase64 { .. } => 256,
+                })
+                .sum(),
+        };
+        let tool_calls_len: usize = self
+            .tool_calls
+            .iter()
+            .map(|tc| tc.name.len() + tc.arguments.len())
+            .sum();
+        content_len + tool_calls_len
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +310,7 @@ pub struct ModelCapabilities {
     pub supports_tools:               bool,
     pub supports_parallel_tool_calls: bool,
     pub tools_disabled_reason:        Option<&'static str>,
+    pub context_window_tokens:        usize,
 }
 
 impl ModelCapabilities {
@@ -298,6 +322,8 @@ impl ModelCapabilities {
         // Ollama serves many raw models whose chat templates/tool-calling support
         // varies. Keep the deny-list small and explicit so unsupported models
         // degrade gracefully without breaking tool-capable ones.
+        let context_window_tokens = estimate_context_window(&canonical);
+
         if matches!(provider, LlmProviderFamily::Ollama) && canonical.starts_with("deepseek-r1") {
             return Self {
                 provider,
@@ -306,6 +332,7 @@ impl ModelCapabilities {
                 tools_disabled_reason: Some(
                     "ollama deepseek-r1 variants do not support function/tool calling",
                 ),
+                context_window_tokens,
             };
         }
 
@@ -314,6 +341,7 @@ impl ModelCapabilities {
             supports_tools: true,
             supports_parallel_tool_calls: !matches!(provider, LlmProviderFamily::Ollama),
             tools_disabled_reason: None,
+            context_window_tokens,
         }
     }
 }
@@ -349,6 +377,19 @@ fn detect_provider_family(provider_hint: Option<&str>, model_name: &str) -> LlmP
     }
 
     LlmProviderFamily::Unknown
+}
+
+/// Best-effort context window estimate based on the canonical model name.
+fn estimate_context_window(canonical: &str) -> usize {
+    if canonical.contains("gemini") {
+        1_000_000
+    } else if canonical.contains("claude") {
+        200_000
+    } else if canonical.contains("gpt-4o") {
+        128_000
+    } else {
+        128_000
+    }
 }
 
 fn canonical_model_name(model_name: &str) -> String {
