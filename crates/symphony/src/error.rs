@@ -41,28 +41,6 @@ pub enum SymphonyError {
         location: snafu::Location,
     },
 
-    #[snafu(display("ralph API error: {message}"))]
-    Ralph {
-        message:  String,
-        #[snafu(implicit)]
-        location: snafu::Location,
-    },
-
-    #[snafu(display("ralph API request failed: {source}"))]
-    RalphRequest {
-        source:   reqwest::Error,
-        #[snafu(implicit)]
-        location: snafu::Location,
-    },
-
-    #[snafu(display("{message}"))]
-    ParseJson {
-        message:  String,
-        source:   serde_json::Error,
-        #[snafu(implicit)]
-        location: snafu::Location,
-    },
-
     #[snafu(display("config error: {message}"))]
     Config {
         message:  String,

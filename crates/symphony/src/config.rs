@@ -23,13 +23,15 @@ fn default_workflow_file() -> String { "WORKFLOW.md".to_owned() }
 
 fn default_command() -> String { "ralph".to_owned() }
 
+fn default_backend() -> String { "codex".to_owned() }
+
 fn default_max_concurrent_agents() -> usize { 2 }
 
 fn default_stall_timeout() -> Duration { Duration::from_secs(30 * 60) }
 
 fn default_max_retry_backoff() -> Duration { Duration::from_secs(60 * 60) }
 
-fn default_active_states() -> Vec<String> { vec!["Todo".to_owned(), "In Progress".to_owned()] }
+fn default_active_states() -> Vec<String> { vec!["Todo".to_owned()] }
 
 fn default_terminal_states() -> Vec<String> {
     vec![
@@ -45,12 +47,24 @@ fn default_repo_label_prefix() -> String { "repo:".to_owned() }
 
 fn default_linear_endpoint() -> String { "https://api.linear.app/graphql".to_owned() }
 
+fn default_started_issue_state() -> String { "In Progress".to_owned() }
+
+fn default_completed_issue_state() -> String { "ToVerify".to_owned() }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TrackerConfig {
     Github {
         /// GitHub personal access token. Supports `$ENV_VAR` syntax.
         api_key: Option<String>,
+
+        /// Tracker state applied once Ralph starts successfully.
+        #[serde(default = "default_started_issue_state")]
+        started_issue_state: String,
+
+        /// Tracker state applied once Ralph completes successfully.
+        #[serde(default = "default_completed_issue_state")]
+        completed_issue_state: String,
     },
     Linear {
         /// Linear API key. Supports `$ENV_VAR` syntax.
@@ -78,7 +92,53 @@ pub enum TrackerConfig {
         /// Label prefix for repo mapping.
         #[serde(default = "default_repo_label_prefix")]
         repo_label_prefix: String,
+
+        /// Tracker state applied once Ralph starts successfully.
+        #[serde(default = "default_started_issue_state")]
+        started_issue_state: String,
+
+        /// Tracker state applied once Ralph completes successfully.
+        #[serde(default = "default_completed_issue_state")]
+        completed_issue_state: String,
     },
+}
+
+impl TrackerConfig {
+    #[must_use]
+    pub fn active_states(&self) -> &[String] {
+        match self {
+            Self::Linear { active_states, .. } => active_states,
+            Self::Github { .. } => &[],
+        }
+    }
+
+    #[must_use]
+    pub fn started_issue_state(&self) -> &str {
+        match self {
+            Self::Github {
+                started_issue_state,
+                ..
+            }
+            | Self::Linear {
+                started_issue_state,
+                ..
+            } => started_issue_state,
+        }
+    }
+
+    #[must_use]
+    pub fn completed_issue_state(&self) -> &str {
+        match self {
+            Self::Github {
+                completed_issue_state,
+                ..
+            }
+            | Self::Linear {
+                completed_issue_state,
+                ..
+            } => completed_issue_state,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
@@ -135,9 +195,9 @@ pub struct AgentConfig {
     #[serde(default = "default_command")]
     pub command: String,
 
-    /// Optional path to a ralph config file.
-    #[serde(default)]
-    pub config_file: Option<PathBuf>,
+    /// Backend passed to `ralph init --backend`.
+    #[serde(default = "default_backend")]
+    pub backend: String,
 
     /// Extra args to pass to `ralph run`.
     #[serde(default)]
@@ -157,7 +217,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             command:     default_command(),
-            config_file: None,
+            backend:     default_backend(),
             extra_args:  Vec::new(),
             run_timeout: None,
         }
@@ -166,13 +226,25 @@ impl Default for AgentConfig {
 
 impl AgentConfig {
     #[must_use]
+    pub fn init_args(&self) -> Vec<String> {
+        vec![
+            "init".to_owned(),
+            "--force".to_owned(),
+            "--backend".to_owned(),
+            self.backend.clone(),
+        ]
+    }
+
+    #[must_use]
     pub fn command_args(&self) -> Vec<String> {
         let mut args = vec!["run".to_owned()];
-        if let Some(path) = &self.config_file {
-            args.push("-c".to_owned());
-            args.push(path.display().to_string());
+        let explicit_mode = self
+            .extra_args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--autonomous" | "--no-tui"));
+        if !explicit_mode {
+            args.push("--autonomous".to_owned());
         }
-        args.push("--no-tui".to_owned());
         args.extend(self.extra_args.iter().cloned());
         args
     }

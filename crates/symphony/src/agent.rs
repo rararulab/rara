@@ -45,6 +45,39 @@ impl RalphAgent {
     #[must_use]
     pub fn new(config: AgentConfig) -> Self { Self { config } }
 
+    async fn init_workspace_config<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
+        let mut cmd = Command::new(&self.config.command);
+        for arg in self.config.init_args() {
+            cmd.arg(arg);
+        }
+
+        let output = cmd
+            .current_dir(workspace.as_ref())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+            .context(IoSnafu)?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let details = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("ralph init exited with {}", output.status)
+        };
+
+        Err(crate::error::SymphonyError::Workspace {
+            message:  format!("failed to initialize Ralph workspace config: {details}"),
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })
+    }
+
     pub fn build_prompt(&self, task: &AgentTask) -> String {
         if let Some(content) = &task.workflow_content {
             let trimmed = content.trim();
@@ -88,10 +121,12 @@ Issue #{number}: {title}
             "\
 ## Required Delivery
 
+- use the system-installed linear CLI (`linear`) to comment on the Linear issue before or during implementation.
+- in that Linear comment, summarize your reasoning and implementation plan for the issue.
 - commit your changes.
 - push the branch to the remote repository.
 - create a GitHub pull request for this branch before finishing.
-- comment on the Linear issue with the GitHub pull request link before finishing.
+- use the same linear CLI (`linear`) to comment on the Linear issue again with the GitHub pull request link and a short implementation summary before finishing.
 - include the issue identifier `{}` in the commit message and pull request title or body.
 ",
             task.issue.identifier
@@ -105,6 +140,8 @@ Issue #{number}: {title}
         task: &AgentTask,
         workspace: P,
     ) -> Result<AgentHandle> {
+        self.init_workspace_config(workspace.as_ref()).await?;
+
         let prompt_path = workspace.as_ref().join("PROMPT.md");
         tokio::fs::write(&prompt_path, self.build_prompt(task))
             .await

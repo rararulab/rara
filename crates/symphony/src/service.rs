@@ -37,8 +37,6 @@ use crate::{
     workspace::{WorkspaceInfo, WorkspaceManager, workflow_file},
 };
 
-const STARTED_ISSUE_STATE: &str = "In Progress";
-
 struct RunningIssue {
     issue:      TrackedIssue,
     workspace:  WorkspaceInfo,
@@ -112,6 +110,7 @@ impl SymphonyService {
                 active_states,
                 terminal_states,
                 repo_label_prefix,
+                ..
             }) => {
                 let resolved_key = resolve_env_var(api_key)?;
                 let repo_names = self.config.repos.iter().map(|r| r.name.clone()).collect();
@@ -126,7 +125,7 @@ impl SymphonyService {
                     repo_names,
                 )?))
             }
-            Some(TrackerConfig::Github { api_key }) => {
+            Some(TrackerConfig::Github { api_key, .. }) => {
                 let token = match api_key {
                     Some(k) => Some(resolve_env_var(k)?),
                     None => self.github_token.clone(),
@@ -245,8 +244,9 @@ impl IssueRuntime {
                     stderr_lines = output.stderr_line_count,
                     "ralph task runner completed"
                 );
-                if let Err(err) = tracker.transition_issue(&run.issue, "Verify").await {
-                    warn!(issue_id = %issue_id, error = %err, "failed to transition issue to Verify after success");
+                let completed_state = self.completed_issue_state();
+                if let Err(err) = tracker.transition_issue(&run.issue, completed_state).await {
+                    warn!(issue_id = %issue_id, state = completed_state, error = %err, "failed to transition issue after successful ralph run");
                     self.failed.insert(
                         issue_id,
                         FinishedIssue {
@@ -366,10 +366,11 @@ impl IssueRuntime {
             spawn_error_logger(output.clone(), log_writer, "stderr", stderr);
         }
 
-        if let Err(err) = tracker.transition_issue(&issue, STARTED_ISSUE_STATE).await {
+        let started_state = self.started_issue_state();
+        if let Err(err) = tracker.transition_issue(&issue, started_state).await {
             warn!(
                 issue_id = %issue.id,
-                state = STARTED_ISSUE_STATE,
+                state = started_state,
                 error = %err,
                 "failed to transition issue after starting ralph task runner"
             );
@@ -435,6 +436,20 @@ impl IssueRuntime {
             .find(|repo| repo.name == repo_name)
             .and_then(|repo| repo.max_concurrent_agents)
             .unwrap_or(self.config.max_concurrent_agents)
+    }
+
+    fn started_issue_state(&self) -> &str {
+        self.config
+            .tracker
+            .as_ref()
+            .map_or("In Progress", TrackerConfig::started_issue_state)
+    }
+
+    fn completed_issue_state(&self) -> &str {
+        self.config
+            .tracker
+            .as_ref()
+            .map_or("ToVerify", TrackerConfig::completed_issue_state)
     }
 }
 

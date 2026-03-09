@@ -26,7 +26,6 @@ snafu.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "time", "sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
