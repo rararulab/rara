@@ -514,11 +514,7 @@ pub(crate) async fn run_agent_loop(
                         .filter(|(name, _)| !user.can_use_tool(name))
                         .map(|(name, _)| name.to_string())
                         .collect();
-                    info!(
-                        user_id,
-                        ?denied,
-                        "filtered tools by user permissions"
-                    );
+                    info!(user_id, ?denied, "filtered tools by user permissions");
                 }
                 Arc::new(filtered)
             }
@@ -534,12 +530,9 @@ pub(crate) async fn run_agent_loop(
         None => manifest.system_prompt.clone(),
     };
     let effective_prompt = format!(
-        "{effective_prompt}\n\n\
-         <context_contract>\n\
-         Excessively long context may cause model call failures. \
-         In this case, you SHOULD first use tape_handoff tool to \
-         shorten the length of the retrieved history.\n\
-         </context_contract>"
+        "{effective_prompt}\n\n<context_contract>\nExcessively long context may cause model call \
+         failures. In this case, you SHOULD first use tape_handoff tool to shorten the length of \
+         the retrieved history.\n</context_contract>"
     );
     let provider_hint = manifest.provider_hint.as_deref();
 
@@ -704,17 +697,20 @@ pub(crate) async fn run_agent_loop(
                 llm::StreamDelta::Done { stop_reason, usage } => {
                     has_tool_calls = stop_reason == llm::StopReason::ToolCalls;
                     if let Some(u) = usage {
-                        if let Err(e) = tape.append_event(
-                            tape_name,
-                            "llm.run",
-                            serde_json::json!({
-                                "usage": {
-                                    "prompt_tokens": u.prompt_tokens,
-                                    "completion_tokens": u.completion_tokens,
-                                    "total_tokens": u.total_tokens
-                                }
-                            }),
-                        ).await {
+                        if let Err(e) = tape
+                            .append_event(
+                                tape_name,
+                                "llm.run",
+                                serde_json::json!({
+                                    "usage": {
+                                        "prompt_tokens": u.prompt_tokens,
+                                        "completion_tokens": u.completion_tokens,
+                                        "total_tokens": u.total_tokens
+                                    }
+                                }),
+                            )
+                            .await
+                        {
                             warn!(error = %e, "failed to persist llm usage event");
                         }
                     }
@@ -751,34 +747,29 @@ pub(crate) async fn run_agent_loop(
 
                 // Create an automatic handoff anchor to truncate context.
                 let state = crate::memory::HandoffState {
-                    phase: None,
-                    summary: Some(
+                    phase:      None,
+                    summary:    Some(
                         "Context window exceeded — automatic handoff to truncate history."
                             .to_owned(),
                     ),
                     next_steps: None,
                     source_ids: vec![],
-                    owner: Some("system".to_owned()),
-                    extra: None,
+                    owner:      Some("system".to_owned()),
+                    extra:      None,
                 };
                 if let Err(he) = tape.handoff(tape_name, "auto-compact", state).await {
                     warn!(error = %he, "auto-handoff failed, cannot recover from context window error");
                     return Err(KernelError::AgentExecution {
-                        message: format!(
-                            "Context window exceeded and auto-handoff failed: {he}"
-                        ),
+                        message: format!("Context window exceeded and auto-handoff failed: {he}"),
                     });
                 }
 
                 // Rebuild messages from the truncated context.
-                let rebuilt =
-                    tape.build_llm_context(tape_name).await.map_err(|e| {
-                        KernelError::AgentExecution {
-                            message: format!(
-                                "failed to rebuild context after handoff: {e}"
-                            ),
-                        }
-                    })?;
+                let rebuilt = tape.build_llm_context(tape_name).await.map_err(|e| {
+                    KernelError::AgentExecution {
+                        message: format!("failed to rebuild context after handoff: {e}"),
+                    }
+                })?;
                 messages = rebuilt;
                 // Re-add the user's current message that triggered this turn.
                 messages.push(llm::Message::user(&input_text));
@@ -904,10 +895,12 @@ pub(crate) async fn run_agent_loop(
                 arguments: args.clone(),
             });
             if let Some(ref mtx) = milestone_tx {
-                let _ = mtx.send(crate::io::AgentEvent::Milestone {
-                    stage: "tool_call_start".to_string(),
-                    detail: Some(tool_call.name.clone()),
-                }).await;
+                let _ = mtx
+                    .send(crate::io::AgentEvent::Milestone {
+                        stage:  "tool_call_start".to_string(),
+                        detail: Some(tool_call.name.clone()),
+                    })
+                    .await;
             }
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
         }
@@ -974,7 +967,10 @@ pub(crate) async fn run_agent_loop(
                     if let Some(ref user) = user_ref {
                         if !user.can_use_tool(&name) {
                             tool_span.record("success", false);
-                            let err = format!("permission denied: user '{}' cannot use tool '{name}'", user.name);
+                            let err = format!(
+                                "permission denied: user '{}' cannot use tool '{name}'",
+                                user.name
+                            );
                             warn!("{err}");
                             let dur = tool_start.elapsed().as_millis() as u64;
                             return (false, serde_json::json!({ "error": &err }), Some(err), dur);
@@ -1043,10 +1039,16 @@ pub(crate) async fn run_agent_loop(
                 error:          err.clone(),
             });
             if let Some(ref mtx) = milestone_tx {
-                let _ = mtx.send(crate::io::AgentEvent::Milestone {
-                    stage: "tool_call_end".to_string(),
-                    detail: Some(format!("{}: {}", name, if *success { "ok" } else { "error" })),
-                }).await;
+                let _ = mtx
+                    .send(crate::io::AgentEvent::Milestone {
+                        stage:  "tool_call_end".to_string(),
+                        detail: Some(format!(
+                            "{}: {}",
+                            name,
+                            if *success { "ok" } else { "error" }
+                        )),
+                    })
+                    .await;
             }
 
             tool_call_traces.push(ToolCallTrace {

@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
@@ -5,82 +19,82 @@ use snafu::Snafu;
 pub enum SymphonyError {
     #[snafu(display("github request failed for {repo}"))]
     GitHubRequest {
-        repo: String,
-        source: reqwest::Error,
+        repo:     String,
+        source:   reqwest::Error,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("GitHub API returned {status} for {repo}"))]
     GitHubStatus {
-        repo: String,
-        status: reqwest::StatusCode,
+        repo:     String,
+        status:   reqwest::StatusCode,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("linear API error: {message}"))]
     Linear {
-        message: String,
-        source: lineark_sdk::LinearError,
+        message:  String,
+        source:   lineark_sdk::LinearError,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("ralph API error: {message}"))]
     Ralph {
-        message: String,
+        message:  String,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("ralph API request failed: {source}"))]
     RalphRequest {
-        source: reqwest::Error,
+        source:   reqwest::Error,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("{message}"))]
     ParseJson {
-        message: String,
-        source: serde_json::Error,
+        message:  String,
+        source:   serde_json::Error,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("config error: {message}"))]
     Config {
-        message: String,
+        message:  String,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("git error: {source}"))]
     Git {
-        source: git2::Error,
+        source:   git2::Error,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("workspace error: {message}"))]
     Workspace {
-        message: String,
+        message:  String,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("hook failed: {hook} - {message}"))]
     Hook {
-        hook: String,
-        message: String,
+        hook:     String,
+        message:  String,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
     #[snafu(display("IO error: {source}"))]
     Io {
-        source: std::io::Error,
+        source:   std::io::Error,
         #[snafu(implicit)]
         location: snafu::Location,
     },

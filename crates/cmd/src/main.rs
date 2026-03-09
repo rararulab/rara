@@ -21,8 +21,10 @@ mod build_info;
 mod top;
 
 use rara_app::{AppConfig, StartOptions, run as run_app, start_with_options};
-use rara_channels::terminal::{CliEvent, TerminalAdapter};
-use rara_channels::tool_display::{tool_arguments_summary, tool_display_name};
+use rara_channels::{
+    terminal::{CliEvent, TerminalAdapter},
+    tool_display::{tool_arguments_summary, tool_display_name},
+};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     identity::UserId,
@@ -124,7 +126,10 @@ impl ServerArgs {
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Start the gateway supervisor")]
-#[command(long_about = "Start the gateway supervisor that spawns, monitors, and restarts the agent server.\n\nExamples:\n  rara gateway")]
+#[command(
+    long_about = "Start the gateway supervisor that spawns, monitors, and restarts the agent \
+                  server.\n\nExamples:\n  rara gateway"
+)]
 struct GatewayArgs {}
 
 impl GatewayArgs {
@@ -150,10 +155,7 @@ impl GatewayArgs {
 
         // Extract port from HTTP bind_address (e.g. "127.0.0.1:25555" -> "25555").
         let bind_addr = &config.http.bind_address;
-        let port = bind_addr
-            .rsplit(':')
-            .next()
-            .unwrap_or("25555");
+        let port = bind_addr.rsplit(':').next().unwrap_or("25555");
         tracing::info!(
             health_timeout = gateway_config.health_timeout,
             max_restart_attempts = gateway_config.max_restart_attempts,
@@ -173,23 +175,29 @@ impl GatewayArgs {
         let Some(bot_token) = tg.bot_token.as_deref().filter(|s| !s.is_empty()) else {
             whatever!("Gateway requires telegram.bot_token");
         };
-        let Some(raw_channel_id) = tg.notification_channel_id.as_deref().filter(|s| !s.is_empty()) else {
+        let Some(raw_channel_id) = tg
+            .notification_channel_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        else {
             whatever!("Gateway requires telegram.notification_channel_id");
         };
         let channel_id: i64 = raw_channel_id
             .parse()
             .whatever_context("telegram.notification_channel_id must be a valid i64")?;
-        let notifier = std::sync::Arc::new(
-            rara_app::gateway::UpdateNotifier::new(bot_token, channel_id, build_info::FULL_VERSION, &gateway_config.repo_url),
-        );
+        let notifier = std::sync::Arc::new(rara_app::gateway::UpdateNotifier::new(
+            bot_token,
+            channel_id,
+            build_info::FULL_VERSION,
+            &gateway_config.repo_url,
+        ));
 
         // 1. Create supervisor + handle.
-        let (mut supervisor, supervisor_handle) =
-            rara_app::gateway::SupervisorService::new(
-                gateway_config.clone(),
-                port,
-                std::sync::Arc::clone(&notifier),
-            );
+        let (mut supervisor, supervisor_handle) = rara_app::gateway::SupervisorService::new(
+            gateway_config.clone(),
+            port,
+            std::sync::Arc::clone(&notifier),
+        );
 
         // 2. Create update detector + watch receiver.
         let (detector, update_rx) =
@@ -238,7 +246,9 @@ impl GatewayArgs {
                 tracing::error!(error = %e, "Gateway supervisor stopped with error");
                 // Gateway stays alive for manual intervention — don't propagate
                 // the error as a hard failure.
-                tracing::info!("Gateway will remain alive for manual intervention. Press Ctrl+C to exit.");
+                tracing::info!(
+                    "Gateway will remain alive for manual intervention. Press Ctrl+C to exit."
+                );
                 tokio::signal::ctrl_c().await.ok();
                 cancel.cancel();
                 Ok(())
@@ -299,7 +309,10 @@ impl SymphonyArgs {
             std::env::var("GITHUB_TOKEN").ok(),
         );
 
-        symphony.run().await.whatever_context("symphony service failed")
+        symphony
+            .run()
+            .await
+            .whatever_context("symphony service failed")
     }
 }
 
@@ -425,16 +438,29 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
     match event {
         StreamEvent::TextDelta { text: t } => CliEvent::TextDelta { text: t },
         StreamEvent::ReasoningDelta { text: t } => CliEvent::ReasoningDelta { text: t },
-        StreamEvent::ToolCallStart { name, arguments, .. } => {
+        StreamEvent::ToolCallStart {
+            name, arguments, ..
+        } => {
             let summary = tool_arguments_summary(&name, &arguments);
             let display = tool_display_name(&name).to_owned();
-            CliEvent::ToolCallStart { name: display, summary }
+            CliEvent::ToolCallStart {
+                name: display,
+                summary,
+            }
         }
-        StreamEvent::ToolCallEnd { error, success, result_preview, .. } => {
+        StreamEvent::ToolCallEnd {
+            error,
+            success,
+            result_preview,
+            ..
+        } => {
             if let Some(ref err) = error {
                 eprintln!("\x1b[31m[tool error] {}\x1b[0m", err);
             }
-            CliEvent::ToolCallEnd { success, result_preview }
+            CliEvent::ToolCallEnd {
+                success,
+                result_preview,
+            }
         }
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
         StreamEvent::TurnMetrics {

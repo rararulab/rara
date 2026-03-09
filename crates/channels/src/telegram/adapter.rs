@@ -51,9 +51,7 @@ use dashmap::DashMap;
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
-        command::{
-            CallbackHandler, CommandContext, CommandHandler, CommandInfo, CommandResult,
-        },
+        command::{CallbackHandler, CommandContext, CommandHandler, CommandInfo, CommandResult},
         types::{ChannelType, ChannelUser, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
@@ -148,7 +146,11 @@ fn format_tool_line(t: &ToolProgress) -> String {
 fn render_progress(tools: &[ToolProgress]) -> String {
     let total = tools.len();
     if total <= 5 {
-        return tools.iter().map(format_tool_line).collect::<Vec<_>>().join("\n");
+        return tools
+            .iter()
+            .map(format_tool_line)
+            .collect::<Vec<_>>()
+            .join("\n");
     }
 
     let mut lines = Vec::new();
@@ -325,15 +327,23 @@ impl TelegramAdapter {
         self
     }
 
-    /// Register command handlers (builder pattern — must be called before `Arc` wrapping).
+    /// Register command handlers (builder pattern — must be called before `Arc`
+    /// wrapping).
     pub fn with_command_handlers(self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
-        *self.command_handlers.write().unwrap_or_else(|e| e.into_inner()) = handlers;
+        *self
+            .command_handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = handlers;
         self
     }
 
-    /// Replace command handlers at runtime (works through `&self` / `Arc<Self>`).
+    /// Replace command handlers at runtime (works through `&self` /
+    /// `Arc<Self>`).
     pub fn set_command_handlers(&self, handlers: Vec<Arc<dyn CommandHandler>>) {
-        *self.command_handlers.write().unwrap_or_else(|e| e.into_inner()) = handlers;
+        *self
+            .command_handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = handlers;
     }
 
     /// Register callback handlers.
@@ -405,11 +415,7 @@ impl TelegramAdapter {
     }
 
     /// Send binary attachments (images or documents) to a Telegram chat.
-    async fn send_attachments(
-        &self,
-        chat_id: i64,
-        attachments: &[rara_kernel::io::Attachment],
-    ) {
+    async fn send_attachments(&self, chat_id: i64, attachments: &[rara_kernel::io::Attachment]) {
         use teloxide::types::InputFile;
 
         for attachment in attachments {
@@ -888,16 +894,16 @@ async fn handle_update(
 
                 if !cmd_name.is_empty() {
                     // Find a handler whose `commands()` list contains this name.
-                    let matched_handler = command_handlers.iter().find(|h| {
-                        h.commands().iter().any(|def| def.name == cmd_name)
-                    });
+                    let matched_handler = command_handlers
+                        .iter()
+                        .find(|h| h.commands().iter().any(|def| def.name == cmd_name));
 
                     if let Some(handler) = matched_handler {
                         let args = text[first_token.len()..].trim_start().to_owned();
                         let info = CommandInfo {
                             name: cmd_name.to_owned(),
                             args,
-                            raw:  text.to_owned(),
+                            raw: text.to_owned(),
                         };
 
                         let user_id = msg
@@ -906,9 +912,7 @@ async fn handle_update(
                             .map(|u| u.id.0.to_string())
                             .unwrap_or_default();
                         let display_name = msg.from.as_ref().and_then(|u| {
-                            u.username
-                                .clone()
-                                .or_else(|| Some(u.first_name.clone()))
+                            u.username.clone().or_else(|| Some(u.first_name.clone()))
                         });
 
                         let mut metadata = HashMap::new();
@@ -919,9 +923,9 @@ async fn handle_update(
 
                         let ctx = CommandContext {
                             channel_type: ChannelType::Telegram,
-                            session_key:  String::new(),
-                            user:         ChannelUser {
-                                platform_id:  user_id,
+                            session_key: String::new(),
+                            user: ChannelUser {
+                                platform_id: user_id,
                                 display_name,
                             },
                             metadata,
@@ -938,16 +942,14 @@ async fn handle_update(
                                     "telegram adapter: command handler failed"
                                 );
                                 let _ = bot
-                                    .send_message(
-                                        ChatId(chat_id),
-                                        format!("Command failed: {e}"),
-                                    )
+                                    .send_message(ChatId(chat_id), format!("Command failed: {e}"))
                                     .await;
                             }
                         }
                         return;
                     }
-                    // No handler matched — fall through to normal message processing.
+                    // No handler matched — fall through to normal message
+                    // processing.
                 }
             }
         }
@@ -1057,11 +1059,7 @@ async fn handle_update(
 // ---------------------------------------------------------------------------
 
 /// Send a [`CommandResult`] back to the Telegram chat.
-async fn dispatch_command_result(
-    bot: &teloxide::Bot,
-    chat_id: i64,
-    result: CommandResult,
-) {
+async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: CommandResult) {
     match result {
         CommandResult::Text(text) => {
             let _ = bot.send_message(ChatId(chat_id), text).await;

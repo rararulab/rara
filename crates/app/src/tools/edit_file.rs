@@ -108,8 +108,8 @@ impl AgentTool for EditFileTool {
 
         if !replace_all && count > 1 {
             bail!(
-                "old_string found {count} times in {}. Use replace_all=true to replace \
-                 all occurrences, or provide a more specific old_string.",
+                "old_string found {count} times in {}. Use replace_all=true to replace all \
+                 occurrences, or provide a more specific old_string.",
                 file_path.display()
             );
         }

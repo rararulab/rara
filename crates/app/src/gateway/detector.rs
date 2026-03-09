@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! [`UpdateDetector`] — periodically checks upstream `origin/main` for new commits.
+//! [`UpdateDetector`] — periodically checks upstream `origin/main` for new
+//! commits.
 
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -27,11 +28,11 @@ use crate::GatewayConfig;
 #[derive(Debug, Clone)]
 pub struct UpdateState {
     /// Local HEAD revision.
-    pub current_rev:     String,
+    pub current_rev:      String,
     /// Latest upstream `origin/main` revision (after last successful fetch).
-    pub upstream_rev:    Option<String>,
+    pub upstream_rev:     Option<String>,
     /// Timestamp of the last successful check.
-    pub last_check_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_check_time:  Option<chrono::DateTime<chrono::Utc>>,
     /// Whether the upstream has commits not yet applied locally.
     pub update_available: bool,
 }
@@ -60,8 +61,8 @@ impl UpdateDetector {
 
         let state = UpdateState {
             current_rev,
-            upstream_rev:     None,
-            last_check_time:  None,
+            upstream_rev: None,
+            last_check_time: None,
             update_available: false,
         };
 

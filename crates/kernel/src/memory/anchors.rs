@@ -40,10 +40,10 @@ pub struct AnchorSummary {
 pub struct HandoffState {
     /// Current phase label (e.g. "discovery", "implement", "verify").
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub phase: Option<String>,
+    pub phase:      Option<String>,
     /// Human-readable summary of what happened before this anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+    pub summary:    Option<String>,
     /// Actionable items for the next phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_steps: Option<String>,
@@ -52,8 +52,8 @@ pub struct HandoffState {
     pub source_ids: Vec<u64>,
     /// Who created this anchor ("human", "agent", "system").
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
+    pub owner:      Option<String>,
     /// Free-form extension data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extra: Option<Value>,
+    pub extra:      Option<Value>,
 }

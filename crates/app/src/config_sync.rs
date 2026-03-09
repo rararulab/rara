@@ -1,10 +1,24 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Bidirectional sync between config.yaml and the settings KV store.
 //!
 //! [`ConfigFileSync`] watches both directions:
-//! - **File -> KV**: `notify` file watcher detects config.yaml edits,
-//!   flattens dynamic sections, writes to KV via `batch_update`.
-//! - **KV -> File**: subscribes to settings change notifications,
-//!   debounces writes, serializes full AppConfig back to YAML.
+//! - **File -> KV**: `notify` file watcher detects config.yaml edits, flattens
+//!   dynamic sections, writes to KV via `batch_update`.
+//! - **KV -> File**: subscribes to settings change notifications, debounces
+//!   writes, serializes full AppConfig back to YAML.
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -29,9 +43,9 @@ const DEBOUNCE_MS: u64 = 1500;
 
 /// Bidirectional sync between config.yaml and the settings KV store.
 pub struct ConfigFileSync {
-    settings: Arc<dyn SettingsProvider>,
-    app_config: Arc<RwLock<AppConfig>>,
-    config_path: PathBuf,
+    settings:          Arc<dyn SettingsProvider>,
+    app_config:        Arc<RwLock<AppConfig>>,
+    config_path:       PathBuf,
     last_written_hash: Arc<AtomicU64>,
 }
 
@@ -300,8 +314,9 @@ gateway:
 
         let db_store = yunara_store::db::DBStore::new(pool.clone());
         let kv = db_store.kv_store();
-        let settings_svc =
-            rara_backend_admin::settings::SettingsSvc::load(kv, pool).await.unwrap();
+        let settings_svc = rara_backend_admin::settings::SettingsSvc::load(kv, pool)
+            .await
+            .unwrap();
         let settings_provider: Arc<dyn SettingsProvider> = Arc::new(settings_svc);
 
         // Write a minimal config.yaml to temp dir
@@ -332,21 +347,23 @@ telegram:
         tokio::fs::write(&config_path, yaml).await.unwrap();
 
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let _sync = ConfigFileSync::new(
-            settings_provider.clone(),
-            config,
-            config_path,
-        )
-        .await
-        .unwrap();
+        let _sync = ConfigFileSync::new(settings_provider.clone(), config, config_path)
+            .await
+            .unwrap();
 
         // Verify KV store was populated
         assert_eq!(
-            settings_provider.get("llm.default_provider").await.as_deref(),
+            settings_provider
+                .get("llm.default_provider")
+                .await
+                .as_deref(),
             Some("test-provider"),
         );
         assert_eq!(
-            settings_provider.get("llm.providers.test-provider.base_url").await.as_deref(),
+            settings_provider
+                .get("llm.providers.test-provider.base_url")
+                .await
+                .as_deref(),
             Some("http://localhost:1234"),
         );
         assert_eq!(
@@ -369,12 +386,24 @@ telegram:
         // Spot-check key fields survived roundtrip
         assert_eq!(config.http.bind_address, reparsed.http.bind_address);
         assert_eq!(
-            config.llm.as_ref().and_then(|l| l.default_provider.as_deref()),
-            reparsed.llm.as_ref().and_then(|l| l.default_provider.as_deref()),
+            config
+                .llm
+                .as_ref()
+                .and_then(|l| l.default_provider.as_deref()),
+            reparsed
+                .llm
+                .as_ref()
+                .and_then(|l| l.default_provider.as_deref()),
         );
         assert_eq!(
-            config.telegram.as_ref().and_then(|t| t.bot_token.as_deref()),
-            reparsed.telegram.as_ref().and_then(|t| t.bot_token.as_deref()),
+            config
+                .telegram
+                .as_ref()
+                .and_then(|t| t.bot_token.as_deref()),
+            reparsed
+                .telegram
+                .as_ref()
+                .and_then(|t| t.bot_token.as_deref()),
         );
 
         // Duration roundtrip
@@ -391,14 +420,26 @@ telegram:
 
         // Knowledge roundtrip
         assert_eq!(
-            config.knowledge.as_ref().and_then(|k| k.embedding_model.as_deref()),
-            reparsed.knowledge.as_ref().and_then(|k| k.embedding_model.as_deref()),
+            config
+                .knowledge
+                .as_ref()
+                .and_then(|k| k.embedding_model.as_deref()),
+            reparsed
+                .knowledge
+                .as_ref()
+                .and_then(|k| k.embedding_model.as_deref()),
         );
 
         // None fields should stay None
         assert_eq!(
-            config.telegram.as_ref().and_then(|t| t.allowed_group_chat_id.as_deref()),
-            reparsed.telegram.as_ref().and_then(|t| t.allowed_group_chat_id.as_deref()),
+            config
+                .telegram
+                .as_ref()
+                .and_then(|t| t.allowed_group_chat_id.as_deref()),
+            reparsed
+                .telegram
+                .as_ref()
+                .and_then(|t| t.allowed_group_chat_id.as_deref()),
         );
     }
 }

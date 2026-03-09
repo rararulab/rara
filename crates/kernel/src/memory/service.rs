@@ -99,7 +99,10 @@ impl TapeService {
     pub async fn entries_by_ids(&self, tape_name: &str, ids: &[u64]) -> TapResult<Vec<TapEntry>> {
         let entries = self.entries(tape_name).await?;
         let id_set: std::collections::HashSet<u64> = ids.iter().copied().collect();
-        Ok(entries.into_iter().filter(|e| id_set.contains(&e.id)).collect())
+        Ok(entries
+            .into_iter()
+            .filter(|e| id_set.contains(&e.id))
+            .collect())
     }
 
     /// Execute `func` against a forked tape. On success, merge the fork back
@@ -136,7 +139,14 @@ impl TapeService {
             return Ok(());
         }
         let _ = self
-            .handoff(tape_name, "session/start", HandoffState { owner: Some("human".into()), ..Default::default() })
+            .handoff(
+                tape_name,
+                "session/start",
+                HandoffState {
+                    owner: Some("human".into()),
+                    ..Default::default()
+                },
+            )
             .await?;
         Ok(())
     }
@@ -385,9 +395,9 @@ impl TapeService {
         self.store.reset(tape_name).await?;
         let handoff_state = HandoffState {
             owner: Some("human".into()),
-            extra: archive_path.as_ref().map(|path| {
-                json!({ "archived": path.to_string_lossy() })
-            }),
+            extra: archive_path
+                .as_ref()
+                .map(|path| json!({ "archived": path.to_string_lossy() })),
             ..Default::default()
         };
         let _ = self
@@ -548,9 +558,7 @@ impl TapeService {
         }
 
         // Count entries since the last anchor — if already within budget, skip.
-        let last_anchor_pos = entries
-            .iter()
-            .rposition(|e| e.kind == TapEntryKind::Anchor);
+        let last_anchor_pos = entries.iter().rposition(|e| e.kind == TapEntryKind::Anchor);
         let entries_since_anchor = match last_anchor_pos {
             Some(pos) => total - pos - 1,
             None => total,
@@ -582,8 +590,8 @@ impl TapeService {
         // the default read set to entries after this point.
         let handoff_state = HandoffState {
             summary: Some(format!(
-                "Compacted: {discarded} old message/tool entries moved out of default view. \
-                 Total history: {total} entries preserved on tape."
+                "Compacted: {discarded} old message/tool entries moved out of default view. Total \
+                 history: {total} entries preserved on tape."
             )),
             owner: Some("system".into()),
             source_ids,

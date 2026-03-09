@@ -23,9 +23,10 @@ use rara_kernel::{
     memory::TapeService,
     session::{self as ks, SessionIndex, SessionKey},
 };
+
 use super::client::{
-    BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo,
-    SessionDetail, SessionListItem,
+    BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
+    SessionListItem,
 };
 
 /// A [`BotServiceClient`] that calls [`SessionIndex`] and [`TapeService`]
@@ -165,7 +166,12 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
-        match self.sessions.get_session(&sk).await.map_err(map_session_err)? {
+        match self
+            .sessions
+            .get_session(&sk)
+            .await
+            .map_err(map_session_err)?
+        {
             Some(entry) => Ok(entry_to_detail(&entry)),
             None => Err(BotServiceError::Service {
                 message: format!("session not found: {key}"),

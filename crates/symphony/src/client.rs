@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use serde_json::Value;
 use snafu::ResultExt;
 use tracing::debug;
@@ -8,30 +22,30 @@ use crate::error::{RalphRequestSnafu, RalphSnafu, Result};
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRecord {
-    pub id: String,
-    pub title: String,
-    pub status: String,
-    pub priority: u8,
+    pub id:                String,
+    pub title:             String,
+    pub status:            String,
+    pub priority:          u8,
     #[serde(default)]
-    pub blocked_by: Option<String>,
+    pub blocked_by:        Option<String>,
     #[serde(default)]
-    pub archived_at: Option<String>,
+    pub archived_at:       Option<String>,
     #[serde(default)]
-    pub queued_task_id: Option<String>,
+    pub queued_task_id:    Option<String>,
     #[serde(default)]
     pub merge_loop_prompt: Option<String>,
     #[serde(default)]
-    pub error_message: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub error_message:     Option<String>,
+    pub created_at:        String,
+    pub updated_at:        String,
     #[serde(default)]
-    pub completed_at: Option<String>,
+    pub completed_at:      Option<String>,
 }
 
 /// HTTP client for ralph's JSON-RPC API.
 #[derive(Debug, Clone)]
 pub struct RalphClient {
-    http: reqwest::Client,
+    http:     reqwest::Client,
     endpoint: String,
 }
 
@@ -43,7 +57,7 @@ impl RalphClient {
     #[must_use]
     pub fn new(base_url: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http:     reqwest::Client::new(),
             endpoint: format!("{}/rpc/v1", base_url.trim_end_matches('/')),
         }
     }

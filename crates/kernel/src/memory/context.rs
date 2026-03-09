@@ -172,8 +172,16 @@ pub fn anchor_context(entries: &[TapEntry]) -> Option<Message> {
             hs.next_steps.unwrap_or_default(),
         ),
         Err(_) => (
-            state_val.get("summary").and_then(Value::as_str).unwrap_or("").to_owned(),
-            state_val.get("next_steps").and_then(Value::as_str).unwrap_or("").to_owned(),
+            state_val
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            state_val
+                .get("next_steps")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
         ),
     };
 

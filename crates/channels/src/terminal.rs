@@ -43,7 +43,10 @@ pub enum CliEvent {
     /// A tool call has started.
     ToolCallStart { name: String, summary: String },
     /// A tool call has finished.
-    ToolCallEnd { success: bool, result_preview: String },
+    ToolCallEnd {
+        success:        bool,
+        result_preview: String,
+    },
     /// Progress stage update.
     Progress { text: String },
     /// Error notification.

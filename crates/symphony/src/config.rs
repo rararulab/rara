@@ -1,36 +1,35 @@
-use std::path::PathBuf;
-use std::time::Duration;
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{path::PathBuf, time::Duration};
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 
-fn default_active_labels() -> Vec<String> {
-    vec!["symphony:ready".to_owned()]
-}
+fn default_active_labels() -> Vec<String> { vec!["symphony:ready".to_owned()] }
 
-fn default_workflow_file() -> String {
-    "WORKFLOW.md".to_owned()
-}
+fn default_workflow_file() -> String { "WORKFLOW.md".to_owned() }
 
-fn default_command() -> String {
-    "ralph".to_owned()
-}
+fn default_command() -> String { "ralph".to_owned() }
 
-fn default_max_concurrent_agents() -> usize {
-    2
-}
+fn default_max_concurrent_agents() -> usize { 2 }
 
-fn default_stall_timeout() -> Duration {
-    Duration::from_secs(30 * 60)
-}
+fn default_stall_timeout() -> Duration { Duration::from_secs(30 * 60) }
 
-fn default_max_retry_backoff() -> Duration {
-    Duration::from_secs(60 * 60)
-}
+fn default_max_retry_backoff() -> Duration { Duration::from_secs(60 * 60) }
 
-fn default_active_states() -> Vec<String> {
-    vec!["Todo".to_owned(), "In Progress".to_owned()]
-}
+fn default_active_states() -> Vec<String> { vec!["Todo".to_owned(), "In Progress".to_owned()] }
 
 fn default_terminal_states() -> Vec<String> {
     vec![
@@ -42,13 +41,9 @@ fn default_terminal_states() -> Vec<String> {
     ]
 }
 
-fn default_repo_label_prefix() -> String {
-    "repo:".to_owned()
-}
+fn default_repo_label_prefix() -> String { "repo:".to_owned() }
 
-fn default_linear_endpoint() -> String {
-    "https://api.linear.app/graphql".to_owned()
-}
+fn default_linear_endpoint() -> String { "https://api.linear.app/graphql".to_owned() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -98,7 +93,7 @@ pub struct SymphonyConfig {
     /// How often to poll for new issues.
     #[serde(
         deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize",
+        serialize_with = "humantime_serde::serialize"
     )]
     pub poll_interval: Duration,
 
@@ -110,7 +105,7 @@ pub struct SymphonyConfig {
     #[serde(
         default = "default_stall_timeout",
         deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize",
+        serialize_with = "humantime_serde::serialize"
     )]
     pub stall_timeout: Duration,
 
@@ -118,7 +113,7 @@ pub struct SymphonyConfig {
     #[serde(
         default = "default_max_retry_backoff",
         deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize",
+        serialize_with = "humantime_serde::serialize"
     )]
     pub max_retry_backoff: Duration,
 
@@ -153,7 +148,7 @@ pub struct AgentConfig {
         default,
         deserialize_with = "humantime_serde::deserialize",
         serialize_with = "humantime_serde::serialize",
-        skip_serializing_if = "Option::is_none",
+        skip_serializing_if = "Option::is_none"
     )]
     pub run_timeout: Option<Duration>,
 }
@@ -161,9 +156,9 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            command: default_command(),
+            command:     default_command(),
             config_file: None,
-            extra_args: Vec::new(),
+            extra_args:  Vec::new(),
             run_timeout: None,
         }
     }

@@ -32,8 +32,8 @@ impl AgentTool for TapeInfoTool {
     fn name(&self) -> &str { "tape-info" }
 
     fn description(&self) -> &str {
-        "Return metadata about the current session tape: entry count, anchors, \
-         entries since last anchor, and last known token usage."
+        "Return metadata about the current session tape: entry count, anchors, entries since last \
+         anchor, and last known token usage."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -68,12 +68,8 @@ impl AgentTool for TapeInfoTool {
             .unwrap_or_else(|| "unknown".to_owned());
 
         let output = format!(
-            "tape={}\n\
-             entries={}\n\
-             anchors={}\n\
-             last_anchor={}\n\
-             entries_since_last_anchor={}\n\
-             last_token_usage={}",
+            "tape={}\nentries={}\nanchors={}\nlast_anchor={}\nentries_since_last_anchor={}\\
+             nlast_token_usage={}",
             info.name,
             info.entries,
             info.anchors,

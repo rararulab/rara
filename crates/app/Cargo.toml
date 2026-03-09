@@ -22,9 +22,9 @@ chrono.workspace = true
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }
+humantime-serde = "1"
 lettre.workspace = true
 notify = { workspace = true }
-serde_yaml.workspace = true
 rand.workspace = true
 rara-agents.workspace = true
 rara-backend-admin = { workspace = true }
@@ -42,9 +42,9 @@ rara-sessions.workspace = true
 rara-skills.workspace = true
 rara-symphony.workspace = true
 reqwest = { workspace = true }
-humantime-serde = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+serde_yaml.workspace = true
 snafu = { workspace = true }
 sqlx = { workspace = true }
 sysinfo.workspace = true

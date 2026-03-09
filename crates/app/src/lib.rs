@@ -94,7 +94,7 @@ pub struct MitaConfig {
     /// Heartbeat interval (e.g. "30m", "1800s").
     #[serde(
         deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize",
+        serialize_with = "humantime_serde::serialize"
     )]
     pub heartbeat_interval: Duration,
 }
@@ -106,17 +106,17 @@ pub struct GatewayConfig {
     #[serde(
         default = "gateway_defaults::check_interval",
         deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize",
+        serialize_with = "humantime_serde::serialize"
     )]
-    pub check_interval:      Duration,
+    pub check_interval:       Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
-    pub health_timeout:      u64,
+    pub health_timeout:       u64,
     /// HTTP health poll interval (e.g. "2s").
     #[serde(
         default = "gateway_defaults::health_poll_interval",
         deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize",
+        serialize_with = "humantime_serde::serialize"
     )]
     pub health_poll_interval: Duration,
     /// Max consecutive restart failures before giving up.
@@ -124,12 +124,12 @@ pub struct GatewayConfig {
     pub max_restart_attempts: u32,
     /// Whether to auto-apply upstream updates.
     #[serde(default = "gateway_defaults::auto_update")]
-    pub auto_update:         bool,
+    pub auto_update:          bool,
     /// Bind address for the gateway admin HTTP API.
     #[serde(default = "gateway_defaults::bind_address")]
-    pub bind_address:        String,
+    pub bind_address:         String,
     /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
-    pub repo_url:            String,
+    pub repo_url:             String,
 }
 
 mod gateway_defaults {
@@ -246,13 +246,10 @@ pub async fn start_with_options(
         path.push("config.yaml");
         path
     };
-    let config_file_sync = config_sync::ConfigFileSync::new(
-        settings_provider.clone(),
-        config.clone(),
-        config_path,
-    )
-    .await
-    .whatever_context("Failed to initialize config file sync")?;
+    let config_file_sync =
+        config_sync::ConfigFileSync::new(settings_provider.clone(), config.clone(), config_path)
+            .await
+            .whatever_context("Failed to initialize config file sync")?;
 
     let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
         .await
@@ -351,11 +348,8 @@ pub async fn start_with_options(
 
     // Symphony status handle removed — symphony is now a standalone sync bridge.
 
-    let (domain_routes, openapi) = backend.routes(
-        &kernel_handle,
-        &rara.skill_registry,
-        &rara.mcp_manager,
-    );
+    let (domain_routes, openapi) =
+        backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
     let swagger_ui =
         utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
 
@@ -414,11 +408,12 @@ pub async fn start_with_options(
             use rara_channels::telegram::commands::{
                 KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
             };
-            let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
-                std::sync::Arc::new(KernelBotServiceClient::new(
-                    rara.session_index.clone(),
-                    rara.tape_service.clone(),
-                ));
+            let bot_client: std::sync::Arc<
+                dyn rara_channels::telegram::commands::BotServiceClient,
+            > = std::sync::Arc::new(KernelBotServiceClient::new(
+                rara.session_index.clone(),
+                rara.tape_service.clone(),
+            ));
             let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = vec![
                 std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
                 std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),

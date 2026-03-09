@@ -31,7 +31,8 @@ pub struct KnowledgeService {
 }
 
 impl KnowledgeService {
-    /// Resolve source tape entries for memory items that have source references.
+    /// Resolve source tape entries for memory items that have source
+    /// references.
     ///
     /// Groups lookups by `source_tape` to minimise tape reads, then fetches
     /// the referenced entries via [`TapeService::entries_by_ids`].
@@ -43,7 +44,10 @@ impl KnowledgeService {
             std::collections::HashMap::new();
         for item in items {
             if let (Some(tape), Some(entry_id)) = (&item.source_tape, item.source_entry_id) {
-                by_tape.entry(tape.clone()).or_default().push(entry_id as u64);
+                by_tape
+                    .entry(tape.clone())
+                    .or_default()
+                    .push(entry_id as u64);
             }
         }
         let mut results = Vec::new();

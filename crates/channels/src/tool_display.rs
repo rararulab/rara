@@ -52,8 +52,8 @@ pub fn tool_arguments_summary(tool_name: &str, arguments: &serde_json::Value) ->
 ///
 /// For `shell_execute` commands starting with `agent-browser`, the display name
 /// becomes `"browser"` and the summary shows only the sub-command.  Shell noise
-/// like trailing `2>&1` and pipe suffixes is stripped.  The summary is truncated
-/// to 60 characters (suitable for Telegram's narrower viewport).
+/// like trailing `2>&1` and pipe suffixes is stripped.  The summary is
+/// truncated to 60 characters (suitable for Telegram's narrower viewport).
 pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (String, String) {
     if tool_name == "shell_execute" {
         if let Some(cmd) = arguments.get("command").and_then(|v| v.as_str()) {
@@ -137,8 +137,9 @@ fn truncate_summary(s: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn display_name_mapping() {
@@ -151,7 +152,10 @@ mod tests {
     #[test]
     fn summary_shell() {
         let args = json!({"command": "ls -la /tmp"});
-        assert_eq!(tool_arguments_summary("shell_execute", &args), "ls -la /tmp");
+        assert_eq!(
+            tool_arguments_summary("shell_execute", &args),
+            "ls -la /tmp"
+        );
     }
 
     #[test]

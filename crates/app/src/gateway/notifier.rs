@@ -21,8 +21,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use sysinfo::System;
-use teloxide::prelude::*;
-use teloxide::types::ChatId;
+use teloxide::{prelude::*, types::ChatId};
 use tracing::warn;
 
 /// Telegram notifier for gateway auto-update events.
@@ -30,29 +29,29 @@ use tracing::warn;
 /// All errors are logged but never propagated — notifications must not
 /// break the update pipeline.
 pub struct UpdateNotifier {
-    bot: Bot,
-    channel_id: i64,
+    bot:              Bot,
+    channel_id:       i64,
     /// Gateway version string (injected from build_info).
-    version: String,
+    version:          String,
     /// Machine hostname.
-    hostname: String,
+    hostname:         String,
     /// OS version string.
-    os: String,
+    os:               String,
     /// CPU model string.
-    cpu: String,
+    cpu:              String,
     /// Total physical memory formatted as GB.
-    memory: String,
+    memory:           String,
     /// Wall-clock time the gateway process started.
-    started_at: chrono::DateTime<chrono::Local>,
+    started_at:       chrono::DateTime<chrono::Local>,
     /// Number of times the agent has been (re)started.
     agent_generation: AtomicU32,
     /// Wall-clock time of the most recent agent launch.
     agent_started_at: std::sync::Mutex<Option<chrono::DateTime<chrono::Local>>>,
     /// Version/revision of the currently running agent binary.
     /// Initially same as gateway version; updated after each successful update.
-    agent_version: std::sync::Mutex<String>,
+    agent_version:    std::sync::Mutex<String>,
     /// Repository URL for building commit links (e.g. "https://github.com/rararulab/rara").
-    repo_url: String,
+    repo_url:         String,
 }
 
 impl UpdateNotifier {
@@ -110,33 +109,35 @@ impl UpdateNotifier {
         self.send(&format!(
             "✅ <b>Agent started and healthy</b>\n{}",
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     pub async fn update_started(&self, rev: &str) {
         self.send(&format!(
-            "🔄 <b>Auto-update: starting build</b>\n\
-             target: {}\n{}",
+            "🔄 <b>Auto-update: starting build</b>\ntarget: {}\n{}",
             self.commit_link(rev),
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     pub async fn build_in_progress(&self) {
         self.send(&format!(
             "🔨 <b>Auto-update: building new version…</b>\n{}",
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     pub async fn update_success(&self, new_rev: &str) {
         *self.agent_version.lock().unwrap() = new_rev.to_owned();
         self.send(&format!(
-            "✅ <b>Auto-update: updated, restarting agent</b>\n\
-             new rev: {}\n{}",
+            "✅ <b>Auto-update: updated, restarting agent</b>\nnew rev: {}\n{}",
             self.commit_link(new_rev),
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     // -- error events ---------------------------------------------------------
@@ -145,31 +146,34 @@ impl UpdateNotifier {
         self.send(&format!(
             "❌ <b>Auto-update: executor creation failed</b>\n{}\n<pre>{err}</pre>",
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     pub async fn build_failed(&self, rev: &str, reason: &str) {
         self.send(&format!(
-            "❌ <b>Auto-update: build failed</b>\n\
-             target: {}\n{}\n<pre>{reason}</pre>",
+            "❌ <b>Auto-update: build failed</b>\ntarget: {}\n{}\n<pre>{reason}</pre>",
             self.commit_link(rev),
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     pub async fn activation_failed(&self, reason: &str, rolled_back: bool) {
         self.send(&format!(
-            "❌ <b>Auto-update: activation failed</b>\n\
-             rolled_back: {rolled_back}\n{}\n<pre>{reason}</pre>",
+            "❌ <b>Auto-update: activation failed</b>\nrolled_back: \
+             {rolled_back}\n{}\n<pre>{reason}</pre>",
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     pub async fn restart_failed(&self, err: &str) {
         self.send(&format!(
             "❌ <b>Auto-update: restart failed</b>\n{}\n<pre>{err}</pre>",
             self.status_block(),
-        )).await;
+        ))
+        .await;
     }
 
     // -- internal -------------------------------------------------------------
@@ -178,22 +182,19 @@ impl UpdateNotifier {
     fn status_block(&self) -> String {
         let generation = self.agent_generation.load(Ordering::Relaxed);
 
-        let agent_since = self.agent_started_at.lock().unwrap()
+        let agent_since = self
+            .agent_started_at
+            .lock()
+            .unwrap()
             .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "—".into());
 
         let agent_ver = self.agent_version.lock().unwrap().clone();
 
         format!(
-            "\n🖥 host: <code>{}</code>\n\
-             💻 os: <code>{}</code>\n\
-             🧠 cpu: <code>{}</code>\n\
-             💾 mem: <code>{}</code>\n\
-             📦 gateway: <code>{}</code>\n\
-             🤖 agent: {}\n\
-             ⏱ gateway since: {}\n\
-             🔄 agent generation: {}\n\
-             🕐 agent since: {}",
+            "\n🖥 host: <code>{}</code>\n💻 os: <code>{}</code>\n🧠 cpu: <code>{}</code>\n💾 mem: \
+             <code>{}</code>\n📦 gateway: <code>{}</code>\n🤖 agent: {}\n⏱ gateway since: {}\n🔄 \
+             agent generation: {}\n🕐 agent since: {}",
             self.hostname,
             self.os,
             self.cpu,

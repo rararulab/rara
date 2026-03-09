@@ -35,9 +35,9 @@ impl AgentTool for TapeHandoffTool {
     fn name(&self) -> &str { "tape-handoff" }
 
     fn description(&self) -> &str {
-        "Create a handoff anchor in the session tape to truncate context. \
-         Use this when context is getting too long and may cause model call failures. \
-         Provide a summary of the conversation so far and any next steps."
+        "Create a handoff anchor in the session tape to truncate context. Use this when context is \
+         getting too long and may cause model call failures. Provide a summary of the conversation \
+         so far and any next steps."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

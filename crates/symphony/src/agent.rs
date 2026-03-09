@@ -1,23 +1,38 @@
-use std::path::Path;
-use std::time::Instant;
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{path::Path, time::Instant};
 
 use snafu::ResultExt;
 use tokio::process::{Child, Command};
 
-use crate::config::AgentConfig;
-use crate::error::{IoSnafu, Result};
-use crate::tracker::TrackedIssue;
+use crate::{
+    config::AgentConfig,
+    error::{IoSnafu, Result},
+    tracker::TrackedIssue,
+};
 
 #[derive(Debug, Clone)]
 pub struct AgentTask {
-    pub issue: TrackedIssue,
-    pub attempt: Option<u32>,
+    pub issue:            TrackedIssue,
+    pub attempt:          Option<u32>,
     pub workflow_content: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct AgentHandle {
-    pub child: Child,
+    pub child:      Child,
     pub started_at: Instant,
 }
 
@@ -28,9 +43,7 @@ pub struct RalphAgent {
 
 impl RalphAgent {
     #[must_use]
-    pub fn new(config: AgentConfig) -> Self {
-        Self { config }
-    }
+    pub fn new(config: AgentConfig) -> Self { Self { config } }
 
     pub fn build_prompt(&self, task: &AgentTask) -> String {
         if let Some(content) = &task.workflow_content {
@@ -49,7 +62,8 @@ impl RalphAgent {
 
         let retry_section = task.attempt.map_or(String::new(), |attempt| {
             format!(
-                "\nThis is retry attempt {attempt}. The previous attempt failed. Review the prior attempt and take a different approach.\n"
+                "\nThis is retry attempt {attempt}. The previous attempt failed. Review the prior \
+                 attempt and take a different approach.\n"
             )
         });
 
@@ -86,7 +100,11 @@ Issue #{number}: {title}
 
     /// Write `PROMPT.md` into the issue worktree and spawn a non-interactive
     /// `ralph run` subprocess whose output is consumed by symphony.
-    pub async fn start<P: AsRef<Path>>(&self, task: &AgentTask, workspace: P) -> Result<AgentHandle> {
+    pub async fn start<P: AsRef<Path>>(
+        &self,
+        task: &AgentTask,
+        workspace: P,
+    ) -> Result<AgentHandle> {
         let prompt_path = workspace.as_ref().join("PROMPT.md");
         tokio::fs::write(&prompt_path, self.build_prompt(task))
             .await

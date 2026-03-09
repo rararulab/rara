@@ -42,13 +42,13 @@ pub type ToolRegistryRef = Arc<ToolRegistry>;
 pub struct ToolContext {
     /// The authenticated user identifier for the current session.
     /// `None` when the session has no resolved principal (e.g. anonymous).
-    pub user_id: Option<String>,
+    pub user_id:         Option<String>,
     /// The session key for the current conversation turn.
-    pub session_key: Option<crate::session::SessionKey>,
+    pub session_key:     Option<crate::session::SessionKey>,
     /// The originating endpoint (e.g. Telegram chat) for routing replies.
     pub origin_endpoint: Option<crate::io::Endpoint>,
     /// Event queue for pushing outbound events.
-    pub event_queue: Option<crate::queue::EventQueueRef>,
+    pub event_queue:     Option<crate::queue::EventQueueRef>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -179,10 +179,11 @@ mod tests {
     #[async_trait]
     impl AgentTool for DummyTool {
         fn name(&self) -> &str { &self.name }
+
         fn description(&self) -> &str { "test tool" }
-        fn parameters_schema(&self) -> serde_json::Value {
-            serde_json::json!({"type": "object"})
-        }
+
+        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type": "object"}) }
+
         async fn execute(
             &self,
             _params: serde_json::Value,
@@ -195,9 +196,7 @@ mod tests {
     fn build_registry() -> ToolRegistry {
         let mut reg = ToolRegistry::new();
         for name in ["bash", "http-fetch", "read-file", "write-file"] {
-            reg.register(Arc::new(DummyTool {
-                name: name.into(),
-            }));
+            reg.register(Arc::new(DummyTool { name: name.into() }));
         }
         reg
     }
@@ -212,7 +211,10 @@ mod tests {
             enabled:     true,
         };
         let filtered = reg.filtered_by_user(&user);
-        assert!(filtered.is_empty(), "Role::User with no permissions should have no tools");
+        assert!(
+            filtered.is_empty(),
+            "Role::User with no permissions should have no tools"
+        );
     }
 
     #[test]

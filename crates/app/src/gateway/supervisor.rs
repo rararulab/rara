@@ -14,8 +14,10 @@
 
 //! [`SupervisorService`] — spawn, health-check, and restart `rara server`.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};
@@ -69,11 +71,11 @@ pub enum SupervisorCommand {
 #[derive(Debug, Clone, Serialize)]
 pub struct SupervisorStatus {
     /// Whether the agent child process is currently running.
-    pub running: bool,
+    pub running:       bool,
     /// Number of times the agent has been restarted (failure + manual).
     pub restart_count: u32,
     /// PID of the running child process, if any.
-    pub pid: Option<u32>,
+    pub pid:           Option<u32>,
 }
 
 /// A clonable handle for sending commands to a running [`SupervisorService`]
@@ -96,9 +98,7 @@ impl SupervisorHandle {
     }
 
     /// Get a snapshot of the current supervisor status.
-    pub fn status(&self) -> SupervisorStatus {
-        self.status_rx.borrow().clone()
-    }
+    pub fn status(&self) -> SupervisorStatus { self.status_rx.borrow().clone() }
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +124,11 @@ impl SupervisorService {
     ///
     /// `health_port` is the HTTP port the agent binds to (from
     /// `RestServerConfig::bind_address`).
-    pub fn new(config: GatewayConfig, health_port: &str, notifier: Arc<UpdateNotifier>) -> (Self, SupervisorHandle) {
+    pub fn new(
+        config: GatewayConfig,
+        health_port: &str,
+        notifier: Arc<UpdateNotifier>,
+    ) -> (Self, SupervisorHandle) {
         let health_url = format!("http://127.0.0.1:{health_port}/api/health");
         let shutdown = CancellationToken::new();
 
@@ -138,9 +142,9 @@ impl SupervisorService {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
 
         let initial_status = SupervisorStatus {
-            running: false,
+            running:       false,
             restart_count: 0,
-            pid: None,
+            pid:           None,
         };
         let (status_tx, status_rx) = watch::channel(initial_status);
 
@@ -228,7 +232,10 @@ impl SupervisorService {
                     }
 
                     let backoff = Duration::from_secs(2u64.pow(self.restart_count));
-                    info!(backoff_secs = backoff.as_secs(), "Backing off before restart");
+                    info!(
+                        backoff_secs = backoff.as_secs(),
+                        "Backing off before restart"
+                    );
 
                     tokio::select! {
                         () = tokio::time::sleep(backoff) => {}

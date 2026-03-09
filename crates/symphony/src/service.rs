@@ -1,43 +1,63 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use chrono::Utc;
 use snafu::ResultExt;
-use tokio::fs::OpenOptions;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdout};
-use tokio::sync::{Mutex, mpsc};
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStderr, ChildStdout},
+    sync::{Mutex, mpsc},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::agent::{AgentTask, RalphAgent};
-use crate::config::{RepoConfig, SymphonyConfig, TrackerConfig};
-use crate::error::{ConfigSnafu, IoSnafu, Result};
-use crate::tracker::{GitHubIssueTracker, IssueTracker, IssueState, LinearIssueTracker, TrackedIssue};
-use crate::workspace::{workflow_file, WorkspaceInfo, WorkspaceManager};
+use crate::{
+    agent::{AgentTask, RalphAgent},
+    config::{RepoConfig, SymphonyConfig, TrackerConfig},
+    error::{ConfigSnafu, IoSnafu, Result},
+    tracker::{GitHubIssueTracker, IssueState, IssueTracker, LinearIssueTracker, TrackedIssue},
+    workspace::{WorkspaceInfo, WorkspaceManager, workflow_file},
+};
 
 const STARTED_ISSUE_STATE: &str = "In Progress";
 
 struct RunningIssue {
-    issue: TrackedIssue,
-    workspace: WorkspaceInfo,
-    child: Child,
+    issue:      TrackedIssue,
+    workspace:  WorkspaceInfo,
+    child:      Child,
     started_at: Instant,
-    log_path: PathBuf,
-    output: ProcessOutputSummaryHandle,
+    log_path:   PathBuf,
+    output:     ProcessOutputSummaryHandle,
 }
 
 struct FinishedIssue {
-    issue: TrackedIssue,
+    issue:     TrackedIssue,
     workspace: WorkspaceInfo,
 }
 
 /// Top-level service that polls issue trackers, manages per-issue `ralph run`
 /// subprocesses, and advances issue state in the external tracker.
 pub struct SymphonyService {
-    config: SymphonyConfig,
-    shutdown: CancellationToken,
+    config:       SymphonyConfig,
+    shutdown:     CancellationToken,
     github_token: Option<String>,
 }
 
@@ -125,11 +145,11 @@ impl SymphonyService {
 }
 
 struct IssueRuntime {
-    config: SymphonyConfig,
+    config:            SymphonyConfig,
     workspace_manager: WorkspaceManager,
-    agent: RalphAgent,
-    running: HashMap<String, RunningIssue>,
-    failed: HashMap<String, FinishedIssue>,
+    agent:             RalphAgent,
+    running:           HashMap<String, RunningIssue>,
+    failed:            HashMap<String, FinishedIssue>,
 }
 
 impl IssueRuntime {
@@ -167,7 +187,11 @@ impl IssueRuntime {
                 break;
             }
 
-            if self.running.values().filter(|run| run.issue.repo == issue.repo).count()
+            if self
+                .running
+                .values()
+                .filter(|run| run.issue.repo == issue.repo)
+                .count()
                 >= self.max_concurrent_for_repo(&issue.repo)
             {
                 info!(issue_id = %issue.id, repo = %issue.repo, "no repo slot available");
@@ -200,7 +224,9 @@ impl IssueRuntime {
             match run.child.try_wait() {
                 Ok(Some(status)) => completed.push((issue_id, status)),
                 Ok(None) => {}
-                Err(err) => warn!(issue_id = %issue_id, error = %err, "failed to poll ralph child status"),
+                Err(err) => {
+                    warn!(issue_id = %issue_id, error = %err, "failed to poll ralph child status")
+                }
             }
         }
 
@@ -224,7 +250,7 @@ impl IssueRuntime {
                     self.failed.insert(
                         issue_id,
                         FinishedIssue {
-                            issue: run.issue,
+                            issue:     run.issue,
                             workspace: run.workspace,
                         },
                     );
@@ -245,7 +271,7 @@ impl IssueRuntime {
                 self.failed.insert(
                     issue_id,
                     FinishedIssue {
-                        issue: run.issue,
+                        issue:     run.issue,
                         workspace: run.workspace,
                     },
                 );
@@ -305,10 +331,12 @@ impl IssueRuntime {
     /// transition the issue to `In Progress` once the child is live.
     async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
         let repo = self.repo_config(&issue.repo)?;
-        let workspace = self
-            .workspace_manager
-            .ensure_worktree(&repo, issue.number, &issue.title)?;
-        let workflow_path = workspace.path.join(workflow_file(&repo, &self.config.workflow_file));
+        let workspace =
+            self.workspace_manager
+                .ensure_worktree(&repo, issue.number, &issue.title)?;
+        let workflow_path = workspace
+            .path
+            .join(workflow_file(&repo, &self.config.workflow_file));
         let workflow_content = tokio::fs::read_to_string(&workflow_path).await.ok();
 
         let task = AgentTask {
@@ -368,7 +396,9 @@ impl IssueRuntime {
                     warn!(repo = %repo_name, path = %workspace.path.display(), error = %err, "failed to cleanup workspace");
                 }
             }
-            Err(err) => warn!(repo = %repo_name, error = %err, "failed to resolve repo for workspace cleanup"),
+            Err(err) => {
+                warn!(repo = %repo_name, error = %err, "failed to resolve repo for workspace cleanup")
+            }
         }
     }
 
@@ -379,17 +409,20 @@ impl IssueRuntime {
             .iter()
             .find(|repo| repo.name == repo_name)
             .cloned()
-            .ok_or_else(|| ConfigSnafu {
-                message: format!("unknown repo: {repo_name}"),
-            }
-            .build())?;
+            .ok_or_else(|| {
+                ConfigSnafu {
+                    message: format!("unknown repo: {repo_name}"),
+                }
+                .build()
+            })?;
 
         let mut resolved = repo;
         if resolved.repo_path.is_none() {
-            let cwd = std::env::current_dir().map_err(|source| crate::error::SymphonyError::Io {
-                source,
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
+            let cwd =
+                std::env::current_dir().map_err(|source| crate::error::SymphonyError::Io {
+                    source,
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })?;
             resolved.repo_path = Some(cwd.clone());
         }
         Ok(resolved)
@@ -444,10 +477,13 @@ struct IssueLogWriter {
 impl IssueLogWriter {
     async fn record(&self, stream_name: &'static str, line: &str) -> Result<()> {
         let entry = format!("{} [{}] {}\n", Utc::now().to_rfc3339(), stream_name, line);
-        self.sender.send(entry).await.map_err(|_| crate::error::SymphonyError::Workspace {
-            message: String::from("issue log writer closed unexpectedly"),
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })
+        self.sender
+            .send(entry)
+            .await
+            .map_err(|_| crate::error::SymphonyError::Workspace {
+                message:  String::from("issue log writer closed unexpectedly"),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })
     }
 }
 
@@ -457,10 +493,12 @@ async fn spawn_issue_log_writer(
     issue: &TrackedIssue,
     workspace: &WorkspaceInfo,
 ) -> Result<IssueLogWriter> {
-    let parent = log_path.parent().ok_or_else(|| crate::error::SymphonyError::Workspace {
-        message: format!("issue log path has no parent: {}", log_path.display()),
-        location: snafu::Location::new(file!(), line!(), column!()),
-    })?;
+    let parent = log_path
+        .parent()
+        .ok_or_else(|| crate::error::SymphonyError::Workspace {
+            message:  format!("issue log path has no parent: {}", log_path.display()),
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
     tokio::fs::create_dir_all(parent).await.context(IoSnafu)?;
 
     let mut file = OpenOptions::new()
@@ -522,16 +560,14 @@ impl ProcessOutputSummaryHandle {
         self.0.lock().await.record(stream_name, line);
     }
 
-    async fn snapshot(&self) -> ProcessOutputSummary {
-        self.0.lock().await.clone()
-    }
+    async fn snapshot(&self) -> ProcessOutputSummary { self.0.lock().await.clone() }
 }
 
 #[derive(Debug, Clone, Default)]
 struct ProcessOutputSummary {
     stdout_line_count: usize,
     stderr_line_count: usize,
-    stderr_tail: VecDeque<String>,
+    stderr_tail:       VecDeque<String>,
 }
 
 impl ProcessOutputSummary {
@@ -557,7 +593,11 @@ impl ProcessOutputSummary {
         if self.stderr_tail.is_empty() {
             String::from("<none>")
         } else {
-            self.stderr_tail.iter().cloned().collect::<Vec<_>>().join(" | ")
+            self.stderr_tail
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ")
         }
     }
 }

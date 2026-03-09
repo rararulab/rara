@@ -1,15 +1,33 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use snafu::{Location, ensure};
 
-use crate::config::RepoConfig;
-use crate::error::{Result, SymphonyError};
+use crate::{
+    config::RepoConfig,
+    error::{Result, SymphonyError},
+};
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceInfo {
-    pub path: PathBuf,
-    pub branch: String,
+    pub path:        PathBuf,
+    pub branch:      String,
     pub created_now: bool,
 }
 
@@ -19,7 +37,12 @@ pub struct WorkspaceManager;
 impl WorkspaceManager {
     /// Ensure the issue branch is checked out in a dedicated worktree under the
     /// configured workspace root. Existing worktrees are reused.
-    pub fn ensure_worktree(&self, repo: &RepoConfig, issue_number: u64, issue_title: &str) -> Result<WorkspaceInfo> {
+    pub fn ensure_worktree(
+        &self,
+        repo: &RepoConfig,
+        issue_number: u64,
+        issue_title: &str,
+    ) -> Result<WorkspaceInfo> {
         ensure!(
             repo.repo_path.is_some(),
             crate::error::WorkspaceSnafu {
@@ -60,10 +83,12 @@ impl WorkspaceManager {
             source,
             location: Location::new(file!(), line!(), column!()),
         })?;
-        let head = head_ref.peel_to_commit().map_err(|source| SymphonyError::Git {
-            source,
-            location: Location::new(file!(), line!(), column!()),
-        })?;
+        let head = head_ref
+            .peel_to_commit()
+            .map_err(|source| SymphonyError::Git {
+                source,
+                location: Location::new(file!(), line!(), column!()),
+            })?;
 
         let branch_ref = match repo.branch(&branch, &head, false) {
             Ok(branch_ref) => branch_ref,
@@ -75,7 +100,7 @@ impl WorkspaceManager {
                 })?,
             Err(err) => {
                 return Err(SymphonyError::Git {
-                    source: err,
+                    source:   err,
                     location: Location::new(file!(), line!(), column!()),
                 });
             }
@@ -119,7 +144,9 @@ impl WorkspaceManager {
         }
 
         if let Ok(wt) = repo.find_worktree(&workspace.branch) {
-            let _ = wt.prune(Some(git2::WorktreePruneOptions::new().valid(false).locked(false)));
+            let _ = wt.prune(Some(
+                git2::WorktreePruneOptions::new().valid(false).locked(false),
+            ));
         }
 
         if let Ok(mut branch) = repo.find_branch(&workspace.branch, git2::BranchType::Local) {
@@ -144,19 +171,29 @@ fn branch_name(issue_number: u64, issue_title: &str) -> String {
         .filter(|piece| !piece.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    let slug = if slug.is_empty() { "task".to_owned() } else { slug };
+    let slug = if slug.is_empty() {
+        "task".to_owned()
+    } else {
+        slug
+    };
     format!("issue-{issue_number}-{slug}")
 }
 
 /// Resolve the repo-specific workflow file path relative to the worktree root.
 pub fn workflow_file(repo: &RepoConfig, default_workflow_file: &str) -> PathBuf {
-    Path::new(repo.workflow_file.as_deref().unwrap_or(default_workflow_file)).to_path_buf()
+    Path::new(
+        repo.workflow_file
+            .as_deref()
+            .unwrap_or(default_workflow_file),
+    )
+    .to_path_buf()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn creates_and_cleans_up_worktree() {

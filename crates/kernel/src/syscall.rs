@@ -54,23 +54,23 @@ use crate::{
 /// parameters to `dispatch()`.
 pub(crate) struct SyscallDispatcher {
     /// Cross-agent shared key-value store (OpenDAL-backed).
-    shared_kv:       SharedKv,
+    shared_kv:             SharedKv,
     /// Inter-agent pipe registry for streaming data between agents.
-    pipe_registry:   PipeRegistry,
+    pipe_registry:         PipeRegistry,
     /// Multi-driver LLM registry with per-agent overrides.
-    driver_registry: DriverRegistryRef,
+    driver_registry:       DriverRegistryRef,
     /// Global tool registry.
-    tool_registry:   ToolRegistryRef,
+    tool_registry:         ToolRegistryRef,
     /// Event bus for publishing kernel notifications.
-    event_bus:       NotificationBusRef,
+    event_bus:             NotificationBusRef,
     /// Kernel configuration.
-    config:          KernelConfig,
+    config:                KernelConfig,
     /// Tape service for session message persistence (passed to SyscallTool).
-    tape_service:            TapeService,
+    tape_service:          TapeService,
     /// Optional provider of dynamically discovered tools (e.g. MCP servers).
-    dynamic_tool_provider:   Option<DynamicToolProviderRef>,
+    dynamic_tool_provider: Option<DynamicToolProviderRef>,
     /// Scheduled task wheel for job scheduling.
-    job_wheel:               Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
 }
 
 impl SyscallDispatcher {
@@ -86,7 +86,9 @@ impl SyscallDispatcher {
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         let jobs_path = rara_paths::config_dir().join("scheduler").join("jobs.json");
-        let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(jobs_path)));
+        let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(
+            jobs_path,
+        )));
         Self {
             shared_kv,
             pipe_registry,
@@ -308,17 +310,16 @@ impl SyscallDispatcher {
                 message,
                 reply_tx,
             } => {
-                let principal = process_table
-                    .with(&syscall_sender, |p| p.principal.clone());
+                let principal = process_table.with(&syscall_sender, |p| p.principal.clone());
                 let result = match principal {
                     Some(principal) => {
                         let entry = crate::schedule::JobEntry {
-                            id:          crate::schedule::JobId::new(),
+                            id: crate::schedule::JobId::new(),
                             trigger,
                             message,
                             session_key: syscall_sender,
                             principal,
-                            created_at:  Timestamp::now(),
+                            created_at: Timestamp::now(),
                         };
                         let id = entry.id.clone();
                         let mut wheel = self.job_wheel.lock().unwrap();
@@ -327,11 +328,9 @@ impl SyscallDispatcher {
                         info!(job_id = %id, session = %syscall_sender, "registered scheduled job");
                         Ok(id)
                     }
-                    None => {
-                        Err(crate::error::KernelError::Other {
-                            message: format!("session not found: {syscall_sender}").into(),
-                        })
-                    }
+                    None => Err(crate::error::KernelError::Other {
+                        message: format!("session not found: {syscall_sender}").into(),
+                    }),
                 };
                 let _ = reply_tx.send(result);
             }

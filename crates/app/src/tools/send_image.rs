@@ -52,8 +52,8 @@ impl AgentTool for SendImageTool {
     fn name(&self) -> &str { "send-image" }
 
     fn description(&self) -> &str {
-        "Send an image file to the user in the current conversation. Supports PNG, JPEG, WebP, \
-         and GIF formats. Maximum file size is 10 MB."
+        "Send an image file to the user in the current conversation. Supports PNG, JPEG, WebP, and \
+         GIF formats. Maximum file size is 10 MB."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -112,10 +112,7 @@ impl AgentTool for SendImageTool {
         }
 
         // Determine MIME type from extension.
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let mime_type = mime_from_extension(ext)
             .ok_or_else(|| {
                 anyhow::anyhow!(

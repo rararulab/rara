@@ -195,8 +195,8 @@ pub enum Syscall {
     // -- Scheduling --
     /// Register a new scheduled job.
     RegisterJob {
-        trigger: crate::schedule::Trigger,
-        message: String,
+        trigger:  crate::schedule::Trigger,
+        message:  String,
         #[debug(skip)]
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<crate::schedule::JobId>>,
@@ -204,7 +204,7 @@ pub enum Syscall {
 
     /// Remove a scheduled job by ID.
     RemoveJob {
-        job_id: crate::schedule::JobId,
+        job_id:   crate::schedule::JobId,
         #[debug(skip)]
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<()>>,
@@ -310,9 +310,7 @@ pub enum KernelEvent {
     // === Scheduled ===
     /// A scheduled task has fired. Unlike `UserMessage`, this is a
     /// system-initiated event and is not routed through the ingress pipeline.
-    ScheduledTask {
-        job: JobEntry,
-    },
+    ScheduledTask { job: JobEntry },
 
     // === Notification ===
     /// Send a notification message to the notification channel.

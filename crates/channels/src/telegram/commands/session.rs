@@ -349,14 +349,10 @@ impl CommandHandler for StopCommandHandler {
         let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
-                return Ok(CommandResult::Text(
-                    "当前没有活跃的会话。".to_owned(),
-                ));
+                return Ok(CommandResult::Text("当前没有活跃的会话。".to_owned()));
             }
             Err(_) => {
-                return Ok(CommandResult::Text(
-                    "当前没有活跃的会话。".to_owned(),
-                ));
+                return Ok(CommandResult::Text("当前没有活跃的会话。".to_owned()));
             }
         };
 
@@ -365,9 +361,7 @@ impl CommandHandler for StopCommandHandler {
                 let _ = self.handle.send_signal(key, Signal::Interrupt);
                 Ok(CommandResult::Text("已中断当前操作。".to_owned()))
             }
-            Err(_) => Ok(CommandResult::Text(
-                "当前没有活跃的会话。".to_owned(),
-            )),
+            Err(_) => Ok(CommandResult::Text("当前没有活跃的会话。".to_owned())),
         }
     }
 }

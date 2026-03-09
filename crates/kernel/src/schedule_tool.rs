@@ -114,8 +114,8 @@ impl AgentTool for ScheduleOnceTool {
         params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let p: ScheduleOnceParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+        let p: ScheduleOnceParams =
+            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
         if p.after_seconds == 0 {
             return Err(anyhow::anyhow!("after_seconds must be > 0"));
@@ -146,9 +146,7 @@ struct ScheduleIntervalParams {
 impl AgentTool for ScheduleIntervalTool {
     fn name(&self) -> &str { "schedule-interval" }
 
-    fn description(&self) -> &str {
-        "Schedule a repeating task. It fires every N seconds."
-    }
+    fn description(&self) -> &str { "Schedule a repeating task. It fires every N seconds." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -172,8 +170,8 @@ impl AgentTool for ScheduleIntervalTool {
         params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let p: ScheduleIntervalParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+        let p: ScheduleIntervalParams =
+            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
         if p.interval_seconds == 0 {
             return Err(anyhow::anyhow!("interval_seconds must be > 0"));
@@ -238,8 +236,8 @@ impl AgentTool for ScheduleCronTool {
         params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let p: ScheduleCronParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+        let p: ScheduleCronParams =
+            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
 
         if p.cron.is_empty() {
             return Err(anyhow::anyhow!("cron expression must not be empty"));
@@ -259,9 +257,7 @@ impl AgentTool for ScheduleCronTool {
         let next_chrono = schedule
             .upcoming(chrono::Utc)
             .find(|t| *t > now_chrono)
-            .ok_or_else(|| {
-                anyhow::anyhow!("cron expression '{}' yields no future time", p.cron)
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("cron expression '{}' yields no future time", p.cron))?;
 
         let next_at = jiff::Timestamp::from_second(next_chrono.timestamp())
             .map_err(|e| anyhow::anyhow!("timestamp conversion error: {e}"))?;
@@ -294,9 +290,7 @@ struct ScheduleRemoveParams {
 impl AgentTool for ScheduleRemoveTool {
     fn name(&self) -> &str { "schedule-remove" }
 
-    fn description(&self) -> &str {
-        "Remove a previously scheduled task by its job ID."
-    }
+    fn description(&self) -> &str { "Remove a previously scheduled task by its job ID." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -358,9 +352,7 @@ pub struct ScheduleListTool;
 impl AgentTool for ScheduleListTool {
     fn name(&self) -> &str { "schedule-list" }
 
-    fn description(&self) -> &str {
-        "List all scheduled tasks for the current session."
-    }
+    fn description(&self) -> &str { "List all scheduled tasks for the current session." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({

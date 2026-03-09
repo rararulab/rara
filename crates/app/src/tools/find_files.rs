@@ -73,10 +73,7 @@ impl AgentTool for FindFilesTool {
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: pattern"))?;
 
         let workspace = rara_paths::workspace_dir();
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         let resolved_path = if std::path::Path::new(path).is_absolute() {
             std::path::PathBuf::from(path)
         } else {

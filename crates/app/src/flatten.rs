@@ -208,8 +208,16 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
 /// a recognised prefix are ignored.
 pub fn unflatten_from_settings(
     pairs: &HashMap<String, String>,
-) -> (Option<LlmConfig>, Option<TelegramConfig>, Option<KnowledgeConfig>) {
-    (unflatten_llm(pairs), unflatten_telegram(pairs), unflatten_knowledge(pairs))
+) -> (
+    Option<LlmConfig>,
+    Option<TelegramConfig>,
+    Option<KnowledgeConfig>,
+) {
+    (
+        unflatten_llm(pairs),
+        unflatten_telegram(pairs),
+        unflatten_knowledge(pairs),
+    )
 }
 
 fn unflatten_llm(pairs: &HashMap<String, String>) -> Option<LlmConfig> {
@@ -311,7 +319,7 @@ mod tests {
     fn roundtrip_flatten_unflatten() {
         let llm = LlmConfig {
             default_provider: Some("ollama".into()),
-            providers: {
+            providers:        {
                 let mut m = HashMap::new();
                 m.insert(
                     "ollama".into(),

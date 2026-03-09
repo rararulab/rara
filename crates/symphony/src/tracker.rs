@@ -1,11 +1,27 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
-use snafu::{ensure, ResultExt};
+use snafu::{ResultExt, ensure};
 
-use crate::config::RepoConfig;
-use crate::error::{GitHubRequestSnafu, GitHubStatusSnafu, LinearSnafu, Result};
+use crate::{
+    config::RepoConfig,
+    error::{GitHubRequestSnafu, GitHubStatusSnafu, LinearSnafu, Result},
+};
 
 /// Represents the lifecycle state of a tracked issue.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,23 +36,23 @@ pub enum IssueState {
 #[derive(Debug, Clone)]
 pub struct TrackedIssue {
     /// Unique identifier (owner/repo#number).
-    pub id: String,
+    pub id:         String,
     /// Human-readable identifier. GitHub: "42", Linear: "RAR-42".
     pub identifier: String,
     /// Repository name (owner/repo).
-    pub repo: String,
+    pub repo:       String,
     /// Issue number.
-    pub number: u64,
+    pub number:     u64,
     /// Issue title.
-    pub title: String,
+    pub title:      String,
     /// Issue body/description.
-    pub body: Option<String>,
+    pub body:       Option<String>,
     /// Labels attached to the issue.
-    pub labels: Vec<String>,
+    pub labels:     Vec<String>,
     /// Priority (lower = higher priority).
-    pub priority: u32,
+    pub priority:   u32,
     /// Current lifecycle state.
-    pub state: IssueState,
+    pub state:      IssueState,
     /// When the issue was created.
     pub created_at: DateTime<Utc>,
 }
@@ -59,9 +75,9 @@ pub trait IssueTracker: Send + Sync {
 
 /// GitHub-backed issue tracker using the REST API.
 pub struct GitHubIssueTracker {
-    repos: Vec<RepoConfig>,
+    repos:  Vec<RepoConfig>,
     client: reqwest::Client,
-    token: Option<String>,
+    token:  Option<String>,
 }
 
 impl GitHubIssueTracker {
@@ -104,26 +120,27 @@ impl GitHubIssueTracker {
              ?state=open&labels={labels}&per_page=100"
         );
 
-        let resp = self.get(&url).send().await
-            .context(GitHubRequestSnafu { repo: repo.name.clone() })?;
+        let resp = self.get(&url).send().await.context(GitHubRequestSnafu {
+            repo: repo.name.clone(),
+        })?;
 
         ensure!(
             resp.status().is_success(),
             GitHubStatusSnafu {
-                repo: repo.name.clone(),
+                repo:   repo.name.clone(),
                 status: resp.status(),
             }
         );
 
-        let items: Vec<GitHubIssue> = resp.json().await
-            .context(GitHubRequestSnafu { repo: repo.name.clone() })?;
+        let items: Vec<GitHubIssue> = resp.json().await.context(GitHubRequestSnafu {
+            repo: repo.name.clone(),
+        })?;
 
         let issues = items
             .into_iter()
             .filter(|item| item.pull_request.is_none())
             .map(|item| {
-                let labels: Vec<String> =
-                    item.labels.into_iter().map(|l| l.name).collect();
+                let labels: Vec<String> = item.labels.into_iter().map(|l| l.name).collect();
                 let priority = derive_priority(&labels);
                 TrackedIssue {
                     id: format!("{}#{}", repo.name, item.number),
@@ -169,23 +186,26 @@ impl IssueTracker for GitHubIssueTracker {
     async fn fetch_issue_state(&self, issue: &TrackedIssue) -> Result<IssueState> {
         let (owner, name) = parse_repo_slug(&issue.repo);
         let number = issue.number;
-        let url = format!(
-            "https://api.github.com/repos/{owner}/{name}/issues/{number}"
-        );
+        let url = format!("https://api.github.com/repos/{owner}/{name}/issues/{number}");
 
         let repo = &issue.repo;
-        let resp = self.get(&url).send().await
+        let resp = self
+            .get(&url)
+            .send()
+            .await
             .context(GitHubRequestSnafu { repo: repo.clone() })?;
 
         ensure!(
             resp.status().is_success(),
             GitHubStatusSnafu {
-                repo: repo.clone(),
+                repo:   repo.clone(),
                 status: resp.status(),
             }
         );
 
-        let item: GitHubIssue = resp.json().await
+        let item: GitHubIssue = resp
+            .json()
+            .await
             .context(GitHubRequestSnafu { repo: repo.clone() })?;
 
         if item.state == "closed" {
@@ -209,9 +229,7 @@ impl IssueTracker for GitHubIssueTracker {
 /// Parse an `"owner/repo"` slug into `(owner, repo)`.
 ///
 /// If no slash is present, treats the whole string as repo with empty owner.
-fn parse_repo_slug(slug: &str) -> (&str, &str) {
-    slug.split_once('/').unwrap_or(("", slug))
-}
+fn parse_repo_slug(slug: &str) -> (&str, &str) { slug.split_once('/').unwrap_or(("", slug)) }
 
 /// Derive a numeric priority from issue labels.
 ///
@@ -256,12 +274,12 @@ fn sort_issues(issues: &mut [TrackedIssue]) {
 
 #[derive(Debug, Deserialize)]
 struct GitHubIssue {
-    number: u64,
-    title: String,
-    body: Option<String>,
-    state: String,
-    labels: Vec<GitHubLabel>,
-    created_at: DateTime<Utc>,
+    number:       u64,
+    title:        String,
+    body:         Option<String>,
+    state:        String,
+    labels:       Vec<GitHubLabel>,
+    created_at:   DateTime<Utc>,
     pull_request: Option<serde_json::Value>,
 }
 
@@ -274,13 +292,13 @@ struct GitHubLabel {
 
 /// Linear-backed issue tracker using the GraphQL API.
 pub struct LinearIssueTracker {
-    client: lineark_sdk::Client,
-    team_key: String,
-    project_slug: Option<String>,
-    active_states: Vec<String>,
-    terminal_states: Vec<String>,
+    client:            lineark_sdk::Client,
+    team_key:          String,
+    project_slug:      Option<String>,
+    active_states:     Vec<String>,
+    terminal_states:   Vec<String>,
     repo_label_prefix: String,
-    repos: Vec<String>,
+    repos:             Vec<String>,
 }
 
 impl LinearIssueTracker {
@@ -295,8 +313,9 @@ impl LinearIssueTracker {
         repo_label_prefix: String,
         repos: Vec<String>,
     ) -> Result<Self> {
-        let mut client = lineark_sdk::Client::from_token(api_key)
-            .context(LinearSnafu { message: "failed to create client" })?;
+        let mut client = lineark_sdk::Client::from_token(api_key).context(LinearSnafu {
+            message: "failed to create client",
+        })?;
         client.set_base_url(endpoint.to_owned());
         Ok(Self {
             client,
@@ -332,7 +351,8 @@ impl LinearIssueTracker {
             .unwrap_or(0)
     }
 
-    /// Map Linear priority (0 = no priority) to our ordering (lower = higher priority).
+    /// Map Linear priority (0 = no priority) to our ordering (lower = higher
+    /// priority).
     fn map_priority(linear_priority: u32) -> u32 {
         match linear_priority {
             0 => u32::MAX,
@@ -421,7 +441,9 @@ impl IssueTracker for LinearIssueTracker {
                 .client
                 .execute_connection::<serde_json::Value>(query, variables, "issues")
                 .await
-                .context(LinearSnafu { message: "failed to fetch issues" })?;
+                .context(LinearSnafu {
+                    message: "failed to fetch issues",
+                })?;
 
             tracing::debug!(
                 page_size = conn.nodes.len(),
@@ -467,10 +489,8 @@ impl IssueTracker for LinearIssueTracker {
                     .unwrap_or("")
                     .to_owned();
                 let number = Self::parse_number(&identifier);
-                let linear_priority = node
-                    .get("priority")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+                let linear_priority =
+                    node.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let priority = Self::map_priority(linear_priority);
                 let created_at: DateTime<Utc> = node
                     .get("createdAt")
@@ -519,10 +539,7 @@ impl IssueTracker for LinearIssueTracker {
             }
         }
 
-        tracing::debug!(
-            total = all_issues.len(),
-            "linear: fetch complete"
-        );
+        tracing::debug!(total = all_issues.len(), "linear: fetch complete");
 
         sort_issues(&mut all_issues);
         Ok(all_issues)
@@ -546,9 +563,13 @@ impl IssueTracker for LinearIssueTracker {
         let original_issue_id = &issue.id;
         let variables = serde_json::json!({ "id": original_issue_id });
 
-        let issue: serde_json::Value =
-            self.client.execute(QUERY, variables, "issue").await
-                .context(LinearSnafu { message: "failed to fetch issue state" })?;
+        let issue: serde_json::Value = self
+            .client
+            .execute(QUERY, variables, "issue")
+            .await
+            .context(LinearSnafu {
+                message: "failed to fetch issue state",
+            })?;
 
         let state_name = issue
             .get("state")
@@ -597,7 +618,10 @@ impl IssueTracker for LinearIssueTracker {
             .execute(MUTATION, variables, "issueUpdate")
             .await
             .context(LinearSnafu {
-                message: format!("failed to transition issue {} to '{state_name}'", issue.identifier),
+                message: format!(
+                    "failed to transition issue {} to '{state_name}'",
+                    issue.identifier
+                ),
             })?;
 
         let success = result
@@ -626,7 +650,8 @@ impl IssueTracker for LinearIssueTracker {
 }
 
 impl LinearIssueTracker {
-    /// Resolve a workflow state name (e.g. "In Progress") to its Linear state ID.
+    /// Resolve a workflow state name (e.g. "In Progress") to its Linear state
+    /// ID.
     async fn resolve_state_id(&self, state_name: &str) -> Result<String> {
         const QUERY: &str = r#"
             query($teamKey: String!, $stateName: String!) {
@@ -700,10 +725,7 @@ mod tests {
         assert_eq!(derive_priority(&[s("priority:unknown")]), u32::MAX);
 
         // First matching priority wins
-        assert_eq!(
-            derive_priority(&[s("priority:high"), s("priority:low")]),
-            2
-        );
+        assert_eq!(derive_priority(&[s("priority:high"), s("priority:low")]), 2);
     }
 
     #[test]
@@ -714,10 +736,10 @@ mod tests {
 
         let mut issues = vec![
             issue("c", 3, u32::MAX, t1), // no priority, oldest
-            issue("a", 1, 1, t2),         // priority 1, newer
-            issue("b", 2, 1, t1),         // priority 1, older
-            issue("d", 4, u32::MAX, t2),  // no priority, newer
-            issue("e", 5, 2, t3),         // priority 2
+            issue("a", 1, 1, t2),        // priority 1, newer
+            issue("b", 2, 1, t1),        // priority 1, older
+            issue("d", 4, u32::MAX, t2), // no priority, newer
+            issue("e", 5, 2, t3),        // priority 2
         ];
 
         sort_issues(&mut issues);
@@ -727,20 +749,11 @@ mod tests {
         assert_eq!(ids, vec!["b", "a", "e", "c", "d"]);
     }
 
-    fn s(v: &str) -> String {
-        v.to_owned()
-    }
+    fn s(v: &str) -> String { v.to_owned() }
 
-    fn dt(rfc3339: &str) -> DateTime<Utc> {
-        rfc3339.parse().unwrap()
-    }
+    fn dt(rfc3339: &str) -> DateTime<Utc> { rfc3339.parse().unwrap() }
 
-    fn issue(
-        id: &str,
-        number: u64,
-        priority: u32,
-        created_at: DateTime<Utc>,
-    ) -> TrackedIssue {
+    fn issue(id: &str, number: u64, priority: u32, created_at: DateTime<Utc>) -> TrackedIssue {
         TrackedIssue {
             id: id.to_owned(),
             identifier: number.to_string(),

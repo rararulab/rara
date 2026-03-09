@@ -18,20 +18,14 @@
 //! and [`JobWheel`] (the scheduling data structure backed by a `BTreeMap`).
 //! Jobs are persisted as JSON and restored on startup.
 
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{
-    identity::Principal,
-    session::SessionKey,
-};
+use crate::{identity::Principal, session::SessionKey};
 
 base::define_id!(
     /// Unique identifier for a scheduled job.
@@ -136,9 +130,7 @@ pub struct JobWheel {
 
 impl JobWheel {
     /// Build a wheel key from a job entry.
-    fn key(entry: &JobEntry) -> WheelKey {
-        (entry.trigger.next_at().as_second(), entry.id.0)
-    }
+    fn key(entry: &JobEntry) -> WheelKey { (entry.trigger.next_at().as_second(), entry.id.0) }
 
     /// Load jobs from the JSON persistence file, or create an empty wheel.
     pub fn load(path: PathBuf) -> Self {
@@ -179,11 +171,7 @@ impl JobWheel {
         let cutoff: WheelKey = (now.as_second(), Uuid::max());
 
         // Collect all keys up to `now`.
-        let keys: Vec<WheelKey> = self
-            .jobs
-            .range(..=cutoff)
-            .map(|(k, _)| *k)
-            .collect();
+        let keys: Vec<WheelKey> = self.jobs.range(..=cutoff).map(|(k, _)| *k).collect();
 
         for key in keys {
             if let Some(entry) = self.jobs.remove(&key) {
@@ -195,7 +183,8 @@ impl JobWheel {
                         // One-shot — do not re-insert.
                     }
                     Trigger::Interval { every_secs, .. } => {
-                        let next = now.checked_add(jiff::SignedDuration::from_secs(every_secs as i64))
+                        let next = now
+                            .checked_add(jiff::SignedDuration::from_secs(every_secs as i64))
                             .unwrap_or(now);
 
                         let mut rescheduled = entry;
@@ -205,21 +194,19 @@ impl JobWheel {
                         };
                         self.jobs.insert(Self::key(&rescheduled), rescheduled);
                     }
-                    Trigger::Cron { expr, .. } => {
-                        match Self::next_cron_time(&expr, now) {
-                            Some(next) => {
-                                let mut rescheduled = entry;
-                                rescheduled.trigger = Trigger::Cron {
-                                    expr,
-                                    next_at: next,
-                                };
-                                self.jobs.insert(Self::key(&rescheduled), rescheduled);
-                            }
-                            None => {
-                                warn!(job_id = %entry.id, expr = expr, "cron expression yields no future time, removing job");
-                            }
+                    Trigger::Cron { expr, .. } => match Self::next_cron_time(&expr, now) {
+                        Some(next) => {
+                            let mut rescheduled = entry;
+                            rescheduled.trigger = Trigger::Cron {
+                                expr,
+                                next_at: next,
+                            };
+                            self.jobs.insert(Self::key(&rescheduled), rescheduled);
                         }
-                    }
+                        None => {
+                            warn!(job_id = %entry.id, expr = expr, "cron expression yields no future time, removing job");
+                        }
+                    },
                 }
             }
         }
@@ -235,11 +222,7 @@ impl JobWheel {
 
     /// Remove a job by ID. Returns the removed entry if found.
     pub fn remove(&mut self, id: &JobId) -> Option<JobEntry> {
-        let key = self
-            .jobs
-            .iter()
-            .find(|(_, v)| v.id == *id)
-            .map(|(k, _)| *k);
+        let key = self.jobs.iter().find(|(_, v)| v.id == *id).map(|(k, _)| *k);
         key.and_then(|k| self.jobs.remove(&k))
     }
 
@@ -247,10 +230,7 @@ impl JobWheel {
     pub fn list(&self, session_key: Option<&SessionKey>) -> Vec<JobEntry> {
         self.jobs
             .values()
-            .filter(|e| {
-                session_key
-                    .map_or(true, |sk| e.session_key == *sk)
-            })
+            .filter(|e| session_key.map_or(true, |sk| e.session_key == *sk))
             .cloned()
             .collect()
     }

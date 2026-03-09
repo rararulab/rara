@@ -294,7 +294,10 @@ pub fn workspace_dir() -> &'static PathBuf {
     WORKSPACE_DIR.get_or_init(|| {
         let dir = config_dir().join("workspace");
         std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
-            panic!("failed to create workspace directory {}: {e}", dir.display())
+            panic!(
+                "failed to create workspace directory {}: {e}",
+                dir.display()
+            )
         });
         dir
     })

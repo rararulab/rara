@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use rara_symphony::config::{AgentConfig, RepoConfig};
-use rara_symphony::tracker::{IssueState, TrackedIssue};
-use rara_symphony::agent::AgentTask;
-use rara_symphony::agent::RalphAgent;
+use rara_symphony::{
+    agent::{AgentTask, RalphAgent},
+    config::{AgentConfig, RepoConfig},
+    tracker::{IssueState, TrackedIssue},
+};
 
 #[test]
 fn repo_config_defaults_workspace_root_under_rara_config_dir() {
@@ -59,19 +60,19 @@ fn agent_config_builds_ralph_run_command() {
 fn default_prompt_requires_push_pr_and_linear_comment() {
     let agent = RalphAgent::new(AgentConfig::default());
     let task = AgentTask {
-        issue: TrackedIssue {
-            id: "lin_123".to_owned(),
+        issue:            TrackedIssue {
+            id:         "lin_123".to_owned(),
             identifier: "RAR-123".to_owned(),
-            repo: "rararulab/rara".to_owned(),
-            number: 123,
-            title: "Add merge tracking".to_owned(),
-            body: Some("Track PR merge status before closing the Linear issue.".to_owned()),
-            labels: vec![],
-            priority: 1,
-            state: IssueState::Active,
+            repo:       "rararulab/rara".to_owned(),
+            number:     123,
+            title:      "Add merge tracking".to_owned(),
+            body:       Some("Track PR merge status before closing the Linear issue.".to_owned()),
+            labels:     vec![],
+            priority:   1,
+            state:      IssueState::Active,
             created_at: Utc::now(),
         },
-        attempt: None,
+        attempt:          None,
         workflow_content: None,
     };
 

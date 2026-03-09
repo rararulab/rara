@@ -103,7 +103,10 @@ pub enum ContentBlock {
     /// A reference to an image by URL.
     ImageUrl { url: String },
     /// Inline base64-encoded image data.
-    ImageBase64 { media_type: String, data: String },
+    ImageBase64 {
+        media_type: String,
+        data:       String,
+    },
 }
 
 /// Message content — either plain text or multimodal blocks.

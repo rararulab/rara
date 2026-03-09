@@ -124,4 +124,3 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
 
     fn subscribe(&self) -> watch::Receiver<()> { self.tx.subscribe() }
 }
-

@@ -1,11 +1,27 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::collections::HashMap;
 
 use tracing::{debug, info, warn};
 
-use crate::client::{RalphClient, TaskRecord};
-use crate::error::Result;
-use crate::supervisor::RalphSupervisor;
-use crate::tracker::{IssueState, IssueTracker, TrackedIssue};
+use crate::{
+    client::{RalphClient, TaskRecord},
+    error::Result,
+    supervisor::RalphSupervisor,
+    tracker::{IssueState, IssueTracker, TrackedIssue},
+};
 
 /// What action to take for a given issue ↔ task pair.
 #[derive(Debug, PartialEq, Eq)]
@@ -23,11 +39,11 @@ enum SyncAction {
 /// Report of what happened during a sync cycle.
 #[derive(Debug, Default)]
 pub struct SyncReport {
-    pub created: Vec<String>,
+    pub created:   Vec<String>,
     pub completed: Vec<String>,
     pub cancelled: Vec<String>,
-    pub failed: Vec<String>,
-    pub skipped: Vec<String>,
+    pub failed:    Vec<String>,
+    pub skipped:   Vec<String>,
     pub unchanged: usize,
 }
 
@@ -38,7 +54,8 @@ pub struct SyncReport {
 pub struct IssueSyncer;
 
 impl IssueSyncer {
-    /// Run a full sync cycle: compare issues against ralph tasks and take action.
+    /// Run a full sync cycle: compare issues against ralph tasks and take
+    /// action.
     pub async fn sync(
         supervisor: &RalphSupervisor,
         tracker: &dyn IssueTracker,
@@ -118,30 +135,26 @@ impl IssueSyncer {
                         }
                     }
                 }
-                SyncAction::CompleteIssue => {
-                    match tracker.transition_issue(issue, "Done").await {
-                        Ok(()) => {
-                            info!(issue = %issue.identifier, "transitioned issue to Done");
-                            report.completed.push(issue.identifier.clone());
-                        }
-                        Err(e) => {
-                            warn!(issue = %issue.identifier, error = %e, "failed to transition issue");
-                            report.failed.push(issue.identifier.clone());
-                        }
+                SyncAction::CompleteIssue => match tracker.transition_issue(issue, "Done").await {
+                    Ok(()) => {
+                        info!(issue = %issue.identifier, "transitioned issue to Done");
+                        report.completed.push(issue.identifier.clone());
                     }
-                }
-                SyncAction::CancelTask => {
-                    match client.task_cancel(&issue.identifier).await {
-                        Ok(_) => {
-                            info!(issue = %issue.identifier, "cancelled ralph task");
-                            report.cancelled.push(issue.identifier.clone());
-                        }
-                        Err(e) => {
-                            warn!(issue = %issue.identifier, error = %e, "failed to cancel ralph task");
-                            report.failed.push(issue.identifier.clone());
-                        }
+                    Err(e) => {
+                        warn!(issue = %issue.identifier, error = %e, "failed to transition issue");
+                        report.failed.push(issue.identifier.clone());
                     }
-                }
+                },
+                SyncAction::CancelTask => match client.task_cancel(&issue.identifier).await {
+                    Ok(_) => {
+                        info!(issue = %issue.identifier, "cancelled ralph task");
+                        report.cancelled.push(issue.identifier.clone());
+                    }
+                    Err(e) => {
+                        warn!(issue = %issue.identifier, error = %e, "failed to cancel ralph task");
+                        report.failed.push(issue.identifier.clone());
+                    }
+                },
                 SyncAction::None => {
                     report.unchanged += 1;
                 }
@@ -172,7 +185,7 @@ fn determine_action(issue_state: &IssueState, task_status: Option<&str>) -> Sync
         (IssueState::Terminal, _) => SyncAction::None,
 
         // Catch-all: unknown task status → nothing.
-        (_, _) => SyncAction::None,
+        (..) => SyncAction::None,
     }
 }
 

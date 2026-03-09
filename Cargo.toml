@@ -160,13 +160,13 @@ indexmap = "2"
 jiff = { version = "^0.2", features = ["serde"] }
 jsonwebtoken = "9"
 lazy_static = "^1.4"
-lineark-sdk = "1.1"
 lettre = { version = "0.11", default-features = false, features = [
     "tokio1-rustls-tls",
     "smtp-transport",
     "builder",
     "hostname",
 ] }
+lineark-sdk = "1.1"
 llmfit-core = { git = "https://github.com/AlexsJones/llmfit" }
 md5 = "0.7"
 moka = { version = "0.12", features = ["future"] }
@@ -189,12 +189,12 @@ serde_json = "1.0.143"
 serde_yaml = "0.9"
 sha2 = "0.10"
 shadow-rs = "1.2"
-sysinfo = "0.34"
 smart-default = "0.7"
 snafu = "^0.8"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono", "uuid"] }
 strum = "^0.27"
 strum_macros = "^0.27"
+sysinfo = "0.34"
 teloxide = { version = "^0.17", features = ["macros"] }
 tokio = { version = "^1.45", features = ["full", "tracing"] }
 tokio-util = "^0.7"

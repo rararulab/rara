@@ -41,8 +41,7 @@
 
 use std::sync::Arc;
 
-use futures::future::join_all;
-use futures::FutureExt;
+use futures::{FutureExt, future::join_all};
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -50,7 +49,10 @@ use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::{
     KernelError,
-    agent::{AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, Priority, run_agent_loop},
+    agent::{
+        AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, Priority,
+        run_agent_loop,
+    },
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -444,7 +446,9 @@ impl Kernel {
                 session = %job.session_key,
                 "scheduled job fired"
             );
-            let _ = self.event_queue.push(KernelEventEnvelope::scheduled_task(job));
+            let _ = self
+                .event_queue
+                .push(KernelEventEnvelope::scheduled_task(job));
         }
     }
 
@@ -1046,19 +1050,13 @@ impl Kernel {
             description:        "Executes a scheduled task and summarizes the result".to_string(),
             model:              None,
             system_prompt:      format!(
-                "You are a scheduled task executor.\n\n\
-                 ## Task\n\
-                 Job ID: {job_id}\n\
-                 Schedule: {trigger_summary}\n\
-                 Task: {message}\n\n\
-                 ## Instructions\n\
-                 1. Execute the task described above using available tools.\n\
-                 2. After completion, provide a brief summary of what you did and the outcome.\n\n\
-                 ## After Completion\n\
-                 When you finish the task, call the `kernel` tool with:\n\
-                 - action: \"publish\"\n\
-                 - event_type: \"scheduled_task_done\"\n\
-                 - payload: {{ \"message\": \"<your summary of what was done and the outcome>\" }}\n",
+                "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
+                 {trigger_summary}\nTask: {message}\n\n## Instructions\n1. Execute the task \
+                 described above using available tools.\n2. After completion, provide a brief \
+                 summary of what you did and the outcome.\n\n## After Completion\nWhen you finish \
+                 the task, call the `kernel` tool with:\n- action: \"publish\"\n- event_type: \
+                 \"scheduled_task_done\"\n- payload: {{ \"message\": \"<your summary of what was \
+                 done and the outcome>\" }}\n",
                 message = job.message,
             ),
             soul_prompt:        None,
@@ -1079,10 +1077,10 @@ impl Kernel {
                 manifest,
                 job.message.clone(),
                 principal,
-                None,              // no parent
-                None,              // no resume
-                None,              // independent session, don't pollute the original tape
-                None,              // no origin endpoint
+                None, // no parent
+                None, // no resume
+                None, // independent session, don't pollute the original tape
+                None, // no origin endpoint
             )
             .await
         {
@@ -1527,7 +1525,10 @@ impl Kernel {
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(&self.io.stream_hub());
 
-        let milestone_tx = self.process_table.with(&session_key, |p| p.result_tx.clone()).flatten();
+        let milestone_tx = self
+            .process_table
+            .with(&session_key, |p| p.result_tx.clone())
+            .flatten();
         let parent_span = tracing::Span::current();
 
         // -- Phase 7: Spawn background task --------------------------------------

@@ -134,7 +134,8 @@ impl AgentTool for BashTool {
 }
 
 /// Try to rewrite a command via `rtk rewrite` for token-optimized output.
-/// Falls back to the original command if rtk is unavailable or declines the rewrite.
+/// Falls back to the original command if rtk is unavailable or declines the
+/// rewrite.
 async fn rtk_rewrite(command: &str) -> String {
     let result = tokio::process::Command::new("rtk")
         .args(["rewrite", command])

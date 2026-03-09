@@ -388,12 +388,15 @@ impl InMemoryUserStore {
         // Ensure a built-in "system" user exists so internal subsystems
         // (e.g. Mita heartbeat) can resolve a principal without requiring
         // explicit YAML configuration.
-        store.by_name.entry("system".to_string()).or_insert_with(|| KernelUser {
-            name:        "system".to_string(),
-            role:        Role::Root,
-            permissions: default_permissions(Role::Root),
-            enabled:     true,
-        });
+        store
+            .by_name
+            .entry("system".to_string())
+            .or_insert_with(|| KernelUser {
+                name:        "system".to_string(),
+                role:        Role::Root,
+                permissions: default_permissions(Role::Root),
+                enabled:     true,
+            });
 
         store
     }
@@ -532,9 +535,7 @@ pub(crate) struct McpDynamicToolProvider {
 }
 
 impl McpDynamicToolProvider {
-    pub fn new(manager: rara_mcp::manager::mgr::McpManager) -> Self {
-        Self { manager }
-    }
+    pub fn new(manager: rara_mcp::manager::mgr::McpManager) -> Self { Self { manager } }
 }
 
 #[async_trait]

@@ -15,17 +15,21 @@
 //! Update pipeline — wires [`UpdateDetector`] state changes to
 //! [`UpdateExecutor`] and [`SupervisorHandle`] for automatic updates.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::detector::UpdateState;
-use super::executor::{UpdateExecutor, UpdateResult};
-use super::notifier::UpdateNotifier;
-use super::supervisor::SupervisorHandle;
+use super::{
+    detector::UpdateState,
+    executor::{UpdateExecutor, UpdateResult},
+    notifier::UpdateNotifier,
+    supervisor::SupervisorHandle,
+};
 use crate::GatewayConfig;
 
 /// Guard that prevents concurrent update executions.
@@ -44,7 +48,10 @@ pub async fn run_update_pipeline(
     cancel: CancellationToken,
     notifier: Arc<UpdateNotifier>,
 ) {
-    info!("Update pipeline started (auto_update={})", config.auto_update);
+    info!(
+        "Update pipeline started (auto_update={})",
+        config.auto_update
+    );
 
     loop {
         tokio::select! {
@@ -73,7 +80,10 @@ pub async fn run_update_pipeline(
         };
 
         // Prevent concurrent updates.
-        if UPDATING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        if UPDATING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             info!("Update pipeline: another update is already in progress, skipping");
             continue;
         }
@@ -126,7 +136,10 @@ async fn execute_and_handle(
             warn!(reason = %reason, "Auto-update: build failed for {}: {}", upstream_rev, reason);
             notifier.build_failed(upstream_rev, &reason).await;
         }
-        UpdateResult::ActivationFailed { reason, rolled_back } => {
+        UpdateResult::ActivationFailed {
+            reason,
+            rolled_back,
+        } => {
             warn!(
                 reason = %reason,
                 rolled_back,

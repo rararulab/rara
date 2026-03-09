@@ -14,14 +14,20 @@
 
 //! Gateway admin HTTP server — exposes status, restart, and shutdown endpoints.
 
-use axum::{Json, Router, extract::State, routing::{get, post}};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use serde::Serialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::detector::UpdateState;
-use super::supervisor::{SupervisorHandle, SupervisorStatus};
+use super::{
+    detector::UpdateState,
+    supervisor::{SupervisorHandle, SupervisorStatus},
+};
 
 // ---------------------------------------------------------------------------
 // Shared state

@@ -14,8 +14,10 @@
 
 //! [`UpdateExecutor`] — staging worktree build, binary activation & rollback.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use snafu::{ResultExt, Snafu};
 use tokio::process::Command;
@@ -74,7 +76,10 @@ pub enum UpdateResult {
     BuildFailed { reason: String },
     /// Binary swap failed; `rolled_back` indicates whether the backup was
     /// successfully restored.
-    ActivationFailed { reason: String, rolled_back: bool },
+    ActivationFailed {
+        reason:      String,
+        rolled_back: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +126,10 @@ impl UpdateExecutor {
     /// On build failure the staging worktree is cleaned up and
     /// [`UpdateResult::BuildFailed`] is returned (not an `Err`).
     /// On activation failure a rollback is attempted automatically.
-    pub async fn execute_update(&mut self, target_rev: &str) -> Result<UpdateResult, ExecutorError> {
+    pub async fn execute_update(
+        &mut self,
+        target_rev: &str,
+    ) -> Result<UpdateResult, ExecutorError> {
         let short_rev = &target_rev[..std::cmp::min(8, target_rev.len())];
         self.staging_dir = rara_paths::staging_dir().join(short_rev);
 
@@ -198,7 +206,12 @@ impl UpdateExecutor {
         }
 
         let output = Command::new("git")
-            .args(["worktree", "add", &self.staging_dir.to_string_lossy(), target_rev])
+            .args([
+                "worktree",
+                "add",
+                &self.staging_dir.to_string_lossy(),
+                target_rev,
+            ])
             .current_dir(&self.repo_dir)
             .output()
             .await
@@ -324,7 +337,12 @@ impl UpdateExecutor {
     /// Remove the staging git worktree (best-effort).
     async fn remove_worktree(&self) -> Result<(), ExecutorError> {
         let output = Command::new("git")
-            .args(["worktree", "remove", "--force", &self.staging_dir.to_string_lossy()])
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                &self.staging_dir.to_string_lossy(),
+            ])
             .current_dir(&self.repo_dir)
             .output()
             .await
@@ -396,9 +414,7 @@ async fn cleanup_stale_worktrees(repo_dir: &Path) {
 
 /// Detect the git repository root from the directory containing `exe_path`.
 async fn detect_repo_root(exe_path: &std::path::Path) -> Result<PathBuf, ExecutorError> {
-    let exe_dir = exe_path
-        .parent()
-        .unwrap_or(exe_path);
+    let exe_dir = exe_path.parent().unwrap_or(exe_path);
 
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
