@@ -25,15 +25,18 @@ use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, warn};
+use uuid::Uuid;
 
 use crate::{
     error::{IoSnafu, KernelError, Result},
     handle::KernelHandle,
-    identity::Role,
+    identity::{KernelUser, Role},
     io::{StreamEvent, StreamHandle},
     llm,
     llm::ModelCapabilities,
-    session::SessionKey,
+    queue::EventQueueRef,
+    session::{BackgroundToolRun, BackgroundToolStatus, SessionKey, SessionTable},
+    tool::{ToolExecutionMode, ToolOutput, ToolRegistryRef},
 };
 
 /// Estimated chars-per-token ratio for context size estimation.
@@ -375,6 +378,19 @@ struct PendingToolCall {
     arguments_buf: String,
 }
 
+type ValidToolCall = (String, String, serde_json::Value);
+
+#[derive(Debug)]
+struct ExecutedToolCall {
+    id:          String,
+    name:        String,
+    arguments:   serde_json::Value,
+    success:     bool,
+    result:      ToolOutput,
+    error:       Option<String>,
+    duration_ms: u64,
+}
+
 /// Trace of a single tool call within an iteration.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolCallTrace {
@@ -450,6 +466,263 @@ impl AgentTurnResult {
             },
         }
     }
+}
+
+async fn execute_single_tool_call(
+    tool: Option<crate::tool::AgentToolRef>,
+    name: String,
+    args: serde_json::Value,
+    tool_context: crate::tool::ToolContext,
+    runtime_user: Option<KernelUser>,
+) -> (bool, ToolOutput, Option<String>, u64) {
+    let tool_start = Instant::now();
+
+    if let Some(ref user) = runtime_user {
+        if !user.can_use_tool(&name) {
+            let err = format!(
+                "permission denied: user '{}' cannot use tool '{name}'",
+                user.name
+            );
+            warn!("{err}");
+            let dur = tool_start.elapsed().as_millis() as u64;
+            return (
+                false,
+                ToolOutput::from(serde_json::json!({ "error": &err })),
+                Some(err),
+                dur,
+            );
+        }
+    }
+
+    match tool {
+        Some(tool) => match tool.execute(args, &tool_context).await {
+            Ok(result) => {
+                let dur = tool_start.elapsed().as_millis() as u64;
+                (true, result, None::<String>, dur)
+            }
+            Err(e) => {
+                let dur = tool_start.elapsed().as_millis() as u64;
+                (
+                    false,
+                    ToolOutput::from(serde_json::json!({ "error": e.to_string() })),
+                    Some(e.to_string()),
+                    dur,
+                )
+            }
+        },
+        None => {
+            let err = format!("tool not found: {name}");
+            let dur = tool_start.elapsed().as_millis() as u64;
+            (
+                false,
+                ToolOutput::from(serde_json::json!({ "error": &err })),
+                Some(err),
+                dur,
+            )
+        }
+    }
+}
+
+async fn execute_tool_calls(
+    process_table: Arc<SessionTable>,
+    event_queue: EventQueueRef,
+    session_key: SessionKey,
+    tools: ToolRegistryRef,
+    valid_tool_calls: Vec<ValidToolCall>,
+    tool_context: crate::tool::ToolContext,
+    runtime_user: Option<KernelUser>,
+    stream_handle: &StreamHandle,
+) -> Result<Vec<ExecutedToolCall>> {
+    let mut inline_futures = Vec::new();
+    let mut executed = Vec::with_capacity(valid_tool_calls.len());
+
+    for (id, name, arguments) in valid_tool_calls {
+        let tool = tools.get(&name).cloned();
+        let capabilities = tool
+            .as_ref()
+            .map(|tool| tool.capabilities())
+            .unwrap_or_default();
+
+        if matches!(capabilities.execution_mode, ToolExecutionMode::Detachable) {
+            let Some(tool_ref) = tool else {
+                let (success, result, error, duration_ms) = execute_single_tool_call(
+                    None,
+                    name.clone(),
+                    arguments.clone(),
+                    tool_context.clone(),
+                    runtime_user.clone(),
+                )
+                .await;
+                executed.push(ExecutedToolCall {
+                    id,
+                    name,
+                    arguments,
+                    success,
+                    result,
+                    error,
+                    duration_ms,
+                });
+                continue;
+            };
+
+            if let Some(ref user) = runtime_user {
+                if !user.can_use_tool(&name) {
+                    let (success, result, error, duration_ms) = execute_single_tool_call(
+                        Some(tool_ref),
+                        name.clone(),
+                        arguments.clone(),
+                        tool_context.clone(),
+                        runtime_user.clone(),
+                    )
+                    .await;
+                    executed.push(ExecutedToolCall {
+                        id,
+                        name,
+                        arguments,
+                        success,
+                        result,
+                        error,
+                        duration_ms,
+                    });
+                    continue;
+                }
+            }
+
+            let run_id = Uuid::new_v4().to_string();
+            let started_at = jiff::Timestamp::now();
+            process_table.insert_background_run(
+                &session_key,
+                BackgroundToolRun {
+                    id: run_id.clone(),
+                    tool_name: name.clone(),
+                    started_at,
+                    status: BackgroundToolStatus::Running,
+                },
+            )?;
+
+            let started_summary = capabilities
+                .status_label
+                .unwrap_or_else(|| format!("{name} running in background"));
+            stream_handle.emit(StreamEvent::BackgroundToolStarted {
+                id:      run_id.clone(),
+                name:    name.clone(),
+                summary: started_summary,
+            });
+
+            let process_table = Arc::clone(&process_table);
+            let event_queue = Arc::clone(&event_queue);
+            let tool_context = tool_context.clone();
+            let runtime_user = runtime_user.clone();
+            let tool_name = name.clone();
+            let tool_args = arguments.clone();
+            let background_run_id = run_id.clone();
+            tokio::spawn(async move {
+                let (success, result, error, _duration_ms) = execute_single_tool_call(
+                    Some(tool_ref),
+                    tool_name.clone(),
+                    tool_args,
+                    tool_context,
+                    runtime_user,
+                )
+                .await;
+                let summary = if success {
+                    truncate_preview(&result.json.to_string(), RESULT_PREVIEW_MAX_BYTES)
+                } else {
+                    error.clone().unwrap_or_else(|| {
+                        truncate_preview(&result.json.to_string(), RESULT_PREVIEW_MAX_BYTES)
+                    })
+                };
+                let status = if success {
+                    BackgroundToolStatus::Succeeded {
+                        summary: summary.clone(),
+                    }
+                } else {
+                    BackgroundToolStatus::Failed {
+                        error: summary.clone(),
+                    }
+                };
+
+                if let Err(err) =
+                    process_table.complete_background_run(&session_key, &background_run_id, status)
+                {
+                    warn!(
+                        session_key = %session_key,
+                        run_id = %background_run_id,
+                        error = %err,
+                        "failed to persist background tool completion"
+                    );
+                }
+
+                if let Err(err) = event_queue.try_push(
+                    crate::event::KernelEventEnvelope::background_tool_completed(
+                        session_key,
+                        background_run_id.clone(),
+                        tool_name.clone(),
+                        success,
+                        summary.clone(),
+                        result.json.clone(),
+                    ),
+                ) {
+                    warn!(
+                        session_key = %session_key,
+                        run_id = %background_run_id,
+                        error = %err,
+                        "failed to enqueue background tool completion"
+                    );
+                }
+            });
+
+            executed.push(ExecutedToolCall {
+                id,
+                name: name.clone(),
+                arguments,
+                success: true,
+                result: serde_json::json!({
+                    "status": "running",
+                    "run_id": run_id,
+                    "tool": name,
+                })
+                .into(),
+                error: None,
+                duration_ms: 0,
+            });
+            continue;
+        }
+
+        let name_for_span = name.clone();
+        let args_for_exec = arguments.clone();
+        let tool_context = tool_context.clone();
+        let runtime_user = runtime_user.clone();
+        inline_futures.push(async move {
+            let tool_span = info_span!(
+                "tool_exec",
+                tool_name = name_for_span.as_str(),
+                success = tracing::field::Empty,
+            );
+            let _guard = tool_span.enter();
+            let (success, result, error, duration_ms) = execute_single_tool_call(
+                tool,
+                name_for_span.clone(),
+                args_for_exec,
+                tool_context,
+                runtime_user,
+            )
+            .await;
+            tool_span.record("success", success);
+            ExecutedToolCall {
+                id,
+                name: name_for_span,
+                arguments,
+                success,
+                result,
+                error,
+                duration_ms,
+            }
+        });
+    }
+
+    executed.extend(futures::future::join_all(inline_futures).await);
+    Ok(executed)
 }
 
 fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json::Value, String> {
@@ -1068,126 +1341,28 @@ pub(crate) async fn run_agent_loop(
             None
         };
 
-        // Execute all tool calls concurrently (with timing for traces)
-        let tool_futures: Vec<_> = valid_tool_calls
-            .iter()
-            .map(|(_id, name, args)| {
-                let tool = tools.get(name);
-                let args = args.clone();
-                let name = name.clone();
-                let tc = tool_context.clone();
-                let user_ref = runtime_user.clone();
-                let tool_cancel = turn_cancel.clone();
-                let tool_span = info_span!(
-                    "tool_exec",
-                    tool_name = name.as_str(),
-                    success = tracing::field::Empty,
-                );
-                async move {
-                    let _guard = tool_span.enter();
-                    let tool_start = Instant::now();
-
-                    // Runtime permission guard — deny if user cannot use this tool.
-                    if let Some(ref user) = user_ref {
-                        if !user.can_use_tool(&name) {
-                            tool_span.record("success", false);
-                            let err = format!(
-                                "permission denied: user '{}' cannot use tool '{name}'",
-                                user.name
-                            );
-                            warn!("{err}");
-                            let dur = tool_start.elapsed().as_millis() as u64;
-                            return (
-                                false,
-                                crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
-                                Some(err),
-                                dur,
-                            );
-                        }
-                    }
-
-                    if let Some(tool) = tool {
-                        let tool_result = tokio::select! {
-                            result = tool.execute(args, &tc) => result,
-                            _ = tool_cancel.cancelled() => {
-                                let dur = tool_start.elapsed().as_millis() as u64;
-                                tool_span.record("success", false);
-                                return (
-                                    false,
-                                    crate::tool::ToolOutput::from(
-                                        serde_json::json!({ "error": "interrupted by user" }),
-                                    ),
-                                    Some("interrupted by user".to_string()),
-                                    dur,
-                                );
-                            }
-                        };
-
-                        match tool_result {
-                            Ok(result) => {
-                                tool_span.record("success", true);
-                                let dur = tool_start.elapsed().as_millis() as u64;
-                                (true, result, None::<String>, dur)
-                            }
-                            Err(e) => {
-                                tool_span.record("success", false);
-                                let dur = tool_start.elapsed().as_millis() as u64;
-                                (
-                                    false,
-                                    crate::tool::ToolOutput::from(
-                                        serde_json::json!({ "error": e.to_string() }),
-                                    ),
-                                    Some(e.to_string()),
-                                    dur,
-                                )
-                            }
-                        }
-                    } else {
-                        tool_span.record("success", false);
-                        let err = format!("tool not found: {name}");
-                        let dur = tool_start.elapsed().as_millis() as u64;
-                        (
-                            false,
-                            crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
-                            Some(err),
-                            dur,
-                        )
-                    }
-                }
-            })
-            .collect();
-
-        let results = tokio::select! {
-            results = tokio::time::timeout(tool_execution_timeout, futures::future::join_all(tool_futures)) => {
-                match results {
-                    Ok(results) => results,
-                    Err(_) => {
-                        return Err(KernelError::AgentExecution {
-                            message: format!(
-                                "tool execution timed out after {}s",
-                                tool_execution_timeout.as_secs()
-                            ),
-                        });
-                    }
-                }
-            }
-            _ = turn_cancel.cancelled() => {
-                return Err(KernelError::AgentExecution {
-                    message: "interrupted by user".into(),
-                });
-            }
-        };
+        // Execute tool calls, detaching eligible long-running tools so the
+        // interactive session can return to Ready immediately.
+        let results = execute_tool_calls(
+            Arc::clone(handle.process_table()),
+            Arc::clone(handle.event_queue()),
+            session_key,
+            Arc::clone(&tools),
+            valid_tool_calls.clone(),
+            tool_context.clone(),
+            runtime_user.clone(),
+            stream_handle,
+        )
+        .await?;
 
         // Persist tool results to tape.
         if !results.is_empty() {
             let results_json: Vec<serde_json::Value> = results
                 .iter()
-                .map(|(_success, result, _err, _dur)| result.json.clone())
+                .map(|result| result.result.json.clone())
                 .collect();
-            let tool_names: Vec<String> = valid_tool_calls
-                .iter()
-                .map(|(_id, name, _args)| name.clone())
-                .collect();
+            let tool_names: Vec<String> =
+                results.iter().map(|result| result.name.clone()).collect();
             let _ = tape
                 .append_tool_result(
                     tape_name,
@@ -1209,17 +1384,15 @@ pub(crate) async fn run_agent_loop(
         let mut tool_call_traces: Vec<ToolCallTrace> = Vec::with_capacity(results.len());
 
         // Emit ToolCallEnd events and append tool response messages
-        for ((id, name, args), (success, result, err, duration_ms)) in
-            valid_tool_calls.iter().zip(results.iter())
-        {
-            let result_str = result.json.to_string();
+        for result in &results {
+            let result_str = result.result.json.to_string();
             let result_preview = truncate_preview(&result_str, RESULT_PREVIEW_MAX_BYTES);
 
             stream_handle.emit(StreamEvent::ToolCallEnd {
-                id:             id.clone(),
+                id:             result.id.clone(),
                 result_preview: result_preview.clone(),
-                success:        *success,
-                error:          err.clone(),
+                success:        result.success,
+                error:          result.error.clone(),
             });
             if let Some(ref mtx) = milestone_tx {
                 let _ = mtx
@@ -1227,24 +1400,24 @@ pub(crate) async fn run_agent_loop(
                         stage:  "tool_call_end".to_string(),
                         detail: Some(format!(
                             "{}: {}",
-                            name,
-                            if *success { "ok" } else { "error" }
+                            result.name,
+                            if result.success { "ok" } else { "error" }
                         )),
                     })
                     .await;
             }
 
             tool_call_traces.push(ToolCallTrace {
-                name: name.clone(),
-                id: id.clone(),
-                duration_ms: *duration_ms,
-                success: *success,
-                arguments: args.clone(),
+                name: result.name.clone(),
+                id: result.id.clone(),
+                duration_ms: result.duration_ms,
+                success: result.success,
+                arguments: result.arguments.clone(),
                 result_preview,
-                error: err.clone(),
+                error: result.error.clone(),
             });
 
-            messages.push(llm::Message::tool_result(id, result_str));
+            messages.push(llm::Message::tool_result(&result.id, result_str));
         }
 
         // Collect iteration trace (with tool calls)
@@ -1336,13 +1509,108 @@ pub(crate) async fn run_agent_loop(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use serde_json::json;
+    use tokio::sync::{Notify, Semaphore};
 
     use super::{
         ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
-        should_remind_tape_anchor, should_remind_tape_search,
+        execute_tool_calls, should_remind_tape_anchor, should_remind_tape_search,
     };
-    use crate::llm::Message;
+    use crate::{
+        identity::Principal,
+        io::StreamHub,
+        llm::Message,
+        queue::{EventQueueRef, ShardedEventQueue, ShardedEventQueueConfig},
+        session::{
+            AgentRunLoopResult, BackgroundToolStatus, Session, SessionKey, SessionState,
+            SessionTable,
+        },
+        tool::{
+            AgentTool, ToolCapabilities, ToolContext, ToolExecutionMode, ToolOutput, ToolRegistry,
+        },
+    };
+
+    struct DetachableTestTool {
+        notify: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentTool for DetachableTestTool {
+        fn name(&self) -> &str { "detachable-test-tool" }
+
+        fn description(&self) -> &str { "test detachable tool" }
+
+        fn parameters_schema(&self) -> serde_json::Value { json!({ "type": "object" }) }
+
+        fn capabilities(&self) -> ToolCapabilities {
+            ToolCapabilities {
+                execution_mode: ToolExecutionMode::Detachable,
+                status_label:   Some("background".into()),
+            }
+        }
+
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _context: &ToolContext,
+        ) -> anyhow::Result<ToolOutput> {
+            self.notify.notified().await;
+            Ok(json!({ "ok": true }).into())
+        }
+    }
+
+    fn test_session_table(session_key: SessionKey) -> Arc<SessionTable> {
+        let table = Arc::new(SessionTable::new());
+        let permit = Arc::new(Semaphore::new(1))
+            .try_acquire_owned()
+            .expect("semaphore permit");
+        table.insert(Session {
+            session_key,
+            parent_id: None,
+            manifest: crate::agent::AgentManifest {
+                name:               "test-agent".into(),
+                role:               Default::default(),
+                description:        "test agent".into(),
+                model:              None,
+                system_prompt:      "You are a test agent.".into(),
+                soul_prompt:        None,
+                provider_hint:      None,
+                max_iterations:     None,
+                tools:              vec![],
+                max_children:       None,
+                max_context_tokens: None,
+                priority:           crate::agent::Priority::Normal,
+                metadata:           serde_json::Value::Null,
+                sandbox:            None,
+            },
+            principal: Principal::lookup("tester"),
+            env: crate::agent::AgentEnv::default(),
+            state: SessionState::Ready,
+            created_at: jiff::Timestamp::now(),
+            finished_at: None,
+            result: Some(AgentRunLoopResult {
+                output:     String::new(),
+                iterations: 0,
+                tool_calls: 0,
+            }),
+            result_tx: None,
+            created_files: vec![],
+            metrics: Arc::new(crate::session::RuntimeMetrics::new()),
+            turn_traces: vec![],
+            turn_cancel: tokio_util::sync::CancellationToken::new(),
+            process_cancel: tokio_util::sync::CancellationToken::new(),
+            paused: false,
+            pause_buffer: vec![],
+            background_runs: vec![],
+            origin_endpoint: None,
+            child_semaphore: Arc::new(Semaphore::new(1)),
+            _global_permit: permit,
+        });
+        table
+    }
 
     #[test]
     fn classify_context_pressure_returns_normal_below_threshold() {
@@ -1422,5 +1690,68 @@ mod tests {
         assert!(prompt.contains("<context_contract>"));
         assert!(!prompt.contains("<delegation_contract>"));
         assert!(!prompt.contains("action: \"spawn\""));
+    }
+
+    #[tokio::test]
+    async fn detachable_tool_returns_running_handle_without_waiting_for_completion() {
+        let session_key = SessionKey::new();
+        let process_table = test_session_table(session_key);
+        let event_queue: EventQueueRef =
+            Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+                num_shards:      0,
+                shard_capacity:  16,
+                global_capacity: 16,
+            }));
+        let stream_hub = StreamHub::new(8);
+        let stream_handle = stream_hub.open(session_key);
+        let notify = Arc::new(Notify::new());
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(DetachableTestTool {
+            notify: Arc::clone(&notify),
+        }));
+        let tools = Arc::new(registry);
+        let tool_calls = vec![(
+            "tool-call-1".to_string(),
+            "detachable-test-tool".to_string(),
+            json!({}),
+        )];
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            execute_tool_calls(
+                Arc::clone(&process_table),
+                event_queue,
+                session_key,
+                tools,
+                tool_calls,
+                ToolContext::default(),
+                None,
+                &stream_handle,
+            ),
+        )
+        .await
+        .expect("detachable tool execution should not block")
+        .expect("detachable tool execution should succeed");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].result.json["status"], "running");
+        assert_eq!(result[0].result.json["tool"], "detachable-test-tool");
+        assert!(result[0].result.json["run_id"].as_str().is_some());
+
+        let background_runs = result[0].result.json["run_id"]
+            .as_str()
+            .map(|run_id| {
+                process_table
+                    .background_runs(&session_key)
+                    .into_iter()
+                    .find(|run| run.id == run_id)
+            })
+            .flatten()
+            .expect("background run should be registered");
+        assert_eq!(background_runs.tool_name, "detachable-test-tool");
+        assert_eq!(background_runs.status, BackgroundToolStatus::Running);
+
+        notify.notify_waiters();
     }
 }

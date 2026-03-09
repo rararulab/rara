@@ -523,6 +523,18 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
                 result_preview,
             }
         }
+        StreamEvent::BackgroundToolStarted { name, summary, .. } => CliEvent::Progress {
+            text: format!("[background tool] {name}: {summary}"),
+        },
+        StreamEvent::BackgroundToolFinished {
+            success, summary, ..
+        } => CliEvent::Progress {
+            text: format!(
+                "[background tool {}] {}",
+                if success { "done" } else { "failed" },
+                summary
+            ),
+        },
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
         StreamEvent::TurnMetrics {
             duration_ms,

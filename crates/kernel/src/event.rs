@@ -296,6 +296,16 @@ pub enum KernelEvent {
         result:   AgentRunLoopResult,
     },
 
+    /// A detachable background tool run has completed.
+    /// The owning session is in [`EventBase::session_key`].
+    BackgroundToolCompleted {
+        run_id:    String,
+        tool_name: String,
+        success:   bool,
+        summary:   String,
+        result:    serde_json::Value,
+    },
+
     // === Output ===
     /// Deliver an outbound envelope to egress.
     #[debug("Deliver(session={})", _0.session_key)]
@@ -334,6 +344,7 @@ impl KernelEvent {
             Self::SendSignal { .. } | Self::Shutdown => EventPriority::Critical,
             Self::TurnCompleted { .. }
             | Self::ChildSessionDone { .. }
+            | Self::BackgroundToolCompleted { .. }
             | Self::Deliver(_)
             | Self::SessionCommand(_)
             | Self::SendNotification { .. } => EventPriority::Normal,
@@ -486,6 +497,27 @@ impl KernelEventEnvelope {
         Self::child_session_done(parent_id, child_id, result)
     }
 
+    /// Create a `BackgroundToolCompleted` event.
+    pub fn background_tool_completed(
+        session_key: SessionKey,
+        run_id: String,
+        tool_name: String,
+        success: bool,
+        summary: String,
+        result: serde_json::Value,
+    ) -> Self {
+        Self {
+            base: EventBase::from(session_key),
+            kind: KernelEvent::BackgroundToolCompleted {
+                run_id,
+                tool_name,
+                success,
+                summary,
+                result,
+            },
+        }
+    }
+
     /// Create a `Deliver` event.
     pub fn deliver(envelope: OutboundEnvelope) -> Self {
         let session_key = envelope.session_key.clone();
@@ -576,6 +608,19 @@ impl KernelEventEnvelope {
                     self.base.session_key
                 )
             }
+            KernelEvent::BackgroundToolCompleted {
+                run_id,
+                tool_name,
+                success,
+                summary,
+                ..
+            } => {
+                let status = if *success { "succeeded" } else { "failed" };
+                format!(
+                    "background tool run {run_id} ({tool_name}) {status} for {}: {summary}",
+                    self.base.session_key
+                )
+            }
             KernelEvent::Deliver(envelope) => {
                 format!(
                     "deliver outbound message for session {}",
@@ -614,6 +659,7 @@ impl KernelEventEnvelope {
             KernelEvent::SendSignal { .. }
             | KernelEvent::TurnCompleted { .. }
             | KernelEvent::ChildSessionDone { .. }
+            | KernelEvent::BackgroundToolCompleted { .. }
             | KernelEvent::SessionCommand(_) => Some(self.base.session_key),
             _ => None,
         }

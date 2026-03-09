@@ -16,6 +16,25 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 
+/// How the kernel should schedule a tool invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolExecutionMode {
+    /// Execute within the current turn and wait for the result.
+    #[default]
+    Inline,
+    /// Detach execution into a background run owned by the kernel.
+    Detachable,
+}
+
+/// Optional execution metadata advertised by a tool.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolCapabilities {
+    /// Whether the tool may run detached from the current turn.
+    pub execution_mode: ToolExecutionMode,
+    /// Short status label for UIs to display while the tool is running.
+    pub status_label:   Option<String>,
+}
+
 /// A binary resource produced by a tool (e.g. a compressed screenshot).
 #[derive(Debug, Clone)]
 pub struct ResourceAttachment {
@@ -102,6 +121,9 @@ pub trait AgentTool: Send + Sync {
 
     /// JSON Schema describing the accepted parameters.
     fn parameters_schema(&self) -> serde_json::Value;
+
+    /// Optional execution metadata used by the kernel scheduler.
+    fn capabilities(&self) -> ToolCapabilities { ToolCapabilities::default() }
 
     /// Execute the tool with the given parameters and execution context.
     async fn execute(
@@ -278,5 +300,16 @@ mod tests {
         assert!(filtered.get("read-file").is_some());
         assert!(filtered.get("bash").is_none());
         assert!(filtered.get("write-file").is_none());
+    }
+
+    #[test]
+    fn tool_capability_marks_detachable_tools() {
+        let caps = ToolCapabilities {
+            execution_mode: ToolExecutionMode::Detachable,
+            status_label:   Some("background".into()),
+        };
+
+        assert!(matches!(caps.execution_mode, ToolExecutionMode::Detachable));
+        assert_eq!(caps.status_label.as_deref(), Some("background"));
     }
 }

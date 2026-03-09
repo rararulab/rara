@@ -808,6 +808,18 @@ pub enum StreamEvent {
         success:        bool,
         error:          Option<String>,
     },
+    /// A detachable background tool run has started.
+    BackgroundToolStarted {
+        id:      String,
+        name:    String,
+        summary: String,
+    },
+    /// A detachable background tool run has finished.
+    BackgroundToolFinished {
+        id:      String,
+        success: bool,
+        summary: String,
+    },
     /// Progress stage update.
     Progress { stage: String },
     /// Turn metrics summary (emitted before stream close).
