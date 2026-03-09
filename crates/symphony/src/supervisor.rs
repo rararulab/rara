@@ -6,8 +6,11 @@ use tracing::{info, warn};
 use crate::client::RalphClient;
 use crate::error::{RalphSnafu, Result};
 
-/// Default port for the ralph API server.
+/// Default port for the ralph RPC API server.
 const RALPH_API_PORT: u16 = 13781;
+
+/// Default command for starting ralph.
+const RALPH_COMMAND: &str = "ralph";
 
 /// How long to wait between health check retries during startup.
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -18,25 +21,29 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Delay before restarting a crashed ralph-api process.
 const RESTART_DELAY: Duration = Duration::from_secs(3);
 
-/// Manages the ralph-api child process lifecycle.
+/// Manages the ralph RPC API child process lifecycle.
 ///
-/// Spawns `ralph-api` as a subprocess, monitors health via HTTP,
+/// Spawns `ralph web` as a subprocess, monitors health via HTTP,
 /// and restarts automatically on crash.
 pub struct RalphSupervisor {
     child: Option<Child>,
     port: u16,
+    workspace_root: String,
     client: RalphClient,
 }
 
 impl RalphSupervisor {
     /// Create a new supervisor. Does not start the process yet.
+    ///
+    /// `workspace_root` is the directory ralph uses for task/loop storage.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(workspace_root: &str) -> Self {
         let port = RALPH_API_PORT;
         let client = RalphClient::new(&format!("http://127.0.0.1:{port}"));
         Self {
             child: None,
             port,
+            workspace_root: workspace_root.to_owned(),
             client,
         }
     }
@@ -51,9 +58,13 @@ impl RalphSupervisor {
     pub async fn start(&mut self) -> Result<()> {
         info!(port = self.port, "starting ralph-api");
 
-        let child = Command::new("ralph-api")
-            .env("RALPH_API_PORT", self.port.to_string())
-            .env("RALPH_API_HOST", "127.0.0.1")
+        let child = Command::new(RALPH_COMMAND)
+            .arg("web")
+            .arg("--no-open")
+            .arg("--backend-port")
+            .arg(self.port.to_string())
+            .arg("--workspace")
+            .arg(&self.workspace_root)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

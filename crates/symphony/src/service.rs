@@ -38,8 +38,12 @@ impl SymphonyService {
         // 1. Build issue tracker.
         let tracker: Box<dyn IssueTracker> = self.build_tracker()?;
 
-        // 2. Start ralph-api supervisor.
-        let mut supervisor = RalphSupervisor::new();
+        // 2. Start ralph RPC API supervisor.
+        let workspace_root = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .to_string_lossy()
+            .into_owned();
+        let mut supervisor = RalphSupervisor::new(&workspace_root);
         supervisor.start().await?;
         let syncer = IssueSyncer::new(supervisor.client());
 
