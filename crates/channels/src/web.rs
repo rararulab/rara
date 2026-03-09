@@ -839,20 +839,33 @@ impl ChannelAdapter for WebAdapter {
 
 #[cfg(test)]
 mod tests {
-    use rara_kernel::io::StreamEvent;
+    use std::{sync::Arc, time::Duration};
+
+    use dashmap::DashMap;
+    use rara_kernel::{
+        io::{StreamEvent, StreamHub},
+        session::SessionKey,
+    };
+    use tokio::sync::{RwLock, broadcast};
+    use tokio::time::timeout;
 
     use super::{WebEvent, stream_event_to_web_event};
 
+    async fn recv_web_event(rx: &mut broadcast::Receiver<String>) -> WebEvent {
+        let payload = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for web event")
+            .expect("broadcast channel should stay open");
+        serde_json::from_str(&payload).expect("web event should deserialize")
+    }
+
     #[test]
-    fn reasoning_deltas_are_forwarded_to_web_clients() {
+    fn reasoning_deltas_are_not_forwarded_to_web_clients() {
         let event = StreamEvent::ReasoningDelta {
             text: "internal".to_owned(),
         };
 
-        assert!(matches!(
-            stream_event_to_web_event(event),
-            Some(WebEvent::ReasoningDelta { text }) if text == "internal"
-        ));
+        assert!(stream_event_to_web_event(event).is_none());
     }
 
     #[test]
@@ -865,5 +878,62 @@ mod tests {
             stream_event_to_web_event(event),
             Some(WebEvent::TextDelta { text }) if text == "hello"
         ));
+    }
+
+    #[tokio::test]
+    async fn stream_forwarder_reconnects_same_session_after_previous_turn_closes() {
+        let session_key = SessionKey::new();
+        let session_raw = session_key.to_string();
+        let sessions = Arc::new(DashMap::new());
+        let session_tx = super::WebAdapter::get_or_create_session(&sessions, &session_raw);
+        let stream_hub = Arc::new(StreamHub::new(8));
+        let stream_hub_ref = Arc::new(RwLock::new(Some(Arc::clone(&stream_hub))));
+
+        super::spawn_stream_forwarder(
+            Arc::clone(&stream_hub_ref),
+            Arc::clone(&sessions),
+            session_raw.clone(),
+        );
+        let first_stream = stream_hub.open(session_key.clone());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let mut first_rx = session_tx.subscribe();
+        first_stream.emit(StreamEvent::ToolCallEnd {
+            id:             "tool-1".to_owned(),
+            result_preview: "{\"error\":\"timed out\"}".to_owned(),
+            success:        false,
+            error:          Some("tool timed out".to_owned()),
+        });
+        let first_stream_id = first_stream.stream_id().clone();
+        stream_hub.close(&first_stream_id);
+        drop(first_stream);
+
+        assert!(matches!(
+            recv_web_event(&mut first_rx).await,
+            WebEvent::ToolCallEnd { id, success, .. } if id == "tool-1" && !success
+        ));
+        assert!(matches!(recv_web_event(&mut first_rx).await, WebEvent::Done));
+
+        super::spawn_stream_forwarder(
+            Arc::clone(&stream_hub_ref),
+            Arc::clone(&sessions),
+            session_raw,
+        );
+        let second_stream = stream_hub.open(session_key);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let mut second_rx = session_tx.subscribe();
+        second_stream.emit(StreamEvent::TextDelta {
+            text: "second turn".to_owned(),
+        });
+        let second_stream_id = second_stream.stream_id().clone();
+        stream_hub.close(&second_stream_id);
+        drop(second_stream);
+
+        assert!(matches!(
+            recv_web_event(&mut second_rx).await,
+            WebEvent::TextDelta { text } if text == "second turn"
+        ));
+        assert!(matches!(recv_web_event(&mut second_rx).await, WebEvent::Done));
     }
 }
