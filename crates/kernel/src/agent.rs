@@ -16,7 +16,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use dashmap::DashMap;
@@ -47,6 +47,8 @@ const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
 const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
 /// Multiple medium tool outputs in one phase should also trigger a reminder.
 const MEDIUM_TOOL_RESULT_CHARS: usize = 3_000;
+/// Hard cap for a single tool execution within one turn.
+const DEFAULT_TOOL_EXECUTION_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ContextPressure {
@@ -462,6 +464,83 @@ fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json:
         ));
     }
     Ok(args)
+}
+
+async fn execute_tool_call(
+    tool: Option<crate::tool::AgentToolRef>,
+    name: String,
+    args: serde_json::Value,
+    tc: crate::tool::ToolContext,
+    user_ref: Option<crate::identity::KernelUser>,
+    timeout: Duration,
+) -> (bool, crate::tool::ToolOutput, Option<String>, u64) {
+    let tool_start = Instant::now();
+
+    if let Some(ref user) = user_ref {
+        if !user.can_use_tool(&name) {
+            let err = format!(
+                "permission denied: user '{}' cannot use tool '{name}'",
+                user.name
+            );
+            warn!("{err}");
+            let dur = tool_start.elapsed().as_millis() as u64;
+            return (
+                false,
+                crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+                Some(err),
+                dur,
+            );
+        }
+    }
+
+    let Some(tool) = tool else {
+        let err = format!("tool not found: {name}");
+        let dur = tool_start.elapsed().as_millis() as u64;
+        return (
+            false,
+            crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+            Some(err),
+            dur,
+        );
+    };
+
+    match tokio::time::timeout(timeout, tool.execute(args, &tc)).await {
+        Ok(Ok(result)) => {
+            let dur = tool_start.elapsed().as_millis() as u64;
+            (true, result, None, dur)
+        }
+        Ok(Err(e)) => {
+            let err = e.to_string();
+            let dur = tool_start.elapsed().as_millis() as u64;
+            (
+                false,
+                crate::tool::ToolOutput::from(serde_json::json!({ "error": err })),
+                Some(err),
+                dur,
+            )
+        }
+        Err(_) => {
+            let err = format!(
+                "tool '{name}' timed out after {}",
+                format_timeout_duration(timeout)
+            );
+            let dur = tool_start.elapsed().as_millis() as u64;
+            (
+                false,
+                crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+                Some(err),
+                dur,
+            )
+        }
+    }
+}
+
+fn format_timeout_duration(timeout: Duration) -> String {
+    if timeout.as_secs() > 0 && timeout.subsec_nanos() == 0 {
+        format!("{}s", timeout.as_secs())
+    } else {
+        format!("{}ms", timeout.as_millis())
+    }
 }
 
 fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
@@ -1072,7 +1151,7 @@ pub(crate) async fn run_agent_loop(
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
             .map(|(_id, name, args)| {
-                let tool = tools.get(name);
+                let tool = tools.get(name).cloned();
                 let args = args.clone();
                 let name = name.clone();
                 let tc = tool_context.clone();
@@ -1084,58 +1163,17 @@ pub(crate) async fn run_agent_loop(
                 );
                 async move {
                     let _guard = tool_span.enter();
-                    let tool_start = Instant::now();
-
-                    // Runtime permission guard — deny if user cannot use this tool.
-                    if let Some(ref user) = user_ref {
-                        if !user.can_use_tool(&name) {
-                            tool_span.record("success", false);
-                            let err = format!(
-                                "permission denied: user '{}' cannot use tool '{name}'",
-                                user.name
-                            );
-                            warn!("{err}");
-                            let dur = tool_start.elapsed().as_millis() as u64;
-                            return (
-                                false,
-                                crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
-                                Some(err),
-                                dur,
-                            );
-                        }
-                    }
-
-                    if let Some(tool) = tool {
-                        match tool.execute(args, &tc).await {
-                            Ok(result) => {
-                                tool_span.record("success", true);
-                                let dur = tool_start.elapsed().as_millis() as u64;
-                                (true, result, None::<String>, dur)
-                            }
-                            Err(e) => {
-                                tool_span.record("success", false);
-                                let dur = tool_start.elapsed().as_millis() as u64;
-                                (
-                                    false,
-                                    crate::tool::ToolOutput::from(
-                                        serde_json::json!({ "error": e.to_string() }),
-                                    ),
-                                    Some(e.to_string()),
-                                    dur,
-                                )
-                            }
-                        }
-                    } else {
-                        tool_span.record("success", false);
-                        let err = format!("tool not found: {name}");
-                        let dur = tool_start.elapsed().as_millis() as u64;
-                        (
-                            false,
-                            crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
-                            Some(err),
-                            dur,
-                        )
-                    }
+                    let result = execute_tool_call(
+                        tool,
+                        name,
+                        args,
+                        tc,
+                        user_ref,
+                        DEFAULT_TOOL_EXECUTION_TIMEOUT,
+                    )
+                    .await;
+                    tool_span.record("success", result.0);
+                    result
                 }
             })
             .collect();
@@ -1300,13 +1338,42 @@ pub(crate) async fn run_agent_loop(
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use async_trait::async_trait;
     use serde_json::json;
+    use tokio::time::sleep;
 
     use super::{
         ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
-        should_remind_tape_anchor, should_remind_tape_search,
+        execute_tool_call, should_remind_tape_anchor, should_remind_tape_search,
     };
-    use crate::llm::Message;
+    use crate::{
+        llm::Message,
+        tool::{AgentTool, ToolContext, ToolOutput},
+    };
+
+    struct SleepTool {
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl AgentTool for SleepTool {
+        fn name(&self) -> &str { "sleep-tool" }
+
+        fn description(&self) -> &str { "sleeps before returning" }
+
+        fn parameters_schema(&self) -> serde_json::Value { json!({ "type": "object" }) }
+
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _context: &ToolContext,
+        ) -> anyhow::Result<ToolOutput> {
+            sleep(self.delay).await;
+            Ok(ToolOutput::from(json!({ "ok": true })))
+        }
+    }
 
     #[test]
     fn classify_context_pressure_returns_normal_below_threshold() {
@@ -1386,5 +1453,31 @@ mod tests {
         assert!(prompt.contains("<context_contract>"));
         assert!(!prompt.contains("<delegation_contract>"));
         assert!(!prompt.contains("action: \"spawn\""));
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_returns_timeout_error() {
+        let (success, output, err, duration_ms) = execute_tool_call(
+            Some(Arc::new(SleepTool {
+                delay: Duration::from_millis(25),
+            })),
+            "sleep-tool".to_string(),
+            json!({}),
+            ToolContext::default(),
+            None,
+            Duration::from_millis(5),
+        )
+        .await;
+
+        assert!(!success);
+        assert!(duration_ms < 25);
+        assert_eq!(
+            output.json,
+            json!({ "error": "tool 'sleep-tool' timed out after 5ms" })
+        );
+        assert_eq!(
+            err.as_deref(),
+            Some("tool 'sleep-tool' timed out after 5ms")
+        );
     }
 }
