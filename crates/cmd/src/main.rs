@@ -202,6 +202,7 @@ impl GatewayArgs {
         // 2. Create update detector + watch receiver.
         let (detector, update_rx) =
             rara_app::gateway::UpdateDetector::new(gateway_config.clone()).await;
+        let update_state_tx = detector.sender();
         let detector_cancel = cancel.clone();
         tokio::spawn(async move {
             detector.run(detector_cancel).await;
@@ -228,7 +229,10 @@ impl GatewayArgs {
         let admin_state = rara_app::gateway::server::GatewayAppState {
             supervisor_handle,
             update_state_rx: update_rx,
+            update_state_tx,
             shutdown: cancel.clone(),
+            notifier,
+            owner_token: config.owner_token.clone(),
         };
         let admin_bind = gateway_config.bind_address.clone();
         let _admin_handle = rara_app::gateway::server::serve(&admin_bind, admin_state)
@@ -375,7 +379,7 @@ impl ChatArgs {
         // Register CLI endpoint in the EndpointRegistry.
         let cli_endpoint = Endpoint {
             channel_type: ChannelType::Cli,
-            address:      EndpointAddress::Cli {
+            address: EndpointAddress::Cli {
                 session_id: session_key.clone(),
             },
         };
@@ -479,17 +483,17 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
 /// Build a [`RawPlatformMessage`] for the CLI channel.
 fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
     RawPlatformMessage {
-        channel_type:        ChannelType::Cli,
+        channel_type: ChannelType::Cli,
         platform_message_id: Some(ulid::Ulid::new().to_string()),
-        platform_user_id:    user_id.to_owned(),
-        platform_chat_id:    Some(session_key.to_owned()),
-        content:             MessageContent::Text(content.to_owned()),
-        reply_context:       Some(IoReplyContext {
-            thread_id:                None,
+        platform_user_id: user_id.to_owned(),
+        platform_chat_id: Some(session_key.to_owned()),
+        content: MessageContent::Text(content.to_owned()),
+        reply_context: Some(IoReplyContext {
+            thread_id: None,
             reply_to_platform_msg_id: None,
-            interaction_type:         InteractionType::Message,
+            interaction_type: InteractionType::Message,
         }),
-        metadata:            HashMap::new(),
+        metadata: HashMap::new(),
     }
 }
 

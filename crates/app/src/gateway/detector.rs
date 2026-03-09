@@ -28,11 +28,11 @@ use crate::GatewayConfig;
 #[derive(Debug, Clone)]
 pub struct UpdateState {
     /// Local HEAD revision.
-    pub current_rev:      String,
+    pub current_rev: String,
     /// Latest upstream `origin/main` revision (after last successful fetch).
-    pub upstream_rev:     Option<String>,
+    pub upstream_rev: Option<String>,
     /// Timestamp of the last successful check.
-    pub last_check_time:  Option<chrono::DateTime<chrono::Utc>>,
+    pub last_check_time: Option<chrono::DateTime<chrono::Utc>>,
     /// Whether the upstream has commits not yet applied locally.
     pub update_available: bool,
 }
@@ -47,8 +47,8 @@ pub struct UpdateState {
 /// that downstream consumers (e.g. `UpdateExecutor` in #94) can react.
 pub struct UpdateDetector {
     config: GatewayConfig,
-    state:  UpdateState,
-    tx:     watch::Sender<UpdateState>,
+    state: UpdateState,
+    tx: watch::Sender<UpdateState>,
 }
 
 impl UpdateDetector {
@@ -69,6 +69,11 @@ impl UpdateDetector {
         let (tx, rx) = watch::channel(state.clone());
 
         (Self { config, state, tx }, rx)
+    }
+
+    /// Clone the sender used to publish fresh update state snapshots.
+    pub fn sender(&self) -> watch::Sender<UpdateState> {
+        self.tx.clone()
     }
 
     /// Run the detection loop until the provided cancellation token is
@@ -96,61 +101,55 @@ impl UpdateDetector {
 
     /// Execute a single fetch-and-compare cycle.
     async fn check_once(&mut self) {
+        match Self::probe().await {
+            Ok(state) => {
+                self.state = state;
+                let _ = self.tx.send(self.state.clone());
+            }
+            Err(e) => warn!(error = %e, "git update probe failed — will retry next cycle"),
+        }
+    }
+
+    /// Execute a single fetch-and-compare cycle and return the fresh state.
+    pub async fn probe() -> Result<UpdateState, String> {
         // 1. git fetch origin main
-        if let Err(e) = Self::git_fetch().await {
-            warn!(error = %e, "git fetch failed — will retry next cycle");
-            return;
-        }
+        Self::git_fetch().await?;
 
-        // 2. Refresh local HEAD (may have changed if an update was applied).
-        match Self::git_rev_parse("HEAD").await {
-            Ok(rev) => self.state.current_rev = rev,
-            Err(e) => {
-                warn!(error = %e, "git rev-parse HEAD failed");
-                return;
-            }
-        }
+        let current_rev = Self::git_rev_parse("HEAD").await?;
+        let upstream_rev = Self::git_rev_parse("origin/main").await?;
+        let last_check_time = Some(chrono::Utc::now());
 
-        // 3. Get upstream rev.
-        match Self::git_rev_parse("origin/main").await {
-            Ok(rev) => self.state.upstream_rev = Some(rev),
-            Err(e) => {
-                warn!(error = %e, "git rev-parse origin/main failed");
-                return;
-            }
-        }
-
-        self.state.last_check_time = Some(chrono::Utc::now());
-
-        let upstream = self.state.upstream_rev.as_deref().unwrap_or_default();
+        let update_available = if upstream_rev == current_rev {
+            false
+        } else {
+            Self::is_ancestor(&current_rev, &upstream_rev).await
+        };
 
         // Only trigger when remote is strictly ahead of local.
         // A simple != would also fire when local is ahead (e.g. local commits
         // not yet pushed), which is not an updateable situation.
-        self.state.update_available = if upstream == self.state.current_rev {
-            false
-        } else {
-            Self::is_ancestor(&self.state.current_rev, upstream).await
-        };
-
-        if self.state.update_available {
+        if update_available {
             info!(
-                current = %self.state.current_rev,
-                upstream = %upstream,
+                current = %current_rev,
+                upstream = %upstream_rev,
                 "Update available (remote ahead)"
             );
-        } else if upstream != self.state.current_rev {
+        } else if upstream_rev != current_rev {
             info!(
-                current = %self.state.current_rev,
-                upstream = %upstream,
+                current = %current_rev,
+                upstream = %upstream_rev,
                 "Revisions differ but remote is not ahead — skipping"
             );
         } else {
-            info!(rev = %self.state.current_rev, "Already up to date");
+            info!(rev = %current_rev, "Already up to date");
         }
 
-        // Publish to watchers (ignore error — means no active receivers).
-        let _ = self.tx.send(self.state.clone());
+        Ok(UpdateState {
+            current_rev,
+            upstream_rev: Some(upstream_rev),
+            last_check_time,
+            update_available,
+        })
     }
 
     // -- git helpers --------------------------------------------------------

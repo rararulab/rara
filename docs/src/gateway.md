@@ -118,12 +118,18 @@ The staging directory is managed internally by `rara_paths` and is not user-conf
 
 The gateway exposes its own HTTP server (default port `25556`, separate from the agent's `25555`) for operational control.
 
+All admin endpoints require `Authorization: Bearer <owner_token>`. The token is
+read from the top-level `owner_token` field in `config.yaml`. If
+`owner_token` is unset, the admin API stays online but rejects requests with
+`503 owner_token_not_configured` so gateway operations are disabled by default.
+
 ### Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/gateway/status` | Agent status, current/upstream rev, update availability |
 | `POST` | `/gateway/restart` | Gracefully restart the agent child process |
+| `POST` | `/gateway/update` | `git fetch` latest upstream rev, build, activate, and restart |
 | `POST` | `/gateway/shutdown` | Graceful shutdown of gateway + agent |
 
 ### `GET /gateway/status`
@@ -149,8 +155,24 @@ The gateway exposes its own HTTP server (default port `25556`, separate from the
 Triggers a graceful restart of the agent: SIGTERM → wait → respawn. This is a **manual restart** — it does not count as a failure and does not trigger backoff.
 
 ```bash
-curl -X POST http://127.0.0.1:25556/gateway/restart
+curl -X POST \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  http://127.0.0.1:25556/gateway/restart
 # {"ok": true}
+```
+
+### `POST /gateway/update`
+
+This endpoint performs a fresh `git fetch origin main`, compares `HEAD` with
+`origin/main`, and only runs the staged build / activate / restart flow when
+the remote branch is ahead. The JSON response reports whether the gateway was
+already current, busy with another update, or finished with a build / activation
+ result.
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  http://127.0.0.1:25556/gateway/update
 ```
 
 ### `POST /gateway/shutdown`
@@ -158,7 +180,9 @@ curl -X POST http://127.0.0.1:25556/gateway/restart
 Gracefully shuts down both the agent and the gateway process.
 
 ```bash
-curl -X POST http://127.0.0.1:25556/gateway/shutdown
+curl -X POST \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  http://127.0.0.1:25556/gateway/shutdown
 # {"ok": true}
 ```
 

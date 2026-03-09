@@ -20,6 +20,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use serde::Serialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -34,6 +35,34 @@ use crate::GatewayConfig;
 
 /// Guard that prevents concurrent update executions.
 static UPDATING: AtomicBool = AtomicBool::new(false);
+
+struct UpdateExecutionGuard;
+
+impl UpdateExecutionGuard {
+    fn acquire() -> Option<Self> {
+        UPDATING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()?;
+        Some(Self)
+    }
+}
+
+impl Drop for UpdateExecutionGuard {
+    fn drop(&mut self) {
+        UPDATING.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Structured outcome for a manual or automatic gateway update attempt.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateExecutionSummary {
+    pub ok: bool,
+    pub status: String,
+    pub detail: String,
+    pub target_rev: Option<String>,
+    pub active_rev: Option<String>,
+    pub rolled_back: Option<bool>,
+}
 
 /// Run the update pipeline loop.
 ///
@@ -79,14 +108,10 @@ pub async fn run_update_pipeline(
             None => continue,
         };
 
-        // Prevent concurrent updates.
-        if UPDATING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
+        let Some(_guard) = UpdateExecutionGuard::acquire() else {
             info!("Update pipeline: another update is already in progress, skipping");
             continue;
-        }
+        };
 
         info!(rev = %upstream_rev, "Auto-update: starting update to {}", upstream_rev);
         notifier.update_started(&upstream_rev).await;
@@ -97,9 +122,29 @@ pub async fn run_update_pipeline(
             warn!(error = %e, "Auto-update: executor creation failed");
             notifier.executor_creation_failed(e).await;
         }
-
-        UPDATING.store(false, Ordering::Relaxed);
     }
+}
+
+/// Execute an update immediately if no other update is already in flight.
+pub async fn trigger_update(
+    upstream_rev: &str,
+    supervisor_handle: &SupervisorHandle,
+    notifier: &UpdateNotifier,
+) -> Result<UpdateExecutionSummary, String> {
+    let Some(_guard) = UpdateExecutionGuard::acquire() else {
+        return Ok(UpdateExecutionSummary {
+            ok: false,
+            status: "busy".to_owned(),
+            detail: "another update is already in progress".to_owned(),
+            target_rev: Some(upstream_rev.to_owned()),
+            active_rev: None,
+            rolled_back: None,
+        });
+    };
+
+    info!(rev = %upstream_rev, "Manual update: starting update to {}", upstream_rev);
+    notifier.update_started(upstream_rev).await;
+    execute_and_handle(upstream_rev, supervisor_handle, notifier).await
 }
 
 /// Create an executor, run the update, and handle the result.
@@ -107,7 +152,7 @@ async fn execute_and_handle(
     upstream_rev: &str,
     supervisor_handle: &SupervisorHandle,
     notifier: &UpdateNotifier,
-) -> Result<(), String> {
+) -> Result<UpdateExecutionSummary, String> {
     let mut executor = UpdateExecutor::new()
         .await
         .map_err(|e| format!("failed to create UpdateExecutor: {e}"))?;
@@ -131,10 +176,26 @@ async fn execute_and_handle(
             if let Err(e) = executor.cleanup().await {
                 warn!(error = %e, "Auto-update: cleanup failed (non-fatal)");
             }
+            Ok(UpdateExecutionSummary {
+                ok: true,
+                status: "updated".to_owned(),
+                detail: "update built successfully and restart requested".to_owned(),
+                target_rev: Some(upstream_rev.to_owned()),
+                active_rev: Some(new_rev),
+                rolled_back: None,
+            })
         }
         UpdateResult::BuildFailed { reason } => {
             warn!(reason = %reason, "Auto-update: build failed for {}: {}", upstream_rev, reason);
             notifier.build_failed(upstream_rev, &reason).await;
+            Ok(UpdateExecutionSummary {
+                ok: false,
+                status: "build_failed".to_owned(),
+                detail: reason,
+                target_rev: Some(upstream_rev.to_owned()),
+                active_rev: None,
+                rolled_back: None,
+            })
         }
         UpdateResult::ActivationFailed {
             reason,
@@ -155,8 +216,14 @@ async fn execute_and_handle(
                 warn!(error = %e, "Auto-update: failed to send restart command after rollback");
                 notifier.restart_failed(&e.to_string()).await;
             }
+            Ok(UpdateExecutionSummary {
+                ok: false,
+                status: "activation_failed".to_owned(),
+                detail: reason,
+                target_rev: Some(upstream_rev.to_owned()),
+                active_rev: None,
+                rolled_back: Some(rolled_back),
+            })
         }
     }
-
-    Ok(())
 }
