@@ -16,6 +16,17 @@ fn default_command() -> String {
     "ralph".to_owned()
 }
 
+/// Execution backend for the coding agent subprocess.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentBackend {
+    /// Ralph CLI (`ralph run`) — the default backend.
+    #[default]
+    Ralph,
+    /// OpenAI Codex CLI (`codex --approval-mode full-auto`).
+    Codex,
+}
+
 fn default_max_concurrent_agents() -> usize {
     2
 }
@@ -136,16 +147,23 @@ pub struct SymphonyConfig {
 
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct AgentConfig {
-    /// The command to invoke ralph.
-    #[serde(default = "default_command")]
-    pub command: String,
+    /// Which execution backend to use.
+    #[serde(default)]
+    #[builder(default)]
+    pub backend: AgentBackend,
 
-    /// Optional path to a ralph config file.
+    /// Override the command binary. When absent, derived from `backend`
+    /// (`"ralph"` for Ralph, `"codex"` for Codex).
+    #[serde(default)]
+    pub command: Option<String>,
+
+    /// Optional path to a ralph config file (Ralph backend only).
     #[serde(default)]
     pub config_file: Option<PathBuf>,
 
-    /// Extra args to pass to `ralph run`.
+    /// Extra args appended to the generated command line.
     #[serde(default)]
+    #[builder(default)]
     pub extra_args: Vec<String>,
 
     /// Timeout for a single agent run.
@@ -161,7 +179,8 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            command: default_command(),
+            backend: AgentBackend::default(),
+            command: None,
             config_file: None,
             extra_args: Vec::new(),
             run_timeout: None,
@@ -170,16 +189,45 @@ impl Default for AgentConfig {
 }
 
 impl AgentConfig {
+    /// The binary to invoke, derived from `backend` unless explicitly overridden.
     #[must_use]
-    pub fn command_args(&self) -> Vec<String> {
-        let mut args = vec!["run".to_owned()];
-        if let Some(path) = &self.config_file {
-            args.push("-c".to_owned());
-            args.push(path.display().to_string());
+    pub fn effective_command(&self) -> &str {
+        self.command.as_deref().unwrap_or(match self.backend {
+            AgentBackend::Ralph => "ralph",
+            AgentBackend::Codex => "codex",
+        })
+    }
+
+    /// Build the argument list for the agent subprocess.
+    ///
+    /// `prompt` is required for the Codex backend (passed as a positional arg)
+    /// and ignored for Ralph (which reads `PROMPT.md` from the working directory).
+    #[must_use]
+    pub fn command_args(&self, prompt: Option<&str>) -> Vec<String> {
+        match self.backend {
+            AgentBackend::Ralph => {
+                let mut args = vec!["run".to_owned()];
+                if let Some(path) = &self.config_file {
+                    args.push("-c".to_owned());
+                    args.push(path.display().to_string());
+                }
+                args.push("--no-tui".to_owned());
+                args.extend(self.extra_args.iter().cloned());
+                args
+            }
+            AgentBackend::Codex => {
+                let mut args = vec![
+                    "--quiet".to_owned(),
+                    "--approval-mode".to_owned(),
+                    "full-auto".to_owned(),
+                ];
+                args.extend(self.extra_args.iter().cloned());
+                if let Some(p) = prompt {
+                    args.push(p.to_owned());
+                }
+                args
+            }
         }
-        args.push("--no-tui".to_owned());
-        args.extend(self.extra_args.iter().cloned());
-        args
     }
 }
 

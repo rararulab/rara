@@ -85,15 +85,20 @@ Issue #{number}: {title}
     }
 
     /// Write `PROMPT.md` into the issue worktree and spawn a non-interactive
-    /// `ralph run` subprocess whose output is consumed by symphony.
+    /// agent subprocess whose output is consumed by symphony.
+    ///
+    /// The subprocess command depends on the configured backend:
+    /// - **Ralph**: `ralph run -c <config> --no-tui` (reads `PROMPT.md` from cwd)
+    /// - **Codex**: `codex --quiet --approval-mode full-auto "<prompt>"` (prompt as arg)
     pub async fn start<P: AsRef<Path>>(&self, task: &AgentTask, workspace: P) -> Result<AgentHandle> {
+        let prompt = self.build_prompt(task);
         let prompt_path = workspace.as_ref().join("PROMPT.md");
-        tokio::fs::write(&prompt_path, self.build_prompt(task))
+        tokio::fs::write(&prompt_path, &prompt)
             .await
             .context(IoSnafu)?;
 
-        let mut cmd = Command::new(&self.config.command);
-        for arg in self.config.command_args() {
+        let mut cmd = Command::new(self.config.effective_command());
+        for arg in self.config.command_args(Some(&prompt)) {
             cmd.arg(arg);
         }
 

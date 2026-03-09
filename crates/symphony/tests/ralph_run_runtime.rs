@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use rara_symphony::config::{AgentConfig, RepoConfig};
+use rara_symphony::config::{AgentBackend, AgentConfig, RepoConfig};
 use rara_symphony::tracker::{IssueState, TrackedIssue};
 use rara_symphony::agent::AgentTask;
 use rara_symphony::agent::RalphAgent;
@@ -41,7 +41,7 @@ fn agent_config_builds_ralph_run_command() {
         .extra_args(vec!["--autonomous".to_owned()])
         .build();
 
-    let args = agent.command_args();
+    let args = agent.command_args(None);
 
     assert_eq!(
         args,
@@ -51,6 +51,46 @@ fn agent_config_builds_ralph_run_command() {
             "/tmp/ralph.yml".to_owned(),
             "--no-tui".to_owned(),
             "--autonomous".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn agent_config_defaults_command_from_backend() {
+    let ralph = AgentConfig::default();
+    assert_eq!(ralph.effective_command(), "ralph");
+
+    let codex = AgentConfig::builder()
+        .backend(AgentBackend::Codex)
+        .build();
+    assert_eq!(codex.effective_command(), "codex");
+
+    // Explicit command overrides backend default.
+    let custom = AgentConfig::builder()
+        .backend(AgentBackend::Codex)
+        .command("/usr/local/bin/codex-nightly".to_owned())
+        .build();
+    assert_eq!(custom.effective_command(), "/usr/local/bin/codex-nightly");
+}
+
+#[test]
+fn codex_backend_builds_full_auto_command() {
+    let agent = AgentConfig::builder()
+        .backend(AgentBackend::Codex)
+        .extra_args(vec!["--model".to_owned(), "o3".to_owned()])
+        .build();
+
+    let args = agent.command_args(Some("Fix the bug"));
+
+    assert_eq!(
+        args,
+        vec![
+            "--quiet".to_owned(),
+            "--approval-mode".to_owned(),
+            "full-auto".to_owned(),
+            "--model".to_owned(),
+            "o3".to_owned(),
+            "Fix the bug".to_owned(),
         ]
     );
 }
