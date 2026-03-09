@@ -173,7 +173,7 @@ moka = { version = "0.12", features = ["future"] }
 notify = "7"
 oauth2 = "5"
 once_cell = "^1.20"
-opendal = { version = "0.52", features = ["services-fs", "services-memory"] }
+opendal = { version = "0.55", features = ["services-fs", "services-memory"] }
 prometheus = "^0.14"
 prost = "^0.14"
 protobuf = "^3.7"
