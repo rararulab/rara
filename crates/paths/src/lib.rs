@@ -262,6 +262,12 @@ pub fn skills_dir() -> &'static PathBuf {
     SKILLS_DIR.get_or_init(|| config_dir().join("skills"))
 }
 
+/// Returns the path to the resources directory for tool-produced artifacts.
+pub fn resources_dir() -> &'static PathBuf {
+    static RESOURCES_DIR: OnceLock<PathBuf> = OnceLock::new();
+    RESOURCES_DIR.get_or_init(|| data_dir().join("resources"))
+}
+
 /// Returns the path to the staging directory used for gateway updates.
 ///
 /// Resolves to `<data_dir>/staging/`. The directory is created if it
