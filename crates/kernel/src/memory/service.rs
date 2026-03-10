@@ -88,11 +88,15 @@ pub struct TapeService {
 
 impl TapeService {
     /// Create a service backed by the given store.
-    pub fn new(store: FileTapeStore) -> Self { Self { store } }
+    pub fn new(store: FileTapeStore) -> Self {
+        Self { store }
+    }
 
     /// Access the underlying [`FileTapeStore`] for low-level operations such as
     /// fork/merge/discard that require direct store access.
-    pub fn store(&self) -> &FileTapeStore { &self.store }
+    pub fn store(&self) -> &FileTapeStore {
+        &self.store
+    }
 
     /// Read all entries for the given tape.
     pub async fn entries(&self, tape_name: &str) -> TapResult<Vec<TapEntry>> {
@@ -275,7 +279,10 @@ impl TapeService {
             messages.insert(insert_pos, anchor_msg);
         }
 
-        Ok(messages)
+        Ok(super::context::apply_token_budget(
+            messages,
+            super::context::DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET,
+        ))
     }
 
     /// Build LLM-ready messages from a session tape, prepending user-specific
@@ -305,7 +312,10 @@ impl TapeService {
             messages.insert(insert_pos, user_msg);
         }
 
-        Ok(messages)
+        Ok(super::context::apply_token_budget(
+            messages,
+            super::context::DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET,
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -632,7 +642,9 @@ impl TapeService {
     }
 
     /// List all tape names known to the underlying store.
-    pub async fn list_tapes(&self) -> TapResult<Vec<String>> { self.store.list_tapes().await }
+    pub async fn list_tapes(&self) -> TapResult<Vec<String>> {
+        self.store.list_tapes().await
+    }
 }
 
 /// Find the most recent anchor ID for a named anchor.
@@ -755,6 +767,14 @@ mod tests {
 
     use super::*;
 
+    fn estimated_tokens(messages: &[crate::llm::Message]) -> usize {
+        messages
+            .iter()
+            .map(|message| message.estimated_char_len())
+            .sum::<usize>()
+            .div_ceil(4)
+    }
+
     /// Create a [`TapeService`] backed by a temporary directory.
     async fn temp_tape_service(dir: &Path) -> TapeService {
         let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
@@ -838,6 +858,101 @@ mod tests {
         // No user notes → no injected system message, just the user message.
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, crate::llm::Role::User);
+    }
+
+    #[tokio::test]
+    async fn build_llm_context_enforces_budget_and_keeps_anchor_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "budgeted-session";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.handoff(
+            tape,
+            "topic/budgeted",
+            HandoffState {
+                summary: Some("Carry forward the important prior context.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        for label in ["first", "second", "third"] {
+            svc.append_message(
+                tape,
+                json!({"role": "user", "content": format!("{label}:{}", "x".repeat(1800))}),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let messages = svc.build_llm_context(tape).await.unwrap();
+        let rendered = format!("{messages:?}");
+
+        assert!(
+            estimated_tokens(&messages)
+                <= super::super::context::DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET
+        );
+        assert!(rendered.contains("[Previous Context]"));
+        assert!(rendered.contains("third:"));
+        assert!(rendered.contains("... [truncated]"));
+    }
+
+    #[tokio::test]
+    async fn build_llm_context_with_user_reapplies_budget_after_user_context_insertion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "budgeted-user-session";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "system", "content": "You are a helpful assistant."}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": format!("older:{}", "x".repeat(1800))}),
+            None,
+        )
+        .await
+        .unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": format!("newer:{}", "y".repeat(1800))}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        svc.append_user_note(
+            "budget-user",
+            "fact",
+            &format!("prefers concise answers {}", "z".repeat(400)),
+        )
+        .await
+        .unwrap();
+
+        let messages = svc
+            .build_llm_context_with_user(tape, "budget-user")
+            .await
+            .unwrap();
+        let rendered = format!("{messages:?}");
+
+        assert!(
+            estimated_tokens(&messages)
+                <= super::super::context::DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET
+        );
+        assert_eq!(messages[0].role, crate::llm::Role::System);
+        assert!(rendered.contains("helpful assistant"));
+        assert!(rendered.contains("[User Memory]"));
+        assert!(rendered.contains("newer:"));
+        assert!(rendered.contains("... [truncated]"));
     }
 
     #[tokio::test]

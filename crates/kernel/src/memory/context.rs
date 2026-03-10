@@ -24,7 +24,13 @@
 use serde_json::Value;
 
 use super::{HandoffState, TapEntry, TapEntryKind, TapResult};
-use crate::llm::{Message, ToolCallRequest};
+use crate::llm::{ContentBlock, Message, MessageContent, Role, ToolCallRequest};
+
+/// Default token budget for assembled tape context, following Bub's 1024-token
+/// cap.
+pub const DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET: usize = 1024;
+const CHARS_PER_TOKEN: usize = 4;
+const TRUNCATION_MARKER: &str = "... [truncated]";
 
 /// Reconstruct LLM messages from persisted tape entries.
 ///
@@ -62,7 +68,7 @@ fn append_message_entry(messages: &mut Vec<Message>, entry: &TapEntry) {
 /// Intermediate representation for a pending tool call, used to pair
 /// tool-call IDs with their corresponding tool-result messages.
 struct PendingCall {
-    id:   String,
+    id: String,
     name: String,
 }
 
@@ -98,7 +104,7 @@ fn append_tool_call_entry(messages: &mut Vec<Message>, entry: &TapEntry) -> Vec<
             .to_owned();
 
         pending.push(PendingCall {
-            id:   id.clone(),
+            id: id.clone(),
             name: name.clone(),
         });
         tool_calls.push(ToolCallRequest {
@@ -146,6 +152,222 @@ fn render_tool_result(result: &Value) -> TapResult<String> {
             serde_json::to_string(other).map_err(|source| super::TapError::JsonEncode { source })?
         }
     })
+}
+
+/// Apply a hard estimated-token budget to an already reconstructed message
+/// list.
+///
+/// The budget is enforced across the full returned context:
+/// - leading system messages are preserved first, in order, when they fit;
+/// - the newest conversational messages are then retained as a suffix;
+/// - if the boundary message is plain text, it is truncated to consume the
+///   remaining budget instead of overflowing it.
+pub fn apply_token_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
+    if budget_tokens == 0 || messages.is_empty() {
+        return Vec::new();
+    }
+
+    let leading_system_count = messages
+        .iter()
+        .take_while(|message| message.role == Role::System)
+        .count();
+    let (leading_systems, remainder) = messages.split_at(leading_system_count);
+
+    let mut kept_messages = Vec::new();
+    let mut remaining_budget = budget_tokens;
+
+    for message in leading_systems {
+        if remaining_budget == 0 {
+            break;
+        }
+
+        let Some(fitted_message) = fit_message_within_budget(message, remaining_budget) else {
+            break;
+        };
+        let used_tokens = estimate_message_tokens(&fitted_message);
+        if used_tokens == 0 {
+            continue;
+        }
+
+        let truncated = used_tokens < estimate_message_tokens(message);
+        remaining_budget = remaining_budget.saturating_sub(used_tokens);
+        kept_messages.push(fitted_message);
+
+        if truncated {
+            return kept_messages;
+        }
+    }
+
+    let mut kept_suffix = Vec::new();
+    for message in remainder.iter().rev() {
+        if remaining_budget == 0 {
+            break;
+        }
+
+        let Some(fitted_message) = fit_message_within_budget(message, remaining_budget) else {
+            break;
+        };
+        let used_tokens = estimate_message_tokens(&fitted_message);
+        if used_tokens == 0 {
+            continue;
+        }
+
+        let truncated = used_tokens < estimate_message_tokens(message);
+        remaining_budget = remaining_budget.saturating_sub(used_tokens);
+        kept_suffix.push(fitted_message);
+
+        if truncated {
+            break;
+        }
+    }
+
+    kept_suffix.reverse();
+    kept_messages.extend(kept_suffix);
+    kept_messages
+}
+
+fn fit_message_within_budget(message: &Message, budget_tokens: usize) -> Option<Message> {
+    if budget_tokens == 0 {
+        return None;
+    }
+
+    if estimate_message_tokens(message) <= budget_tokens {
+        return Some(message.clone());
+    }
+
+    truncate_message_to_budget(message, budget_tokens)
+}
+
+fn truncate_message_to_budget(message: &Message, budget_tokens: usize) -> Option<Message> {
+    if budget_tokens == 0 || !message.tool_calls.is_empty() {
+        return None;
+    }
+
+    let max_chars = budget_tokens.saturating_mul(CHARS_PER_TOKEN);
+    if max_chars == 0 {
+        return None;
+    }
+
+    let truncated_content = truncate_content_to_chars(&message.content, max_chars)?;
+    let truncated_message = Message {
+        role: message.role,
+        content: truncated_content,
+        tool_calls: Vec::new(),
+        tool_call_id: message.tool_call_id.clone(),
+    };
+
+    if truncated_message.estimated_char_len() == 0
+        || estimate_message_tokens(&truncated_message) > budget_tokens
+    {
+        return None;
+    }
+
+    Some(truncated_message)
+}
+
+fn truncate_content_to_chars(content: &MessageContent, max_chars: usize) -> Option<MessageContent> {
+    if max_chars == 0 {
+        return None;
+    }
+
+    match content {
+        MessageContent::Text(text) => {
+            let truncated = truncate_text_to_chars(text, max_chars)?;
+            Some(MessageContent::Text(truncated))
+        }
+        MessageContent::Multimodal(blocks) => {
+            let mut remaining_chars = max_chars;
+            let mut kept_blocks = Vec::new();
+
+            for block in blocks {
+                if remaining_chars == 0 {
+                    break;
+                }
+
+                match block {
+                    ContentBlock::Text { text } => {
+                        let Some(truncated) = truncate_text_to_chars(text, remaining_chars) else {
+                            break;
+                        };
+                        remaining_chars = remaining_chars.saturating_sub(truncated.len());
+                        kept_blocks.push(ContentBlock::Text { text: truncated });
+                    }
+                    ContentBlock::ImageUrl { url } => {
+                        if url.len() > remaining_chars {
+                            break;
+                        }
+                        remaining_chars = remaining_chars.saturating_sub(url.len());
+                        kept_blocks.push(ContentBlock::ImageUrl { url: url.clone() });
+                    }
+                    ContentBlock::ImageBase64 { media_type, data } => {
+                        let estimated_len = 256usize;
+                        if estimated_len > remaining_chars {
+                            break;
+                        }
+                        remaining_chars = remaining_chars.saturating_sub(estimated_len);
+                        kept_blocks.push(ContentBlock::ImageBase64 {
+                            media_type: media_type.clone(),
+                            data: data.clone(),
+                        });
+                    }
+                }
+            }
+
+            if kept_blocks.is_empty() {
+                None
+            } else {
+                Some(MessageContent::Multimodal(kept_blocks))
+            }
+        }
+    }
+}
+
+fn truncate_text_to_chars(text: &str, max_chars: usize) -> Option<String> {
+    if max_chars == 0 || text.is_empty() {
+        return None;
+    }
+
+    if text.len() <= max_chars {
+        return Some(text.to_owned());
+    }
+
+    if max_chars <= TRUNCATION_MARKER.len() {
+        return Some(text[..char_boundary_before(text, max_chars)].to_owned());
+    }
+
+    let content_limit = max_chars.saturating_sub(TRUNCATION_MARKER.len());
+    let boundary = char_boundary_before(text, content_limit);
+    if boundary == 0 {
+        return Some(
+            TRUNCATION_MARKER[..char_boundary_before(TRUNCATION_MARKER, max_chars)].to_owned(),
+        );
+    }
+
+    Some(format!("{}{}", &text[..boundary], TRUNCATION_MARKER))
+}
+
+fn char_boundary_before(text: &str, max_bytes: usize) -> usize {
+    if max_bytes >= text.len() {
+        return text.len();
+    }
+
+    let mut boundary = 0usize;
+    for (idx, _) in text.char_indices() {
+        if idx > max_bytes {
+            break;
+        }
+        boundary = idx;
+    }
+
+    if text.is_char_boundary(max_bytes) {
+        max_bytes
+    } else {
+        boundary
+    }
+}
+
+fn estimate_message_tokens(message: &Message) -> usize {
+    message.estimated_char_len().div_ceil(CHARS_PER_TOKEN)
 }
 
 // ---------------------------------------------------------------------------
@@ -269,9 +491,9 @@ mod tests {
     /// Helper to build a `TapEntry` with kind `Note`.
     fn note_entry(category: &str, content: &str, date: &str) -> TapEntry {
         TapEntry {
-            id:        1,
-            kind:      TapEntryKind::Note,
-            payload:   json!({"category": category, "content": content}),
+            id: 1,
+            kind: TapEntryKind::Note,
+            payload: json!({"category": category, "content": content}),
             timestamp: Timestamp::from(
                 jiff::civil::date(
                     date[..4].parse().unwrap(),
@@ -281,7 +503,7 @@ mod tests {
                 .to_zoned(jiff::tz::TimeZone::UTC)
                 .unwrap(),
             ),
-            metadata:  None,
+            metadata: None,
         }
     }
 
@@ -293,11 +515,11 @@ mod tests {
     #[test]
     fn user_tape_context_returns_none_for_non_note_entries() {
         let entry = TapEntry {
-            id:        1,
-            kind:      TapEntryKind::Message,
-            payload:   json!({"role": "user", "content": "hello"}),
+            id: 1,
+            kind: TapEntryKind::Message,
+            payload: json!({"role": "user", "content": "hello"}),
             timestamp: Timestamp::now(),
-            metadata:  None,
+            metadata: None,
         };
         assert!(user_tape_context(&[entry]).is_none());
     }
@@ -340,18 +562,18 @@ mod tests {
     fn default_tape_context_reconstructs_messages() {
         let entries = vec![
             TapEntry {
-                id:        1,
-                kind:      TapEntryKind::Message,
-                payload:   json!({"role": "user", "content": "hello"}),
+                id: 1,
+                kind: TapEntryKind::Message,
+                payload: json!({"role": "user", "content": "hello"}),
                 timestamp: Timestamp::now(),
-                metadata:  None,
+                metadata: None,
             },
             TapEntry {
-                id:        2,
-                kind:      TapEntryKind::Message,
-                payload:   json!({"role": "assistant", "content": "hi there"}),
+                id: 2,
+                kind: TapEntryKind::Message,
+                payload: json!({"role": "assistant", "content": "hi there"}),
                 timestamp: Timestamp::now(),
-                metadata:  None,
+                metadata: None,
             },
         ];
         let messages = default_tape_context(&entries).unwrap();
@@ -360,17 +582,34 @@ mod tests {
         assert_eq!(messages[1].role, Role::Assistant);
     }
 
+    #[test]
+    fn apply_token_budget_truncates_single_oversized_text_message() {
+        let oversized = "x".repeat((DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET * CHARS_PER_TOKEN) + 200);
+        let messages = vec![Message::user(oversized)];
+
+        let budgeted = apply_token_budget(messages, DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET);
+
+        assert_eq!(budgeted.len(), 1);
+        assert_eq!(budgeted[0].role, Role::User);
+        assert!(estimate_message_tokens(&budgeted[0]) <= DEFAULT_CONTEXT_ASSEMBLY_TOKEN_BUDGET);
+        let text = match &budgeted[0].content {
+            MessageContent::Text(text) => text,
+            _ => panic!("expected text content"),
+        };
+        assert!(text.ends_with(TRUNCATION_MARKER));
+    }
+
     // -----------------------------------------------------------------------
     // anchor_context tests
     // -----------------------------------------------------------------------
 
     fn anchor_entry(state: serde_json::Value) -> TapEntry {
         TapEntry {
-            id:        10,
-            kind:      TapEntryKind::Anchor,
-            payload:   json!({"name": "topic/done", "state": state}),
+            id: 10,
+            kind: TapEntryKind::Anchor,
+            payload: json!({"name": "topic/done", "state": state}),
             timestamp: Timestamp::now(),
-            metadata:  None,
+            metadata: None,
         }
     }
 
@@ -431,18 +670,18 @@ mod tests {
         let entries = vec![
             anchor_entry(json!({"summary": "old context"})),
             TapEntry {
-                id:        11,
-                kind:      TapEntryKind::Message,
-                payload:   json!({"role": "user", "content": "hello"}),
+                id: 11,
+                kind: TapEntryKind::Message,
+                payload: json!({"role": "user", "content": "hello"}),
                 timestamp: Timestamp::now(),
-                metadata:  None,
+                metadata: None,
             },
             TapEntry {
-                id:        20,
-                kind:      TapEntryKind::Anchor,
-                payload:   json!({"name": "topic/new", "state": {"summary": "new context"}}),
+                id: 20,
+                kind: TapEntryKind::Anchor,
+                payload: json!({"name": "topic/new", "state": {"summary": "new context"}}),
                 timestamp: Timestamp::now(),
-                metadata:  None,
+                metadata: None,
             },
         ];
         let msg = anchor_context(&entries).expect("should produce a message");
