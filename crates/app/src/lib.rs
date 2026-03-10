@@ -20,6 +20,7 @@ mod mita;
 mod tools;
 
 use std::{
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -177,29 +178,40 @@ impl AppConfig {
     /// Load config from YAML files.
     ///
     /// Sources (later sources override earlier ones):
-    /// - **release**: `~/.config/job/config.yaml` (global) → `./config.yaml`
-    ///   (local override)
-    /// - **debug**: `./config.yaml` only
+    /// - global: [`rara_paths::config_file()`]
+    /// - local override: `./config.yaml`
     ///
     /// All required fields must be present after merging; missing
     /// keys cause a deserialization error at startup.
     pub fn new() -> Result<Self, config::ConfigError> {
-        let mut builder = config::Config::builder();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::load_from_paths(
+            rara_paths::config_file().as_path(),
+            &cwd.join("config.yaml"),
+        )
+    }
 
-        // Global config path only in release mode.
-        #[cfg(not(debug_assertions))]
-        {
-            builder = builder.add_source(
-                config::File::from(rara_paths::config_file().as_path())
-                    .format(config::FileFormat::Yaml)
-                    .required(false),
-            );
+    fn load_from_paths(global_path: &Path, local_path: &Path) -> Result<Self, config::ConfigError> {
+        if !(global_path.is_file() || local_path.is_file()) {
+            return Err(config::ConfigError::Message(format!(
+                "No config.yaml found. Looked for {} and {}",
+                local_path.display(),
+                global_path.display()
+            )));
         }
 
-        builder = builder
-            .add_source(config::File::new("config", config::FileFormat::Yaml).required(true));
-
-        let cfg = builder.build()?;
+        let cfg = config::Config::builder()
+            .add_source(
+                config::File::from(global_path)
+                    .format(config::FileFormat::Yaml)
+                    .required(false),
+            )
+            .add_source(
+                config::File::from(local_path)
+                    .format(config::FileFormat::Yaml)
+                    .required(false),
+            )
+            .build()?;
         tracing::info!(?cfg, "Raw configuration");
         cfg.try_deserialize()
     }
@@ -523,6 +535,54 @@ pub async fn start_with_options(
     });
 
     Ok(app_handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::AppConfig;
+
+    const BASE_YAML: &str = r#"
+http:
+  bind_address: "127.0.0.1:25555"
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+users:
+  - name: test
+    role: root
+    platforms: []
+mita:
+  heartbeat_interval: "30m"
+"#;
+
+    #[test]
+    fn app_config_loads_from_global_fallback_when_local_is_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("global-config.yaml");
+        let local = tmp.path().join("config.yaml");
+        fs::write(&global, BASE_YAML).expect("write global config");
+
+        let config = AppConfig::load_from_paths(&global, &local).expect("load config");
+        assert_eq!(config.http.bind_address, "127.0.0.1:25555");
+    }
+
+    #[test]
+    fn app_config_prefers_local_override_over_global() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("global-config.yaml");
+        let local = tmp.path().join("config.yaml");
+        fs::write(&global, BASE_YAML).expect("write global config");
+        fs::write(
+            &local,
+            BASE_YAML.replace("127.0.0.1:25555", "127.0.0.1:35555"),
+        )
+        .expect("write local config");
+
+        let config = AppConfig::load_from_paths(&global, &local).expect("load config");
+        assert_eq!(config.http.bind_address, "127.0.0.1:35555");
+    }
 }
 
 async fn try_build_telegram(

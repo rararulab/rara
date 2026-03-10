@@ -1,0 +1,487 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use chrono::Utc;
+use clap::Args;
+use crossterm::event::{self, Event, KeyEventKind};
+use rara_app::{AppConfig, StartOptions, start_with_options};
+use rara_channels::{
+    terminal::{CliEvent, TerminalAdapter},
+    tool_display::{tool_arguments_summary, tool_display_name},
+};
+use rara_kernel::{
+    channel::types::{ChannelType, MessageContent},
+    handle::KernelHandle,
+    identity::UserId,
+    io::{
+        Endpoint, EndpointAddress, InteractionType, RawPlatformMessage,
+        ReplyContext as IoReplyContext, StreamEvent,
+    },
+    session::{ChannelBinding, SessionEntry, SessionIndex, SessionKey},
+};
+use snafu::{ResultExt, Whatever, whatever};
+
+use crate::chat::{
+    app::{ChatAction, ChatState, Role},
+    ui::render,
+};
+
+pub mod app;
+pub mod theme;
+pub mod ui;
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Start interactive chat with an agent")]
+pub struct ChatArgs {
+    /// Session key for conversation continuity.
+    #[arg(long, default_value = "default")]
+    session: String,
+
+    /// User identifier.
+    #[arg(long, default_value = "local")]
+    user_id: String,
+}
+
+impl ChatArgs {
+    pub async fn run(self) -> Result<(), Whatever> {
+        let config = AppConfig::new().whatever_context("Failed to load config")?;
+        let default_model_label = default_model_label(&config);
+
+        let logs_dir = rara_paths::logs_dir();
+        std::fs::create_dir_all(logs_dir).whatever_context("Failed to create logs directory")?;
+
+        let _guards = common_telemetry::logging::init_global_logging(
+            "rara-cli",
+            &common_telemetry::logging::LoggingOptions {
+                dir: logs_dir.to_string_lossy().into_owned(),
+                append_stdout: false,
+                ..Default::default()
+            },
+            &common_telemetry::logging::TracingOptions::default(),
+            None,
+        );
+
+        let (adapter, event_rx) = TerminalAdapter::new();
+        let adapter = Arc::new(adapter);
+        let mut app_handle = start_with_options(
+            config,
+            StartOptions {
+                cli_adapter: Some(adapter.clone()),
+            },
+        )
+        .await
+        .whatever_context("Failed to start application")?;
+
+        let kernel_handle = match app_handle.kernel_handle.take() {
+            Some(handle) => handle,
+            None => whatever!("kernel handle not available"),
+        };
+        let endpoint_registry = kernel_handle.endpoint_registry().clone();
+        let stream_hub = kernel_handle.stream_hub().clone();
+
+        let session_alias = self.session.clone();
+        let user_id = self.user_id.clone();
+        let resolved_user_id = cli_kernel_user_id(&user_id);
+        let resolved_session_id =
+            get_or_create_cli_session(kernel_handle.session_index().as_ref(), &session_alias)
+                .await
+                .whatever_context("Failed to resolve CLI chat session")?;
+
+        let cli_endpoint = Endpoint {
+            channel_type: ChannelType::Cli,
+            address:      EndpointAddress::Cli {
+                session_id: session_alias.clone(),
+            },
+        };
+        endpoint_registry.register(&resolved_user_id, cli_endpoint);
+
+        spawn_stream_forwarder(adapter, stream_hub, resolved_session_id);
+
+        let mut terminal = ratatui::init();
+        let mut chat_state = ChatState::new(session_alias.clone(), user_id.clone());
+        chat_state.model_label = default_model_label;
+
+        let result = run_chat_tui(
+            &mut terminal,
+            &mut chat_state,
+            event_rx,
+            kernel_handle,
+            session_alias,
+            user_id,
+        )
+        .await;
+
+        ratatui::restore();
+        app_handle.shutdown();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        result
+    }
+}
+
+fn spawn_stream_forwarder(
+    adapter: Arc<TerminalAdapter>,
+    stream_hub: Arc<rara_kernel::io::StreamHub>,
+    session_key: SessionKey,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut active_streams = std::collections::HashSet::new();
+
+        loop {
+            interval.tick().await;
+            let subscriptions = stream_hub.subscribe_session(&session_key);
+            for (stream_id, mut rx) in subscriptions {
+                if active_streams.contains(&stream_id) {
+                    while let Ok(event) = rx.try_recv() {
+                        let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                    }
+                    continue;
+                }
+
+                active_streams.insert(stream_id.clone());
+                let adapter = adapter.clone();
+                tokio::spawn(async move {
+                    while let Ok(event) = rx.recv().await {
+                        let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                    }
+                    let _ = adapter.send_cli_event(CliEvent::Done);
+                });
+            }
+        }
+    });
+}
+
+async fn run_chat_tui(
+    terminal: &mut ratatui::DefaultTerminal,
+    state: &mut ChatState,
+    mut event_rx: tokio::sync::mpsc::UnboundedReceiver<CliEvent>,
+    kernel_handle: KernelHandle,
+    session_key: String,
+    user_id: String,
+) -> Result<(), Whatever> {
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+
+    loop {
+        terminal
+            .draw(|frame| render(frame, state, frame.area()))
+            .whatever_context("Failed to draw chat TUI")?;
+
+        tokio::select! {
+            _ = tick.tick() => {
+                state.tick();
+            }
+            maybe_event = poll_crossterm_event() => {
+                if let Some(Event::Key(key)) = maybe_event {
+                    match state.handle_key(key) {
+                        ChatAction::Continue => {}
+                        ChatAction::Back => break,
+                        ChatAction::SlashCommand(command) => {
+                            if handle_slash_command(state, &command) {
+                                break;
+                            }
+                        }
+                        ChatAction::SendMessage(text) => {
+                            state.is_streaming = true;
+                            state.thinking = true;
+                            state.streaming_chars = 0;
+                            state.last_tokens = None;
+                            state.last_cost_usd = None;
+                            state.status_msg = None;
+                            let raw = build_cli_raw_message(&session_key, &user_id, &text);
+                            if let Err(error) = kernel_handle.ingest(raw).await {
+                                state.handle_cli_event(CliEvent::Error {
+                                    message: error.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            event = event_rx.recv() => {
+                match event {
+                    Some(CliEvent::Done) => {
+                        state.handle_cli_event(CliEvent::Done);
+                        if let Some(text) = state.take_staged() {
+                            state.is_streaming = true;
+                            state.thinking = true;
+                            state.streaming_chars = 0;
+                            state.last_tokens = None;
+                            state.last_cost_usd = None;
+                            state.status_msg = None;
+                            let raw = build_cli_raw_message(&session_key, &user_id, &text);
+                            if let Err(error) = kernel_handle.ingest(raw).await {
+                                state.handle_cli_event(CliEvent::Error {
+                                    message: error.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    Some(event) => state.handle_cli_event(event),
+                    None => break,
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_slash_command(state: &mut ChatState, command: &str) -> bool {
+    let parts: Vec<&str> = command.splitn(2, ' ').collect();
+    match parts[0] {
+        "/help" => state.push_message(
+            Role::System,
+            [
+                "/help         — show this help",
+                "/status       — connection & agent info",
+                "/clear        — clear chat history",
+                "/exit         — end chat session",
+            ]
+            .join("\n"),
+        ),
+        "/clear" => {
+            let agent_name = state.agent_name.clone();
+            let model_label = state.model_label.clone();
+            let mode_label = state.mode_label.clone();
+            let session_label = state.session_label.clone();
+            let user_label = state.user_label.clone();
+            state.reset_messages();
+            state.agent_name = agent_name;
+            state.model_label = model_label;
+            state.mode_label = mode_label;
+            state.session_label = session_label;
+            state.user_label = user_label;
+            state.push_message(Role::System, "Chat history cleared.".to_owned());
+        }
+        "/status" => state.push_message(
+            Role::System,
+            format!(
+                "Mode: {}\nSession: {}\nUser: {}\nAgent: {}\nModel: {}",
+                state.mode_label,
+                state.session_label,
+                state.user_label,
+                state.agent_name,
+                state.model_label
+            ),
+        ),
+        "/exit" | "/quit" => return true,
+        other => state.push_message(
+            Role::System,
+            format!("Unknown command: {other}. Type /help"),
+        ),
+    }
+
+    false
+}
+
+fn default_model_label(config: &AppConfig) -> String {
+    let Some(llm) = config.llm.as_ref() else {
+        return "default".to_owned();
+    };
+    let Some(provider) = llm.default_provider.as_deref() else {
+        return "default".to_owned();
+    };
+    let Some(provider_config) = llm.providers.get(provider) else {
+        return provider.to_owned();
+    };
+    match provider_config.default_model.as_deref() {
+        Some(model) if !model.is_empty() => format!("{provider}/{model}"),
+        _ => provider.to_owned(),
+    }
+}
+
+fn cli_kernel_user_id(user_id: &str) -> UserId { UserId(user_id.to_owned()) }
+
+async fn get_or_create_cli_session(
+    session_index: &dyn SessionIndex,
+    chat_id: &str,
+) -> Result<SessionKey, Whatever> {
+    if let Some(binding) = session_index
+        .get_channel_binding("cli", chat_id)
+        .await
+        .whatever_context("Failed to load CLI channel binding")?
+    {
+        return Ok(binding.session_key);
+    }
+
+    let now = Utc::now();
+    let entry = SessionEntry {
+        key:           SessionKey::new(),
+        title:         Some(chat_id.to_owned()),
+        model:         None,
+        system_prompt: None,
+        message_count: 0,
+        preview:       None,
+        metadata:      None,
+        created_at:    now,
+        updated_at:    now,
+    };
+    let created = session_index
+        .create_session(&entry)
+        .await
+        .whatever_context("Failed to create CLI chat session")?;
+    let binding = ChannelBinding {
+        channel_type: "cli".to_owned(),
+        chat_id:      chat_id.to_owned(),
+        session_key:  created.key.clone(),
+        created_at:   now,
+        updated_at:   now,
+    };
+    session_index
+        .bind_channel(&binding)
+        .await
+        .whatever_context("Failed to bind CLI chat session")?;
+    Ok(created.key)
+}
+
+fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
+    match event {
+        StreamEvent::TextDelta { text } => CliEvent::TextDelta { text },
+        StreamEvent::ReasoningDelta { text } => CliEvent::ReasoningDelta { text },
+        StreamEvent::ToolCallStart {
+            name, arguments, ..
+        } => {
+            let summary = tool_arguments_summary(&name, &arguments);
+            let name = tool_display_name(&name).to_owned();
+            CliEvent::ToolCallStart { name, summary }
+        }
+        StreamEvent::ToolCallEnd {
+            success,
+            result_preview,
+            ..
+        } => CliEvent::ToolCallEnd {
+            success,
+            result_preview,
+        },
+        StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
+        StreamEvent::TurnMetrics {
+            duration_ms,
+            iterations,
+            tool_calls,
+            model,
+        } => CliEvent::Progress {
+            text: format!(
+                "[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"
+            ),
+        },
+    }
+}
+
+fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
+    RawPlatformMessage {
+        channel_type:        ChannelType::Cli,
+        platform_message_id: Some(ulid::Ulid::new().to_string()),
+        platform_user_id:    format!("cli:{user_id}"),
+        platform_chat_id:    Some(session_key.to_owned()),
+        content:             MessageContent::Text(content.to_owned()),
+        reply_context:       Some(IoReplyContext {
+            thread_id:                None,
+            reply_to_platform_msg_id: None,
+            interaction_type:         InteractionType::Message,
+        }),
+        metadata:            HashMap::new(),
+    }
+}
+
+async fn poll_crossterm_event() -> Option<Event> {
+    tokio::task::spawn_blocking(|| {
+        if event::poll(Duration::from_millis(100)).unwrap_or(false) {
+            event::read().ok().and_then(|event| match event {
+                Event::Key(key) if key.kind == KeyEventKind::Press => Some(Event::Key(key)),
+                _ => None,
+            })
+        } else {
+            None
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use rara_channels::terminal::CliEvent;
+    use rara_kernel::{identity::UserId, io::StreamEvent, session::SessionIndex};
+    use rara_sessions::file_index::FileSessionIndex;
+
+    use super::{
+        cli_kernel_user_id, get_or_create_cli_session, handle_slash_command,
+        stream_event_to_cli_event,
+    };
+    use crate::chat::app::{CHAT_BANNER, ChatState};
+
+    #[tokio::test]
+    async fn cli_session_binding_is_created_once_and_reused() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let index = FileSessionIndex::new(tmp.path()).await.expect("index");
+        let session_index: &dyn SessionIndex = &index;
+
+        let first = get_or_create_cli_session(session_index, "default")
+            .await
+            .expect("first session");
+        let second = get_or_create_cli_session(session_index, "default")
+            .await
+            .expect("second session");
+        let binding = session_index
+            .get_channel_binding("cli", "default")
+            .await
+            .expect("binding query")
+            .expect("binding");
+
+        assert_eq!(first, second);
+        assert_eq!(binding.session_key, first);
+    }
+
+    #[test]
+    fn cli_endpoint_registration_uses_kernel_user_id() {
+        assert_eq!(cli_kernel_user_id("ryan"), UserId("ryan".to_owned()));
+    }
+
+    #[test]
+    fn reasoning_deltas_are_forwarded_to_cli() {
+        let event = StreamEvent::ReasoningDelta {
+            text: "internal".to_owned(),
+        };
+
+        assert!(matches!(
+            stream_event_to_cli_event(event),
+            CliEvent::ReasoningDelta { text } if text == "internal"
+        ));
+    }
+
+    #[test]
+    fn text_deltas_still_stream_to_cli() {
+        let event = StreamEvent::TextDelta {
+            text: "hello".to_owned(),
+        };
+
+        assert!(matches!(
+            stream_event_to_cli_event(event),
+            CliEvent::TextDelta { text } if text == "hello"
+        ));
+    }
+
+    #[test]
+    fn exit_slash_command_requests_shutdown_without_message() {
+        let mut state = ChatState::new("default".into(), "local".into());
+
+        assert!(handle_slash_command(&mut state, "/exit"));
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].text, CHAT_BANNER);
+    }
+}
