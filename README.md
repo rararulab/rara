@@ -87,8 +87,11 @@ just clippy
 Copy `env.local.example` to `.env` and configure:
 
 - `DATABASE_URL` — PostgreSQL connection
-- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — Telegram channel
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — Telegram bot token and owner chat ID used for bot commands
+- `RARA__GATEWAY__BIND_ADDRESS` — gateway admin API address used by Telegram `/restart` and `/update`
 - LLM provider API keys
+
+For remote bot operations, run Rara in gateway-supervised mode with `rara gateway`. The Telegram admin commands `/restart` and `/update` are only accepted from the configured owner chat ID and call the local gateway admin API rather than spawning shell commands from the bot process.
 
 ## Tech Stack
 

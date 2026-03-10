@@ -124,6 +124,7 @@ The gateway exposes its own HTTP server (default port `25556`, separate from the
 |--------|------|-------------|
 | `GET` | `/gateway/status` | Agent status, current/upstream rev, update availability |
 | `POST` | `/gateway/restart` | Gracefully restart the agent child process |
+| `POST` | `/gateway/update` | Build the latest upstream revision, activate it, and restart |
 | `POST` | `/gateway/shutdown` | Graceful shutdown of gateway + agent |
 
 ### `GET /gateway/status`
@@ -153,6 +154,15 @@ curl -X POST http://127.0.0.1:25556/gateway/restart
 # {"ok": true}
 ```
 
+### `POST /gateway/update`
+
+Triggers the same supervised update pipeline used by automatic updates: detect the latest upstream revision, build in a staging worktree, atomically swap the binary, verify health, and roll back on failure.
+
+```bash
+curl -X POST http://127.0.0.1:25556/gateway/update
+# {"message":"Updated to <rev> and restarted successfully."}
+```
+
 ### `POST /gateway/shutdown`
 
 Gracefully shuts down both the agent and the gateway process.
@@ -161,6 +171,21 @@ Gracefully shuts down both the agent and the gateway process.
 curl -X POST http://127.0.0.1:25556/gateway/shutdown
 # {"ok": true}
 ```
+
+## Telegram Admin Commands
+
+When the Telegram adapter is enabled, Rara also exposes two privileged bot commands backed by the gateway admin API:
+
+| Command | Behavior | Authorization |
+|---------|----------|---------------|
+| `/restart` | Calls `POST /gateway/restart` and returns a short acknowledgement | Only the configured `telegram.chat_id` |
+| `/update` | Calls `POST /gateway/update` and returns the gateway's summary message | Only the configured `telegram.chat_id` |
+
+Operational requirements:
+- The bot must run in a process started by `rara gateway`; in standalone `rara server` mode there is no gateway admin API to receive these requests.
+- `gateway.bind_address` must point at the local gateway listener reachable from the app process.
+- If no owner chat ID is configured, admin commands stay unavailable instead of failing open.
+- `/update` is synchronous from Telegram's perspective and can take several minutes because it waits for fetch, build, restart, and health verification.
 
 ## Configuration
 

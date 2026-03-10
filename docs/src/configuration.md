@@ -213,7 +213,7 @@ Changes are broadcast to all subscribers in-process via a `watch` channel, takin
 | Field | Description |
 |-------|-------------|
 | `bot_token` | Telegram bot token |
-| `chat_id` | Primary chat ID |
+| `chat_id` | Primary chat ID and owner allowlist for `/restart` and `/update` |
 | `allowed_group_chat_id` | Allowed group chat |
 | `notification_channel_id` | Channel for automated notifications |
 
@@ -251,6 +251,18 @@ Some runtime settings can be bootstrapped from environment variables on first st
 | Env Var | Settings Field |
 |---------|---------------|
 | `TELEGRAM_BOT_TOKEN` | `telegram.bot_token` |
+| `TELEGRAM_CHAT_ID` | `telegram.chat_id` |
 | `OPENROUTER_API_KEY` | `ai.openrouter_api_key` |
 
 These are only used if the KV store has no existing value. After that, changes are made via the API.
+
+### Telegram Bot Ops Verification
+
+To verify the Telegram admin command path end to end:
+
+1. Start the supervised deployment with `rara gateway` so the gateway admin API is present.
+2. Confirm `telegram.bot_token`, `telegram.chat_id`, and `gateway.bind_address` are set to the live bot token, the owner chat ID, and the gateway listener address.
+3. From the configured owner chat, send `/restart` and verify the bot replies with a restart acknowledgement and the supervised instance comes back healthy.
+4. From the configured owner chat, send `/update` and verify the bot eventually returns the gateway summary message describing success or failure.
+5. From any non-owner chat, send `/restart` or `/update` and verify the bot returns an unauthorized response without invoking the gateway.
+6. If `telegram.chat_id` is unset or the app is running without the gateway, verify the bot returns an explicit unavailable/configuration error instead of pretending success.
