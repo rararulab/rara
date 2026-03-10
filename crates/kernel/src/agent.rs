@@ -545,6 +545,11 @@ async fn execute_tool_calls(
             .map(|tool| tool.capabilities())
             .unwrap_or_default();
 
+        // Long-running tools used to share the same join_all() path as short
+        // inline tools. That meant a shell command or MCP call could keep the
+        // whole interactive turn "busy" until completion, so the user saw the
+        // session stall instead of getting control back. Detachable tools now
+        // register a background run immediately and finish out-of-band.
         if matches!(capabilities.execution_mode, ToolExecutionMode::Detachable) {
             let Some(tool_ref) = tool else {
                 let (success, result, error, duration_ms) = execute_single_tool_call(
@@ -691,6 +696,10 @@ async fn execute_tool_calls(
             continue;
         }
 
+        // Inline tools still run inside the turn and must keep the old
+        // timeout/cancel behavior. Without this guard, the background-tool
+        // refactor would fix shell/MCP stalls but quietly reintroduce "wait
+        // forever" behavior for every other tool on this path.
         let name_for_span = name.clone();
         let args_for_exec = arguments.clone();
         let tool_context = tool_context.clone();

@@ -89,6 +89,10 @@ impl AgentTool for McpToolBridge {
 
     fn capabilities(&self) -> ToolCapabilities {
         ToolCapabilities {
+            // MCP tools can fan out to remote services or browser automation,
+            // so their latency is unpredictable. Keeping them inline caused
+            // the same blocked-turn symptom as bash, so default them to the
+            // background path as well.
             execution_mode: ToolExecutionMode::Detachable,
             status_label:   Some("MCP tool running in background".into()),
         }

@@ -69,6 +69,10 @@ impl AgentTool for BashTool {
 
     fn capabilities(&self) -> ToolCapabilities {
         ToolCapabilities {
+            // Shell commands are the most common source of "assistant stops
+            // responding" reports because they often run for seconds or
+            // minutes. Mark them detachable so the command keeps running, but
+            // the conversation can return to Ready immediately.
             execution_mode: ToolExecutionMode::Detachable,
             status_label:   Some("shell command running in background".into()),
         }
