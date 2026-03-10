@@ -17,12 +17,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::{Location, ensure};
+use snafu::{Location, ResultExt, ensure};
 use tracing::{info, warn};
 
 use crate::{
     config::RepoConfig,
-    error::{Result, SymphonyError},
+    error::{IoSnafu, Result, SymphonyError},
 };
 
 #[derive(Debug, Clone)]
@@ -116,10 +116,7 @@ impl WorkspaceManager {
                     branch = %branch,
                     "removing invalid existing symphony worktree before recreation"
                 );
-                fs::remove_dir_all(&path).map_err(|source| SymphonyError::Io {
-                    source,
-                    location: Location::new(file!(), line!(), column!()),
-                })?;
+                fs::remove_dir_all(&path).context(IoSnafu)?;
                 if let Ok(wt) = repo.find_worktree(&branch) {
                     let _ = wt.prune(Some(
                         git2::WorktreePruneOptions::new().valid(false).locked(false),
