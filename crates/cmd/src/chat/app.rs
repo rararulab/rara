@@ -1,0 +1,512 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use rara_channels::terminal::CliEvent;
+
+use crate::chat::theme;
+
+pub const CHAT_BANNER: &str = "/help for commands • /exit to quit";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolInfo {
+    pub name: String,
+    pub input: String,
+    pub result: String,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    User,
+    Agent,
+    System,
+    Tool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: Role,
+    pub text: String,
+    pub tool: Option<ToolInfo>,
+}
+
+pub struct ChatState {
+    pub agent_name: String,
+    pub model_label: String,
+    pub mode_label: String,
+    pub session_label: String,
+    pub user_label: String,
+    pub messages: Vec<ChatMessage>,
+    pub streaming_text: String,
+    pub is_streaming: bool,
+    pub thinking: bool,
+    pub active_tool: Option<String>,
+    pub spinner_frame: usize,
+    pub input: String,
+    pub scroll_offset: u16,
+    pub last_tokens: Option<(u64, u64)>,
+    pub last_cost_usd: Option<f64>,
+    pub streaming_chars: usize,
+    pub status_msg: Option<String>,
+    pub staged_messages: Vec<String>,
+    pub tool_input_buf: String,
+}
+
+pub enum ChatAction {
+    Continue,
+    SendMessage(String),
+    Back,
+    SlashCommand(String),
+}
+
+impl ChatState {
+    #[must_use]
+    pub fn new(session: String, user_id: String) -> Self {
+        let mut state = Self {
+            agent_name: "rara".to_owned(),
+            model_label: "default".to_owned(),
+            mode_label: "in-process".to_owned(),
+            session_label: session,
+            user_label: user_id,
+            messages: Vec::new(),
+            streaming_text: String::new(),
+            is_streaming: false,
+            thinking: false,
+            active_tool: None,
+            spinner_frame: 0,
+            input: String::new(),
+            scroll_offset: 0,
+            last_tokens: None,
+            last_cost_usd: None,
+            streaming_chars: 0,
+            status_msg: None,
+            staged_messages: Vec::new(),
+            tool_input_buf: String::new(),
+        };
+        state.push_message(Role::System, CHAT_BANNER.to_owned());
+        state
+    }
+
+    pub fn reset_messages(&mut self) {
+        self.messages.clear();
+        self.streaming_text.clear();
+        self.is_streaming = false;
+        self.thinking = false;
+        self.active_tool = None;
+        self.spinner_frame = 0;
+        self.input.clear();
+        self.scroll_offset = 0;
+        self.last_tokens = None;
+        self.last_cost_usd = None;
+        self.streaming_chars = 0;
+        self.status_msg = None;
+        self.staged_messages.clear();
+        self.tool_input_buf.clear();
+    }
+
+    pub fn push_message(&mut self, role: Role, text: String) {
+        self.messages.push(ChatMessage {
+            role,
+            text,
+            tool: None,
+        });
+        self.scroll_offset = 0;
+    }
+
+    pub fn append_stream(&mut self, text: &str) {
+        self.thinking = false;
+        self.streaming_text.push_str(text);
+        self.streaming_chars += text.len();
+        self.scroll_offset = 0;
+    }
+
+    pub fn take_staged(&mut self) -> Option<String> {
+        if self.staged_messages.is_empty() {
+            None
+        } else {
+            Some(self.staged_messages.remove(0))
+        }
+    }
+
+    pub fn finalize_stream(&mut self) {
+        if !self.streaming_text.is_empty() {
+            let text = sanitize_function_tags(&std::mem::take(&mut self.streaming_text));
+            self.push_message(Role::Agent, text);
+        }
+        self.is_streaming = false;
+        self.thinking = false;
+        self.active_tool = None;
+        self.streaming_chars = 0;
+        self.tool_input_buf.clear();
+    }
+
+    pub fn tool_start(&mut self, name: &str) {
+        self.active_tool = Some(name.to_owned());
+        self.tool_input_buf.clear();
+        self.spinner_frame = 0;
+    }
+
+    pub fn tool_use_end(&mut self, name: &str, input: &str) {
+        self.messages.push(ChatMessage {
+            role: Role::Tool,
+            text: name.to_owned(),
+            tool: Some(ToolInfo {
+                name: name.to_owned(),
+                input: input.to_owned(),
+                result: String::new(),
+                is_error: false,
+            }),
+        });
+        self.active_tool = None;
+        self.tool_input_buf.clear();
+        self.scroll_offset = 0;
+    }
+
+    pub fn tool_result(&mut self, name: &str, result: &str, is_error: bool) {
+        for message in self.messages.iter_mut().rev() {
+            if message.role != Role::Tool {
+                continue;
+            }
+            let Some(tool) = message.tool.as_mut() else {
+                continue;
+            };
+            if tool.name == name && tool.result.is_empty() {
+                tool.result = result.to_owned();
+                tool.is_error = is_error;
+                break;
+            }
+        }
+        self.active_tool = None;
+        self.tool_input_buf.clear();
+        self.scroll_offset = 0;
+    }
+
+    pub fn tick(&mut self) {
+        if self.active_tool.is_some() || self.thinking {
+            self.spinner_frame = (self.spinner_frame + 1) % theme::SPINNER_FRAMES.len();
+        }
+    }
+
+    pub fn handle_cli_event(&mut self, event: CliEvent) {
+        match event {
+            CliEvent::Reply { content } => {
+                let is_duplicate = self
+                    .messages
+                    .last()
+                    .is_some_and(|message| message.role == Role::Agent && message.text == content);
+                if !content.is_empty() && !is_duplicate {
+                    self.push_message(Role::Agent, content);
+                }
+                self.is_streaming = false;
+                self.thinking = false;
+                self.status_msg = None;
+            }
+            CliEvent::TextDelta { text } => {
+                self.is_streaming = true;
+                self.append_stream(&text);
+            }
+            CliEvent::ReasoningDelta { text } => {
+                self.is_streaming = true;
+                self.thinking = true;
+                self.append_stream(&text);
+            }
+            CliEvent::ToolCallStart { name, summary } => {
+                if !self.streaming_text.is_empty() {
+                    let text = std::mem::take(&mut self.streaming_text);
+                    self.push_message(Role::Agent, text);
+                }
+                self.tool_start(&name);
+                self.tool_use_end(&name, &summary);
+            }
+            CliEvent::ToolCallEnd {
+                success,
+                result_preview,
+            } => {
+                let tool_name = self.messages.iter().rev().find_map(|message| {
+                    let tool = message.tool.as_ref()?;
+                    if tool.result.is_empty() {
+                        Some(tool.name.clone())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(tool_name) = tool_name {
+                    self.tool_result(&tool_name, &result_preview, !success);
+                }
+            }
+            CliEvent::Progress { text } => {
+                self.status_msg = Some(text);
+            }
+            CliEvent::Error { message } => {
+                self.is_streaming = false;
+                self.thinking = false;
+                self.active_tool = None;
+                self.status_msg = Some(format!("Error: {message}"));
+            }
+            CliEvent::Done => self.finalize_stream(),
+        }
+    }
+
+    #[must_use]
+    pub fn handle_key(&mut self, key: KeyEvent) -> ChatAction {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return ChatAction::Back;
+        }
+
+        if self.is_streaming {
+            return self.handle_streaming_key(key);
+        }
+
+        match key.code {
+            KeyCode::Esc => ChatAction::Back,
+            KeyCode::Enter => {
+                let msg = self.input.trim().to_owned();
+                self.input.clear();
+                if msg.is_empty() {
+                    return ChatAction::Continue;
+                }
+                if msg.starts_with('/') {
+                    return ChatAction::SlashCommand(msg);
+                }
+                self.push_message(Role::User, msg.clone());
+                ChatAction::SendMessage(msg)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.clear();
+                ChatAction::Continue
+            }
+            KeyCode::Char(ch)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.input.push(ch);
+                ChatAction::Continue
+            }
+            KeyCode::Backspace => {
+                self.input.pop();
+                ChatAction::Continue
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                ChatAction::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                ChatAction::Continue
+            }
+            KeyCode::PageUp => {
+                self.scroll_offset = self.scroll_offset.saturating_add(10);
+                ChatAction::Continue
+            }
+            KeyCode::PageDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                ChatAction::Continue
+            }
+            _ => ChatAction::Continue,
+        }
+    }
+
+    fn handle_streaming_key(&mut self, key: KeyEvent) -> ChatAction {
+        match key.code {
+            KeyCode::Esc => ChatAction::Back,
+            KeyCode::Enter => {
+                let msg = self.input.trim().to_owned();
+                self.input.clear();
+                if !msg.is_empty() && !msg.starts_with('/') {
+                    self.staged_messages.push(msg.clone());
+                    self.push_message(Role::User, msg);
+                }
+                ChatAction::Continue
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.clear();
+                ChatAction::Continue
+            }
+            KeyCode::Char(ch)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.input.push(ch);
+                ChatAction::Continue
+            }
+            KeyCode::Backspace => {
+                self.input.pop();
+                ChatAction::Continue
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                ChatAction::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                ChatAction::Continue
+            }
+            KeyCode::PageUp => {
+                self.scroll_offset = self.scroll_offset.saturating_add(10);
+                ChatAction::Continue
+            }
+            KeyCode::PageDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                ChatAction::Continue
+            }
+            _ => ChatAction::Continue,
+        }
+    }
+}
+
+fn sanitize_function_tags(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<function>") {
+        out.push_str(&rest[..start]);
+        if let Some(end) = rest[start..].find("</function>") {
+            rest = &rest[start + end + "</function>".len()..];
+        } else {
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use rara_channels::terminal::CliEvent;
+
+    use super::{ChatAction, ChatState, Role};
+
+    #[test]
+    fn new_chat_state_starts_with_openfang_banner() {
+        let chat = ChatState::new("default".into(), "local".into());
+
+        assert_eq!(chat.messages.len(), 1);
+        assert_eq!(chat.messages[0].role, Role::System);
+        assert_eq!(chat.messages[0].text, "/help for commands • /exit to quit");
+    }
+
+    #[test]
+    fn text_delta_promotes_agent_message_on_done() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::TextDelta { text: "hi".into() });
+        chat.handle_cli_event(CliEvent::Done);
+
+        assert_eq!(
+            chat.messages.last().map(|message| message.role),
+            Some(Role::Agent)
+        );
+        assert_eq!(
+            chat.messages.last().map(|message| message.text.as_str()),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn tool_events_create_embedded_tool_message() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::ToolCallStart {
+            name: "read_file".into(),
+            summary: "README.md".into(),
+        });
+
+        let tool = chat
+            .messages
+            .last()
+            .and_then(|message| message.tool.as_ref());
+        assert!(tool.is_some());
+        let tool = tool.expect("tool info");
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.input, "README.md");
+        assert_eq!(tool.result, "");
+        assert!(!tool.is_error);
+
+        chat.handle_cli_event(CliEvent::ToolCallEnd {
+            success: true,
+            result_preview: "contents".into(),
+        });
+
+        let tool = chat
+            .messages
+            .last()
+            .and_then(|message| message.tool.as_ref());
+        assert!(tool.is_some());
+        let tool = tool.expect("tool info");
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.input, "README.md");
+        assert_eq!(tool.result, "contents");
+        assert!(!tool.is_error);
+    }
+
+    #[test]
+    fn finalize_stream_strips_function_tags() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::TextDelta {
+            text: "hello<function>hidden</function>world".into(),
+        });
+        chat.handle_cli_event(CliEvent::Done);
+
+        assert_eq!(
+            chat.messages.last().map(|message| message.text.as_str()),
+            Some("helloworld")
+        );
+    }
+
+    #[test]
+    fn reply_after_stream_does_not_duplicate_last_agent_message() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::TextDelta {
+            text: "same reply".into(),
+        });
+        chat.handle_cli_event(CliEvent::Done);
+        chat.handle_cli_event(CliEvent::Reply {
+            content: "same reply".into(),
+        });
+
+        let agent_messages: Vec<_> = chat
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::Agent)
+            .collect();
+        assert_eq!(agent_messages.len(), 1);
+    }
+
+    #[test]
+    fn streaming_input_is_staged_not_sent_immediately() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.is_streaming = true;
+        chat.input = "next".into();
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::Continue));
+        assert_eq!(chat.staged_messages, vec!["next".to_string()]);
+        assert_eq!(
+            chat.messages.last().map(|message| message.role),
+            Some(Role::User)
+        );
+    }
+
+    #[test]
+    fn slash_command_is_returned_when_idle() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.input = "/clear".into();
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::SlashCommand(cmd) if cmd == "/clear"));
+    }
+
+    #[test]
+    fn scrolling_uses_bottom_relative_offset() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+
+        let _ = chat.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(chat.scroll_offset, 1);
+
+        let _ = chat.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(chat.scroll_offset, 11);
+
+        let _ = chat.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(chat.scroll_offset, 10);
+    }
+}
