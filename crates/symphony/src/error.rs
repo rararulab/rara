@@ -70,6 +70,15 @@ pub enum SymphonyError {
         location: snafu::Location,
     },
 
+    #[snafu(display("workspace error: {message}: {source}"))]
+    WorkspaceContext {
+        message:  String,
+        #[snafu(source(from(SymphonyError, Box::new)))]
+        source:   Box<SymphonyError>,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
     #[snafu(display("workspace IO error: {message}: {source}"))]
     WorkspaceIo {
         message:  String,

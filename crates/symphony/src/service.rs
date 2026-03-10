@@ -35,7 +35,7 @@ use crate::{
         RepoConfig, SymphonyConfig, TrackerConfig, default_active_labels,
         default_repo_checkout_root, default_repo_url,
     },
-    error::{IoSnafu, Result},
+    error::Result,
     tracker::{GitHubIssueTracker, IssueState, IssueTracker, LinearIssueTracker, TrackedIssue},
     workspace::{WorkspaceInfo, WorkspaceManager, workflow_file},
 };
@@ -178,6 +178,11 @@ impl IssueRuntime {
         self.cleanup_terminal_issues(tracker, &active_ids).await;
 
         for issue in issues {
+            let issue_id = issue.id.clone();
+            let issue_identifier = issue.identifier.clone();
+            let repo_name = issue.repo.clone();
+            let issue_number = issue.number;
+
             if self.running.contains_key(&issue.id) || self.failed.contains_key(&issue.id) {
                 continue;
             }
@@ -199,7 +204,14 @@ impl IssueRuntime {
             }
 
             if let Err(err) = self.start_issue(tracker, issue).await {
-                error!(error = %err, "failed to start issue run");
+                error!(
+                    issue_id = %issue_id,
+                    issue_identifier = %issue_identifier,
+                    repo = %repo_name,
+                    issue_number,
+                    error = %err,
+                    "failed to start issue run"
+                );
             }
         }
     }
@@ -331,23 +343,77 @@ impl IssueRuntime {
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
     /// transition the issue to `In Progress` once the child is live.
     async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
-        let repo = self.repo_config(&issue.repo)?;
-        let workspace =
-            self.workspace_manager
-                .ensure_worktree(&repo, issue.number, &issue.title)?;
+        let repo = self
+            .repo_config(&issue.repo)
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
+            message: format!(
+                "failed to resolve repo config for issue {} ({}) in repo {}",
+                issue.identifier, issue.id, issue.repo
+            ),
+        })?;
+        let workspace = self
+            .workspace_manager
+            .ensure_worktree(&repo, issue.number, &issue.title)
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to ensure worktree for issue {} ({}) in repo {} under {}",
+                    issue.identifier,
+                    issue.id,
+                    issue.repo,
+                    repo.effective_workspace_root()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| String::from("<unset>"))
+                ),
+            })?;
         let workflow_path = workspace
             .path
             .join(workflow_file(&repo, &self.config.workflow_file));
-        let workflow_content = tokio::fs::read_to_string(&workflow_path).await.ok();
+        let workflow_content = match tokio::fs::read_to_string(&workflow_path).await {
+            Ok(content) => Some(content),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => {
+                warn!(
+                    issue_id = %issue.id,
+                    issue_identifier = %issue.identifier,
+                    repo = %issue.repo,
+                    workflow_path = %workflow_path.display(),
+                    error = %source,
+                    "failed to read workflow file; continuing with synthesized prompt"
+                );
+                None
+            }
+        };
 
         let task = AgentTask {
             issue: issue.clone(),
             attempt: None,
             workflow_content,
         };
-        let mut handle = self.agent.start(&task, &workspace.path).await?;
+        let mut handle = self
+            .agent
+            .start(&task, &workspace.path)
+            .await
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to start agent for issue {} ({}) in repo {} at workspace {}",
+                    issue.identifier,
+                    issue.id,
+                    issue.repo,
+                    workspace.path.display()
+                ),
+            })?;
         let log_path = issue_log_path(&issue.repo, &issue.identifier);
-        let log_writer = spawn_issue_log_writer(&log_path, &issue, &workspace).await?;
+        let log_writer = spawn_issue_log_writer(&log_path, &issue, &workspace)
+            .await
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to create issue log writer for issue {} ({}) in repo {} at {}",
+                    issue.identifier,
+                    issue.id,
+                    issue.repo,
+                    log_path.display()
+                ),
+            })?;
         let output = ProcessOutputSummaryHandle::default();
 
         info!(
@@ -519,7 +585,18 @@ async fn spawn_issue_log_writer(
             message: format!("issue log path has no parent: {}", log_path.display()),
             location: snafu::Location::new(file!(), line!(), column!()),
         })?;
-    tokio::fs::create_dir_all(parent).await.context(IoSnafu)?;
+    tokio::fs::create_dir_all(parent).await.map_err(|source| {
+        crate::error::SymphonyError::WorkspaceIo {
+            message: format!(
+                "failed to create issue log directory {} for issue {} in repo {}",
+                parent.display(),
+                issue.identifier,
+                issue.repo
+            ),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        }
+    })?;
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -527,7 +604,16 @@ async fn spawn_issue_log_writer(
         .truncate(true)
         .open(log_path)
         .await
-        .context(IoSnafu)?;
+        .map_err(|source| crate::error::SymphonyError::WorkspaceIo {
+            message: format!(
+                "failed to open issue log file {} for issue {} in repo {}",
+                log_path.display(),
+                issue.identifier,
+                issue.repo
+            ),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
     let header = format!(
         "{} [meta] issue={} repo={} branch={} workspace={}\n",
         Utc::now().to_rfc3339(),
@@ -536,7 +622,18 @@ async fn spawn_issue_log_writer(
         workspace.branch,
         workspace.path.display(),
     );
-    file.write_all(header.as_bytes()).await.context(IoSnafu)?;
+    file.write_all(header.as_bytes()).await.map_err(|source| {
+        crate::error::SymphonyError::WorkspaceIo {
+            message: format!(
+                "failed to write issue log header to {} for issue {} in repo {}",
+                log_path.display(),
+                issue.identifier,
+                issue.repo
+            ),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        }
+    })?;
 
     let (sender, mut receiver) = mpsc::channel::<String>(256);
     let log_path = log_path.to_path_buf();
