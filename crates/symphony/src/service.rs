@@ -345,7 +345,6 @@ impl IssueRuntime {
     async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
         let repo = self
             .repo_config(&issue.repo)
-            .map_err(crate::error::ErrorSource::from)
             .with_context(|_| crate::error::WorkspaceContextSnafu {
             message: format!(
                 "failed to resolve repo config for issue {} ({}) in repo {}",
@@ -355,7 +354,6 @@ impl IssueRuntime {
         let workspace = self
             .workspace_manager
             .ensure_worktree(&repo, issue.number, &issue.title)
-            .map_err(crate::error::ErrorSource::from)
             .with_context(|_| crate::error::WorkspaceContextSnafu {
                 message: format!(
                     "failed to ensure worktree for issue {} ({}) in repo {} under {}",
@@ -395,7 +393,6 @@ impl IssueRuntime {
             .agent
             .start(&task, &workspace.path)
             .await
-            .map_err(crate::error::ErrorSource::from)
             .with_context(|_| crate::error::WorkspaceContextSnafu {
                 message: format!(
                     "failed to start agent for issue {} ({}) in repo {} at workspace {}",
@@ -408,7 +405,6 @@ impl IssueRuntime {
         let log_path = issue_log_path(&issue.repo, &issue.identifier);
         let log_writer = spawn_issue_log_writer(&log_path, &issue, &workspace)
             .await
-            .map_err(crate::error::ErrorSource::from)
             .with_context(|_| crate::error::WorkspaceContextSnafu {
                 message: format!(
                     "failed to create issue log writer for issue {} ({}) in repo {} at {}",
