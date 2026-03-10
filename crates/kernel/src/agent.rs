@@ -16,7 +16,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use dashmap::DashMap;
@@ -531,6 +531,8 @@ async fn execute_tool_calls(
     valid_tool_calls: Vec<ValidToolCall>,
     tool_context: crate::tool::ToolContext,
     runtime_user: Option<KernelUser>,
+    tool_execution_timeout: Duration,
+    turn_cancel: CancellationToken,
     stream_handle: &StreamHandle,
 ) -> Result<Vec<ExecutedToolCall>> {
     let mut inline_futures = Vec::new();
@@ -721,7 +723,28 @@ async fn execute_tool_calls(
         });
     }
 
-    executed.extend(futures::future::join_all(inline_futures).await);
+    let inline_results = tokio::select! {
+        results = tokio::time::timeout(tool_execution_timeout, futures::future::join_all(inline_futures)) => {
+            match results {
+                Ok(results) => results,
+                Err(_) => {
+                    return Err(KernelError::AgentExecution {
+                        message: format!(
+                            "tool execution timed out after {}s",
+                            tool_execution_timeout.as_secs()
+                        ),
+                    });
+                }
+            }
+        }
+        _ = turn_cancel.cancelled() => {
+            return Err(KernelError::AgentExecution {
+                message: "interrupted by user".into(),
+            });
+        }
+    };
+
+    executed.extend(inline_results);
     Ok(executed)
 }
 
@@ -1361,6 +1384,8 @@ pub(crate) async fn run_agent_loop(
             valid_tool_calls.clone(),
             tool_context.clone(),
             runtime_user.clone(),
+            tool_execution_timeout,
+            turn_cancel.clone(),
             stream_handle,
         )
         .await?;
@@ -1519,6 +1544,8 @@ pub(crate) async fn run_agent_loop(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -1547,6 +1574,10 @@ mod tests {
         notify: Arc<Notify>,
     }
 
+    struct StallingInlineTestTool {
+        notify: Arc<Notify>,
+    }
+
     #[async_trait]
     impl AgentTool for DetachableTestTool {
         fn name(&self) -> &str { "detachable-test-tool" }
@@ -1561,6 +1592,24 @@ mod tests {
                 status_label:   Some("background".into()),
             }
         }
+
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _context: &ToolContext,
+        ) -> anyhow::Result<ToolOutput> {
+            self.notify.notified().await;
+            Ok(json!({ "ok": true }).into())
+        }
+    }
+
+    #[async_trait]
+    impl AgentTool for StallingInlineTestTool {
+        fn name(&self) -> &str { "stalling-inline-test-tool" }
+
+        fn description(&self) -> &str { "test inline tool that never completes" }
+
+        fn parameters_schema(&self) -> serde_json::Value { json!({ "type": "object" }) }
 
         async fn execute(
             &self,
@@ -1742,6 +1791,8 @@ mod tests {
                 tool_calls,
                 ToolContext::default(),
                 None,
+                Duration::from_secs(30),
+                tokio_util::sync::CancellationToken::new(),
                 &stream_handle,
             ),
         )
@@ -1766,6 +1817,54 @@ mod tests {
             .expect("background run should be registered");
         assert_eq!(background_runs.tool_name, "detachable-test-tool");
         assert_eq!(background_runs.status, BackgroundToolStatus::Running);
+
+        notify.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn inline_tool_execution_times_out_without_blocking_turn_forever() {
+        let session_key = SessionKey::new();
+        let process_table = test_session_table(session_key);
+        let event_queue: EventQueueRef =
+            Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+                num_shards:      0,
+                shard_capacity:  16,
+                global_capacity: 16,
+            }));
+        let stream_hub = StreamHub::new(8);
+        let stream_handle = stream_hub.open(session_key);
+        let notify = Arc::new(Notify::new());
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(StallingInlineTestTool {
+            notify: Arc::clone(&notify),
+        }));
+        let tools = Arc::new(registry);
+        let tool_calls = vec![(
+            "tool-call-1".to_string(),
+            "stalling-inline-test-tool".to_string(),
+            json!({}),
+        )];
+
+        let result = execute_tool_calls(
+            Arc::clone(&process_table),
+            event_queue,
+            session_key,
+            tools,
+            tool_calls,
+            ToolContext::default(),
+            None,
+            Duration::from_millis(25),
+            tokio_util::sync::CancellationToken::new(),
+            &stream_handle,
+        )
+        .await;
+
+        let err = result.expect_err("inline tool should time out");
+        let crate::error::KernelError::AgentExecution { message } = err else {
+            panic!("expected AgentExecution timeout, got {err:?}");
+        };
+        assert!(message.contains("tool execution timed out"), "{message}");
 
         notify.notify_waiters();
     }
