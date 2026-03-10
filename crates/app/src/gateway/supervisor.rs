@@ -266,6 +266,10 @@ impl SupervisorService {
     async fn spawn_and_monitor(&mut self) -> Result<ExitReason, SupervisorError> {
         let mut child = self.spawn_child().await?;
 
+        if let Some(stderr) = child.stderr.take() {
+            Self::drain_child_stderr(stderr);
+        }
+
         // Phase 1: wait for READY on stdout.
         let stdout = child.stdout.take();
         self.wait_for_ready(stdout).await?;
@@ -340,11 +344,23 @@ impl SupervisorService {
         let exe = std::env::current_exe().context(SpawnSnafu)?;
         Command::new(&exe)
             .arg("server")
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::piped())
             .process_group(0)
             .spawn()
             .context(SpawnSnafu)
+    }
+
+    /// Drain child stderr in the gateway process so the agent never writes to
+    /// the controlling terminal from a background process group.
+    fn drain_child_stderr(stderr: tokio::process::ChildStderr) {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                warn!(target: "rara_app::gateway::agent_stderr", "{line}");
+            }
+        });
     }
 
     /// Phase 1: read child stdout lines until one contains "READY".
