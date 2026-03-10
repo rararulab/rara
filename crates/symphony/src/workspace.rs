@@ -17,12 +17,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::{Location, ensure};
-use tracing::info;
+use snafu::{Location, ResultExt, ensure};
+use tracing::{info, warn};
 
 use crate::{
     config::RepoConfig,
-    error::{Result, SymphonyError},
+    error::{IoSnafu, Result, SymphonyError},
 };
 
 #[derive(Debug, Clone)]
@@ -78,6 +78,10 @@ impl WorkspaceManager {
         Ok((checkout, repo_path))
     }
 
+    fn invalid_existing_worktree(path: &Path) -> bool {
+        path.exists() && git2::Repository::open(path).is_err()
+    }
+
     /// Ensure the issue branch is checked out in a dedicated worktree under the
     /// configured workspace root. Existing worktrees are reused.
     pub fn ensure_worktree(
@@ -103,21 +107,34 @@ impl WorkspaceManager {
             .expect("checked workspace_root above");
         let branch = branch_name(issue_number, issue_title);
         let path = workspace_root.join(&branch);
+        let (repo, _) = self.ensure_repo_checkout(repo)?;
 
         if path.exists() {
-            return Ok(WorkspaceInfo {
-                path,
-                branch,
-                created_now: false,
-            });
+            if Self::invalid_existing_worktree(&path) {
+                warn!(
+                    path = %path.display(),
+                    branch = %branch,
+                    "removing invalid existing symphony worktree before recreation"
+                );
+                fs::remove_dir_all(&path).context(IoSnafu)?;
+                if let Ok(wt) = repo.find_worktree(&branch) {
+                    let _ = wt.prune(Some(
+                        git2::WorktreePruneOptions::new().valid(false).locked(false),
+                    ));
+                }
+            } else {
+                return Ok(WorkspaceInfo {
+                    path,
+                    branch,
+                    created_now: false,
+                });
+            }
         }
 
         fs::create_dir_all(&workspace_root).map_err(|source| SymphonyError::Io {
             source,
             location: Location::new(file!(), line!(), column!()),
         })?;
-
-        let (repo, _) = self.ensure_repo_checkout(repo)?;
         let head_ref = repo.head().map_err(|source| SymphonyError::Git {
             source,
             location: Location::new(file!(), line!(), column!()),
@@ -283,5 +300,45 @@ mod tests {
 
         assert!(repo_path.exists());
         assert!(workspace.path.exists());
+    }
+
+    #[test]
+    fn replaces_invalid_existing_worktree_directory() {
+        let repo_dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(repo_dir.path()).unwrap();
+        std::fs::write(repo_dir.path().join("ralph.core.yml"), "agent: {}\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(Path::new("ralph.core.yml"))
+            .expect("should stage core config");
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+
+        let workspace_root = TempDir::new().unwrap();
+        let broken_path = workspace_root.path().join("issue-11-dynamic-repo");
+        std::fs::create_dir_all(&broken_path).unwrap();
+        std::fs::write(
+            broken_path.join(".git"),
+            "gitdir: /tmp/nonexistent-symphony-worktree\n",
+        )
+        .unwrap();
+
+        let repo = RepoConfig::builder()
+            .name("crrowbot/rara-notes".to_owned())
+            .url(repo_dir.path().display().to_string())
+            .repo_path(repo_dir.path().to_path_buf())
+            .workspace_root(workspace_root.path().to_path_buf())
+            .active_labels(vec!["symphony:ready".to_owned()])
+            .build();
+
+        let manager = WorkspaceManager;
+        let workspace = manager.ensure_worktree(&repo, 11, "Dynamic repo").unwrap();
+
+        assert!(workspace.created_now);
+        assert!(workspace.path.join("ralph.core.yml").exists());
+        assert!(git2::Repository::open(&workspace.path).is_ok());
     }
 }
