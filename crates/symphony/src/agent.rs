@@ -97,7 +97,7 @@ impl RalphAgent {
             .stdin(Stdio::null())
             .output()
             .await
-            .with_context(|_| WorkspaceIoSnafu {
+            .context(WorkspaceIoSnafu {
                 message: format!(
                     "failed to run `{command}` in {}",
                     workspace.as_ref().display()
@@ -149,7 +149,7 @@ impl RalphAgent {
             .stdin(std::process::Stdio::null())
             .output()
             .await
-            .with_context(|_| WorkspaceIoSnafu {
+            .context(WorkspaceIoSnafu {
                 message: format!(
                     "failed to run `{command}` in {}",
                     workspace.as_ref().display()
@@ -164,7 +164,7 @@ impl RalphAgent {
             let core_path = workspace.as_ref().join(&self.config.core_config_file);
             let generated = tokio::fs::read_to_string(&generated_path)
                 .await
-                .with_context(|_| WorkspaceIoSnafu {
+                .context(WorkspaceIoSnafu {
                     message: format!(
                         "failed to read generated Ralph config {}",
                         generated_path.display()
@@ -172,13 +172,13 @@ impl RalphAgent {
                 })?;
             let core = tokio::fs::read_to_string(&core_path)
                 .await
-                .with_context(|_| WorkspaceIoSnafu {
+                .context(WorkspaceIoSnafu {
                     message: format!("failed to read Ralph core config {}", core_path.display()),
                 })?;
             let merged = merge_core_config(&generated, &core)?;
             tokio::fs::write(&generated_path, merged)
                 .await
-                .with_context(|_| WorkspaceIoSnafu {
+                .context(WorkspaceIoSnafu {
                     message: format!(
                         "failed to write merged Ralph config {}",
                         generated_path.display()
@@ -273,7 +273,7 @@ Issue #{number}: {title}
         let prompt_path = workspace.as_ref().join("PROMPT.md");
         tokio::fs::write(&prompt_path, self.build_prompt(task))
             .await
-            .with_context(|_| WorkspaceIoSnafu {
+            .context(WorkspaceIoSnafu {
                 message: format!("failed to write prompt {}", prompt_path.display()),
             })?;
 
@@ -289,7 +289,7 @@ Issue #{number}: {title}
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn().with_context(|_| WorkspaceIoSnafu {
+        let child = cmd.spawn().context(WorkspaceIoSnafu {
             message: format!(
                 "failed to spawn `{command}` in {}",
                 workspace.as_ref().display()
