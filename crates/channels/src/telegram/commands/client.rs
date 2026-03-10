@@ -46,33 +46,33 @@ pub struct ChannelBinding {
 /// Summary of a chat session (used in list views).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionListItem {
-    pub key:           String,
-    pub title:         Option<String>,
+    pub key: String,
+    pub title: Option<String>,
     pub message_count: i64,
-    pub updated_at:    String,
+    pub updated_at: String,
 }
 
 /// Detailed information about a single chat session.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionDetail {
-    pub key:           String,
-    pub title:         Option<String>,
-    pub model:         Option<String>,
+    pub key: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
     pub message_count: i64,
-    pub preview:       Option<String>,
-    pub created_at:    String,
-    pub updated_at:    String,
+    pub preview: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// A job discovered through the search API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscoveryJob {
-    pub title:           String,
-    pub company:         String,
-    pub location:        Option<String>,
-    pub url:             Option<String>,
-    pub salary_min:      Option<i32>,
-    pub salary_max:      Option<i32>,
+    pub title: String,
+    pub company: String,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub salary_min: Option<i32>,
+    pub salary_max: Option<i32>,
     pub salary_currency: Option<String>,
 }
 
@@ -80,7 +80,7 @@ pub struct DiscoveryJob {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerInfo {
-    pub name:   String,
+    pub name: String,
     pub status: McpServerStatus,
 }
 
@@ -138,6 +138,11 @@ pub trait BotServiceClient: Send + Sync {
         key: &str,
         model: Option<&str>,
     ) -> Result<SessionDetail, BotServiceError>;
+
+    // -- Admin operations ---------------------------------------------------
+
+    /// Request a supervised agent restart via the local admin control plane.
+    async fn restart_agent(&self) -> Result<(), BotServiceError>;
 
     // -- Job discovery -------------------------------------------------------
 

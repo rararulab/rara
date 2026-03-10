@@ -23,6 +23,7 @@ use rara_kernel::{
     memory::TapeService,
     session::{self as ks, SessionIndex, SessionKey},
 };
+use reqwest::{Client, StatusCode};
 
 use super::client::{
     BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
@@ -33,12 +34,26 @@ use super::client::{
 /// directly, bypassing any HTTP layer.
 pub struct KernelBotServiceClient {
     sessions: Arc<dyn SessionIndex>,
-    tape:     TapeService,
+    tape: TapeService,
+    gateway_base_url: Option<String>,
+    http_client: Client,
 }
 
 impl KernelBotServiceClient {
-    pub fn new(sessions: Arc<dyn SessionIndex>, tape: TapeService) -> Self {
-        Self { sessions, tape }
+    pub fn new(
+        sessions: Arc<dyn SessionIndex>,
+        tape: TapeService,
+        gateway_base_url: Option<String>,
+    ) -> Self {
+        Self {
+            sessions,
+            tape,
+            gateway_base_url,
+            http_client: Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("reqwest client should build"),
+        }
     }
 }
 
@@ -54,22 +69,22 @@ fn map_session_err(e: ks::SessionError) -> BotServiceError {
 
 fn entry_to_list_item(e: &ks::SessionEntry) -> SessionListItem {
     SessionListItem {
-        key:           e.key.to_string(),
-        title:         e.title.clone(),
+        key: e.key.to_string(),
+        title: e.title.clone(),
         message_count: e.message_count,
-        updated_at:    e.updated_at.to_rfc3339(),
+        updated_at: e.updated_at.to_rfc3339(),
     }
 }
 
 fn entry_to_detail(e: &ks::SessionEntry) -> SessionDetail {
     SessionDetail {
-        key:           e.key.to_string(),
-        title:         e.title.clone(),
-        model:         e.model.clone(),
+        key: e.key.to_string(),
+        title: e.title.clone(),
+        model: e.model.clone(),
         message_count: e.message_count,
-        preview:       e.preview.clone(),
-        created_at:    e.created_at.to_rfc3339(),
-        updated_at:    e.updated_at.to_rfc3339(),
+        preview: e.preview.clone(),
+        created_at: e.created_at.to_rfc3339(),
+        updated_at: e.updated_at.to_rfc3339(),
     }
 }
 
@@ -110,10 +125,10 @@ impl BotServiceClient for KernelBotServiceClient {
         let now = Utc::now();
         let binding = ks::ChannelBinding {
             channel_type: channel_type.to_owned(),
-            chat_id:      chat_id.to_owned(),
-            session_key:  key,
-            created_at:   now,
-            updated_at:   now,
+            chat_id: chat_id.to_owned(),
+            session_key: key,
+            created_at: now,
+            updated_at: now,
         };
         self.sessions
             .bind_channel(&binding)
@@ -125,15 +140,15 @@ impl BotServiceClient for KernelBotServiceClient {
     async fn create_session(&self, title: Option<&str>) -> Result<String, BotServiceError> {
         let now = Utc::now();
         let entry = ks::SessionEntry {
-            key:           SessionKey::new(),
-            title:         title.map(String::from),
-            model:         None,
+            key: SessionKey::new(),
+            title: title.map(String::from),
+            model: None,
             system_prompt: None,
             message_count: 0,
-            preview:       None,
-            metadata:      None,
-            created_at:    now,
-            updated_at:    now,
+            preview: None,
+            metadata: None,
+            created_at: now,
+            updated_at: now,
         };
         let created = self
             .sessions
@@ -206,6 +221,35 @@ impl BotServiceClient for KernelBotServiceClient {
         Ok(entry_to_detail(&updated))
     }
 
+    async fn restart_agent(&self) -> Result<(), BotServiceError> {
+        let Some(base_url) = self.gateway_base_url.as_deref() else {
+            return Err(BotServiceError::Service {
+                message: "gateway admin API is not configured".to_owned(),
+            });
+        };
+
+        let url = format!("{}/gateway/restart", normalize_gateway_base_url(base_url));
+        let response =
+            self.http_client
+                .post(url)
+                .send()
+                .await
+                .map_err(|e| BotServiceError::Service {
+                    message: format!("gateway restart request failed: {e}"),
+                })?;
+
+        if response.status() == StatusCode::OK {
+            return Ok(());
+        }
+
+        Err(BotServiceError::Service {
+            message: format!(
+                "gateway restart request returned HTTP {}",
+                response.status()
+            ),
+        })
+    }
+
     // -- Job discovery (not yet implemented) ----------------------------------
 
     async fn discover_jobs(
@@ -260,5 +304,13 @@ impl BotServiceClient for KernelBotServiceClient {
         Err(BotServiceError::Service {
             message: "MCP management not available via kernel client".to_owned(),
         })
+    }
+}
+
+fn normalize_gateway_base_url(address: &str) -> String {
+    if address.starts_with("http://") || address.starts_with("https://") {
+        address.trim_end_matches('/').to_owned()
+    } else {
+        format!("http://{}", address.trim_end_matches('/'))
     }
 }

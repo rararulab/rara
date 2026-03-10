@@ -22,12 +22,14 @@
 //! ## Modules
 //!
 //! - [`client`]: Backend service client trait and response types.
+//! - [`admin`]: `/restart` admin command.
 //! - [`basic`]: `/start` and `/help` commands.
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
 //! - [`job`]: `/search` and `/jd` commands.
 //! - [`mcp`]: `/mcp` command.
 //! - [`callbacks`]: Inline keyboard callback handlers.
 
+pub mod admin;
 pub mod basic;
 pub mod callbacks;
 pub mod client;
@@ -35,6 +37,7 @@ pub mod kernel_client;
 pub mod mcp;
 pub mod session;
 
+pub use admin::AdminCommandHandler;
 pub use basic::BasicCommandHandler;
 pub use callbacks::SessionSwitchCallbackHandler;
 pub use client::BotServiceClient;
