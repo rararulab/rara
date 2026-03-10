@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::AgentConfig,
-    error::{ConfigYamlSnafu, IoSnafu, Result},
+    error::{ConfigYamlSnafu, Result, WorkspaceIoSnafu},
     tracker::TrackedIssue,
 };
 
@@ -77,9 +77,18 @@ impl RalphAgent {
     #[must_use]
     pub fn new(config: AgentConfig) -> Self { Self { config } }
 
+    fn format_command(&self, args: &[String]) -> String {
+        let mut parts = Vec::with_capacity(args.len() + 1);
+        parts.push(self.config.command.clone());
+        parts.extend(args.iter().cloned());
+        parts.join(" ")
+    }
+
     async fn doctor_workspace<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
+        let args = self.config.doctor_args();
+        let command = self.format_command(&args);
         let mut cmd = Command::new(&self.config.command);
-        for arg in self.config.doctor_args() {
+        for arg in &args {
             cmd.arg(arg);
         }
 
@@ -88,7 +97,12 @@ impl RalphAgent {
             .stdin(Stdio::null())
             .output()
             .await
-            .context(IoSnafu)?;
+            .context(WorkspaceIoSnafu {
+                message: format!(
+                    "failed to run `{command}` in {}",
+                    workspace.as_ref().display()
+                ),
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -123,8 +137,10 @@ impl RalphAgent {
     }
 
     async fn init_workspace_config<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
+        let args = self.config.init_args();
+        let command = self.format_command(&args);
         let mut cmd = Command::new(&self.config.command);
-        for arg in self.config.init_args() {
+        for arg in &args {
             cmd.arg(arg);
         }
 
@@ -133,7 +149,12 @@ impl RalphAgent {
             .stdin(std::process::Stdio::null())
             .output()
             .await
-            .context(IoSnafu)?;
+            .context(WorkspaceIoSnafu {
+                message: format!(
+                    "failed to run `{command}` in {}",
+                    workspace.as_ref().display()
+                ),
+            })?;
 
         if output.status.success() {
             // Materialize the repo root core config into the generated
@@ -143,14 +164,26 @@ impl RalphAgent {
             let core_path = workspace.as_ref().join(&self.config.core_config_file);
             let generated = tokio::fs::read_to_string(&generated_path)
                 .await
-                .context(IoSnafu)?;
+                .context(WorkspaceIoSnafu {
+                    message: format!(
+                        "failed to read generated Ralph config {}",
+                        generated_path.display()
+                    ),
+                })?;
             let core = tokio::fs::read_to_string(&core_path)
                 .await
-                .context(IoSnafu)?;
+                .context(WorkspaceIoSnafu {
+                    message: format!("failed to read Ralph core config {}", core_path.display()),
+                })?;
             let merged = merge_core_config(&generated, &core)?;
             tokio::fs::write(&generated_path, merged)
                 .await
-                .context(IoSnafu)?;
+                .context(WorkspaceIoSnafu {
+                    message: format!(
+                        "failed to write merged Ralph config {}",
+                        generated_path.display()
+                    ),
+                })?;
             self.doctor_workspace(workspace.as_ref()).await?;
             return Ok(());
         }
@@ -240,10 +273,14 @@ Issue #{number}: {title}
         let prompt_path = workspace.as_ref().join("PROMPT.md");
         tokio::fs::write(&prompt_path, self.build_prompt(task))
             .await
-            .context(IoSnafu)?;
+            .context(WorkspaceIoSnafu {
+                message: format!("failed to write prompt {}", prompt_path.display()),
+            })?;
 
+        let args = self.config.command_args();
+        let command = self.format_command(&args);
         let mut cmd = Command::new(&self.config.command);
-        for arg in self.config.command_args() {
+        for arg in &args {
             cmd.arg(arg);
         }
 
@@ -252,7 +289,12 @@ Issue #{number}: {title}
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn().context(IoSnafu)?;
+        let child = cmd.spawn().context(WorkspaceIoSnafu {
+            message: format!(
+                "failed to spawn `{command}` in {}",
+                workspace.as_ref().display()
+            ),
+        })?;
 
         Ok(AgentHandle {
             child,
