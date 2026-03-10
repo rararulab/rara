@@ -706,7 +706,7 @@ mod tests {
         .expect("fallback repo config should resolve");
 
         assert_eq!(repo.name, "crrowbot/rara-notes");
-        assert_eq!(repo.url, "https://github.com/crrowbot/rara-notes");
+        assert_eq!(repo.url, "git@github.com:crrowbot/rara-notes.git");
         assert_eq!(
             repo.repo_path,
             Some(
