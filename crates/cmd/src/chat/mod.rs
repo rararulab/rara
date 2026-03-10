@@ -1,10 +1,22 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::Utc;
 use clap::Args;
 use crossterm::event::{self, Event, KeyEventKind};
-use snafu::{ResultExt, Whatever, whatever};
-
 use rara_app::{AppConfig, StartOptions, start_with_options};
 use rara_channels::{
     terminal::{CliEvent, TerminalAdapter},
@@ -20,6 +32,7 @@ use rara_kernel::{
     },
     session::{ChannelBinding, SessionEntry, SessionIndex, SessionKey},
 };
+use snafu::{ResultExt, Whatever, whatever};
 
 use crate::chat::{
     app::{ChatAction, ChatState, Role},
@@ -89,7 +102,7 @@ impl ChatArgs {
 
         let cli_endpoint = Endpoint {
             channel_type: ChannelType::Cli,
-            address: EndpointAddress::Cli {
+            address:      EndpointAddress::Cli {
                 session_id: session_alias.clone(),
             },
         };
@@ -291,9 +304,7 @@ fn default_model_label(config: &AppConfig) -> String {
     }
 }
 
-fn cli_kernel_user_id(user_id: &str) -> UserId {
-    UserId(user_id.to_owned())
-}
+fn cli_kernel_user_id(user_id: &str) -> UserId { UserId(user_id.to_owned()) }
 
 async fn get_or_create_cli_session(
     session_index: &dyn SessionIndex,
@@ -309,15 +320,15 @@ async fn get_or_create_cli_session(
 
     let now = Utc::now();
     let entry = SessionEntry {
-        key: SessionKey::new(),
-        title: Some(chat_id.to_owned()),
-        model: None,
+        key:           SessionKey::new(),
+        title:         Some(chat_id.to_owned()),
+        model:         None,
         system_prompt: None,
         message_count: 0,
-        preview: None,
-        metadata: None,
-        created_at: now,
-        updated_at: now,
+        preview:       None,
+        metadata:      None,
+        created_at:    now,
+        updated_at:    now,
     };
     let created = session_index
         .create_session(&entry)
@@ -325,10 +336,10 @@ async fn get_or_create_cli_session(
         .whatever_context("Failed to create CLI chat session")?;
     let binding = ChannelBinding {
         channel_type: "cli".to_owned(),
-        chat_id: chat_id.to_owned(),
-        session_key: created.key.clone(),
-        created_at: now,
-        updated_at: now,
+        chat_id:      chat_id.to_owned(),
+        session_key:  created.key.clone(),
+        created_at:   now,
+        updated_at:   now,
     };
     session_index
         .bind_channel(&binding)
@@ -372,17 +383,17 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
 
 fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
     RawPlatformMessage {
-        channel_type: ChannelType::Cli,
+        channel_type:        ChannelType::Cli,
         platform_message_id: Some(ulid::Ulid::new().to_string()),
-        platform_user_id: format!("cli:{user_id}"),
-        platform_chat_id: Some(session_key.to_owned()),
-        content: MessageContent::Text(content.to_owned()),
-        reply_context: Some(IoReplyContext {
-            thread_id: None,
+        platform_user_id:    format!("cli:{user_id}"),
+        platform_chat_id:    Some(session_key.to_owned()),
+        content:             MessageContent::Text(content.to_owned()),
+        reply_context:       Some(IoReplyContext {
+            thread_id:                None,
             reply_to_platform_msg_id: None,
-            interaction_type: InteractionType::Message,
+            interaction_type:         InteractionType::Message,
         }),
-        metadata: HashMap::new(),
+        metadata:            HashMap::new(),
     }
 }
 
@@ -404,7 +415,6 @@ async fn poll_crossterm_event() -> Option<Event> {
 
 #[cfg(test)]
 mod tests {
-    use crate::chat::app::{CHAT_BANNER, ChatState};
     use rara_channels::terminal::CliEvent;
     use rara_kernel::{identity::UserId, io::StreamEvent, session::SessionIndex};
     use rara_sessions::file_index::FileSessionIndex;
@@ -413,6 +423,7 @@ mod tests {
         cli_kernel_user_id, get_or_create_cli_session, handle_slash_command,
         stream_event_to_cli_event,
     };
+    use crate::chat::app::{CHAT_BANNER, ChatState};
 
     #[tokio::test]
     async fn cli_session_binding_is_created_once_and_reused() {

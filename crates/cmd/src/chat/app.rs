@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rara_channels::terminal::CliEvent;
 
@@ -7,9 +21,9 @@ pub const CHAT_BANNER: &str = "/help for commands • /exit to quit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolInfo {
-    pub name: String,
-    pub input: String,
-    pub result: String,
+    pub name:     String,
+    pub input:    String,
+    pub result:   String,
     pub is_error: bool,
 }
 
@@ -29,25 +43,25 @@ pub struct ChatMessage {
 }
 
 pub struct ChatState {
-    pub agent_name: String,
-    pub model_label: String,
-    pub mode_label: String,
-    pub session_label: String,
-    pub user_label: String,
-    pub messages: Vec<ChatMessage>,
-    pub streaming_text: String,
-    pub is_streaming: bool,
-    pub thinking: bool,
-    pub active_tool: Option<String>,
-    pub spinner_frame: usize,
-    pub input: String,
-    pub scroll_offset: u16,
-    pub last_tokens: Option<(u64, u64)>,
-    pub last_cost_usd: Option<f64>,
+    pub agent_name:      String,
+    pub model_label:     String,
+    pub mode_label:      String,
+    pub session_label:   String,
+    pub user_label:      String,
+    pub messages:        Vec<ChatMessage>,
+    pub streaming_text:  String,
+    pub is_streaming:    bool,
+    pub thinking:        bool,
+    pub active_tool:     Option<String>,
+    pub spinner_frame:   usize,
+    pub input:           String,
+    pub scroll_offset:   u16,
+    pub last_tokens:     Option<(u64, u64)>,
+    pub last_cost_usd:   Option<f64>,
     pub streaming_chars: usize,
-    pub status_msg: Option<String>,
+    pub status_msg:      Option<String>,
     pub staged_messages: Vec<String>,
-    pub tool_input_buf: String,
+    pub tool_input_buf:  String,
 }
 
 pub enum ChatAction {
@@ -61,25 +75,25 @@ impl ChatState {
     #[must_use]
     pub fn new(session: String, user_id: String) -> Self {
         let mut state = Self {
-            agent_name: "rara".to_owned(),
-            model_label: "default".to_owned(),
-            mode_label: "in-process".to_owned(),
-            session_label: session,
-            user_label: user_id,
-            messages: Vec::new(),
-            streaming_text: String::new(),
-            is_streaming: false,
-            thinking: false,
-            active_tool: None,
-            spinner_frame: 0,
-            input: String::new(),
-            scroll_offset: 0,
-            last_tokens: None,
-            last_cost_usd: None,
+            agent_name:      "rara".to_owned(),
+            model_label:     "default".to_owned(),
+            mode_label:      "in-process".to_owned(),
+            session_label:   session,
+            user_label:      user_id,
+            messages:        Vec::new(),
+            streaming_text:  String::new(),
+            is_streaming:    false,
+            thinking:        false,
+            active_tool:     None,
+            spinner_frame:   0,
+            input:           String::new(),
+            scroll_offset:   0,
+            last_tokens:     None,
+            last_cost_usd:   None,
             streaming_chars: 0,
-            status_msg: None,
+            status_msg:      None,
             staged_messages: Vec::new(),
-            tool_input_buf: String::new(),
+            tool_input_buf:  String::new(),
         };
         state.push_message(Role::System, CHAT_BANNER.to_owned());
         state
@@ -149,9 +163,9 @@ impl ChatState {
             role: Role::Tool,
             text: name.to_owned(),
             tool: Some(ToolInfo {
-                name: name.to_owned(),
-                input: input.to_owned(),
-                result: String::new(),
+                name:     name.to_owned(),
+                input:    input.to_owned(),
+                result:   String::new(),
                 is_error: false,
             }),
         });
@@ -405,7 +419,7 @@ mod tests {
     fn tool_events_create_embedded_tool_message() {
         let mut chat = ChatState::new("default".into(), "local".into());
         chat.handle_cli_event(CliEvent::ToolCallStart {
-            name: "read_file".into(),
+            name:    "read_file".into(),
             summary: "README.md".into(),
         });
 
@@ -421,7 +435,7 @@ mod tests {
         assert!(!tool.is_error);
 
         chat.handle_cli_event(CliEvent::ToolCallEnd {
-            success: true,
+            success:        true,
             result_preview: "contents".into(),
         });
 
