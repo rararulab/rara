@@ -15,7 +15,7 @@
 use std::{path::Path, process::Stdio, time::Instant};
 
 use serde_yaml::{Mapping, Value};
-use snafu::ResultExt;
+use snafu::{IntoError, ResultExt};
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
@@ -82,6 +82,47 @@ impl RalphAgent {
         parts.push(self.config.command.clone());
         parts.extend(args.iter().cloned());
         parts.join(" ")
+    }
+
+    async fn merge_core_config_if_present<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
+        let generated_path = workspace.as_ref().join("ralph.yml");
+        let core_path = workspace.as_ref().join(&self.config.core_config_file);
+        let generated = tokio::fs::read_to_string(&generated_path)
+            .await
+            .context(WorkspaceIoSnafu {
+                message: format!(
+                    "failed to read generated Ralph config {}",
+                    generated_path.display()
+                ),
+            })?;
+
+        let core = match tokio::fs::read_to_string(&core_path).await {
+            Ok(core) => core,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                info!(
+                    path = %core_path.display(),
+                    "Ralph core config missing in worktree; using generated ralph.yml as-is"
+                );
+                return Ok(());
+            }
+            Err(source) => {
+                return Err(WorkspaceIoSnafu {
+                    message: format!("failed to read Ralph core config {}", core_path.display()),
+                }
+                .into_error(source));
+            }
+        };
+
+        let merged = merge_core_config(&generated, &core)?;
+        tokio::fs::write(&generated_path, merged)
+            .await
+            .context(WorkspaceIoSnafu {
+                message: format!(
+                    "failed to write merged Ralph config {}",
+                    generated_path.display()
+                ),
+            })?;
+        Ok(())
     }
 
     async fn doctor_workspace<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
@@ -160,30 +201,7 @@ impl RalphAgent {
             // Materialize the repo root core config into the generated
             // worktree-local `ralph.yml` because the later `ralph run` step
             // intentionally executes without extra `-c` overlays.
-            let generated_path = workspace.as_ref().join("ralph.yml");
-            let core_path = workspace.as_ref().join(&self.config.core_config_file);
-            let generated = tokio::fs::read_to_string(&generated_path)
-                .await
-                .context(WorkspaceIoSnafu {
-                    message: format!(
-                        "failed to read generated Ralph config {}",
-                        generated_path.display()
-                    ),
-                })?;
-            let core = tokio::fs::read_to_string(&core_path)
-                .await
-                .context(WorkspaceIoSnafu {
-                    message: format!("failed to read Ralph core config {}", core_path.display()),
-                })?;
-            let merged = merge_core_config(&generated, &core)?;
-            tokio::fs::write(&generated_path, merged)
-                .await
-                .context(WorkspaceIoSnafu {
-                    message: format!(
-                        "failed to write merged Ralph config {}",
-                        generated_path.display()
-                    ),
-                })?;
+            self.merge_core_config_if_present(workspace.as_ref()).await?;
             self.doctor_workspace(workspace.as_ref()).await?;
             return Ok(());
         }
@@ -300,5 +318,40 @@ Issue #{number}: {title}
             child,
             started_at: Instant::now(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn merge_core_config_overrides_generated_values() {
+        let generated = "agent:\n  backend: local\n";
+        let core = "agent:\n  backend: codex\n";
+        let merged = merge_core_config(generated, core).expect("merge should succeed");
+        assert!(merged.contains("backend: codex"));
+    }
+
+    #[tokio::test]
+    async fn missing_core_config_keeps_generated_ralph_config() {
+        let workspace = TempDir::new().expect("tempdir should exist");
+        let generated_path = workspace.path().join("ralph.yml");
+        tokio::fs::write(&generated_path, "agent:\n  backend: local\n")
+            .await
+            .expect("generated config should be written");
+
+        let agent = RalphAgent::new(AgentConfig::default());
+        agent
+            .merge_core_config_if_present(workspace.path())
+            .await
+            .expect("missing core config should be ignored");
+
+        let merged = tokio::fs::read_to_string(&generated_path)
+            .await
+            .expect("generated config should still be readable");
+        assert!(merged.contains("backend: local"));
     }
 }
