@@ -250,6 +250,7 @@ mod tests {
     #[test]
     fn creates_and_cleans_up_worktree() {
         let repo_dir = TempDir::new().unwrap();
+        let workspace_root = TempDir::new().unwrap();
         let repo = git2::Repository::init(repo_dir.path()).unwrap();
         let mut index = repo.index().unwrap();
         let tree_oid = index.write_tree().unwrap();
@@ -262,6 +263,7 @@ mod tests {
             .name("rararulab/rara".to_owned())
             .url("https://github.com/rararulab/rara".to_owned())
             .repo_path(repo_dir.path().to_path_buf())
+            .workspace_root(workspace_root.path().to_path_buf())
             .active_labels(vec!["symphony:ready".to_owned()])
             .build();
 
@@ -277,6 +279,7 @@ mod tests {
     #[test]
     fn clones_missing_repo_before_creating_worktree() {
         let source_dir = TempDir::new().unwrap();
+        let workspace_root = TempDir::new().unwrap();
         let source_repo = git2::Repository::init(source_dir.path()).unwrap();
         let mut index = source_repo.index().unwrap();
         let tree_oid = index.write_tree().unwrap();
@@ -292,6 +295,7 @@ mod tests {
             .name("crrowbot/rara-notes".to_owned())
             .url(source_dir.path().display().to_string())
             .repo_path(repo_path.clone())
+            .workspace_root(workspace_root.path().to_path_buf())
             .active_labels(vec!["symphony:ready".to_owned()])
             .build();
 
