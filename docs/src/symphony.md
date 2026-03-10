@@ -148,6 +148,7 @@ symphony:
 
 - `repo_path` 是主仓库 checkout
 - `workspace_root` 可选；不填时默认落到 `~/.config/rara/ralpha/worktress/<repo>/worktrees`
+- 对于只通过 `repo:<owner>/<repo>` label 动态发现、但未显式写在 `symphony.repos` 里的仓库，Symphony 会默认使用 `git@github.com:<owner>/<repo>.git` 作为 clone URL
 - `workflow_file` 默认为 `WORKFLOW.md`
 - `tracker.started_issue_state` 控制 Ralph 成功启动后 issue 要切到哪个 tracker 状态，默认是 `In Progress`
 - `tracker.completed_issue_state` 控制 Ralph 成功完成后 issue 要切到哪个 tracker 状态，默认是 `ToVerify`

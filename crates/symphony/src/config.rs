@@ -328,7 +328,7 @@ impl RepoConfig {
 }
 
 pub(crate) fn default_repo_url(repo_name: &str) -> String {
-    format!("https://github.com/{repo_name}")
+    format!("git@github.com:{repo_name}.git")
 }
 
 pub(crate) fn default_repo_checkout_root(repo_name: &str) -> PathBuf {
