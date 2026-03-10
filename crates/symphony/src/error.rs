@@ -70,6 +70,14 @@ pub enum SymphonyError {
         location: snafu::Location,
     },
 
+    #[snafu(display("workspace IO error: {message}: {source}"))]
+    WorkspaceIo {
+        message:  String,
+        source:   std::io::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
     #[snafu(display("hook failed: {hook} - {message}"))]
     Hook {
         hook:     String,

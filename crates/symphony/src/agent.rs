@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::AgentConfig,
-    error::{ConfigYamlSnafu, Result},
+    error::{ConfigYamlSnafu, Result, WorkspaceIoSnafu},
     tracker::TrackedIssue,
 };
 
@@ -84,16 +84,6 @@ impl RalphAgent {
         parts.join(" ")
     }
 
-    fn workspace_io_error(
-        action: impl Into<String>,
-        source: std::io::Error,
-    ) -> crate::error::SymphonyError {
-        crate::error::SymphonyError::Workspace {
-            message:  format!("{}: {}", action.into(), source),
-            location: snafu::Location::new(file!(), line!(), column!()),
-        }
-    }
-
     async fn doctor_workspace<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
         let args = self.config.doctor_args();
         let command = self.format_command(&args);
@@ -107,14 +97,11 @@ impl RalphAgent {
             .stdin(Stdio::null())
             .output()
             .await
-            .map_err(|source| {
-                Self::workspace_io_error(
-                    format!(
-                        "failed to run `{command}` in {}",
-                        workspace.as_ref().display()
-                    ),
-                    source,
-                )
+            .with_context(|_| WorkspaceIoSnafu {
+                message: format!(
+                    "failed to run `{command}` in {}",
+                    workspace.as_ref().display()
+                ),
             })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
@@ -162,14 +149,11 @@ impl RalphAgent {
             .stdin(std::process::Stdio::null())
             .output()
             .await
-            .map_err(|source| {
-                Self::workspace_io_error(
-                    format!(
-                        "failed to run `{command}` in {}",
-                        workspace.as_ref().display()
-                    ),
-                    source,
-                )
+            .with_context(|_| WorkspaceIoSnafu {
+                message: format!(
+                    "failed to run `{command}` in {}",
+                    workspace.as_ref().display()
+                ),
             })?;
 
         if output.status.success() {
@@ -180,34 +164,25 @@ impl RalphAgent {
             let core_path = workspace.as_ref().join(&self.config.core_config_file);
             let generated = tokio::fs::read_to_string(&generated_path)
                 .await
-                .map_err(|source| {
-                    Self::workspace_io_error(
-                        format!(
-                            "failed to read generated Ralph config {}",
-                            generated_path.display()
-                        ),
-                        source,
-                    )
+                .with_context(|_| WorkspaceIoSnafu {
+                    message: format!(
+                        "failed to read generated Ralph config {}",
+                        generated_path.display()
+                    ),
                 })?;
             let core = tokio::fs::read_to_string(&core_path)
                 .await
-                .map_err(|source| {
-                    Self::workspace_io_error(
-                        format!("failed to read Ralph core config {}", core_path.display()),
-                        source,
-                    )
+                .with_context(|_| WorkspaceIoSnafu {
+                    message: format!("failed to read Ralph core config {}", core_path.display()),
                 })?;
             let merged = merge_core_config(&generated, &core)?;
             tokio::fs::write(&generated_path, merged)
                 .await
-                .map_err(|source| {
-                    Self::workspace_io_error(
-                        format!(
-                            "failed to write merged Ralph config {}",
-                            generated_path.display()
-                        ),
-                        source,
-                    )
+                .with_context(|_| WorkspaceIoSnafu {
+                    message: format!(
+                        "failed to write merged Ralph config {}",
+                        generated_path.display()
+                    ),
                 })?;
             self.doctor_workspace(workspace.as_ref()).await?;
             return Ok(());
@@ -298,11 +273,8 @@ Issue #{number}: {title}
         let prompt_path = workspace.as_ref().join("PROMPT.md");
         tokio::fs::write(&prompt_path, self.build_prompt(task))
             .await
-            .map_err(|source| {
-                Self::workspace_io_error(
-                    format!("failed to write prompt {}", prompt_path.display()),
-                    source,
-                )
+            .with_context(|_| WorkspaceIoSnafu {
+                message: format!("failed to write prompt {}", prompt_path.display()),
             })?;
 
         let args = self.config.command_args();
@@ -317,14 +289,11 @@ Issue #{number}: {title}
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn().map_err(|source| {
-            Self::workspace_io_error(
-                format!(
-                    "failed to spawn `{command}` in {}",
-                    workspace.as_ref().display()
-                ),
-                source,
-            )
+        let child = cmd.spawn().with_context(|_| WorkspaceIoSnafu {
+            message: format!(
+                "failed to spawn `{command}` in {}",
+                workspace.as_ref().display()
+            ),
         })?;
 
         Ok(AgentHandle {
