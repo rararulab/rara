@@ -73,6 +73,9 @@ pub struct AppConfig {
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram:    Option<flatten::TelegramConfig>,
+    /// Composio credentials (seeded to settings store at startup).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composio:    Option<flatten::ComposioConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
     /// Mita proactive agent configuration (required).

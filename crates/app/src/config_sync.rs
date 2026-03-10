@@ -86,6 +86,7 @@ impl ConfigFileSync {
             let mut cfg = self.app_config.write().await;
             cfg.llm = new_config.llm;
             cfg.telegram = new_config.telegram;
+            cfg.composio = new_config.composio;
             cfg.knowledge = new_config.knowledge;
         }
         info!("config.yaml synced to settings store");
@@ -95,12 +96,13 @@ impl ConfigFileSync {
     /// Write current settings back to config.yaml.
     async fn writeback_to_file(&self) -> anyhow::Result<()> {
         let all_settings = self.settings.list().await;
-        let (llm, telegram, knowledge) = flatten::unflatten_from_settings(&all_settings);
+        let (llm, telegram, composio, knowledge) = flatten::unflatten_from_settings(&all_settings);
 
         let yaml = {
             let mut cfg = self.app_config.write().await;
             cfg.llm = llm;
             cfg.telegram = telegram;
+            cfg.composio = composio;
             cfg.knowledge = knowledge;
             serde_yaml::to_string(&*cfg)?
         };
@@ -194,6 +196,7 @@ impl ConfigFileSync {
                                 let mut cfg = self.app_config.write().await;
                                 cfg.llm = new_config.llm;
                                 cfg.telegram = new_config.telegram;
+                                cfg.composio = new_config.composio;
                                 cfg.knowledge = new_config.knowledge;
                             }
                             info!("config file change detected and synced to settings");
@@ -283,6 +286,10 @@ telegram:
   chat_id: "456"
   notification_channel_id: "-100"
 
+composio:
+  api_key: "cmp_test_key"
+  entity_id: "workspace-default"
+
 knowledge:
   embedding_model: "text-embedding-3-small"
   embedding_dimensions: 1536
@@ -343,6 +350,9 @@ llm:
 telegram:
   bot_token: "123:ABC"
   chat_id: "999"
+composio:
+  api_key: "cmp_test_key"
+  entity_id: "test-entity"
 "#;
         tokio::fs::write(&config_path, yaml).await.unwrap();
 
@@ -374,6 +384,14 @@ telegram:
             settings_provider.get("telegram.chat_id").await.as_deref(),
             Some("999"),
         );
+        assert_eq!(
+            settings_provider.get("composio.api_key").await.as_deref(),
+            Some("cmp_test_key"),
+        );
+        assert_eq!(
+            settings_provider.get("composio.entity_id").await.as_deref(),
+            Some("test-entity"),
+        );
     }
 
     #[test]
@@ -404,6 +422,23 @@ telegram:
                 .telegram
                 .as_ref()
                 .and_then(|t| t.bot_token.as_deref()),
+        );
+        assert_eq!(
+            config.composio.as_ref().and_then(|c| c.api_key.as_deref()),
+            reparsed
+                .composio
+                .as_ref()
+                .and_then(|c| c.api_key.as_deref()),
+        );
+        assert_eq!(
+            config
+                .composio
+                .as_ref()
+                .and_then(|c| c.entity_id.as_deref()),
+            reparsed
+                .composio
+                .as_ref()
+                .and_then(|c| c.entity_id.as_deref()),
         );
 
         // Duration roundtrip

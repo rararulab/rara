@@ -39,8 +39,7 @@
 //! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
 //! sends [`Syscall`] variants through the unified event queue.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use futures::{FutureExt, future::join_all};
 use jiff::Timestamp;
