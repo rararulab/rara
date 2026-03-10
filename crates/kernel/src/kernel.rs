@@ -40,6 +40,7 @@
 //! sends [`Syscall`] variants through the unified event queue.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{FutureExt, future::join_all};
 use jiff::Timestamp;
@@ -86,6 +87,9 @@ pub struct KernelConfig {
     /// Default max LLM iterations for spawned agents.
     #[default = 25]
     pub default_max_iterations: usize,
+    /// Hard cap for one tool execution wave inside a turn.
+    #[default(_code = "Duration::from_secs(180)")]
+    pub tool_execution_timeout: Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]

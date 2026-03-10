@@ -47,7 +47,6 @@ const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
 const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
 /// Multiple medium tool outputs in one phase should also trigger a reminder.
 const MEDIUM_TOOL_RESULT_CHARS: usize = 3_000;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ContextPressure {
     Normal,
@@ -699,6 +698,7 @@ pub(crate) async fn run_agent_loop(
 
     let capabilities = ModelCapabilities::detect(provider_hint, &model);
     let input_text = user_text.clone();
+    let tool_execution_timeout = handle.config().tool_execution_timeout;
 
     // Build initial messages: system + optional history + user
     let mut messages: Vec<llm::Message> = {
@@ -1077,6 +1077,7 @@ pub(crate) async fn run_agent_loop(
                 let name = name.clone();
                 let tc = tool_context.clone();
                 let user_ref = runtime_user.clone();
+                let tool_cancel = turn_cancel.clone();
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -1106,7 +1107,23 @@ pub(crate) async fn run_agent_loop(
                     }
 
                     if let Some(tool) = tool {
-                        match tool.execute(args, &tc).await {
+                        let tool_result = tokio::select! {
+                            result = tool.execute(args, &tc) => result,
+                            _ = tool_cancel.cancelled() => {
+                                let dur = tool_start.elapsed().as_millis() as u64;
+                                tool_span.record("success", false);
+                                return (
+                                    false,
+                                    crate::tool::ToolOutput::from(
+                                        serde_json::json!({ "error": "interrupted by user" }),
+                                    ),
+                                    Some("interrupted by user".to_string()),
+                                    dur,
+                                );
+                            }
+                        };
+
+                        match tool_result {
                             Ok(result) => {
                                 tool_span.record("success", true);
                                 let dur = tool_start.elapsed().as_millis() as u64;
@@ -1140,7 +1157,26 @@ pub(crate) async fn run_agent_loop(
             })
             .collect();
 
-        let results = futures::future::join_all(tool_futures).await;
+        let results = tokio::select! {
+            results = tokio::time::timeout(tool_execution_timeout, futures::future::join_all(tool_futures)) => {
+                match results {
+                    Ok(results) => results,
+                    Err(_) => {
+                        return Err(KernelError::AgentExecution {
+                            message: format!(
+                                "tool execution timed out after {}s",
+                                tool_execution_timeout.as_secs()
+                            ),
+                        });
+                    }
+                }
+            }
+            _ = turn_cancel.cancelled() => {
+                return Err(KernelError::AgentExecution {
+                    message: "interrupted by user".into(),
+                });
+            }
+        };
 
         // Persist tool results to tape.
         if !results.is_empty() {

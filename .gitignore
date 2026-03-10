@@ -88,3 +88,4 @@ config.yaml
 config/*
 
 .ralph/
+logs/
