@@ -22,7 +22,7 @@
 //! ## Modules
 //!
 //! - [`client`]: Backend service client trait and response types.
-//! - [`admin`]: `/restart` admin command.
+//! - [`admin`]: `/restart` and `/update` admin commands.
 //! - [`basic`]: `/start` and `/help` commands.
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
 //! - [`job`]: `/search` and `/jd` commands.

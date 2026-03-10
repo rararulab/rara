@@ -28,11 +28,11 @@ use crate::GatewayConfig;
 #[derive(Debug, Clone)]
 pub struct UpdateState {
     /// Local HEAD revision.
-    pub current_rev:      String,
+    pub current_rev: String,
     /// Latest upstream `origin/main` revision (after last successful fetch).
-    pub upstream_rev:     Option<String>,
+    pub upstream_rev: Option<String>,
     /// Timestamp of the last successful check.
-    pub last_check_time:  Option<chrono::DateTime<chrono::Utc>>,
+    pub last_check_time: Option<chrono::DateTime<chrono::Utc>>,
     /// Whether the upstream has commits not yet applied locally.
     pub update_available: bool,
 }
@@ -47,11 +47,31 @@ pub struct UpdateState {
 /// that downstream consumers (e.g. `UpdateExecutor` in #94) can react.
 pub struct UpdateDetector {
     config: GatewayConfig,
-    state:  UpdateState,
-    tx:     watch::Sender<UpdateState>,
+    state: UpdateState,
+    tx: watch::Sender<UpdateState>,
 }
 
 impl UpdateDetector {
+    /// Probe the repository immediately and return an up-to-date snapshot.
+    pub async fn detect_once() -> Result<UpdateState, String> {
+        Self::git_fetch().await?;
+
+        let current_rev = Self::git_rev_parse("HEAD").await?;
+        let upstream_rev = Self::git_rev_parse("origin/main").await?;
+        let update_available = if upstream_rev == current_rev {
+            false
+        } else {
+            Self::is_ancestor(&current_rev, &upstream_rev).await
+        };
+
+        Ok(UpdateState {
+            current_rev,
+            upstream_rev: Some(upstream_rev),
+            last_check_time: Some(chrono::Utc::now()),
+            update_available,
+        })
+    }
+
     /// Create a new detector.
     ///
     /// Returns the detector **and** a watch receiver that will receive

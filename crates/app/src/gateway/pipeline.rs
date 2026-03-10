@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::{
-    detector::UpdateState,
+    detector::{UpdateDetector, UpdateState},
     executor::{UpdateExecutor, UpdateResult},
     notifier::UpdateNotifier,
     supervisor::SupervisorHandle,
@@ -34,6 +34,23 @@ use crate::GatewayConfig;
 
 /// Guard that prevents concurrent update executions.
 static UPDATING: AtomicBool = AtomicBool::new(false);
+
+struct UpdateGuard;
+
+impl UpdateGuard {
+    fn try_acquire() -> Option<Self> {
+        UPDATING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for UpdateGuard {
+    fn drop(&mut self) {
+        UPDATING.store(false, Ordering::Relaxed);
+    }
+}
 
 /// Run the update pipeline loop.
 ///
@@ -80,13 +97,10 @@ pub async fn run_update_pipeline(
         };
 
         // Prevent concurrent updates.
-        if UPDATING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
+        let Some(_guard) = UpdateGuard::try_acquire() else {
             info!("Update pipeline: another update is already in progress, skipping");
             continue;
-        }
+        };
 
         info!(rev = %upstream_rev, "Auto-update: starting update to {}", upstream_rev);
         notifier.update_started(&upstream_rev).await;
@@ -97,9 +111,54 @@ pub async fn run_update_pipeline(
             warn!(error = %e, "Auto-update: executor creation failed");
             notifier.executor_creation_failed(e).await;
         }
-
-        UPDATING.store(false, Ordering::Relaxed);
     }
+}
+
+pub struct ManualUpdateOutcome {
+    pub updated: bool,
+    pub message: String,
+    pub current_rev: String,
+    pub target_rev: Option<String>,
+}
+
+pub async fn trigger_manual_update(
+    supervisor_handle: &SupervisorHandle,
+    notifier: &UpdateNotifier,
+) -> Result<ManualUpdateOutcome, String> {
+    let state = UpdateDetector::detect_once().await?;
+    let current_rev = state.current_rev.clone();
+    let target_rev = state.upstream_rev.clone();
+
+    if !state.update_available {
+        return Ok(ManualUpdateOutcome {
+            updated: false,
+            message: format!("Already up to date at {}.", short_rev(&current_rev)),
+            current_rev,
+            target_rev,
+        });
+    }
+
+    let Some(upstream_rev) = state.upstream_rev.clone() else {
+        return Err("upstream revision is unavailable after update probe".to_owned());
+    };
+
+    let Some(_guard) = UpdateGuard::try_acquire() else {
+        return Err("another update is already in progress".to_owned());
+    };
+
+    notifier.update_started(&upstream_rev).await;
+    let summary = execute_and_handle(&upstream_rev, supervisor_handle, notifier).await?;
+    Ok(ManualUpdateOutcome {
+        updated: summary.updated,
+        message: summary.message,
+        current_rev,
+        target_rev: Some(upstream_rev),
+    })
+}
+
+struct ExecutionSummary {
+    updated: bool,
+    message: String,
 }
 
 /// Create an executor, run the update, and handle the result.
@@ -107,7 +166,7 @@ async fn execute_and_handle(
     upstream_rev: &str,
     supervisor_handle: &SupervisorHandle,
     notifier: &UpdateNotifier,
-) -> Result<(), String> {
+) -> Result<ExecutionSummary, String> {
     let mut executor = UpdateExecutor::new()
         .await
         .map_err(|e| format!("failed to create UpdateExecutor: {e}"))?;
@@ -131,10 +190,25 @@ async fn execute_and_handle(
             if let Err(e) = executor.cleanup().await {
                 warn!(error = %e, "Auto-update: cleanup failed (non-fatal)");
             }
+            Ok(ExecutionSummary {
+                updated: true,
+                message: format!(
+                    "Updated to {} and requested a supervised restart.",
+                    short_rev(&new_rev)
+                ),
+            })
         }
         UpdateResult::BuildFailed { reason } => {
             warn!(reason = %reason, "Auto-update: build failed for {}: {}", upstream_rev, reason);
             notifier.build_failed(upstream_rev, &reason).await;
+            Ok(ExecutionSummary {
+                updated: false,
+                message: format!(
+                    "Update build failed for {}: {}",
+                    short_rev(upstream_rev),
+                    reason
+                ),
+            })
         }
         UpdateResult::ActivationFailed {
             reason,
@@ -155,8 +229,19 @@ async fn execute_and_handle(
                 warn!(error = %e, "Auto-update: failed to send restart command after rollback");
                 notifier.restart_failed(&e.to_string()).await;
             }
+            Ok(ExecutionSummary {
+                updated: false,
+                message: format!(
+                    "Update activation failed for {}: {}. Rolled back: {}.",
+                    short_rev(upstream_rev),
+                    reason,
+                    rolled_back
+                ),
+            })
         }
     }
+}
 
-    Ok(())
+fn short_rev(rev: &str) -> &str {
+    &rev[..std::cmp::min(8, rev.len())]
 }

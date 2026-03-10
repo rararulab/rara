@@ -24,6 +24,7 @@ use rara_kernel::{
     session::{self as ks, SessionIndex, SessionKey},
 };
 use reqwest::{Client, StatusCode};
+use serde::Deserialize;
 
 use super::client::{
     BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
@@ -222,32 +223,23 @@ impl BotServiceClient for KernelBotServiceClient {
     }
 
     async fn restart_agent(&self) -> Result<(), BotServiceError> {
-        let Some(base_url) = self.gateway_base_url.as_deref() else {
-            return Err(BotServiceError::Service {
-                message: "gateway admin API is not configured".to_owned(),
-            });
-        };
+        self.post_gateway_action(
+            "/gateway/restart",
+            "restart",
+            std::time::Duration::from_secs(5),
+        )
+        .await
+    }
 
-        let url = format!("{}/gateway/restart", normalize_gateway_base_url(base_url));
-        let response =
-            self.http_client
-                .post(url)
-                .send()
-                .await
-                .map_err(|e| BotServiceError::Service {
-                    message: format!("gateway restart request failed: {e}"),
-                })?;
-
-        if response.status() == StatusCode::OK {
-            return Ok(());
-        }
-
-        Err(BotServiceError::Service {
-            message: format!(
-                "gateway restart request returned HTTP {}",
-                response.status()
-            ),
-        })
+    async fn update_agent(&self) -> Result<String, BotServiceError> {
+        let response: GatewayUpdateResponse = self
+            .post_gateway_json(
+                "/gateway/update",
+                "update",
+                std::time::Duration::from_secs(900),
+            )
+            .await?;
+        Ok(response.message)
     }
 
     // -- Job discovery (not yet implemented) ----------------------------------
@@ -305,6 +297,92 @@ impl BotServiceClient for KernelBotServiceClient {
             message: "MCP management not available via kernel client".to_owned(),
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayUpdateResponse {
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayErrorResponse {
+    message: String,
+}
+
+impl KernelBotServiceClient {
+    async fn post_gateway_action(
+        &self,
+        path: &str,
+        action: &str,
+        timeout: std::time::Duration,
+    ) -> Result<(), BotServiceError> {
+        let response = self.post_gateway(path, action, timeout).await?;
+        if response.status() == StatusCode::OK {
+            return Ok(());
+        }
+
+        Err(BotServiceError::Service {
+            message: format!(
+                "gateway {action} request returned HTTP {}",
+                response.status()
+            ),
+        })
+    }
+
+    async fn post_gateway_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        action: &str,
+        timeout: std::time::Duration,
+    ) -> Result<T, BotServiceError> {
+        let response = self.post_gateway(path, action, timeout).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| BotServiceError::Service {
+                    message: format!("gateway {action} error response read failed: {e}"),
+                })?;
+            let message = serde_json::from_slice::<GatewayErrorResponse>(&body)
+                .map(|payload| payload.message)
+                .unwrap_or_else(|_| String::from_utf8_lossy(&body).trim().to_owned());
+            return Err(BotServiceError::Service {
+                message: format!("gateway {action} request returned HTTP {status}: {message}"),
+            });
+        }
+
+        response
+            .json::<T>()
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("gateway {action} response decode failed: {e}"),
+            })
+    }
+
+    async fn post_gateway(
+        &self,
+        path: &str,
+        action: &str,
+        timeout: std::time::Duration,
+    ) -> Result<reqwest::Response, BotServiceError> {
+        let base_url = gateway_base_url(self.gateway_base_url.as_deref())?;
+        let url = format!("{}{path}", normalize_gateway_base_url(base_url));
+        self.http_client
+            .post(url)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("gateway {action} request failed: {e}"),
+            })
+    }
+}
+
+fn gateway_base_url(base_url: Option<&str>) -> Result<&str, BotServiceError> {
+    base_url.ok_or_else(|| BotServiceError::Service {
+        message: "gateway admin API is not configured".to_owned(),
+    })
 }
 
 fn normalize_gateway_base_url(address: &str) -> String {

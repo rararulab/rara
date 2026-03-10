@@ -215,6 +215,7 @@ impl GatewayArgs {
         let admin_state = rara_app::gateway::server::GatewayAppState {
             supervisor_handle,
             update_state_rx: update_rx,
+            notifier,
             shutdown: cancel.clone(),
         };
         let admin_bind = gateway_config.bind_address.clone();

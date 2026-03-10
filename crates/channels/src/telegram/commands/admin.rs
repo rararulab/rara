@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Admin Telegram bot commands such as `/restart`.
+//! Admin Telegram bot commands such as `/restart` and `/update`.
 
 use std::sync::Arc;
 
@@ -44,11 +44,18 @@ impl AdminCommandHandler {
 #[async_trait]
 impl CommandHandler for AdminCommandHandler {
     fn commands(&self) -> Vec<CommandDefinition> {
-        vec![CommandDefinition {
-            name: "restart".to_owned(),
-            description: "Restart the supervised Rara instance".to_owned(),
-            usage: Some("/restart".to_owned()),
-        }]
+        vec![
+            CommandDefinition {
+                name: "restart".to_owned(),
+                description: "Restart the supervised Rara instance".to_owned(),
+                usage: Some("/restart".to_owned()),
+            },
+            CommandDefinition {
+                name: "update".to_owned(),
+                description: "Build the latest upstream revision and restart".to_owned(),
+                usage: Some("/update".to_owned()),
+            },
+        ]
     }
 
     async fn handle(
@@ -58,25 +65,34 @@ impl CommandHandler for AdminCommandHandler {
     ) -> Result<CommandResult, KernelError> {
         match command.name.as_str() {
             "restart" => self.handle_restart(context).await,
+            "update" => self.handle_update(context).await,
             _ => Ok(CommandResult::None),
         }
     }
 }
 
 impl AdminCommandHandler {
-    async fn handle_restart(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
+    fn ensure_owner_chat(&self, context: &CommandContext) -> Result<(), CommandResult> {
         let chat_id = extract_chat_id(context);
 
         let Some(expected_chat_id) = self.owner_chat_id.as_deref() else {
-            return Ok(CommandResult::Text(
-                "Restart command is unavailable: no owner Telegram chat is configured.".to_owned(),
+            return Err(CommandResult::Text(
+                "Admin commands are unavailable: no owner Telegram chat is configured.".to_owned(),
             ));
         };
 
         if chat_id != expected_chat_id {
-            return Ok(CommandResult::Text(
+            return Err(CommandResult::Text(
                 "Unauthorized: this command is restricted to the configured owner chat.".to_owned(),
             ));
+        }
+
+        Ok(())
+    }
+
+    async fn handle_restart(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
+        if let Err(result) = self.ensure_owner_chat(context) {
+            return Ok(result);
         }
 
         match self.client.restart_agent().await {
@@ -86,6 +102,17 @@ impl AdminCommandHandler {
             Err(err) => Ok(CommandResult::Text(format!(
                 "Failed to request restart: {err}"
             ))),
+        }
+    }
+
+    async fn handle_update(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
+        if let Err(result) = self.ensure_owner_chat(context) {
+            return Ok(result);
+        }
+
+        match self.client.update_agent().await {
+            Ok(message) => Ok(CommandResult::Text(message)),
+            Err(err) => Ok(CommandResult::Text(format!("Failed to run update: {err}"))),
         }
     }
 }
@@ -119,21 +146,40 @@ mod tests {
 
     struct TestClient {
         restarted: AtomicBool,
+        updated: AtomicBool,
         restart_error: Option<String>,
+        update_error: Option<String>,
+        update_message: String,
     }
 
     impl TestClient {
         fn ok() -> Self {
             Self {
                 restarted: AtomicBool::new(false),
+                updated: AtomicBool::new(false),
                 restart_error: None,
+                update_error: None,
+                update_message: "Update completed and restart requested.".to_owned(),
             }
         }
 
         fn with_error(message: &str) -> Self {
             Self {
                 restarted: AtomicBool::new(false),
+                updated: AtomicBool::new(false),
                 restart_error: Some(message.to_owned()),
+                update_error: Some(message.to_owned()),
+                update_message: "Update completed and restart requested.".to_owned(),
+            }
+        }
+
+        fn with_update_response(message: &str) -> Self {
+            Self {
+                restarted: AtomicBool::new(false),
+                updated: AtomicBool::new(false),
+                restart_error: None,
+                update_error: None,
+                update_message: message.to_owned(),
             }
         }
     }
@@ -191,6 +237,16 @@ mod tests {
                 });
             }
             Ok(())
+        }
+
+        async fn update_agent(&self) -> Result<String, BotServiceError> {
+            self.updated.store(true, Ordering::SeqCst);
+            if let Some(message) = &self.update_error {
+                return Err(BotServiceError::Service {
+                    message: message.clone(),
+                });
+            }
+            Ok(self.update_message.clone())
         }
 
         async fn discover_jobs(
@@ -275,6 +331,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_requires_owner_chat() {
+        let client = Arc::new(TestClient::ok());
+        let handler = AdminCommandHandler::new(client.clone(), Some("42".to_owned()));
+
+        let result = handler
+            .handle(
+                &CommandInfo {
+                    name: "update".to_owned(),
+                    args: String::new(),
+                    raw: "/update".to_owned(),
+                },
+                &command_context(7),
+            )
+            .await
+            .expect("handler should succeed");
+
+        match result {
+            CommandResult::Text(text) => assert_eq!(
+                text,
+                "Unauthorized: this command is restricted to the configured owner chat."
+            ),
+            other => panic!("unexpected command result: {other:?}"),
+        }
+        assert!(!client.updated.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
     async fn restart_triggers_client_for_owner_chat() {
         let client = Arc::new(TestClient::ok());
         let handler = AdminCommandHandler::new(client.clone(), Some("42".to_owned()));
@@ -323,6 +406,59 @@ mod tests {
         match result {
             CommandResult::Text(text) => {
                 assert_eq!(text, "Failed to request restart: gateway unavailable");
+            }
+            other => panic!("unexpected command result: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_triggers_client_for_owner_chat() {
+        let client = Arc::new(TestClient::with_update_response(
+            "Updated to abc1234 and restart requested.",
+        ));
+        let handler = AdminCommandHandler::new(client.clone(), Some("42".to_owned()));
+
+        let result = handler
+            .handle(
+                &CommandInfo {
+                    name: "update".to_owned(),
+                    args: String::new(),
+                    raw: "/update".to_owned(),
+                },
+                &command_context(42),
+            )
+            .await
+            .expect("handler should succeed");
+
+        match result {
+            CommandResult::Text(text) => {
+                assert_eq!(text, "Updated to abc1234 and restart requested.");
+            }
+            other => panic!("unexpected command result: {other:?}"),
+        }
+        assert!(client.updated.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn update_surfaces_client_errors() {
+        let client = Arc::new(TestClient::with_error("build failed"));
+        let handler = AdminCommandHandler::new(client, Some("42".to_owned()));
+
+        let result = handler
+            .handle(
+                &CommandInfo {
+                    name: "update".to_owned(),
+                    args: String::new(),
+                    raw: "/update".to_owned(),
+                },
+                &command_context(42),
+            )
+            .await
+            .expect("handler should succeed");
+
+        match result {
+            CommandResult::Text(text) => {
+                assert_eq!(text, "Failed to run update: build failed");
             }
             other => panic!("unexpected command result: {other:?}"),
         }

@@ -17,16 +17,20 @@
 use axum::{
     Json, Router,
     extract::State,
+    http::StatusCode,
     routing::{get, post},
 };
 use serde::Serialize;
+use std::sync::Arc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::{
     detector::UpdateState,
+    notifier::UpdateNotifier,
     supervisor::{SupervisorHandle, SupervisorStatus},
+    trigger_manual_update,
 };
 
 // ---------------------------------------------------------------------------
@@ -37,8 +41,9 @@ use super::{
 #[derive(Clone)]
 pub struct GatewayAppState {
     pub supervisor_handle: SupervisorHandle,
-    pub update_state_rx:   watch::Receiver<UpdateState>,
-    pub shutdown:          CancellationToken,
+    pub update_state_rx: watch::Receiver<UpdateState>,
+    pub notifier: Arc<UpdateNotifier>,
+    pub shutdown: CancellationToken,
 }
 
 // ---------------------------------------------------------------------------
@@ -47,21 +52,30 @@ pub struct GatewayAppState {
 
 #[derive(Debug, Serialize)]
 struct GatewayStatusResponse {
-    agent:  SupervisorStatus,
+    agent: SupervisorStatus,
     update: UpdateStatusResponse,
 }
 
 #[derive(Debug, Serialize)]
 struct UpdateStatusResponse {
-    current_rev:      String,
-    upstream_rev:     Option<String>,
+    current_rev: String,
+    upstream_rev: Option<String>,
     update_available: bool,
-    last_check_time:  Option<String>,
+    last_check_time: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct OkResponse {
     ok: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct GatewayUpdateResponse {
+    ok: bool,
+    updated: bool,
+    message: String,
+    current_rev: String,
+    target_rev: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,10 +89,10 @@ async fn get_status(State(state): State<GatewayAppState>) -> Json<GatewayStatusR
     Json(GatewayStatusResponse {
         agent,
         update: UpdateStatusResponse {
-            current_rev:      update.current_rev,
-            upstream_rev:     update.upstream_rev,
+            current_rev: update.current_rev,
+            upstream_rev: update.upstream_rev,
             update_available: update.update_available,
-            last_check_time:  update.last_check_time.map(|t| t.to_rfc3339()),
+            last_check_time: update.last_check_time.map(|t| t.to_rfc3339()),
         },
     })
 }
@@ -86,6 +100,37 @@ async fn get_status(State(state): State<GatewayAppState>) -> Json<GatewayStatusR
 async fn post_restart(State(state): State<GatewayAppState>) -> Json<OkResponse> {
     let _ = state.supervisor_handle.restart().await;
     Json(OkResponse { ok: true })
+}
+
+async fn post_update(
+    State(state): State<GatewayAppState>,
+) -> (StatusCode, Json<GatewayUpdateResponse>) {
+    match trigger_manual_update(&state.supervisor_handle, state.notifier.as_ref()).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(GatewayUpdateResponse {
+                ok: true,
+                updated: result.updated,
+                message: result.message,
+                current_rev: result.current_rev,
+                target_rev: result.target_rev,
+            }),
+        ),
+        Err(message) => (
+            if message.contains("already in progress") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            },
+            Json(GatewayUpdateResponse {
+                ok: false,
+                updated: false,
+                message,
+                current_rev: String::new(),
+                target_rev: None,
+            }),
+        ),
+    }
 }
 
 async fn post_shutdown(State(state): State<GatewayAppState>) -> Json<OkResponse> {
@@ -102,6 +147,7 @@ pub fn router(state: GatewayAppState) -> Router {
     Router::new()
         .route("/gateway/status", get(get_status))
         .route("/gateway/restart", post(post_restart))
+        .route("/gateway/update", post(post_update))
         .route("/gateway/shutdown", post(post_shutdown))
         .with_state(state)
 }

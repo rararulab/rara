@@ -144,6 +144,9 @@ pub trait BotServiceClient: Send + Sync {
     /// Request a supervised agent restart via the local admin control plane.
     async fn restart_agent(&self) -> Result<(), BotServiceError>;
 
+    /// Execute the supervised update flow via the local admin control plane.
+    async fn update_agent(&self) -> Result<String, BotServiceError>;
+
     // -- Job discovery -------------------------------------------------------
 
     /// Search for jobs matching the given criteria.
