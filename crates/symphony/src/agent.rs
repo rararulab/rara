@@ -99,6 +99,9 @@ impl RalphAgent {
         let core = match tokio::fs::read_to_string(&core_path).await {
             Ok(core) => core,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                // Dynamically discovered repos are not required to carry a
+                // repo-local `ralph.core.yml`; in that case the generated
+                // worktree-local `ralph.yml` is the best available config.
                 info!(
                     path = %core_path.display(),
                     "Ralph core config missing in worktree; using generated ralph.yml as-is"
