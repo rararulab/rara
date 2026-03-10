@@ -19,6 +19,7 @@ use std::{
 };
 
 use chrono::Utc;
+use snafu::ResultExt;
 use tokio::{
     fs::OpenOptions,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -342,21 +343,22 @@ impl IssueRuntime {
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
     /// transition the issue to `In Progress` once the child is live.
     async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
-        let repo = self.repo_config(&issue.repo).map_err(|err| {
-            crate::error::SymphonyError::Workspace {
-                message: format!(
-                    "failed to resolve repo config for issue {} ({}) in repo {}: {err}",
-                    issue.identifier, issue.id, issue.repo
-                ),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            }
+        let repo = self
+            .repo_config(&issue.repo)
+            .map_err(crate::error::ErrorSource::from)
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
+            message: format!(
+                "failed to resolve repo config for issue {} ({}) in repo {}",
+                issue.identifier, issue.id, issue.repo
+            ),
         })?;
         let workspace = self
             .workspace_manager
             .ensure_worktree(&repo, issue.number, &issue.title)
-            .map_err(|err| crate::error::SymphonyError::Workspace {
+            .map_err(crate::error::ErrorSource::from)
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
                 message: format!(
-                    "failed to ensure worktree for issue {} ({}) in repo {} under {}: {err}",
+                    "failed to ensure worktree for issue {} ({}) in repo {} under {}",
                     issue.identifier,
                     issue.id,
                     issue.repo,
@@ -364,7 +366,6 @@ impl IssueRuntime {
                         .map(|path| path.display().to_string())
                         .unwrap_or_else(|| String::from("<unset>"))
                 ),
-                location: snafu::Location::new(file!(), line!(), column!()),
             })?;
         let workflow_path = workspace
             .path
@@ -394,28 +395,28 @@ impl IssueRuntime {
             .agent
             .start(&task, &workspace.path)
             .await
-            .map_err(|err| crate::error::SymphonyError::Workspace {
+            .map_err(crate::error::ErrorSource::from)
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
                 message: format!(
-                    "failed to start agent for issue {} ({}) in repo {} at workspace {}: {err}",
+                    "failed to start agent for issue {} ({}) in repo {} at workspace {}",
                     issue.identifier,
                     issue.id,
                     issue.repo,
                     workspace.path.display()
                 ),
-                location: snafu::Location::new(file!(), line!(), column!()),
             })?;
         let log_path = issue_log_path(&issue.repo, &issue.identifier);
         let log_writer = spawn_issue_log_writer(&log_path, &issue, &workspace)
             .await
-            .map_err(|err| crate::error::SymphonyError::Workspace {
+            .map_err(crate::error::ErrorSource::from)
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
                 message: format!(
-                    "failed to create issue log writer for issue {} ({}) in repo {} at {}: {err}",
+                    "failed to create issue log writer for issue {} ({}) in repo {} at {}",
                     issue.identifier,
                     issue.id,
                     issue.repo,
                     log_path.display()
                 ),
-                location: snafu::Location::new(file!(), line!(), column!()),
             })?;
         let output = ProcessOutputSummaryHandle::default();
 

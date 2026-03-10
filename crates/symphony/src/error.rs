@@ -12,7 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{error::Error as StdError, fmt};
+
 use snafu::Snafu;
+
+#[derive(Debug)]
+pub struct ErrorSource(pub Box<SymphonyError>);
+
+impl fmt::Display for ErrorSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { self.0.fmt(f) }
+}
+
+impl StdError for ErrorSource {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> { Some(self.0.as_ref()) }
+}
+
+impl From<SymphonyError> for ErrorSource {
+    fn from(value: SymphonyError) -> Self { Self(Box::new(value)) }
+}
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
@@ -66,6 +83,14 @@ pub enum SymphonyError {
     #[snafu(display("workspace error: {message}"))]
     Workspace {
         message:  String,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    #[snafu(display("workspace error: {message}: {source}"))]
+    WorkspaceContext {
+        message:  String,
+        source:   ErrorSource,
         #[snafu(implicit)]
         location: snafu::Location,
     },
