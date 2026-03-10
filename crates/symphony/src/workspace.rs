@@ -17,12 +17,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::{Location, ResultExt, ensure};
+use snafu::{Location, ensure};
 use tracing::{info, warn};
 
 use crate::{
     config::RepoConfig,
-    error::{IoSnafu, Result, SymphonyError},
+    error::{Result, SymphonyError},
 };
 
 #[derive(Debug, Clone)]
@@ -107,7 +107,7 @@ impl WorkspaceManager {
             .expect("checked workspace_root above");
         let branch = branch_name(issue_number, issue_title);
         let path = workspace_root.join(&branch);
-        let (repo, _) = self.ensure_repo_checkout(repo)?;
+        let (checkout, _) = self.ensure_repo_checkout(repo)?;
 
         if path.exists() {
             if Self::invalid_existing_worktree(&path) {
@@ -116,8 +116,17 @@ impl WorkspaceManager {
                     branch = %branch,
                     "removing invalid existing symphony worktree before recreation"
                 );
-                fs::remove_dir_all(&path).context(IoSnafu)?;
-                if let Ok(wt) = repo.find_worktree(&branch) {
+                fs::remove_dir_all(&path).map_err(|source| SymphonyError::WorkspaceIo {
+                    message: format!(
+                        "failed to remove invalid worktree {} for repo {} branch {}",
+                        path.display(),
+                        repo.name,
+                        branch
+                    ),
+                    source,
+                    location: Location::new(file!(), line!(), column!()),
+                })?;
+                if let Ok(wt) = checkout.find_worktree(&branch) {
                     let _ = wt.prune(Some(
                         git2::WorktreePruneOptions::new().valid(false).locked(false),
                     ));
@@ -135,7 +144,7 @@ impl WorkspaceManager {
             source,
             location: Location::new(file!(), line!(), column!()),
         })?;
-        let head_ref = repo.head().map_err(|source| SymphonyError::Git {
+        let head_ref = checkout.head().map_err(|source| SymphonyError::Git {
             source,
             location: Location::new(file!(), line!(), column!()),
         })?;
@@ -146,9 +155,9 @@ impl WorkspaceManager {
                 location: Location::new(file!(), line!(), column!()),
             })?;
 
-        let branch_ref = match repo.branch(&branch, &head, false) {
+        let branch_ref = match checkout.branch(&branch, &head, false) {
             Ok(branch_ref) => branch_ref,
-            Err(err) if err.code() == git2::ErrorCode::Exists => repo
+            Err(err) if err.code() == git2::ErrorCode::Exists => checkout
                 .find_branch(&branch, git2::BranchType::Local)
                 .map_err(|source| SymphonyError::Git {
                     source,
@@ -165,7 +174,8 @@ impl WorkspaceManager {
         let reference = branch_ref.into_reference();
         let mut options = git2::WorktreeAddOptions::new();
         options.reference(Some(&reference));
-        repo.worktree(&branch, &path, Some(&options))
+        checkout
+            .worktree(&branch, &path, Some(&options))
             .map_err(|source| SymphonyError::Git {
                 source,
                 location: Location::new(file!(), line!(), column!()),
