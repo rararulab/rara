@@ -95,47 +95,68 @@ const STREAM_SPLIT_THRESHOLD: usize = 3800;
 
 /// Single tool's progress state within a streaming turn.
 struct ToolProgress {
-    id:       String,
-    name:     String,
-    summary:  String,
-    finished: bool,
-    success:  bool,
+    id:         String,
+    name:       String,
+    summary:    String,
+    started_at: Instant,
+    finished:   bool,
+    success:    bool,
+    duration:   Option<std::time::Duration>,
 }
 
 /// Progress message state for tool execution feedback.
 struct ProgressMessage {
-    message_id: Option<MessageId>,
-    tools:      Vec<ToolProgress>,
-    last_edit:  Instant,
+    message_id:     Option<MessageId>,
+    tools:          Vec<ToolProgress>,
+    last_edit:      Instant,
+    turn_started:   Instant,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id: None,
-            tools:      Vec::new(),
-            last_edit:  Instant::now()
+            message_id:     None,
+            tools:          Vec::new(),
+            last_edit:      Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
+            turn_started:   Instant::now(),
         }
     }
 }
 
 /// Format a single tool-progress line.
+/// Format a duration as a compact human-readable string.
+fn format_duration_compact(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 1 {
+        format!("{}ms", d.as_millis())
+    } else if secs < 60 {
+        format!("{}.{}s", secs, d.subsec_millis() / 100)
+    } else {
+        format!("{}m{}s", secs / 60, secs % 60)
+    }
+}
+
 fn format_tool_line(t: &ToolProgress) -> String {
     let label = if t.summary.is_empty() {
         t.name.clone()
     } else {
-        format!("{}: {}", t.name, t.summary)
+        format!("[{}] {}", t.name, t.summary)
     };
     if t.finished {
+        let time = t
+            .duration
+            .map(|d| format!(" ({})", format_duration_compact(d)))
+            .unwrap_or_default();
         if t.success {
-            format!("\u{2705} {label}")
+            format!("\u{2705} {label}{time}")
         } else {
-            format!("\u{274c} {label}")
+            format!("\u{274c} {label}{time}")
         }
     } else {
-        format!("\u{1f527} {label}...")
+        let elapsed = format_duration_compact(t.started_at.elapsed());
+        format!("\u{1f527} {label}... {elapsed}")
     }
 }
 
@@ -143,23 +164,66 @@ fn format_tool_line(t: &ToolProgress) -> String {
 ///
 /// When there are more than 5 tools, older completed steps are collapsed into a
 /// single "\u{22ef} N earlier steps" line to keep the message compact.
-fn render_progress(tools: &[ToolProgress]) -> String {
+fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) -> String {
+    let in_progress_count = tools.iter().filter(|t| !t.finished).count();
+    let finished_count = tools.iter().filter(|t| t.finished).count();
     let total = tools.len();
-    if total <= 5 {
-        return tools
-            .iter()
-            .map(format_tool_line)
-            .collect::<Vec<_>>()
-            .join("\n");
+
+    // Header: show concurrent count when multiple tools running.
+    let mut lines = Vec::new();
+    if in_progress_count > 1 {
+        lines.push(format!("\u{26a1} {in_progress_count} tools running"));
     }
 
-    let mut lines = Vec::new();
-    let finished_count = tools.iter().filter(|t| t.finished).count();
+    if total <= 5 {
+        for t in tools {
+            lines.push(format_tool_line(t));
+        }
+        // Footer: total elapsed time.
+        if in_progress_count > 0 {
+            lines.push(format!("\u{23f1} {}", format_duration_compact(turn_elapsed)));
+        }
+        return lines.join("\n");
+    }
+
     let last_finished: Vec<_> = tools.iter().filter(|t| t.finished).rev().take(2).collect();
     let collapsed = finished_count.saturating_sub(last_finished.len());
 
     if collapsed > 0 {
-        lines.push(format!("\u{22ef} {} earlier steps", collapsed));
+        // Build category breakdown with total time: "⋯ 8×bash, 5×search (12.3s)"
+        let collapsed_tools: Vec<_> = tools
+            .iter()
+            .filter(|t| t.finished)
+            .take(collapsed)
+            .collect();
+        let mut counts: Vec<(&str, usize)> = Vec::new();
+        for t in &collapsed_tools {
+            if let Some(entry) = counts.iter_mut().find(|(n, _)| *n == t.name.as_str()) {
+                entry.1 += 1;
+            } else {
+                counts.push((&t.name, 1));
+            }
+        }
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        let parts: Vec<_> = counts
+            .iter()
+            .take(4)
+            .map(|(name, count)| format!("{count}\u{00d7}{name}"))
+            .collect();
+        let remaining: usize = counts.iter().skip(4).map(|(_, c)| c).sum();
+        let mut breakdown = parts.join(", ");
+        if remaining > 0 {
+            breakdown.push_str(&format!(", +{remaining}"));
+        }
+        // Sum durations of collapsed tools.
+        let total_dur: std::time::Duration = collapsed_tools
+            .iter()
+            .filter_map(|t| t.duration)
+            .sum();
+        if !total_dur.is_zero() {
+            breakdown.push_str(&format!(" ({})", format_duration_compact(total_dur)));
+        }
+        lines.push(format!("\u{22ef} {breakdown}"));
     }
 
     // Last 2 finished (in original order).
@@ -170,6 +234,11 @@ fn render_progress(tools: &[ToolProgress]) -> String {
     // In-progress tools.
     for t in tools.iter().filter(|t| !t.finished) {
         lines.push(format_tool_line(t));
+    }
+
+    // Footer: total elapsed time (only while tools are still running).
+    if in_progress_count > 0 {
+        lines.push(format!("\u{23f1} {}", format_duration_compact(turn_elapsed)));
     }
 
     lines.join("\n")
@@ -967,7 +1036,7 @@ async fn handle_update(
     let raw = if let Some(photos) = msg.photo() {
         if let Some(largest) = photos.last() {
             match download_and_compress_photo(&bot, &largest.file.id).await {
-                Ok((media_type, b64_data)) => {
+                Ok((media_type, b64_data, original_path, compressed_path)) => {
                     // Combine text + image into multimodal content.
                     let text = match raw.content {
                         MessageContent::Text(ref t) => t.clone(),
@@ -981,8 +1050,18 @@ async fn handle_update(
                         media_type,
                         data: b64_data,
                     });
+                    let mut updated_metadata = raw.metadata.clone();
+                    updated_metadata.insert(
+                        "image_original_path".to_owned(),
+                        serde_json::Value::String(original_path.to_string_lossy().into_owned()),
+                    );
+                    updated_metadata.insert(
+                        "image_compressed_path".to_owned(),
+                        serde_json::Value::String(compressed_path.to_string_lossy().into_owned()),
+                    );
                     RawPlatformMessage {
                         content: MessageContent::Multimodal(blocks),
+                        metadata: updated_metadata,
                         ..raw
                     }
                 }
@@ -1207,8 +1286,10 @@ fn spawn_stream_forwarder(
                                 id,
                                 name: display,
                                 summary,
+                                started_at: Instant::now(),
                                 finished: false,
                                 success: false,
+                                duration: None,
                             });
 
                             // Send typing indicator before the first progress message.
@@ -1218,7 +1299,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = render_progress(&progress.tools);
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1245,9 +1326,10 @@ fn spawn_stream_forwarder(
                             if let Some(tp) = progress.tools.iter_mut().find(|t| t.id == id) {
                                 tp.finished = true;
                                 tp.success = success;
+                                tp.duration = Some(tp.started_at.elapsed());
                             }
 
-                            let text = render_progress(&progress.tools);
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1326,7 +1408,7 @@ fn spawn_stream_forwarder(
 
                     // Flush throttled progress updates.
                     if progress_dirty && !progress.tools.is_empty() {
-                        let text = render_progress(&progress.tools);
+                        let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot
@@ -1609,11 +1691,12 @@ pub fn telegram_to_raw_platform_message(
 
 /// Download a photo from Telegram and compress it for LLM vision input.
 ///
-/// Returns `(media_type, base64_data)`.
+/// Returns `(media_type, base64_data, original_path, compressed_path)`.
+/// Both the original and compressed images are saved to `images_dir()`.
 async fn download_and_compress_photo(
     bot: &teloxide::Bot,
     file_id: &teloxide::types::FileId,
-) -> anyhow::Result<(String, String)> {
+) -> anyhow::Result<(String, String, std::path::PathBuf, std::path::PathBuf)> {
     use base64::Engine;
     use rara_kernel::llm::image::{DEFAULT_MAX_EDGE, DEFAULT_QUALITY};
     use teloxide::net::Download;
@@ -1627,7 +1710,31 @@ async fn download_and_compress_photo(
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
 
-    Ok((media_type, b64))
+    // Determine file extension from media type.
+    let ext = match media_type.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        _ => "bin",
+    };
+
+    // Save original and compressed images to images_dir.
+    let images_dir = rara_paths::images_dir();
+    tokio::fs::create_dir_all(images_dir).await?;
+
+    let id = uuid::Uuid::new_v4();
+    let original_path = images_dir.join(format!("photo_{id}.{ext}"));
+    let compressed_path = images_dir.join(format!("photo_{id}_compressed.{ext}"));
+
+    tokio::fs::write(&original_path, &buf).await?;
+    tokio::fs::write(&compressed_path, &compressed).await?;
+
+    tracing::info!(
+        original = %original_path.display(),
+        compressed = %compressed_path.display(),
+        "saved uploaded photo to images_dir"
+    );
+
+    Ok((media_type, b64, original_path, compressed_path))
 }
 
 pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }

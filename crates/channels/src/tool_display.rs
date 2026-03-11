@@ -18,8 +18,38 @@
 pub fn tool_display_name(raw: &str) -> &str {
     match raw {
         "shell_execute" => "shell",
+        "bash" => "bash",
         "web_search" => "search",
-        "web_fetch" => "fetch",
+        "web_fetch" | "http-fetch" => "fetch",
+        "read-file" => "read",
+        "write-file" => "write",
+        "edit-file" => "edit",
+        "find-files" => "find",
+        "list-directory" => "ls",
+        "grep" => "grep",
+        "screenshot" => "screenshot",
+        "send-image" => "send-image",
+        "send-email" => "email",
+        "memory_search" => "memory-search",
+        "memory_write" => "memory-write",
+        "tape-handoff" => "tape-handoff",
+        "tape-info" => "tape-info",
+        "user-note" => "note",
+        "settings" => "settings",
+        "composio" => "composio",
+        "list-skills" => "skills",
+        "create-skill" => "skill-create",
+        "delete-skill" => "skill-delete",
+        "install-mcp-server" => "mcp-install",
+        "list-mcp-servers" => "mcp-list",
+        "remove-mcp-server" => "mcp-remove",
+        "dispatch-rara" => "dispatch",
+        "list-sessions" => "sessions",
+        "read-tape" => "tape-read",
+        "write-user-note" => "note-write",
+        "distill-user-notes" => "note-distill",
+        "update-soul-state" => "soul-update",
+        "evolve-soul" => "soul-evolve",
         other => other,
     }
 }
@@ -70,17 +100,38 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
 
     let name = tool_display_name(tool_name).to_owned();
     let raw = match tool_name {
+        "bash" => arguments.get("command").and_then(|v| v.as_str()),
         "web_search" => arguments.get("query").and_then(|v| v.as_str()),
-        "web_fetch" => arguments.get("url").and_then(|v| v.as_str()),
-        "read-file" | "write-file" => arguments.get("path").and_then(|v| v.as_str()),
-        _ => ["query", "command", "input", "path", "url"]
+        "web_fetch" | "http-fetch" => arguments.get("url").and_then(|v| v.as_str()),
+        "read-file" | "write-file" | "edit-file" => {
+            arguments.get("path").and_then(|v| v.as_str())
+        }
+        "find-files" | "list-directory" => arguments.get("path").and_then(|v| v.as_str()),
+        "grep" => arguments.get("pattern").and_then(|v| v.as_str()),
+        "memory_search" => arguments.get("query").and_then(|v| v.as_str()),
+        "memory_write" => arguments.get("key").and_then(|v| v.as_str()),
+        "tape-handoff" => arguments.get("summary").and_then(|v| v.as_str()),
+        "tape-info" => arguments.get("session_id").and_then(|v| v.as_str()),
+        "send-email" => arguments
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .or_else(|| arguments.get("to").and_then(|v| v.as_str())),
+        "user-note" | "write-user-note" => arguments
+            .get("title")
+            .and_then(|v| v.as_str())
+            .or_else(|| arguments.get("key").and_then(|v| v.as_str())),
+        "dispatch-rara" => arguments.get("instruction").and_then(|v| v.as_str()),
+        "read-tape" => arguments.get("session_id").and_then(|v| v.as_str()),
+        "create-skill" | "delete-skill" => arguments.get("name").and_then(|v| v.as_str()),
+        "settings" => arguments.get("action").and_then(|v| v.as_str()),
+        _ => ["query", "command", "input", "path", "url", "name", "key"]
             .iter()
             .find_map(|key| arguments.get(*key).and_then(|v| v.as_str()))
             .or_else(|| first_string_value(arguments)),
     };
 
     let summary = match raw {
-        Some(s) => truncate_summary(s, 60),
+        Some(s) => truncate_summary(s, 80),
         None => String::new(),
     };
 
@@ -146,7 +197,11 @@ mod tests {
         assert_eq!(tool_display_name("shell_execute"), "shell");
         assert_eq!(tool_display_name("web_search"), "search");
         assert_eq!(tool_display_name("web_fetch"), "fetch");
-        assert_eq!(tool_display_name("read-file"), "read-file");
+        assert_eq!(tool_display_name("read-file"), "read");
+        assert_eq!(tool_display_name("bash"), "bash");
+        assert_eq!(tool_display_name("grep"), "grep");
+        assert_eq!(tool_display_name("tape-handoff"), "tape-handoff");
+        assert_eq!(tool_display_name("memory_search"), "memory-search");
     }
 
     #[test]

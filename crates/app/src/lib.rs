@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod boot;
+mod context_mode;
 pub mod config_sync;
 pub mod flatten;
 pub mod gateway;
@@ -344,6 +345,7 @@ pub async fn start_with_options(
         )),
         io,
         rara.knowledge_service.clone(),
+        rara.output_interceptor.clone(),
         mcp_tool_provider,
     );
 

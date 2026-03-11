@@ -160,6 +160,8 @@ pub struct Kernel {
     started_at:       Timestamp,
     /// Knowledge layer service for long-term memory extraction.
     knowledge:        crate::memory::knowledge::KnowledgeServiceRef,
+    /// Optional hook to transform tool outputs before sending to the LLM.
+    output_interceptor: Option<crate::tool::OutputInterceptorRef>,
 }
 
 impl Kernel {
@@ -177,6 +179,7 @@ impl Kernel {
         security: SecurityRef,
         io: IOSubsystem,
         knowledge: crate::memory::knowledge::KnowledgeServiceRef,
+        output_interceptor: Option<crate::tool::OutputInterceptorRef>,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
@@ -225,6 +228,7 @@ impl Kernel {
             sharded_queue,
             started_at: Timestamp::now(),
             knowledge,
+            output_interceptor,
         }
     }
 
@@ -1686,6 +1690,69 @@ impl Kernel {
             }
         }
 
+        // -- Phase 5b: Persist image metadata to session -------------------------
+        //
+        // If the inbound message carries image paths (from Telegram adapter),
+        // extract the image ID from the filename and merge it into the
+        // SessionEntry.metadata.images map so tools can discover uploaded images.
+        if let (Some(original), Some(compressed)) = (
+            msg.metadata.get("image_original_path").and_then(|v| v.as_str()),
+            msg.metadata.get("image_compressed_path").and_then(|v| v.as_str()),
+        ) {
+            // Extract image ID from filename: "photo_{uuid}.jpg" → uuid part
+            fn extract_image_id(path: &str) -> Option<String> {
+                let stem = std::path::Path::new(path).file_stem()?.to_str()?;
+                let id = stem.strip_prefix("photo_")?;
+                let id = id.strip_suffix("_compressed").unwrap_or(id);
+                Some(id.to_owned())
+            }
+
+            if let Some(image_id) = extract_image_id(original) {
+                match self.session_index.get_session(&session_key).await {
+                    Ok(Some(mut entry)) => {
+                        let mut meta = entry.metadata.clone().unwrap_or_else(|| serde_json::json!({}));
+                        let images = meta
+                            .as_object_mut()
+                            .unwrap()
+                            .entry("images")
+                            .or_insert_with(|| serde_json::json!({}));
+                        if let Some(images_map) = images.as_object_mut() {
+                            images_map.insert(
+                                image_id.clone(),
+                                serde_json::json!({
+                                    "original_path": original,
+                                    "compressed_path": compressed,
+                                }),
+                            );
+                        }
+                        entry.metadata = Some(meta);
+                        match self.session_index.update_session(&entry).await {
+                            Ok(_) => {
+                                info!(
+                                    session_key = %session_key,
+                                    image_id = %image_id,
+                                    "persisted image metadata to session"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    session_key = %session_key,
+                                    error = %e,
+                                    "failed to update session with image metadata"
+                                );
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        warn!(session_key = %session_key, "session not found for image metadata update");
+                    }
+                    Err(e) => {
+                        warn!(session_key = %session_key, error = %e, "failed to get session for image metadata");
+                    }
+                }
+            }
+        }
+
         // -- Phase 6: Stream setup -----------------------------------------------
         //
         // Why: The stream allows real-time token-by-token delivery to the
@@ -1702,6 +1769,7 @@ impl Kernel {
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(&self.io.stream_hub());
+        let output_interceptor = self.output_interceptor.clone();
 
         let milestone_tx = self
             .process_table
@@ -1825,6 +1893,7 @@ impl Kernel {
                     effective_tape,
                     tool_context,
                     milestone_tx,
+                    output_interceptor,
                 )
                 .await;
 

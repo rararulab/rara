@@ -38,6 +38,8 @@ mod read_file;
 mod screenshot;
 mod send_email;
 mod send_image;
+mod session_info;
+mod set_avatar;
 mod settings;
 mod skill_tools;
 mod tape_handoff;
@@ -64,6 +66,8 @@ use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
 use send_email::SendEmailTool;
 use send_image::SendImageTool;
+use session_info::SessionInfoTool;
+use set_avatar::SetAvatarTool;
 use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use tape_handoff::TapeHandoffTool;
@@ -78,6 +82,7 @@ pub struct ToolDeps {
     pub skill_registry:         rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
     pub tape_service:           rara_kernel::memory::TapeService,
+    pub session_index:          rara_kernel::session::SessionIndexRef,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -118,6 +123,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendImageTool::new()),
+        Arc::new(SetAvatarTool::new(deps.settings.clone())),
         Arc::new(SettingsTool::new(deps.settings.clone())),
         Arc::new(ComposioTool::from_auth_provider(
             deps.composio_auth_provider,
@@ -137,6 +143,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(TapeHandoffTool::new(deps.tape_service.clone())),
         // User memory
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
+        // Session info
+        Arc::new(SessionInfoTool::new(deps.session_index)),
         // Mita-exclusive tools
         list_sessions,
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),

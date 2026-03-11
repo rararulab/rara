@@ -60,6 +60,20 @@ pub trait DynamicToolProvider: Send + Sync {
 /// Shared reference to a dynamic tool provider.
 pub type DynamicToolProviderRef = Arc<dyn DynamicToolProvider>;
 
+/// Intercepts tool output before it is returned to the LLM.
+///
+/// Used for transparent output compression (e.g. indexing large outputs into
+/// a knowledge base and returning a compact reference).
+#[async_trait]
+pub trait OutputInterceptor: Send + Sync {
+    /// Optionally transform a tool's output. Receives the tool name and the
+    /// original output; returns the (possibly replaced) output.
+    async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput;
+}
+
+/// Shared reference to an output interceptor.
+pub type OutputInterceptorRef = Arc<dyn OutputInterceptor>;
+
 /// Shared reference to the [`ToolRegistry`].
 pub type ToolRegistryRef = Arc<ToolRegistry>;
 
@@ -198,6 +212,8 @@ impl Default for ToolRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
     use crate::identity::{KernelUser, Permission, Role};
 
@@ -278,5 +294,30 @@ mod tests {
         assert!(filtered.get("read-file").is_some());
         assert!(filtered.get("bash").is_none());
         assert!(filtered.get("write-file").is_none());
+    }
+
+    struct TestInterceptor {
+        called: AtomicBool,
+    }
+
+    #[async_trait]
+    impl OutputInterceptor for TestInterceptor {
+        async fn intercept(&self, _tool_name: &str, _output: ToolOutput) -> ToolOutput {
+            self.called.store(true, Ordering::SeqCst);
+            ToolOutput::from(serde_json::json!({ "intercepted": true }))
+        }
+    }
+
+    #[tokio::test]
+    async fn output_interceptor_is_called() {
+        let interceptor = TestInterceptor {
+            called: AtomicBool::new(false),
+        };
+
+        let output = ToolOutput::from(serde_json::json!({ "data": "original" }));
+        let result = interceptor.intercept("test-tool", output).await;
+
+        assert!(interceptor.called.load(Ordering::SeqCst));
+        assert_eq!(result.json["intercepted"], true);
     }
 }
