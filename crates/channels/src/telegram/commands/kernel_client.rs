@@ -231,14 +231,19 @@ impl BotServiceClient for KernelBotServiceClient {
             created_at: now,
             updated_at: now,
         };
-        self.sessions.create_session(&entry).await.context(SessionSnafu)?;
+        let created = self.sessions.create_session(&entry).await.context(SessionSnafu)?;
 
-        self.tape
+        if let Err(e) = self
+            .tape
             .checkout_anchor(session_key, anchor_name, &new_key.to_string())
             .await
-            .context(TapeSnafu {
+        {
+            // Rollback: remove the session we just created so it doesn't dangle.
+            let _ = self.sessions.delete_session(&created.key).await;
+            return Err(e).context(TapeSnafu {
                 context: "checkout anchor",
-            })?;
+            });
+        }
 
         Ok(new_key.to_string())
     }

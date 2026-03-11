@@ -162,27 +162,41 @@ impl TapeTool {
     }
 
     async fn exec_checkout(&self, anchor_name: &str) -> anyhow::Result<serde_json::Value> {
-        let new_tape = format!(
-            "{}__checkout_{}",
-            self.tape_name,
-            anchor_name.replace('/', "_")
-        );
-
-        self.tape_service
-            .checkout_anchor(&self.tape_name, anchor_name, &new_tape)
+        // Validate that the anchor exists without creating a tape.
+        // TapeTool does not have access to SessionIndex, so it cannot create a
+        // proper session + tape pair.  Creating the tape alone would produce an
+        // orphan (nothing points to it and the LLM context doesn't switch).
+        // Instead we return anchor metadata so the user can fork via /checkout.
+        let anchors = self
+            .tape_service
+            .anchors(&self.tape_name, usize::MAX)
             .await
-            .map_err(|e| anyhow::anyhow!("checkout failed: {e}"))?;
+            .context("checkout: list anchors")?;
 
-        Ok(serde_json::json!({
-            "status": "checked_out",
-            "from_anchor": anchor_name,
-            "new_tape": new_tape,
-            "message": format!(
-                "Context forked at anchor '{}'. New session tape created. \
-                 Your next turn will use the forked context.",
-                anchor_name
-            )
-        }))
+        let found = anchors.iter().find(|a| a.name == anchor_name);
+
+        match found {
+            Some(_anchor) => Ok(serde_json::json!({
+                "status": "anchor_found",
+                "anchor": anchor_name,
+                "message": format!(
+                    "Anchor '{}' found. Use /checkout {} in chat to fork from this point.",
+                    anchor_name, anchor_name
+                )
+            })),
+            None => {
+                let names: Vec<&str> = anchors.iter().map(|a| a.name.as_str()).collect();
+                Ok(serde_json::json!({
+                    "status": "anchor_not_found",
+                    "anchor": anchor_name,
+                    "available_anchors": names,
+                    "message": format!(
+                        "Anchor '{}' not found. Available anchors: {:?}",
+                        anchor_name, names
+                    )
+                }))
+            }
+        }
     }
 }
 
