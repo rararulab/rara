@@ -17,7 +17,7 @@
 //! Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 //! like `reasoning_content` that `async-openai` doesn't expose.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -65,11 +65,23 @@ struct ResolvedConfig {
     api_key:  String,
 }
 
+/// SSE idle timeout — if no event is received within this duration, abort.
+const SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
 impl OpenAiDriver {
+    /// Build a reqwest client with connect and overall read timeouts.
+    fn build_http_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .expect("failed to build HTTP client")
+    }
+
     /// Create a new driver targeting the given API base URL.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            client:        reqwest::Client::new(),
+            client:        Self::build_http_client(),
             config_source: OpenAiDriverConfigSource::Static {
                 base_url: base_url.into(),
                 api_key:  api_key.into(),
@@ -87,7 +99,7 @@ impl OpenAiDriver {
         provider_name: impl Into<String>,
     ) -> Self {
         Self {
-            client:        reqwest::Client::new(),
+            client:        Self::build_http_client(),
             config_source: OpenAiDriverConfigSource::SettingsBacked {
                 settings,
                 provider_name: provider_name.into(),
@@ -246,20 +258,35 @@ impl LlmDriver for OpenAiDriver {
         let mut event_stream = response.bytes_stream().eventsource();
         let mut acc = StreamAccumulator::new();
 
-        while let Some(event_result) = event_stream.next().await {
-            let event = event_result.map_err(|e| KernelError::Provider {
-                message: format!("SSE stream error: {e}").into(),
-            })?;
+        loop {
+            let maybe_event = tokio::time::timeout(
+                SSE_IDLE_TIMEOUT,
+                event_stream.next(),
+            )
+            .await;
 
-            if event.data == "[DONE]" {
-                break;
+            match maybe_event {
+                Ok(Some(event_result)) => {
+                    let event = event_result.map_err(|e| KernelError::Provider {
+                        message: format!("SSE stream error: {e}").into(),
+                    })?;
+                    if event.data == "[DONE]" {
+                        break;
+                    }
+                    let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
+                        continue;
+                    };
+                    acc.process_chunk(&chunk, &tx).await;
+                }
+                Ok(None) => break,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        timeout_secs = SSE_IDLE_TIMEOUT.as_secs(),
+                        "SSE stream idle timeout — no event received, aborting stream"
+                    );
+                    return Err(KernelError::RetryableServer);
+                }
             }
-
-            let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
-                continue;
-            };
-
-            acc.process_chunk(&chunk, &tx).await;
         }
 
         Ok(acc.finalize(&tx, request.model.clone()).await)
