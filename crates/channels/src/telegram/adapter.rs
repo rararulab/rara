@@ -1505,10 +1505,13 @@ pub fn telegram_to_raw_platform_message(
     bot_username: &str,
 ) -> Option<RawPlatformMessage> {
     // Extract text — try text first, then caption (for photos/documents).
-    let raw_text = msg.text().or_else(|| msg.caption())?;
-    if raw_text.trim().is_empty() {
+    // Photos without caption still produce a valid message (empty text);
+    // only skip when there is neither text nor a photo attachment.
+    let raw_text = msg.text().or_else(|| msg.caption());
+    if raw_text.is_none() && msg.photo().is_none() {
         return None;
     }
+    let raw_text = raw_text.unwrap_or_default();
 
     // Strip @mention from text in group chats.
     let text = if is_group_chat(msg) {
@@ -1522,7 +1525,7 @@ pub fn telegram_to_raw_platform_message(
         raw_text.to_owned()
     };
 
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && msg.photo().is_none() {
         return None;
     }
 
