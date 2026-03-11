@@ -61,11 +61,16 @@ usearch = "2"
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
+chrono.workspace = true
 common-telemetry.workspace = true
+dashmap = "6"
 rara-domain-shared = { workspace = true, features = ["testing"] }
 rara-kernel = { path = ".", features = ["testing"] }
+serde_json.workspace = true
 tempfile.workspace = true
 test-case = "^3"
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 [lints]
 workspace = true
