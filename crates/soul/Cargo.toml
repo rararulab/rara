@@ -1,0 +1,26 @@
+[package]
+name = "rara-soul"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Structured, evolvable persona system for rara agents"
+
+[dependencies]
+rara-paths.workspace = true
+jiff.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+snafu.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

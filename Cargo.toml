@@ -128,6 +128,7 @@ members = [
     "crates/integrations/composio",
     "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
+    "crates/soul",
     "crates/symphony",
 ]
 
@@ -253,6 +254,7 @@ rara-pg-credential-store = { path = "crates/integrations/pg-credential-store" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
+rara-soul = { path = "crates/soul" }
 rara-symphony = { path = "crates/symphony" }
 
 yunara-store = { path = "crates/common/yunara-store" }
