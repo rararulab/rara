@@ -18,10 +18,12 @@
 //! them with compact references.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_kernel::tool::{OutputInterceptor, ToolOutput};
 use rara_mcp::manager::mgr::McpManager;
+use serde::Serialize;
 use tracing::{debug, warn};
 
 /// Name of the context-mode MCP server in the registry.
@@ -36,9 +38,52 @@ const DEFAULT_THRESHOLD: usize = 4096;
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Runtime statistics for the context-mode interceptor.
+pub struct InterceptorStats {
+    /// Number of outputs successfully indexed.
+    pub intercepted_count: AtomicU64,
+    /// Number of index failures (fell back to original output).
+    pub fallback_count: AtomicU64,
+    /// Total original payload bytes before indexing.
+    pub bytes_before: AtomicU64,
+    /// Total compact reference bytes after indexing.
+    pub bytes_after: AtomicU64,
+}
+
+impl InterceptorStats {
+    fn new() -> Self {
+        Self {
+            intercepted_count: AtomicU64::new(0),
+            fallback_count: AtomicU64::new(0),
+            bytes_before: AtomicU64::new(0),
+            bytes_after: AtomicU64::new(0),
+        }
+    }
+
+    /// Take a point-in-time snapshot of the stats.
+    pub fn stats(&self) -> InterceptorStatsSnapshot {
+        InterceptorStatsSnapshot {
+            intercepted_count: self.intercepted_count.load(Ordering::Relaxed),
+            fallback_count: self.fallback_count.load(Ordering::Relaxed),
+            bytes_before: self.bytes_before.load(Ordering::Relaxed),
+            bytes_after: self.bytes_after.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Point-in-time snapshot of [`InterceptorStats`].
+#[derive(Debug, Clone, Serialize)]
+pub struct InterceptorStatsSnapshot {
+    pub intercepted_count: u64,
+    pub fallback_count: u64,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+}
+
 pub struct ContextModeInterceptor {
     manager:   McpManager,
     threshold: usize,
+    stats:     Arc<InterceptorStats>,
 }
 
 impl ContextModeInterceptor {
@@ -46,12 +91,18 @@ impl ContextModeInterceptor {
         Self {
             manager,
             threshold: DEFAULT_THRESHOLD,
+            stats: Arc::new(InterceptorStats::new()),
         }
     }
 
     pub fn with_threshold(mut self, threshold: usize) -> Self {
         self.threshold = threshold;
         self
+    }
+
+    /// Returns a shared handle to the runtime statistics.
+    pub fn stats(&self) -> Arc<InterceptorStats> {
+        Arc::clone(&self.stats)
     }
 }
 
@@ -93,13 +144,20 @@ impl OutputInterceptor for ContextModeInterceptor {
                     "indexed large tool output via context-mode"
                 );
                 let summary = build_summary(tool_name, &json_str);
-                ToolOutput::from(serde_json::json!({
+                let replacement = serde_json::json!({
                     "indexed": true,
                     "index_id": &index_id,
                     "original_bytes": json_str.len(),
                     "summary": summary,
                     "hint": "Use the context-mode search tool with relevant queries to retrieve details from this output."
-                }))
+                });
+                let replacement_str = replacement.to_string();
+
+                self.stats.intercepted_count.fetch_add(1, Ordering::Relaxed);
+                self.stats.bytes_before.fetch_add(json_str.len() as u64, Ordering::Relaxed);
+                self.stats.bytes_after.fetch_add(replacement_str.len() as u64, Ordering::Relaxed);
+
+                ToolOutput::from(replacement)
             }
             Err(e) => {
                 warn!(
@@ -107,6 +165,7 @@ impl OutputInterceptor for ContextModeInterceptor {
                     error = %e,
                     "context-mode index failed, returning original output"
                 );
+                self.stats.fallback_count.fetch_add(1, Ordering::Relaxed);
                 output
             }
         }

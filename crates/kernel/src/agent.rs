@@ -674,7 +674,7 @@ pub(crate) async fn run_agent_loop(
     tape_name: &str,
     tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
-    output_interceptor: Option<crate::tool::OutputInterceptorRef>,
+    output_interceptor: crate::tool::DynamicOutputInterceptor,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1216,10 +1216,13 @@ pub(crate) async fn run_agent_loop(
                             Ok(result) => {
                                 tool_span.record("success", true);
                                 let dur = tool_start.elapsed().as_millis() as u64;
-                                let result = if let Some(ref interceptor) = output_interceptor {
-                                    interceptor.intercept(&name, result).await
-                                } else {
-                                    result
+                                let result = {
+                                    let guard = output_interceptor.read().await;
+                                    if let Some(ref interceptor) = *guard {
+                                        interceptor.intercept(&name, result).await
+                                    } else {
+                                        result
+                                    }
                                 };
                                 (true, result, None::<String>, dur)
                             }
