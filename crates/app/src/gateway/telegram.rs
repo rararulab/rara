@@ -18,8 +18,6 @@
 //! (separate from rara's bot). Only processes `/command` messages from the
 //! configured `channel_id`; everything else is silently ignored.
 
-use std::sync::Arc;
-
 use teloxide::{
     payloads::{GetUpdatesSetters, SendMessageSetters},
     prelude::*,
@@ -30,11 +28,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::{
-    detector::UpdateState,
-    notifier::UpdateNotifier,
-    supervisor::SupervisorHandle,
-};
+use super::{detector::UpdateState, supervisor::SupervisorHandle};
 
 /// Lightweight Telegram polling loop for gateway management commands.
 pub struct GatewayTelegramListener {
@@ -42,7 +36,6 @@ pub struct GatewayTelegramListener {
     channel_id:        i64,
     supervisor_handle: SupervisorHandle,
     update_state_rx:   watch::Receiver<UpdateState>,
-    notifier:          Arc<UpdateNotifier>,
     shutdown:          CancellationToken,
     health_url:        String,
 }
@@ -53,7 +46,6 @@ impl GatewayTelegramListener {
         channel_id: i64,
         supervisor_handle: SupervisorHandle,
         update_state_rx: watch::Receiver<UpdateState>,
-        notifier: Arc<UpdateNotifier>,
         shutdown: CancellationToken,
         health_url: String,
     ) -> Self {
@@ -62,35 +54,32 @@ impl GatewayTelegramListener {
             channel_id,
             supervisor_handle,
             update_state_rx,
-            notifier,
             shutdown,
             health_url,
         }
     }
 
-    /// Run the polling loop until cancelled.
-    pub async fn run(self, cancel: CancellationToken) {
+    /// Run the polling loop until the shutdown token is cancelled.
+    pub async fn run(self) {
+        let cancel = &self.shutdown;
         // Delete any stale webhook so getUpdates works.
         if let Err(e) = self.bot.delete_webhook().await {
             warn!(error = %e, "gateway telegram: failed to delete webhook");
         }
 
-        let me = match self.bot.get_me().await {
+        match self.bot.get_me().await {
             Ok(me) => {
                 info!(
                     bot_id = me.id.0,
                     bot_username = ?me.username,
                     "gateway telegram: bot identity verified"
                 );
-                me
             }
             Err(e) => {
                 warn!(error = %e, "gateway telegram: failed to verify bot — listener will not start");
                 return;
             }
         };
-        let bot_username = me.username.clone().unwrap_or_default();
-
         let mut offset: Option<i32> = None;
 
         loop {
@@ -143,20 +132,18 @@ impl GatewayTelegramListener {
                     continue;
                 };
 
-                // Strip bot mention suffix (e.g. "/restart@mybot" -> "/restart").
                 let text = raw_text.trim();
-                let cmd_text = if let Some(stripped) = text.strip_suffix(&format!("@{bot_username}")) {
-                    stripped
-                } else {
-                    text
-                };
-
-                if !cmd_text.starts_with('/') {
+                if !text.starts_with('/') {
                     continue;
                 }
 
-                let parts: Vec<&str> = cmd_text.split_whitespace().collect();
-                let command = parts[0]; // e.g. "/restart"
+                let parts: Vec<&str> = text.split_whitespace().collect();
+                // Strip @bot suffix from command token (e.g. "/restart@MyBot" → "/restart").
+                let command_raw = parts[0];
+                let command = command_raw
+                    .find('@')
+                    .map(|i| &command_raw[..i])
+                    .unwrap_or(command_raw);
                 let args = &parts[1..];
 
                 let reply = self.handle_command(command, args).await;
@@ -227,16 +214,17 @@ impl GatewayTelegramListener {
         // git fetch origin main
         let fetch = tokio::process::Command::new("git")
             .args(["fetch", "origin", "main"])
+            .current_dir(repo_dir())
             .output()
             .await;
 
         match fetch {
             Ok(o) if !o.status.success() => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
+                let stderr = html_escape(&String::from_utf8_lossy(&o.stderr));
                 return format!("<b>Sync failed</b>\n<code>git fetch</code> failed:\n<pre>{stderr}</pre>");
             }
             Err(e) => {
-                return format!("<b>Sync failed</b>\n<pre>{e}</pre>");
+                return format!("<b>Sync failed</b>\n<pre>{}</pre>", html_escape(&e.to_string()));
             }
             _ => {}
         }
@@ -244,27 +232,28 @@ impl GatewayTelegramListener {
         // git merge --ff-only origin/main
         let merge = tokio::process::Command::new("git")
             .args(["merge", "--ff-only", "origin/main"])
+            .current_dir(repo_dir())
             .output()
             .await;
 
         match merge {
             Ok(o) if o.status.success() => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
+                let stdout = html_escape(&String::from_utf8_lossy(&o.stdout));
                 let mut reply = format!("<b>Sync complete</b>\n<pre>{stdout}</pre>");
                 if do_restart {
                     match self.supervisor_handle.restart().await {
                         Ok(()) => reply.push_str("\nRestart initiated."),
-                        Err(e) => reply.push_str(&format!("\nRestart failed: <pre>{e}</pre>")),
+                        Err(e) => reply.push_str(&format!("\nRestart failed: <pre>{}</pre>", html_escape(&e.to_string()))),
                     }
                 }
                 reply
             }
             Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
+                let stderr = html_escape(&String::from_utf8_lossy(&o.stderr));
                 format!("<b>Sync failed</b>\n<code>git merge --ff-only</code> failed:\n<pre>{stderr}</pre>")
             }
             Err(e) => {
-                format!("<b>Sync failed</b>\n<pre>{e}</pre>")
+                format!("<b>Sync failed</b>\n<pre>{}</pre>", html_escape(&e.to_string()))
             }
         }
     }
@@ -275,7 +264,7 @@ impl GatewayTelegramListener {
         // Find the most recent .log file.
         let mut entries: Vec<_> = match std::fs::read_dir(logs_dir) {
             Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
-            Err(e) => return format!("<b>Logs failed</b>\n<pre>{e}</pre>"),
+            Err(e) => return format!("<b>Logs failed</b>\n<pre>{}</pre>", html_escape(&e.to_string())),
         };
         entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
 
@@ -283,21 +272,22 @@ impl GatewayTelegramListener {
             return "No log files found.".to_owned();
         };
 
-        // Read last 50 lines.
-        let content = match tokio::fs::read_to_string(latest.path()).await {
-            Ok(c) => c,
-            Err(e) => return format!("<b>Logs failed</b>\n<pre>{e}</pre>"),
+        // Read last ~4KB from the file to avoid loading huge logs into memory.
+        let tail_text = match read_tail(&latest.path(), 4096).await {
+            Ok(t) => t,
+            Err(e) => return format!("<b>Logs failed</b>\n<pre>{}</pre>", html_escape(&e.to_string())),
         };
 
-        let lines: Vec<&str> = content.lines().collect();
-        let tail: Vec<&str> = lines.iter().rev().take(50).rev().copied().collect();
-        let tail_text = tail.join("\n");
+        // Keep only complete lines (drop the first partial line after seek).
+        let lines: Vec<&str> = tail_text.lines().collect();
+        let lines = if lines.len() > 1 { &lines[1..] } else { &lines[..] };
+        let tail = lines.iter().rev().take(50).rev().copied().collect::<Vec<_>>().join("\n");
 
         // Telegram message limit is 4096 chars. Truncate if needed.
-        let truncated = if tail_text.len() > 3800 {
-            &tail_text[tail_text.len() - 3800..]
+        let truncated = if tail.len() > 3800 {
+            &tail[tail.len() - 3800..]
         } else {
-            &tail_text
+            &tail
         };
 
         format!(
@@ -357,7 +347,32 @@ impl GatewayTelegramListener {
     }
 }
 
-/// Minimal HTML escaping for log output embedded in <pre> tags.
+/// Minimal HTML escaping for output embedded in `<pre>` tags.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Read the last `max_bytes` from a file without loading it entirely.
+async fn read_tail(path: &std::path::Path, max_bytes: u64) -> Result<String, std::io::Error> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let metadata = file.metadata().await?;
+    let len = metadata.len();
+
+    if len > max_bytes {
+        file.seek(std::io::SeekFrom::End(-(max_bytes as i64))).await?;
+    }
+
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).await?;
+    Ok(buf)
+}
+
+/// Best-effort repo root detection (directory containing the running executable).
+fn repo_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
