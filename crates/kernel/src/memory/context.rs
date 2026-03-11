@@ -204,6 +204,28 @@ pub fn anchor_context(entries: &[TapEntry]) -> Option<Message> {
     Some(Message::system(body))
 }
 
+/// Extract the `summary` field from the last anchor entry in the given slice.
+///
+/// This is used to retrieve the distilled knowledge summary from a user tape's
+/// anchor state.  Returns `None` when there is no anchor or the anchor has no
+/// summary.
+pub fn anchor_summary_from_entries(entries: &[TapEntry]) -> Option<String> {
+    let anchor = entries
+        .iter()
+        .rev()
+        .find(|e| e.kind == TapEntryKind::Anchor)?;
+
+    let state_val = anchor.payload.get("state")?;
+    match serde_json::from_value::<HandoffState>(state_val.clone()) {
+        Ok(hs) => hs.summary.filter(|s| !s.is_empty()),
+        Err(_) => state_val
+            .get("summary")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // User tape context
 // ---------------------------------------------------------------------------
@@ -214,15 +236,14 @@ pub fn anchor_context(entries: &[TapEntry]) -> Option<Message> {
 /// Reads all `Note` entries from the user tape and formats them into a single
 /// system message.  Returns `None` when the user tape has no notes, so the
 /// caller can skip injection entirely.
-pub fn user_tape_context(entries: &[TapEntry]) -> Option<Message> {
+pub fn user_tape_context(
+    entries: &[TapEntry],
+    anchor_summary: Option<&str>,
+) -> Option<Message> {
     let notes: Vec<&TapEntry> = entries
         .iter()
         .filter(|e| e.kind == TapEntryKind::Note)
         .collect();
-
-    if notes.is_empty() {
-        return None;
-    }
 
     let mut sections: Vec<String> = Vec::new();
 
@@ -245,15 +266,28 @@ pub fn user_tape_context(entries: &[TapEntry]) -> Option<Message> {
         sections.push(format!("- [{category}] ({date}) {content}"));
     }
 
-    if sections.is_empty() {
+    let has_summary = anchor_summary.is_some_and(|s| !s.is_empty());
+    let has_notes = !sections.is_empty();
+
+    if !has_summary && !has_notes {
         return None;
     }
 
-    let body = format!(
+    let mut body = String::from(
         "[User Memory]\nThe following notes were previously recorded about this user. Use them to \
-         personalize your responses.\n\n{}",
-        sections.join("\n")
+         personalize your responses.\n",
     );
+
+    if let Some(summary) = anchor_summary.filter(|s| !s.is_empty()) {
+        body.push_str("\n[Distilled Knowledge]\n");
+        body.push_str(summary);
+        body.push('\n');
+    }
+
+    if has_notes {
+        body.push_str("\n[Recent Notes]\n");
+        body.push_str(&sections.join("\n"));
+    }
 
     Some(Message::system(body))
 }
@@ -287,7 +321,7 @@ mod tests {
 
     #[test]
     fn user_tape_context_returns_none_for_empty_entries() {
-        assert!(user_tape_context(&[]).is_none());
+        assert!(user_tape_context(&[], None).is_none());
     }
 
     #[test]
@@ -299,19 +333,19 @@ mod tests {
             timestamp: Timestamp::now(),
             metadata:  None,
         };
-        assert!(user_tape_context(&[entry]).is_none());
+        assert!(user_tape_context(&[entry], None).is_none());
     }
 
     #[test]
     fn user_tape_context_skips_empty_content() {
         let entry = note_entry("fact", "", "2026-03-06");
-        assert!(user_tape_context(&[entry]).is_none());
+        assert!(user_tape_context(&[entry], None).is_none());
     }
 
     #[test]
     fn user_tape_context_renders_with_timestamp() {
         let entry = note_entry("preference", "prefers dark mode", "2026-03-06");
-        let msg = user_tape_context(&[entry]).expect("should produce a message");
+        let msg = user_tape_context(&[entry], None).expect("should produce a message");
         assert_eq!(msg.role, Role::System);
         let text = match &msg.content {
             MessageContent::Text(t) => t.as_str(),
@@ -327,7 +361,7 @@ mod tests {
             note_entry("fact", "name is Alice", "2026-01-15"),
             note_entry("todo", "follow up on project", "2026-02-20"),
         ];
-        let msg = user_tape_context(&entries).expect("should produce a message");
+        let msg = user_tape_context(&entries, None).expect("should produce a message");
         let text = match &msg.content {
             MessageContent::Text(t) => t.as_str(),
             _ => panic!("expected text content"),

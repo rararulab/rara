@@ -119,6 +119,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "read-tape".to_string(),
         "dispatch-rara".to_string(),
         "write-user-note".to_string(),
+        "distill-user-notes".to_string(),
     ],
     max_children:       Some(0),
     max_context_tokens: None,
@@ -285,6 +286,16 @@ Do NOT write back:
 - Trivial or obvious information.
 - Things already recorded in the user's tape (check with `read_tape` first).
 - Speculation without evidence from the tapes.
+
+## Knowledge Distillation
+
+Use `distill-user-notes` to condense accumulated user notes when a user's tape has grown large. Steps:
+1. Read the user's tape with `read-tape` to see current notes
+2. If there are many notes (10+) since the last distillation, synthesize them
+3. Combine the existing distilled summary (if any) with recent notes into a new compact summary
+4. Call `distill-user-notes` with the condensed summary
+
+Good distillation preserves all important facts while removing redundancy and outdated information.
 
 ## Rules
 

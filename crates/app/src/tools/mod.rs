@@ -27,6 +27,7 @@ mod http_fetch;
 mod list_directory;
 mod mcp_tools;
 mod mita_dispatch_rara;
+mod mita_distill_user_notes;
 mod mita_list_sessions;
 mod mita_read_tape;
 mod mita_write_user_note;
@@ -52,6 +53,7 @@ use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
 pub use mita_dispatch_rara::DispatchRaraTool;
 use mita_list_sessions::ListSessionsTool;
 use mita_read_tape::ReadTapeTool;
+use mita_distill_user_notes::DistillUserNotesTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
@@ -128,7 +130,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // Mita-exclusive tools
         Arc::new(ListSessionsTool::new(deps.session_index)),
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
-        Arc::new(MitaWriteUserNoteTool::new(deps.tape_service)),
+        Arc::new(MitaWriteUserNoteTool::new(deps.tape_service.clone())),
+        Arc::new(DistillUserNotesTool::new(deps.tape_service)),
         dispatch_rara,
     ];
 

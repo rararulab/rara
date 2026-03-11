@@ -296,12 +296,15 @@ impl TapeService {
     ) -> TapResult<Vec<crate::llm::Message>> {
         let mut messages = self.build_llm_context(tape_name).await?;
 
-        // Load user tape and inject user context after any leading system
-        // messages, so it appears between the system prompt and conversation
-        // history.  This ensures the LLM's system prompt is never displaced.
+        // Load user tape entries since the last anchor so accumulated notes
+        // respect distillation boundaries.  The anchor summary (if any)
+        // carries previously-distilled knowledge.
         let user_tape = super::user_tape_name(user_id);
-        let user_entries = self.entries(&user_tape).await?;
-        if let Some(user_msg) = super::context::user_tape_context(&user_entries) {
+        let user_entries = self.from_last_anchor(&user_tape, None).await?;
+        let anchor_summary = super::context::anchor_summary_from_entries(&user_entries);
+        if let Some(user_msg) =
+            super::context::user_tape_context(&user_entries, anchor_summary.as_deref())
+        {
             let insert_pos = messages
                 .iter()
                 .position(|m| m.role != crate::llm::Role::System)
