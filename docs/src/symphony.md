@@ -136,7 +136,18 @@ symphony:
   agent:
     command: ralph
     backend: codex
+    assign_prefix: ralph:
     core_config_file: ralph.core.yml
+    backends:
+      docker:
+        backend: docker
+        core_config_file: ralph.docker.yml
+        extra_args: ["--autonomous"]
+      kubernetes:
+        command: /usr/local/bin/ralph
+        backend: kubernetes
+        core_config_file: ralph.k8s.yml
+        run_timeout: 2h
 
   repos:
     - name: rararulab/rara
@@ -153,7 +164,11 @@ symphony:
 - `tracker.started_issue_state` 控制 Ralph 成功启动后 issue 要切到哪个 tracker 状态，默认是 `In Progress`
 - `tracker.completed_issue_state` 控制 Ralph 成功完成后 issue 要切到哪个 tracker 状态，默认是 `ToVerify`
 - `tracker.active_states` 控制 symphony 会从 tracker 拉哪些状态；默认只拉 `Todo`
-- `agent.backend` 控制 symphony 在 issue worktree 里执行 `ralph init --force --backend <backend>` 时使用的 backend
+- `agent.backend` 是默认 backend；当 issue 没有可识别的 `assign` 值时，symphony 会继续使用它
+- `agent.assign_prefix` 控制哪些 issue `assign` 值会被解释成 Ralph backend 选择器；默认是 `ralph:`
+- `agent.backends.<name>` 定义可被 `assign` 命中的完整 backend 配置，支持单独覆盖 `command`、`backend`、`core_config_file`、`extra_args` 和 `run_timeout`
+- 如果 issue 的 `assign` 值是 `ralph:docker`，symphony 会查找 `agent.backends.docker` 并用那组配置执行 `ralph init` 和 `ralph run`
+- 如果 `assign` 为空、不带 Ralph 前缀，或者引用了未配置的 backend，symphony 会记录回退日志并继续使用默认 `agent.backend`
 - `agent.core_config_file` 指向仓库根目录里的 Ralph core config；默认是 `ralph.core.yml`
 - agent 默认执行 `ralph run --autonomous`
 - symphony 会先执行 `ralph init --force --backend <backend> -c ralph.core.yml` 生成 worktree 本地 `ralph.yml`
