@@ -14,6 +14,7 @@
 - [Typst Resume System](typst-resume-system.md)
 - [Resume AI Agent](resume-ai-agent.md)
 - [Codex OAuth Integration](codex-oauth.md)
+- [Pixiv MCP Auth Handoff](pixiv-mcp-auth.md)
 
 # API Development
 
