@@ -608,7 +608,14 @@ fn build_runtime_contract_prompt(
          good handoff preserves your progress — a missing summary means lost context\n5. For \
          exact tokens, IDs, codes, names, or quoted details from pre-anchor context, search first \
          and only then answer\n\nFailing to use the tape system when needed will cause context \
-         window overflow and task failure.\n</context_contract>"
+         window overflow and task failure.\n\n## Navigating anchor history\n\nYou can fork from any \
+         past anchor to explore alternative paths:\n- Use `tape` with `action: \"anchors\"` to see \
+         all checkpoints\n- Use `tape` with `action: \"checkout\", name: \"<anchor_name>\"` to fork \
+         a new session from that anchor\n- After checkout, your context resets to the anchor point \
+         — post-anchor entries are excluded\n- Use this when: the conversation went in a wrong \
+         direction, you want to retry from a checkpoint, or the user asks to \"go back to\" a \
+         previous topic\n\nCheckout creates a new session fork — the original session remains \
+         unchanged.\n</context_contract>"
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
