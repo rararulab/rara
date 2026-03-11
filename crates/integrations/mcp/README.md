@@ -59,3 +59,24 @@ cargo test -p rara-mcp
 - **Stdio integration** (7) -- real child-process server via `examples/test_mcp_server`
 - **HTTP integration** (5) -- in-process axum server with `StreamableHttpService`
 - **Unit tests** (19) -- `meta_string`, `is_no_auth_support`, env/header builders
+
+## Diagnostics
+
+The MCP manager now retains the last startup failure for each server and reports it as
+`ConnectionStatus::Error { message }` instead of collapsing the state to disconnected.
+The backend-admin MCP API maps that state through to `McpServerStatus::Error`, so the
+admin UI can show the actual startup failure that blocked the server.
+
+This remediation was added for `RAR-23`, where Pixiv OAuth automation was blocked by
+ghost/mobile/browser MCP servers that looked connected even when their startup or tool
+initialization had already failed.
+
+When an automation-backed server still cannot complete an OAuth flow, check these in order:
+
+1. Inspect `/api/v1/mcp/servers` or the admin UI for `error` status and the retained message.
+2. Review the per-server log buffer for the startup sequence and any `connection failed` entry.
+3. Verify OS/device prerequisites outside the MCP transport:
+   - Ghost OS accessibility/screen-capture permissions on macOS
+   - Mobile device discovery returning at least one target before calling `mobile_open_url`
+   - Browser automation server registration exposing tools instead of an empty tool list
+4. Retry after fixing the underlying dependency; a successful restart clears the retained error.
