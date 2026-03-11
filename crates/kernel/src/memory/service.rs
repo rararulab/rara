@@ -64,6 +64,10 @@ pub struct TapeInfo {
     pub entries_since_last_anchor: usize,
     /// Last observed `total_tokens` usage from a `run` event.
     pub last_token_usage: Option<u64>,
+    /// Estimated token count for the current context window (entries since
+    /// last anchor).  Uses actual `prompt_tokens` from the most recent LLM
+    /// call plus chars/4 estimates for entries added after that call.
+    pub estimated_context_tokens: u64,
 }
 
 /// Get the current tape in contextual execution, mirroring Bub's
@@ -384,6 +388,49 @@ impl TapeService {
                 .and_then(Value::as_u64)
         });
 
+        // Compute estimated context tokens for entries since last anchor.
+        let anchor_id = anchors.last().map(|a| a.id).unwrap_or(0);
+        let since_anchor: Vec<&TapEntry> = entries
+            .iter()
+            .filter(|e| e.id > anchor_id)
+            .collect();
+
+        // Find the last assistant entry with usage metadata.
+        let mut last_known_tokens: u64 = 0;
+        let mut last_usage_entry_id: u64 = 0;
+        for entry in since_anchor.iter().rev() {
+            if let Some(meta) = &entry.metadata {
+                if let Some(prompt_tokens) = meta
+                    .get("usage")
+                    .and_then(|u| u.get("prompt_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    last_known_tokens = prompt_tokens;
+                    last_usage_entry_id = entry.id;
+                    // Also add this entry's own completion tokens
+                    let completion = meta
+                        .get("usage")
+                        .and_then(|u| u.get("completion_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    last_known_tokens += completion;
+                    break;
+                }
+            }
+        }
+
+        // Estimate tokens for entries added after the last usage-bearing entry.
+        let additional_chars: usize = since_anchor
+            .iter()
+            .filter(|e| e.id > last_usage_entry_id)
+            .filter(|e| matches!(
+                e.kind,
+                TapEntryKind::Message | TapEntryKind::ToolCall | TapEntryKind::ToolResult
+            ))
+            .map(|e| e.payload.to_string().len())
+            .sum();
+        let estimated_context_tokens = last_known_tokens + (additional_chars as u64 / 4);
+
         Ok(TapeInfo {
             name: tape_name.to_owned(),
             entries: entries.len(),
@@ -391,6 +438,7 @@ impl TapeService {
             last_anchor,
             entries_since_last_anchor,
             last_token_usage,
+            estimated_context_tokens,
         })
     }
 
