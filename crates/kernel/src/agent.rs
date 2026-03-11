@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use crate::{
     error::{IoSnafu, KernelError, Result},
@@ -806,6 +806,13 @@ pub(crate) async fn run_agent_loop(
             messages_count = messages.len(),
             "calling LLM (inline streaming via LlmDriver)"
         );
+        debug!(
+            iteration,
+            model = model.as_str(),
+            tools_count = tool_defs.len(),
+            messages = %serde_json::to_string(&messages).unwrap_or_default(),
+            "LLM request"
+        );
 
         // Build completion request
         let request = llm::CompletionRequest {
@@ -985,6 +992,22 @@ pub(crate) async fn run_agent_loop(
 
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
         iter_span.record("has_tools", has_tool_calls);
+
+        {
+            let text_preview: String = accumulated_text.chars().take(500).collect();
+            let tool_call_names: Vec<&str> = pending_tool_calls
+                .values()
+                .map(|tc| tc.name.as_str())
+                .collect();
+            debug!(
+                iteration,
+                stream_ms = stream_start.elapsed().as_millis() as u64,
+                has_tool_calls,
+                tool_calls = ?tool_call_names,
+                text_preview = %text_preview,
+                "LLM response"
+            );
+        }
 
         // Terminal response (no tool calls, or recovery iteration must exit)
         if !has_tool_calls || llm_error_recovery_used {
