@@ -705,11 +705,11 @@ pub(crate) async fn run_agent_loop(
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     let has_kernel_tool = tools.get("kernel").is_some();
-    let effective_prompt = {
+    let (effective_prompt, has_soul) = {
         let soul_text = resolve_soul_prompt(&manifest.name, manifest.soul_prompt.as_deref());
         match soul_text {
-            Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
-            None => manifest.system_prompt.clone(),
+            Some(soul) => (format!("{soul}\n\n---\n\n{}", manifest.system_prompt), true),
+            None => (manifest.system_prompt.clone(), false),
         }
     };
     let effective_prompt =
@@ -1012,6 +1012,14 @@ pub(crate) async fn run_agent_loop(
                 success:          true,
                 error:            None,
             };
+            // Best-effort mood update — failure is silently logged, never
+            // blocks the response.
+            if has_soul {
+                if let Some(inf) = crate::mood::infer_mood(&messages) {
+                    crate::mood::update_soul_mood(&manifest.name, &inf);
+                }
+            }
+
             return Ok(AgentTurnResult {
                 text: accumulated_text,
                 iterations: iteration + 1,
@@ -1378,6 +1386,14 @@ pub(crate) async fn run_agent_loop(
         success:          true,
         error:            None,
     };
+    // Best-effort mood update — failure is silently logged, never blocks the
+    // response.
+    if has_soul {
+        if let Some(inf) = crate::mood::infer_mood(&messages) {
+            crate::mood::update_soul_mood(&manifest.name, &inf);
+        }
+    }
+
     Ok(AgentTurnResult {
         text: last_accumulated_text,
         iterations: max_iterations,
