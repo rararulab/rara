@@ -124,6 +124,7 @@ struct ToolProgress {
     finished:   bool,
     success:    bool,
     duration:   Option<std::time::Duration>,
+    error:      Option<String>,
 }
 
 /// Progress message state for tool execution feedback.
@@ -174,7 +175,13 @@ fn format_tool_line(t: &ToolProgress) -> String {
         if t.success {
             format!("\u{2705} {label}{time}")
         } else {
-            format!("\u{274c} {label}{time}")
+            match &t.error {
+                Some(err) => {
+                    let short_err: String = err.chars().take(60).collect();
+                    format!("\u{274c} {label}{time}: {short_err}")
+                }
+                None => format!("\u{274c} {label}{time}"),
+            }
         }
     } else {
         let elapsed = format_duration_compact(t.started_at.elapsed());
@@ -1311,6 +1318,7 @@ fn spawn_stream_forwarder(
                                 finished: false,
                                 success: false,
                                 duration: None,
+                                error: None,
                             });
 
                             // Send typing indicator before the first progress message.
@@ -1343,11 +1351,12 @@ fn spawn_stream_forwarder(
                                 progress_dirty = true;
                             }
                         }
-                        Ok(StreamEvent::ToolCallEnd { id, success, .. }) => {
+                        Ok(StreamEvent::ToolCallEnd { id, success, error, .. }) => {
                             if let Some(tp) = progress.tools.iter_mut().find(|t| t.id == id) {
                                 tp.finished = true;
                                 tp.success = success;
                                 tp.duration = Some(tp.started_at.elapsed());
+                                tp.error = error;
                             }
 
                             let text = render_progress(&progress.tools, progress.turn_started.elapsed());
