@@ -28,7 +28,8 @@ use tracing::info;
 #[derive(Clone)]
 pub struct BackendState {
     pub session_service: crate::chat::service::SessionService,
-    pub settings_svc:    crate::settings::SettingsSvc,
+    pub auth_service: crate::auth::service::AuthService,
+    pub settings_svc: crate::settings::SettingsSvc,
 }
 
 impl BackendState {
@@ -37,6 +38,8 @@ impl BackendState {
     /// The caller is expected to have loaded `SettingsSvc` already (since the
     /// settings provider is also needed by `RaraState`).
     pub async fn init(
+        pool: sqlx::SqlitePool,
+        auth_config: crate::auth::service::AuthConfig,
         session_index: Arc<dyn rara_kernel::session::SessionIndex>,
         tape_service: rara_kernel::memory::TapeService,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -51,10 +54,12 @@ impl BackendState {
             tape_service,
             settings_provider,
         );
+        let auth_service = crate::auth::service::AuthService::new(pool, auth_config);
         info!("Session service initialized");
 
         Ok(Self {
             session_service,
+            auth_service,
             settings_svc,
         })
     }
@@ -78,6 +83,11 @@ impl BackendState {
             &mut router,
             &mut api,
             crate::settings::routes(self.settings_svc.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
+            crate::auth::routes(self.auth_service.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -112,6 +122,7 @@ impl BackendState {
             ),
             tags(
                 (name = "chat", description = "Chat sessions and messaging"),
+                (name = "auth", description = "User authentication"),
                 (name = "settings", description = "Runtime settings"),
                 (name = "system", description = "System utilities")
             )

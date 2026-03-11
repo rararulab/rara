@@ -18,6 +18,7 @@
 //! models, MCP servers, skills, and domain routes (chat).
 
 pub mod agents;
+pub mod auth;
 pub mod chat;
 pub mod kernel;
 pub mod mcp;

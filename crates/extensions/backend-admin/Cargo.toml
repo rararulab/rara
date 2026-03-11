@@ -12,12 +12,14 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 base = { workspace = true }
+bcrypt = { workspace = true }
 bon = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }
 git2 = { workspace = true }
 jiff = { workspace = true }
+jsonwebtoken = { workspace = true }
 
 llmfit-core = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
@@ -51,3 +53,4 @@ base = { workspace = true }
 common-telemetry = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+tower = { workspace = true }

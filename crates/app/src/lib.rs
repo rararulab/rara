@@ -419,6 +419,8 @@ pub async fn start_with_options(
         .whatever_context("Failed to boot kernel dependencies")?;
 
     let backend = rara_backend_admin::state::BackendState::init(
+        pool.clone(),
+        to_backend_auth_config(config.auth.clone().unwrap_or_default()),
         rara.session_index.clone(),
         rara.tape_service.clone(),
         settings_provider.clone(),
@@ -660,6 +662,22 @@ pub async fn start_with_options(
     });
 
     Ok(app_handle)
+}
+
+fn to_backend_auth_config(config: AuthConfig) -> rara_backend_admin::auth::service::AuthConfig {
+    rara_backend_admin::auth::service::AuthConfig {
+        jwt: rara_backend_admin::auth::service::JwtConfig {
+            issuer: config.jwt.issuer,
+            audience: config.jwt.audience,
+            secret: config.jwt.secret,
+            access_token_ttl: config.jwt.access_token_ttl,
+        },
+        password: rara_backend_admin::auth::service::PasswordAuthConfig {
+            max_attempts: config.password.max_attempts,
+            require_email_verification: config.password.require_email_verification,
+            lockout_window: config.password.lockout_window,
+        },
+    }
 }
 
 #[cfg(test)]
