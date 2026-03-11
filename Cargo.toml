@@ -149,7 +149,7 @@ clap = { version = "4.4", features = ["derive"] }
 config = { version = "0.15", features = ["yaml"] }
 croner = "3"
 crossbeam-queue = "0.3"
-crossterm = "0.28"
+crossterm = "0.29"
 derive_more = { version = "2.0", features = ["full"] }
 dirs = "^6"
 eventsource-stream = "0.2"
