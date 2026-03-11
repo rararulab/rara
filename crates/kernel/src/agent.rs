@@ -1227,6 +1227,7 @@ pub(crate) async fn run_agent_loop(
                             Ok(result) => {
                                 tool_span.record("success", true);
                                 let dur = tool_start.elapsed().as_millis() as u64;
+                                info!(tool = %name, duration_ms = dur, "tool call succeeded");
                                 let result = {
                                     let guard = output_interceptor.read().await;
                                     if let Some(ref interceptor) = *guard {
