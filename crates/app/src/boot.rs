@@ -552,13 +552,23 @@ async fn init_mcp_manager(
     Ok(manager)
 }
 
-/// Register context-mode as a builtin MCP server if not already present.
+/// Register context-mode as a builtin MCP server if not already present,
+/// or re-enable it if it was somehow disabled.
 async fn ensure_context_mode_builtin(registry: &rara_mcp::manager::registry::FSMcpRegistry) {
     use rara_mcp::manager::registry::{McpRegistry, McpServerConfig};
 
     const NAME: &str = "context-mode";
 
-    if let Ok(Some(_)) = registry.get(NAME).await {
+    if let Ok(Some(existing)) = registry.get(NAME).await {
+        // Already registered. Ensure it is enabled and marked builtin.
+        if !existing.enabled || !existing.builtin {
+            let mut fixed = existing;
+            fixed.enabled = true;
+            fixed.builtin = true;
+            if let Err(e) = registry.add(NAME.to_string(), fixed).await {
+                tracing::warn!(error = %e, "failed to fix context-mode config");
+            }
+        }
         return;
     }
 

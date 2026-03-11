@@ -1192,12 +1192,12 @@ pub(crate) async fn run_agent_loop(
                         match tool_result {
                             Ok(result) => {
                                 tool_span.record("success", true);
+                                let dur = tool_start.elapsed().as_millis() as u64;
                                 let result = if let Some(ref interceptor) = output_interceptor {
                                     interceptor.intercept(&name, result).await
                                 } else {
                                     result
                                 };
-                                let dur = tool_start.elapsed().as_millis() as u64;
                                 (true, result, None::<String>, dur)
                             }
                             Err(e) => {

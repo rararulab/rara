@@ -17,7 +17,7 @@
 //! Indexes large tool outputs into the context-mode MCP server and replaces
 //! them with compact references.
 
-use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use rara_kernel::tool::{OutputInterceptor, ToolOutput};
@@ -27,35 +27,25 @@ use tracing::{debug, warn};
 /// Name of the context-mode MCP server in the registry.
 const SERVER_NAME: &str = "context-mode";
 
+/// Tool name prefix used by context-mode MCP server.
+const TOOL_PREFIX: &str = "context-mode__";
+
 /// Default output size threshold in bytes.
 const DEFAULT_THRESHOLD: usize = 4096;
 
+/// Monotonic counter to ensure unique index IDs under concurrent execution.
+static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 pub struct ContextModeInterceptor {
-    manager:    McpManager,
-    threshold:  usize,
-    skip_tools: HashSet<String>,
+    manager:   McpManager,
+    threshold: usize,
 }
 
 impl ContextModeInterceptor {
     pub fn new(manager: McpManager) -> Self {
-        let mut skip_tools = HashSet::new();
-        // Skip context-mode's own tools to avoid recursive indexing loops.
-        for suffix in [
-            "execute",
-            "execute_file",
-            "search",
-            "index",
-            "fetch_and_index",
-            "batch_execute",
-            "stats",
-        ] {
-            skip_tools.insert(format!("context-mode__{suffix}"));
-        }
-
         Self {
             manager,
             threshold: DEFAULT_THRESHOLD,
-            skip_tools,
         }
     }
 
@@ -68,8 +58,8 @@ impl ContextModeInterceptor {
 #[async_trait]
 impl OutputInterceptor for ContextModeInterceptor {
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput {
-        // Never intercept context-mode's own tools.
-        if self.skip_tools.contains(tool_name) {
+        // Never intercept context-mode's own tools to avoid recursive indexing.
+        if tool_name.starts_with(TOOL_PREFIX) {
             return output;
         }
 
@@ -79,7 +69,12 @@ impl OutputInterceptor for ContextModeInterceptor {
             return output;
         }
 
-        let index_id = format!("{tool_name}_{}", chrono::Utc::now().timestamp_millis());
+        let seq = INDEX_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let index_id = format!(
+            "{tool_name}_{}_{}",
+            chrono::Utc::now().timestamp_millis(),
+            seq,
+        );
         let index_params = serde_json::json!({
             "content": json_str,
             "id": &index_id,
@@ -97,11 +92,12 @@ impl OutputInterceptor for ContextModeInterceptor {
                     original_bytes = json_str.len(),
                     "indexed large tool output via context-mode"
                 );
+                let summary = build_summary(tool_name, &json_str);
                 ToolOutput::from(serde_json::json!({
                     "indexed": true,
                     "index_id": &index_id,
                     "original_bytes": json_str.len(),
-                    "summary": truncate_for_summary(&json_str, 200),
+                    "summary": summary,
                     "hint": "Use the context-mode search tool with relevant queries to retrieve details from this output."
                 }))
             }
@@ -117,10 +113,11 @@ impl OutputInterceptor for ContextModeInterceptor {
     }
 }
 
-fn truncate_for_summary(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", s.chars().take(max_len).collect::<String>())
-    }
+/// Build a human-readable summary instead of truncating raw JSON.
+fn build_summary(tool_name: &str, json_str: &str) -> String {
+    let bytes = json_str.len();
+    let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
+    format!(
+        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use search to query specific content.",
+    )
 }

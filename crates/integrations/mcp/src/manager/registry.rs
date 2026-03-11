@@ -148,6 +148,9 @@ impl McpRegistry for FSMcpRegistry {
     async fn disable(&self, name: &str) -> Result<bool> {
         let mut inner = self.inner.write().await;
         if let Some(cfg) = inner.servers.get_mut(name) {
+            if cfg.builtin {
+                anyhow::bail!("cannot disable builtin MCP server '{name}'");
+            }
             cfg.enabled = false;
             inner.save().await?;
             Ok(true)
