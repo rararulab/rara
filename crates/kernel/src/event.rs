@@ -646,16 +646,17 @@ impl KernelEventEnvelope {
     /// events.
     ///
     /// - **Global** (returns `None`): `UserMessage`, `GroupMessage`,
-    ///   `CreateSession`, `Deliver`, `IdleCheck`, `Shutdown`
+    ///   `CreateSession`, `IdleCheck`, `Shutdown`
     /// - **Sharded** (returns `Some`): `SendSignal`, `TurnCompleted`,
-    ///   `ChildSessionDone`, `SessionCommand`
+    ///   `ChildSessionDone`, `SessionCommand`, `Deliver`
     pub fn shard_key(&self) -> Option<SessionKey> {
         match &self.kind {
             KernelEvent::SendSignal { .. }
             | KernelEvent::TurnCompleted { .. }
             | KernelEvent::ChildSessionDone { .. }
             | KernelEvent::SessionCommand(_)
-            | KernelEvent::MitaDirective { .. } => Some(self.base.session_key),
+            | KernelEvent::MitaDirective { .. }
+            | KernelEvent::Deliver(_) => Some(self.base.session_key),
             _ => None,
         }
     }
