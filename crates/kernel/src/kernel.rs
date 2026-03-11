@@ -92,10 +92,14 @@ pub struct KernelConfig {
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
-    pub memory_quota_per_agent: usize,
+    pub memory_quota_per_agent:    usize,
+    /// SSE idle timeout for LLM streaming responses. If no event is received
+    /// within this duration, the stream is aborted and retried.
+    #[default(_code = "Duration::from_secs(90)")]
+    pub streaming_idle_timeout:    Duration,
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
-    pub event_queue:            ShardedEventQueueConfig,
+    pub event_queue:               ShardedEventQueueConfig,
 }
 
 /// Shared reference to a
