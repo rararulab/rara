@@ -86,9 +86,18 @@ impl McpCommandHandler {
                     ("\u{2718}", format!("error: {}", html_escape(message)))
                 }
             };
+            let extra = if s.name == "context-mode" {
+                if matches!(s.status, McpServerStatus::Connected) {
+                    " (interceptor: \u{2713})"
+                } else {
+                    " (interceptor: \u{2717})"
+                }
+            } else {
+                ""
+            };
             let _ = writeln!(
                 text,
-                "{icon} <b>{}</b> \u{2014} {status_text}",
+                "{icon} <b>{}</b> \u{2014} {status_text}{extra}",
                 html_escape(&s.name)
             );
         }
