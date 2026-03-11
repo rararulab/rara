@@ -453,6 +453,7 @@ impl AgentTurnResult {
 }
 
 fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json::Value, String> {
+    let arguments = if arguments.trim().is_empty() { "{}" } else { arguments };
     let args = serde_json::from_str::<serde_json::Value>(arguments)
         .map_err(|err| format!("invalid tool arguments: {err}"))?;
     if !args.is_object() {
@@ -1083,11 +1084,12 @@ pub(crate) async fn run_agent_loop(
                         &tool_call.id,
                         serde_json::json!({ "error": error_message }).to_string(),
                     ));
+                    let raw_args: String = tool_call.arguments_buf.chars().take(100).collect();
                     stream_handle.emit(StreamEvent::ToolCallEnd {
                         id:             tool_call.id,
                         result_preview: error_message.chars().take(200).collect(),
                         success:        false,
-                        error:          Some(error_message),
+                        error:          Some(format!("{error_message} | args: {raw_args}")),
                     });
                     continue;
                 }
