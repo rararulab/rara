@@ -364,6 +364,10 @@ fn render_command_result(state: &mut ChatState, result: CmdResult) {
             // Show text portion; inline keyboards are not supported in TUI.
             state.push_message(Role::System, strip_html_tags(&html));
         }
+        CmdResult::Photo { caption, .. } => {
+            let text = caption.unwrap_or_else(|| "[Photo]".to_string());
+            state.push_message(Role::System, text);
+        }
         CmdResult::None => {}
     }
 }
