@@ -101,6 +101,16 @@ impl AgentTool for DispatchRaraTool {
         let session_key = SessionKey::try_from_raw(session_id_str)
             .map_err(|_| anyhow::anyhow!("invalid session key: {session_id_str}"))?;
 
+        // Verify target session is alive before recording dispatch.
+        if !handle.process_table().contains(&session_key) {
+            return Ok(json!({
+                "status": "error",
+                "target_session": session_id_str,
+                "message": format!("Target session '{session_id_str}' is not active. Dispatch skipped.")
+            })
+            .into());
+        }
+
         // Record the dispatch in Mita's tape for future reference (avoid repeats).
         let mita_tape = &SessionKey::deterministic("mita").to_string();
         self.tape_service
