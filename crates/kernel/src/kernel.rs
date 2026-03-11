@@ -535,6 +535,9 @@ impl Kernel {
             KernelEvent::MitaDirective { instruction } => {
                 self.handle_mita_directive(base.session_key, instruction).await;
             }
+            KernelEvent::MitaHeartbeat => {
+                self.handle_mita_heartbeat().await;
+            }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
                 self.process_table
@@ -1283,6 +1286,65 @@ impl Kernel {
 
         // Set metadata flag so start_llm_turn persists as Event (not Message).
         msg.metadata.insert("mita_directive".to_string(), serde_json::json!(true));
+
+        self.deliver_to_session(session_key, msg).await;
+    }
+
+    /// Handle a periodic Mita heartbeat.
+    ///
+    /// Ensures the long-lived Mita session exists (spawning it if necessary)
+    /// and delivers a heartbeat message to it.
+    async fn handle_mita_heartbeat(&self) {
+        let session_key = SessionKey::deterministic("mita");
+
+        if !self.process_table.contains(&session_key) {
+            info!("Mita session not found, bootstrapping");
+
+            // Ensure tape exists with a bootstrap anchor.
+            let tape_name = session_key.to_string();
+            if let Err(e) = self.tape_service.ensure_bootstrap_anchor(&tape_name).await {
+                error!(error = %e, "failed to bootstrap Mita tape");
+                return;
+            }
+
+            let manifest = match self.agent_registry.get("mita") {
+                Some(m) => m,
+                None => {
+                    warn!("Mita agent manifest not found in registry, skipping heartbeat");
+                    return;
+                }
+            };
+
+            let principal = Principal::lookup("system");
+
+            match self
+                .handle_spawn_agent(
+                    manifest,
+                    "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                    principal,
+                    None,
+                    None,
+                    Some(session_key),
+                    None,
+                )
+                .await
+            {
+                Ok(key) => info!(session_key = %key, "Mita long-lived session spawned"),
+                Err(e) => error!(error = %e, "failed to spawn Mita session"),
+            }
+            // Session just spawned with initial message, skip this heartbeat
+            return;
+        }
+
+        // Deliver heartbeat message to the existing Mita session.
+        let msg = InboundMessage::synthetic(
+            "Heartbeat triggered. Analyze active sessions and determine if any proactive \
+             actions are needed. Review your previous tape entries to avoid repeating \
+             recent actions."
+                .to_string(),
+            crate::identity::UserId("system".to_string()),
+            session_key,
+        );
 
         self.deliver_to_session(session_key, msg).await;
     }
