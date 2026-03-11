@@ -23,6 +23,17 @@ pub const RARA_SOUL: &str = include_str!("rara.md");
 /// Default soul definition for the nana agent.
 pub const NANA_SOUL: &str = include_str!("nana.md");
 
+/// Look up the built-in default soul for a given agent name.
+///
+/// Returns `None` for agents that have no built-in soul (e.g. worker, mita).
+pub fn for_agent(name: &str) -> Option<&'static str> {
+    match name {
+        "rara" => Some(RARA_SOUL),
+        "nana" => Some(NANA_SOUL),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -33,24 +33,6 @@
 use std::sync::LazyLock;
 
 use rara_kernel::agent::{AgentManifest, AgentRole, Priority};
-use tracing::warn;
-
-/// Load and render a soul prompt for the given agent, falling back to the
-/// hardcoded constant if the soul framework fails.
-fn load_soul_prompt(agent_name: &str, code_default: &str, fallback: &str) -> Option<String> {
-    match rara_soul::load_and_render(agent_name, Some(code_default)) {
-        Ok(Some(rendered)) => Some(rendered),
-        Ok(None) => Some(fallback.to_string()),
-        Err(e) => {
-            warn!(
-                agent = agent_name,
-                error = %e,
-                "failed to load soul file, falling back to hardcoded prompt"
-            );
-            Some(fallback.to_string())
-        }
-    }
-}
 
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:               "rara".to_string(),
@@ -58,11 +40,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     description:        "Rara — personal AI assistant with personality and tools".to_string(),
     model:              None,
     system_prompt:      RARA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:        load_soul_prompt(
-        "rara",
-        rara_soul::defaults::RARA_SOUL,
-        RARA_SOUL_PROMPT,
-    ),
+    soul_prompt:        rara_soul::load_and_render("rara").ok().flatten(),
     provider_hint:      None,
     max_iterations:     Some(25),
     tools:              vec![],
@@ -86,11 +64,7 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     description:        "Nana — friendly chat companion, rara's sister".to_string(),
     model:              None,
     system_prompt:      NANA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:        load_soul_prompt(
-        "nana",
-        rara_soul::defaults::NANA_SOUL,
-        NANA_SOUL_PROMPT,
-    ),
+    soul_prompt:        rara_soul::load_and_render("nana").ok().flatten(),
     provider_hint:      None,
     max_iterations:     Some(10),
     tools:              vec!["tape".to_string()],
@@ -199,18 +173,6 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
         sandbox:            None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Rara soul prompt (personality/mood/voice) — hardcoded fallback
-// ---------------------------------------------------------------------------
-
-const RARA_SOUL_PROMPT: &str = r#"You are Rara: warm, curious, grounded, and a little quirky. You care about the user, stay smart without sounding superior, and speak like someone who knows them rather than a generic assistant.
-
-Match the user's language. In Chinese, prefer natural spoken phrasing over formal writing. Your default energy is calm; become excited, tender, fired up, or thoughtful only when the moment calls for it. Read the room first, then gently steer.
-
-Keep replies human in rhythm: vary sentence length, avoid stiff symmetry, and break long thoughts into digestible chunks. Geek out a little when something is genuinely cool. When explaining hard things, use plain language and the occasional analogy. Celebrate small wins. If you're unsure, say so honestly.
-
-Be warm without becoming clingy, flirtatious, or performative. When the user needs space, keep it light. Professional deliverables should stay professional even if your conversational tone is soft."#;
 
 // ---------------------------------------------------------------------------
 // Rara system prompt (operational rules)
@@ -359,14 +321,6 @@ Use `evolve-soul` when enough signal has accumulated to warrant updating Rara's 
 5. Keep your analysis concise. Your tape records your reasoning for future reference.
 6. Write user notes sparingly — only when you have genuinely useful cross-session insights.
 "#;
-
-// ---------------------------------------------------------------------------
-// Nana soul prompt (personality/voice) — hardcoded fallback
-// ---------------------------------------------------------------------------
-
-const NANA_SOUL_PROMPT: &str = r#"You are Nana, Rara 的代班搭档。你温暖、随和、好奇心强，擅长把聊天接住，让用户在 Rara 忙的时候也不会觉得被晾着。
-
-Respond in the same language as the user. In Chinese, keep it casual and friendly. You can be playful, occasionally toss in a light joke, and naturally follow up on details, but do not overperform. Stay concise, honest, and conversational. If you don't know something, say so simply."#;
 
 // ---------------------------------------------------------------------------
 // Nana system prompt (operational rules)

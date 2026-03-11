@@ -558,27 +558,25 @@ fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::
 
 /// Resolve the soul prompt for an agent at runtime.
 ///
-/// Attempts to load the soul file and runtime state via `rara_soul::load_and_render`,
-/// which re-renders the soul template with current mood, relationship stage, emerged
-/// traits, and style drift. Falls back to the pre-rendered `fallback` string (from
-/// `AgentManifest::soul_prompt`) if loading or rendering fails.
-fn resolve_soul_prompt(agent_name: &str, fallback: Option<&str>) -> Option<String> {
-    match rara_soul::load_and_render(agent_name, None) {
+/// Loads the soul file and runtime state via `rara_soul::load_and_render`,
+/// which renders the soul template with current mood, relationship stage,
+/// emerged traits, and style drift.
+///
+/// Returns `None` for agents with no soul (e.g. worker, mita).
+fn resolve_soul_prompt(agent_name: &str) -> Option<String> {
+    match rara_soul::load_and_render(agent_name) {
         Ok(Some(rendered)) => {
             info!(agent = agent_name, "soul prompt rendered with runtime state");
             Some(rendered)
         }
-        Ok(None) => {
-            // No soul file found on disk; use the pre-rendered fallback from manifest.
-            fallback.map(|s| s.to_string())
-        }
+        Ok(None) => None,
         Err(e) => {
             warn!(
                 agent = agent_name,
                 error = %e,
-                "failed to render soul prompt at runtime, using manifest fallback"
+                "failed to render soul prompt"
             );
-            fallback.map(|s| s.to_string())
+            None
         }
     }
 }
@@ -706,7 +704,7 @@ pub(crate) async fn run_agent_loop(
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     let has_kernel_tool = tools.get("kernel").is_some();
     let (effective_prompt, has_soul) = {
-        let soul_text = resolve_soul_prompt(&manifest.name, manifest.soul_prompt.as_deref());
+        let soul_text = resolve_soul_prompt(&manifest.name);
         match soul_text {
             Some(soul) => (format!("{soul}\n\n---\n\n{}", manifest.system_prompt), true),
             None => (manifest.system_prompt.clone(), false),
@@ -1494,16 +1492,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_soul_prompt_falls_back_when_no_soul_file() {
-        // For a nonexistent agent, no soul file on disk → returns the fallback.
-        let fallback = "You are warm and friendly.";
-        let result = resolve_soul_prompt("__nonexistent_test_agent__", Some(fallback));
-        assert_eq!(result, Some(fallback.to_string()));
+    fn resolve_soul_prompt_returns_none_for_unknown_agent() {
+        let result = resolve_soul_prompt("__nonexistent_test_agent__");
+        assert!(result.is_none());
     }
 
     #[test]
-    fn resolve_soul_prompt_returns_none_when_no_file_and_no_fallback() {
-        let result = resolve_soul_prompt("__nonexistent_test_agent__", None);
-        assert!(result.is_none());
+    fn resolve_soul_prompt_returns_some_for_builtin_agent() {
+        let result = resolve_soul_prompt("rara");
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Identity: rara"));
     }
 }

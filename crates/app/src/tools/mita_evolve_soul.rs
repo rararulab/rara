@@ -96,7 +96,7 @@ impl AgentTool for EvolveSoulTool {
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: agent"))?;
 
         // 1. Load current soul file.
-        let loaded = rara_soul::load_soul(agent, None)
+        let loaded = rara_soul::load_soul(agent)
             .map_err(|e| anyhow::anyhow!("failed to load soul file: {e}"))?
             .ok_or_else(|| anyhow::anyhow!(
                 "no soul file found for agent '{agent}'"

@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use snafu::ResultExt;
 use tracing::{debug, info};
 
+use crate::defaults;
 use crate::error::{IoSnafu, Result};
 use crate::file::SoulFile;
 use crate::render;
@@ -50,12 +51,12 @@ pub struct LoadedSoul {
 /// Load a soul definition for the given agent name.
 ///
 /// Searches in priority order:
-/// 1. `{config_dir}/agents/{agent_name}/soul.md`
-/// 2. `{config_dir}/soul.md`
-/// 3. Code default (if provided)
+/// 1. `{config_dir}/agents/{agent_name}/soul.md` (per-agent file)
+/// 2. `{config_dir}/soul.md` (global file)
+/// 3. Built-in default from [`defaults::for_agent`]
 ///
-/// Returns `None` if no file exists and no code default is provided.
-pub fn load_soul(agent_name: &str, code_default: Option<&str>) -> Result<Option<LoadedSoul>> {
+/// Returns `None` for agents with no soul at any level (e.g. worker, mita).
+pub fn load_soul(agent_name: &str) -> Result<Option<LoadedSoul>> {
     let config = rara_paths::config_dir();
 
     // Priority 1: per-agent soul file
@@ -86,9 +87,9 @@ pub fn load_soul(agent_name: &str, code_default: Option<&str>) -> Result<Option<
         }));
     }
 
-    // Priority 3: code default
-    if let Some(default_content) = code_default {
-        debug!(agent = agent_name, "using code-default soul definition");
+    // Priority 3: built-in default
+    if let Some(default_content) = defaults::for_agent(agent_name) {
+        debug!(agent = agent_name, "using built-in default soul definition");
         let soul = SoulFile::parse(default_content)?;
         return Ok(Some(LoadedSoul {
             soul,
@@ -136,8 +137,8 @@ pub fn snapshots_dir(agent_name: &str) -> PathBuf {
 /// loading, and rendering into a single call.
 ///
 /// Returns `None` if the agent has no soul definition.
-pub fn load_and_render(agent_name: &str, code_default: Option<&str>) -> Result<Option<String>> {
-    let loaded = load_soul(agent_name, code_default)?;
+pub fn load_and_render(agent_name: &str) -> Result<Option<String>> {
+    let loaded = load_soul(agent_name)?;
     let Some(loaded) = loaded else {
         return Ok(None);
     };
@@ -159,29 +160,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_from_code_default() {
-        let default_content = "---\nname: test\npersonality:\n- friendly\n---\n## Hello\n\nWorld.\n";
-        let loaded = load_soul("nonexistent_agent_xyz", Some(default_content))
-            .unwrap()
-            .unwrap();
+    fn load_builtin_default_for_rara() {
+        let loaded = load_soul("rara").unwrap().unwrap();
         assert_eq!(loaded.source, SoulSource::CodeDefault);
-        assert_eq!(loaded.soul.frontmatter.name, "test");
+        assert_eq!(loaded.soul.frontmatter.name, "rara");
     }
 
     #[test]
-    fn load_no_default_returns_none() {
-        let loaded = load_soul("nonexistent_agent_xyz", None).unwrap();
+    fn load_builtin_default_for_nana() {
+        let loaded = load_soul("nana").unwrap().unwrap();
+        assert_eq!(loaded.source, SoulSource::CodeDefault);
+        assert_eq!(loaded.soul.frontmatter.name, "nana");
+    }
+
+    #[test]
+    fn load_returns_none_for_unknown_agent() {
+        let loaded = load_soul("nonexistent_agent_xyz").unwrap();
         assert!(loaded.is_none());
-    }
-
-    #[test]
-    fn load_from_agent_file() {
-        let dir = tempfile::tempdir().unwrap();
-        // We can't easily test with rara_paths::config_dir() since it's static,
-        // so we test the file parsing path indirectly through SoulFile::parse.
-        let content = "---\nname: rara\n---\n## Test\n";
-        let soul = SoulFile::parse(content).unwrap();
-        assert_eq!(soul.frontmatter.name, "rara");
-        drop(dir);
     }
 }
