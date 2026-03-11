@@ -22,10 +22,10 @@ fn build_test_message(
         source: ChannelSource {
             channel_type:        ChannelType::Internal,
             platform_message_id: None,
-            platform_user_id:    "test-user".to_string(),
+            platform_user_id:    "ryan".to_string(),
             platform_chat_id:    Some(chat_id.to_string()),
         },
-        user: UserId("test-user".to_string()),
+        user: UserId("ryan".to_string()),
         session_key,
         target_session_key: None,
         content: MessageContent::Text(text.to_string()),
@@ -82,7 +82,7 @@ async fn anchor_checkout_roundtrip() {
         .expect("kernel handle should be available");
 
     // 2. Create session with a verifiable fact
-    let principal = Principal::lookup("test-user".to_string());
+    let principal = Principal::lookup("ryan".to_string());
     let session_key = handle
         .spawn_named(
             "rara",
