@@ -199,14 +199,30 @@ impl GatewayArgs {
 
         // 4. Build admin HTTP server state and spawn it.
         let admin_state = rara_app::gateway::server::GatewayAppState {
-            supervisor_handle,
-            update_state_rx: update_rx,
+            supervisor_handle: supervisor_handle.clone(),
+            update_state_rx: update_rx.clone(),
             shutdown: cancel.clone(),
         };
         let admin_bind = gateway_config.bind_address.clone();
         let _admin_handle = rara_app::gateway::server::serve(&admin_bind, admin_state)
             .await
             .whatever_context("Failed to start gateway admin HTTP server")?;
+
+        // 4.5 Spawn Telegram command listener for management commands.
+        let health_url = format!("http://127.0.0.1:{port}/api/health");
+        let listener = rara_app::gateway::GatewayTelegramListener::new(
+            bot_token,
+            channel_id,
+            supervisor_handle,
+            update_rx,
+            std::sync::Arc::clone(&notifier),
+            cancel.clone(),
+            health_url,
+        );
+        let listener_cancel = cancel.clone();
+        tokio::spawn(async move {
+            listener.run(listener_cancel).await;
+        });
 
         // 5. Run supervisor (blocking).
         match supervisor.run().await {
