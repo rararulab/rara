@@ -43,6 +43,15 @@ macro_rules! define_id {
                 Self(Uuid::new_v4())
             }
 
+            /// Generate a deterministic identifier from a name string.
+            ///
+            /// Uses UUID v5 (SHA-1) with the OID namespace so the same name
+            /// always produces the same identifier.
+            #[must_use]
+            pub fn deterministic(name: &str) -> Self {
+                Self(Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()))
+            }
+
             /// Return the inner [`Uuid`].
             #[must_use]
             pub fn into_inner(self) -> Uuid {
