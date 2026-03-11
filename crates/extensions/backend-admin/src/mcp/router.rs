@@ -50,6 +50,10 @@ pub fn mcp_router(manager: McpState) -> Router {
             get(list_server_resources),
         )
         .route("/api/v1/mcp/servers/{name}/logs", get(list_server_logs))
+        .route(
+            "/api/v1/mcp/context-mode/status",
+            get(context_mode_status),
+        )
         .with_state(manager)
 }
 
@@ -408,4 +412,35 @@ async fn list_server_logs(
 ) -> Result<Json<Vec<McpLogEntry>>, McpAdminError> {
     let entries = manager.log_buffer().entries(&name).await;
     Ok(Json(entries))
+}
+
+async fn context_mode_status(
+    State(manager): State<McpState>,
+) -> Json<serde_json::Value> {
+    let status = manager.server_connection_status("context-mode").await;
+    let (status_str, interceptor_enabled) = match status {
+        ConnectionStatus::Connected => ("connected", true),
+        ConnectionStatus::Connecting => ("connecting", false),
+        ConnectionStatus::Disconnected => ("disconnected", false),
+    };
+    let recent_logs = manager.log_buffer().entries("context-mode").await;
+    let log_entries: Vec<serde_json::Value> = recent_logs
+        .iter()
+        .rev()
+        .take(10)
+        .map(|e| {
+            serde_json::json!({
+                "timestamp": e.timestamp,
+                "level": e.level,
+                "message": e.message,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "server": "context-mode",
+        "connection_status": status_str,
+        "interceptor_enabled": interceptor_enabled,
+        "recent_logs": log_entries,
+    }))
 }
