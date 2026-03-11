@@ -155,11 +155,24 @@ impl GatewayArgs {
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
-        // 0. Create Telegram notifier using gateway config fields.
-        let bot_token = &gateway_config.bot_token;
+        // 0. Build shared Telegram bot with proxy support, then create notifier.
+        let proxy = std::env::var("HTTPS_PROXY")
+            .or_else(|_| std::env::var("HTTP_PROXY"))
+            .or_else(|_| std::env::var("ALL_PROXY"))
+            .ok()
+            .filter(|v| !v.is_empty());
+        if let Some(ref p) = proxy {
+            tracing::info!(proxy = %p, "gateway: using proxy for Telegram");
+        }
+        let bot = rara_channels::telegram::build_bot(
+            &gateway_config.bot_token,
+            proxy.as_deref(),
+        )
+        .whatever_context("Failed to build gateway Telegram bot")?;
+
         let chat_id = gateway_config.chat_id;
         let notifier = std::sync::Arc::new(rara_app::gateway::UpdateNotifier::new(
-            bot_token,
+            bot.clone(),
             chat_id,
             build_info::FULL_VERSION,
             &gateway_config.repo_url,
@@ -211,7 +224,7 @@ impl GatewayArgs {
         // 4.5 Spawn Telegram command listener for management commands.
         let health_url = format!("http://127.0.0.1:{port}/api/health");
         let listener = rara_app::gateway::GatewayTelegramListener::new(
-            bot_token,
+            bot,
             chat_id,
             supervisor_handle,
             update_rx,

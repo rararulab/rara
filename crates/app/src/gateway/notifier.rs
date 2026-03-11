@@ -43,9 +43,12 @@ pub struct UpdateNotifier {
 
 impl UpdateNotifier {
     /// Create a new notifier.
-    pub fn new(bot_token: &str, channel_id: i64, version: &str, repo_url: &str) -> Self {
+    ///
+    /// The `bot` should be built via [`rara_channels::telegram::build_bot`]
+    /// which handles proxy and timeout configuration.
+    pub fn new(bot: Bot, channel_id: i64, version: &str, repo_url: &str) -> Self {
         Self {
-            bot: Bot::new(bot_token),
+            bot,
             channel_id,
             agent_generation: AtomicU32::new(0),
             agent_started_at: std::sync::Mutex::new(None),

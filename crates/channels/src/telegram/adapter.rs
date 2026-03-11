@@ -93,6 +93,28 @@ const MIN_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// Set below 4096 to leave buffer for HTML tag expansion from markdown→html.
 const STREAM_SPLIT_THRESHOLD: usize = 3800;
 
+/// Build a [`teloxide::Bot`] with an optional proxy and a timeout suitable
+/// for long polling.
+///
+/// This is a standalone helper so both the Telegram adapter and the gateway
+/// can construct a properly configured `Bot` without duplicating the proxy /
+/// timeout logic.
+///
+/// The proxy URL is passed to [`reqwest::Proxy::all`] (supports `http://`,
+/// `https://`, `socks5://`).
+pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyhow::Error> {
+    match proxy {
+        Some(url) => {
+            let client = teloxide::net::default_reqwest_settings()
+                .proxy(reqwest::Proxy::all(url)?)
+                .timeout(std::time::Duration::from_secs(POLL_TIMEOUT_SECS as u64 + 30))
+                .build()?;
+            Ok(teloxide::Bot::with_client(token, client))
+        }
+        None => Ok(teloxide::Bot::new(token)),
+    }
+}
+
 /// Single tool's progress state within a streaming turn.
 struct ToolProgress {
     id:         String,
@@ -375,17 +397,7 @@ impl TelegramAdapter {
         allowed_chat_ids: Vec<i64>,
         proxy: Option<&str>,
     ) -> Result<Self, anyhow::Error> {
-        let bot = match proxy {
-            Some(url) => {
-                let client = teloxide::net::default_reqwest_settings()
-                    .proxy(reqwest::Proxy::all(url)?)
-                    // Override the 17s default — must exceed POLL_TIMEOUT_SECS (30s).
-                    .timeout(std::time::Duration::from_secs(POLL_TIMEOUT_SECS as u64 + 30))
-                    .build()?;
-                teloxide::Bot::with_client(token, client)
-            }
-            None => teloxide::Bot::new(token),
-        };
+        let bot = build_bot(token, proxy)?;
         Ok(Self::new(bot, allowed_chat_ids))
     }
 
