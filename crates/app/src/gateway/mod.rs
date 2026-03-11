@@ -20,9 +20,11 @@ mod notifier;
 mod pipeline;
 pub mod server;
 mod supervisor;
+pub mod telegram;
 
 pub use detector::{UpdateDetector, UpdateState};
 pub use executor::{ExecutorError, UpdateExecutor, UpdateResult};
 pub use notifier::UpdateNotifier;
 pub use pipeline::run_update_pipeline;
 pub use supervisor::{SupervisorCommand, SupervisorHandle, SupervisorService, SupervisorStatus};
+pub use telegram::GatewayTelegramListener;
