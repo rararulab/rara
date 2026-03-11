@@ -161,7 +161,7 @@ pub struct Kernel {
     /// Knowledge layer service for long-term memory extraction.
     knowledge:        crate::memory::knowledge::KnowledgeServiceRef,
     /// Optional hook to transform tool outputs before sending to the LLM.
-    output_interceptor: Option<crate::tool::OutputInterceptorRef>,
+    output_interceptor: crate::tool::DynamicOutputInterceptor,
 }
 
 impl Kernel {
@@ -179,7 +179,7 @@ impl Kernel {
         security: SecurityRef,
         io: IOSubsystem,
         knowledge: crate::memory::knowledge::KnowledgeServiceRef,
-        output_interceptor: Option<crate::tool::OutputInterceptorRef>,
+        output_interceptor: crate::tool::DynamicOutputInterceptor,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());

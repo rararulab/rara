@@ -41,7 +41,7 @@ pub(crate) struct BootResult {
     pub tape_service:         rara_kernel::memory::TapeService,
     pub skill_registry:       rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:          rara_mcp::manager::mgr::McpManager,
-    pub output_interceptor:   Option<rara_kernel::tool::OutputInterceptorRef>,
+    pub output_interceptor:   rara_kernel::tool::DynamicOutputInterceptor,
     pub settings_provider:    Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     pub identity_resolver:    Arc<dyn rara_kernel::io::IdentityResolver>,
     pub agent_registry:       Arc<rara_kernel::agent::AgentRegistry>,
@@ -156,16 +156,16 @@ pub(crate) async fn boot(
 
     // -- output interceptor (context-mode) --------------------------------
 
-    let output_interceptor: Option<rara_kernel::tool::OutputInterceptorRef> = {
+    let output_interceptor: rara_kernel::tool::DynamicOutputInterceptor = {
         let status = mcp_manager.server_connection_status("context-mode").await;
         if status == rara_mcp::manager::mgr::ConnectionStatus::Connected {
             info!("context-mode connected, enabling output interceptor");
-            Some(Arc::new(crate::context_mode::ContextModeInterceptor::new(
-                mcp_manager.clone(),
-            )))
+            Arc::new(tokio::sync::RwLock::new(Some(Arc::new(
+                crate::context_mode::ContextModeInterceptor::new(mcp_manager.clone()),
+            ))))
         } else {
             info!("context-mode not available, output interceptor disabled");
-            None
+            Arc::new(tokio::sync::RwLock::new(None))
         }
     };
 

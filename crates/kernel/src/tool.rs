@@ -74,6 +74,11 @@ pub trait OutputInterceptor: Send + Sync {
 /// Shared reference to an output interceptor.
 pub type OutputInterceptorRef = Arc<dyn OutputInterceptor>;
 
+/// A dynamically-swappable output interceptor.
+/// Wraps `Option<OutputInterceptorRef>` behind a lock so it can be updated
+/// at runtime (e.g. when context-mode MCP reconnects).
+pub type DynamicOutputInterceptor = Arc<tokio::sync::RwLock<Option<OutputInterceptorRef>>>;
+
 /// Shared reference to the [`ToolRegistry`].
 pub type ToolRegistryRef = Arc<ToolRegistry>;
 
