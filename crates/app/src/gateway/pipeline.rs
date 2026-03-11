@@ -53,6 +53,10 @@ pub async fn run_update_pipeline(
         config.auto_update
     );
 
+    // Track the last successfully applied revision so we skip stale
+    // detector states that were published *during* a build.
+    let mut last_applied_rev: Option<String> = None;
+
     loop {
         tokio::select! {
             result = update_rx.changed() => {
@@ -79,6 +83,14 @@ pub async fn run_update_pipeline(
             None => continue,
         };
 
+        // Skip if we already applied this revision. The detector may have
+        // published a stale `update_available` state mid-build (before the
+        // local HEAD was updated), causing a duplicate trigger.
+        if last_applied_rev.as_deref() == Some(upstream_rev.as_str()) {
+            info!(rev = %upstream_rev, "Update pipeline: already applied this revision, skipping");
+            continue;
+        }
+
         // Prevent concurrent updates.
         if UPDATING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -93,9 +105,14 @@ pub async fn run_update_pipeline(
 
         let result = execute_and_handle(&upstream_rev, &supervisor_handle, &notifier).await;
 
-        if let Err(ref e) = result {
-            warn!(error = %e, "Auto-update: executor creation failed");
-            notifier.executor_creation_failed(e).await;
+        match result {
+            Ok(()) => {
+                last_applied_rev = Some(upstream_rev);
+            }
+            Err(ref e) => {
+                warn!(error = %e, "Auto-update: executor creation failed");
+                notifier.executor_creation_failed(e).await;
+            }
         }
 
         UPDATING.store(false, Ordering::Relaxed);
