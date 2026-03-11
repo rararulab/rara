@@ -114,6 +114,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     provider_hint:      None,
     max_iterations:     Some(20),
     tools:              vec![
+        "tape".to_string(),
         "list-sessions".to_string(),
         "read-tape".to_string(),
         "dispatch-rara".to_string(),
