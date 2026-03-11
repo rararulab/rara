@@ -215,25 +215,30 @@ impl crate::tool::AgentTool for TapeTool {
          and tool result in this session as sequential entries.\n\n## How your context window \
          works\n\nYou do NOT see the entire tape. Your LLM context window only contains entries \
          since the last anchor (checkpoint). Everything before that anchor still exists on the \
-         tape and is fully searchable, but it is not in your current context.\n\n## Anchors\n\nAn \
-         anchor is a named checkpoint you insert into the tape. When you create an anchor, your \
-         future context window starts from that point. Use anchors when:\n- A topic or task is \
-         complete and you want to free up context space\n- You want to mark a logical boundary in \
-         the conversation\n- Your context is getting large and you need to trim it\n\nWhen \
-         creating an anchor, always provide a `summary` of the conversation so far and \
-         `next_steps` if applicable. These are stored in the anchor state so you retain key \
-         context even after the older entries leave your context window.\n\nData before an anchor \
-         is NOT deleted — `search` can still find it across all anchors.\n\n## Entry kinds\n\nEach \
-         tape entry has a kind: `message` (user/assistant chat), `tool_call` (your tool \
-         invocations), `tool_result` (tool outputs), `event` (lifecycle telemetry), `system` \
-         (system prompts), `anchor` (checkpoints).\n\n## Actions\n\n- `info` — inspect tape state \
-         (total entries, anchor count, context window size)\n- `search` — find past conversations \
-         by text, works across all anchors including forgotten context\n- `anchor` — create a \
-         checkpoint to trim your context window\n- `anchors` — list recent checkpoints to \
-         understand your memory structure\n- `entries` — read raw tape entries in your current \
-         context window or after a specific anchor
-         - `between_anchors` — read entries between two named anchors to inspect a specific past \
-         context window"
+         tape and is fully searchable, but it is not in your current context.\n\n## When to \
+         anchor\n\nCreate anchors based on **topic/task transitions**, not context size:\n- The \
+         user switches to a different topic or task\n- A task or conversation thread reaches a \
+         natural conclusion\n- The user explicitly asks to move on\n\nUse `info` to check \
+         `estimated_context_tokens` as a health indicator — if context is growing large after \
+         recalling old data, that is a good time to anchor and consolidate.\n\nWhen creating an \
+         anchor, use a descriptive name (e.g. `topic/immich-setup`, `task/debug-lifetime`) and \
+         always provide a `summary` and `next_steps`. These are injected into your context after \
+         the anchor so you retain key information.\n\n## Recall: accessing past context\n\nWhen \
+         the user refers to something from a previous topic or earlier conversation:\n1. Use \
+         `anchors` to see your memory structure and find the relevant anchor\n2. Use \
+         `between_anchors` to load the full context of that topic segment\n3. Or use `search` to \
+         find specific information by keyword across the entire tape\n\nData before an anchor is \
+         NOT deleted — it is always available for recall. Your anchors are like bookmarks in a \
+         book: you read from the current bookmark forward, but you can always flip back.\n\n## \
+         Entry kinds\n\nEach tape entry has a kind: `message` (user/assistant chat), `tool_call` \
+         (your tool invocations), `tool_result` (tool outputs), `event` (lifecycle telemetry), \
+         `system` (system prompts), `anchor` (checkpoints).\n\n## Actions\n\n- `info` — inspect \
+         tape state (entries, anchors, `estimated_context_tokens`)\n- `search` — recall past \
+         information by keyword, works across all anchors\n- `anchor` — create a named checkpoint \
+         when transitioning topics\n- `anchors` — list checkpoints to find relevant past \
+         context\n- `entries` — read raw tape entries in your current context window or after a \
+         specific anchor\n- `between_anchors` — recall the full context of a specific past topic \
+         segment"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
