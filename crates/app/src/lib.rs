@@ -16,7 +16,6 @@ mod boot;
 pub mod config_sync;
 pub mod flatten;
 pub mod gateway;
-mod mita;
 mod tools;
 
 use std::{
@@ -324,8 +323,13 @@ pub async fn start_with_options(
         boot::McpDynamicToolProvider::new(rara.mcp_manager.clone()),
     ));
 
+    let kernel_config = rara_kernel::kernel::KernelConfig {
+        mita_heartbeat_interval: Some(config.mita.heartbeat_interval),
+        ..Default::default()
+    };
+
     let kernel = rara_kernel::kernel::Kernel::new(
-        Default::default(),
+        kernel_config,
         rara.driver_registry.clone(),
         rara.tool_registry.clone(),
         rara.agent_registry.clone(),
@@ -406,21 +410,6 @@ pub async fn start_with_options(
     // tracing goes to stderr, so this does not interfere.
     println!("READY");
 
-    let worker_runtime = Arc::new(
-        common_runtime::RuntimeOptions::builder()
-            .thread_name("raraworker".to_owned())
-            .enable_io(true)
-            .enable_time(true)
-            .build()
-            .create()
-            .whatever_context("Failed to create worker runtime")?,
-    );
-    let manager_config = common_worker::ManagerConfig {
-        runtime:          Some(worker_runtime),
-        shutdown_timeout: Duration::from_secs(30),
-    };
-    let mut worker_manager = common_worker::Manager::with_state_and_config((), manager_config);
-
     if let Some(ref tg_adapter) = telegram_adapter {
         // Wire command handlers now that KernelHandle is available.
         {
@@ -455,21 +444,6 @@ pub async fn start_with_options(
     }
     info!("Kernel I/O subsystem running");
 
-    // -- Mita heartbeat worker ---------------------------------------------
-    {
-        let heartbeat_worker =
-            mita::MitaHeartbeatWorker::new(kernel_handle.clone(), rara.tape_service.clone());
-        let _mita_handle = worker_manager
-            .worker(heartbeat_worker)
-            .name("mita-heartbeat")
-            .interval(config.mita.heartbeat_interval)
-            .spawn();
-        info!(
-            heartbeat_interval = ?config.mita.heartbeat_interval,
-            "Mita heartbeat worker started"
-        );
-    }
-
     // -- Symphony sync bridge -------------------------------------------------
     if let Some(ref symphony_config) = config.symphony {
         if symphony_config.enabled {
@@ -503,23 +477,6 @@ pub async fn start_with_options(
         shutdown_signal(shutdown_rx).await;
         running_clone.store(false, Ordering::SeqCst);
         ct_clone.cancel();
-
-        info!("Shutting down background workers");
-        if tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            worker_manager.shutdown(),
-        )
-        .await
-        .is_err()
-        {
-            error!("Worker manager shutdown timed out; continuing shutdown");
-        }
-
-        let worker_rt = worker_manager.take_runtime();
-        drop(worker_manager);
-        if let Some(rt) = worker_rt {
-            tokio::task::spawn_blocking(move || drop(rt));
-        }
 
         if let Some(adapter) = telegram_adapter {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
