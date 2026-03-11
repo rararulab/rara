@@ -417,6 +417,24 @@ impl StreamAccumulator {
                                 entry.name = name.clone();
                             }
                         }
+                    }
+
+                    // Emit ToolCallStart BEFORE any argument deltas so the
+                    // receiver creates the PendingToolCall entry first.
+                    // Otherwise ToolCallArgumentsDelta arrives for an index
+                    // that doesn't exist yet and arguments are silently dropped.
+                    if !entry.started && !entry.id.is_empty() && !entry.name.is_empty() {
+                        entry.started = true;
+                        let _ = tx
+                            .send(StreamDelta::ToolCallStart {
+                                index: tc.index,
+                                id:    entry.id.clone(),
+                                name:  entry.name.clone(),
+                            })
+                            .await;
+                    }
+
+                    if let Some(ref func) = tc.function {
                         if let Some(ref args) = func.arguments {
                             if !args.is_empty() {
                                 entry.arguments.push_str(args);
@@ -428,18 +446,6 @@ impl StreamAccumulator {
                                     .await;
                             }
                         }
-                    }
-
-                    // Emit ToolCallStart exactly once when we first get both id and name
-                    if !entry.started && !entry.id.is_empty() && !entry.name.is_empty() {
-                        entry.started = true;
-                        let _ = tx
-                            .send(StreamDelta::ToolCallStart {
-                                index: tc.index,
-                                id:    entry.id.clone(),
-                                name:  entry.name.clone(),
-                            })
-                            .await;
                     }
                 }
             }
