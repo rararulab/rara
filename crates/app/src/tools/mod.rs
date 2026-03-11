@@ -28,8 +28,10 @@ mod list_directory;
 mod mcp_tools;
 mod mita_dispatch_rara;
 mod mita_distill_user_notes;
+mod mita_evolve_soul;
 mod mita_list_sessions;
 mod mita_read_tape;
+mod mita_update_soul_state;
 mod mita_write_user_note;
 mod read_file;
 mod screenshot;
@@ -54,6 +56,8 @@ pub use mita_dispatch_rara::DispatchRaraTool;
 use mita_list_sessions::ListSessionsTool;
 use mita_read_tape::ReadTapeTool;
 use mita_distill_user_notes::DistillUserNotesTool;
+use mita_evolve_soul::EvolveSoulTool;
+use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
@@ -138,6 +142,9 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(MitaWriteUserNoteTool::new(deps.tape_service.clone())),
         Arc::new(DistillUserNotesTool::new(deps.tape_service)),
         dispatch_rara,
+        // Mita soul evolution tools
+        Arc::new(UpdateSoulStateTool::new()),
+        Arc::new(EvolveSoulTool::new()),
     ];
 
     for tool in tools {
