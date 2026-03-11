@@ -40,6 +40,7 @@ pub mod kv;
 pub mod llm;
 pub mod memory;
 pub mod metrics;
+pub mod mood;
 pub mod notification;
 pub mod proactive;
 pub mod queue;
