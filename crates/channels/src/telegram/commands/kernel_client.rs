@@ -201,6 +201,8 @@ impl BotServiceClient for KernelBotServiceClient {
         &self,
         session_key: &str,
     ) -> Result<rara_kernel::memory::AnchorTree, BotServiceError> {
+        // Delegate full tree assembly to kernel memory service so Telegram
+        // layer only consumes a render-ready structure.
         self.tape
             .build_anchor_tree(session_key, &*self.sessions)
             .await
@@ -214,6 +216,7 @@ impl BotServiceClient for KernelBotServiceClient {
         session_key: &str,
         anchor_name: &str,
     ) -> Result<String, BotServiceError> {
+        // 1) Resolve the checkout target to a concrete anchor entry id.
         let entries = self
             .tape
             .entries(session_key)
@@ -236,6 +239,7 @@ impl BotServiceClient for KernelBotServiceClient {
                 message: format!("anchor not found: {anchor_name}"),
             })?;
 
+        // 2) Fork the tape from anchor boundary.
         let fork_tape_name = self
             .tape
             .store()
@@ -264,12 +268,16 @@ impl BotServiceClient for KernelBotServiceClient {
         let created = match self.sessions.create_session(&entry).await {
             Ok(created) => created,
             Err(e) => {
+                // Session creation failed: ensure temporary fork is cleaned up.
                 let _ = self.tape.store().discard(&fork_tape_name).await;
                 return Err(BotServiceError::Session { source: e });
             }
         };
 
         let new_tape = created.key.to_string();
+        // 3) Materialize fork contents into the new session tape.
+        // Note: FileTapeStore::merge copies only "post-fork" deltas, so we
+        // explicitly re-append all forked entries to preserve full child state.
         // Read full fork tape then re-append into the new session tape.
         // We intentionally avoid FileTapeStore::merge here because merge only
         // applies entries created *after* the fork point.
@@ -277,6 +285,8 @@ impl BotServiceClient for KernelBotServiceClient {
             Ok(Some(entries)) => entries,
             Ok(None) => Vec::new(),
             Err(e) => {
+                // If fork read fails, remove both temp fork and just-created
+                // session metadata to avoid dangling half-created sessions.
                 let _ = self.tape.store().discard(&fork_tape_name).await;
                 let _ = self.sessions.delete_session(&created.key).await;
                 return Err(BotServiceError::Tape {
@@ -293,6 +303,7 @@ impl BotServiceClient for KernelBotServiceClient {
                 .append(&new_tape, entry.kind, entry.payload, entry.metadata)
                 .await
             {
+                // Copy failed mid-way: rollback new tape/session as best effort.
                 let _ = self.tape.store().discard(&fork_tape_name).await;
                 let _ = self.tape.store().reset(&new_tape).await;
                 let _ = self.sessions.delete_session(&created.key).await;
@@ -309,6 +320,7 @@ impl BotServiceClient for KernelBotServiceClient {
     }
 
     async fn parent_session(&self, session_key: &str) -> Result<Option<String>, BotServiceError> {
+        // Parent relationship is modeled in session metadata (`forked_from`).
         let sk = SessionKey::try_from_raw(session_key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
@@ -328,10 +340,12 @@ impl BotServiceClient for KernelBotServiceClient {
         session_key: &str,
         anchor_name: Option<&str>,
     ) -> Result<CheckoutResult, BotServiceError> {
+        // Treat empty anchor argument the same as omitted argument.
         let anchor_name = anchor_name.map(str::trim).filter(|name| !name.is_empty());
 
         match anchor_name {
             Some(anchor_name) => {
+                // `/checkout <anchor>` => create child session then rebind chat.
                 let child_key = self.checkout_anchor(session_key, anchor_name).await?;
                 self.bind_channel("telegram", chat_id, &child_key).await?;
                 Ok(CheckoutResult::ForkedFromAnchor {
@@ -340,6 +354,7 @@ impl BotServiceClient for KernelBotServiceClient {
                 })
             }
             None => {
+                // `/checkout` => move back to parent session if one exists.
                 let Some(parent_key) = self.parent_session(session_key).await? else {
                     return Ok(CheckoutResult::NoParent);
                 };
