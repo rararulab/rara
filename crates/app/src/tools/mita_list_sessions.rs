@@ -14,9 +14,10 @@
 
 //! Mita-exclusive tool: list all active sessions with metadata.
 
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rara_kernel::{
     session::SessionIndex,
     tool::{AgentTool, ToolContext, ToolOutput},
@@ -52,6 +53,10 @@ impl AgentTool for ListSessionsTool {
                     "type": "integer",
                     "description": "Maximum number of sessions to return (default 50)",
                     "default": 50
+                },
+                "updated_since": {
+                    "type": "string",
+                    "description": "ISO 8601 timestamp — only return sessions updated after this time (e.g. '2025-01-01T00:00:00Z')"
                 }
             },
             "required": []
@@ -60,12 +65,22 @@ impl AgentTool for ListSessionsTool {
 
     async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let limit = params.get("limit").and_then(|v| v.as_i64()).unwrap_or(50);
+        let updated_since = params
+            .get("updated_since")
+            .and_then(|v| v.as_str())
+            .and_then(|s| DateTime::<Utc>::from_str(s).ok());
 
         let sessions = self
             .session_index
             .list_sessions(limit, 0)
             .await
             .map_err(|e| anyhow::anyhow!("failed to list sessions: {e}"))?;
+
+        let sessions = if let Some(since) = updated_since {
+            sessions.into_iter().filter(|s| s.updated_at > since).collect()
+        } else {
+            sessions
+        };
 
         let entries: Vec<Value> = sessions
             .iter()
