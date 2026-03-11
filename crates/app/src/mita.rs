@@ -50,33 +50,19 @@ impl MitaHeartbeatWorker {
             tape_service,
         }
     }
-}
 
-#[async_trait::async_trait]
-impl common_worker::Worker for MitaHeartbeatWorker {
-    async fn on_start<S: Clone + Send + Sync>(&mut self, ctx: common_worker::WorkerContext<S>) {
-        info!(worker = ctx.name(), "Mita heartbeat worker starting");
-
-        // Ensure Mita's tape exists with a bootstrap anchor.
-        if let Err(e) = self.tape_service.ensure_bootstrap_anchor("mita").await {
-            error!(error = %e, "failed to bootstrap Mita tape");
-            return;
-        }
-
-        // Spawn Mita as a long-lived session with a fixed session key.
-        let manifest = match self.kernel_handle.agent_registry().get("mita") {
-            Some(m) => m,
-            None => {
-                error!("Mita agent manifest not found in registry");
-                return;
-            }
-        };
+    /// Spawn (or re-spawn) the long-lived Mita session.
+    async fn spawn_mita_session(&self) -> Result<SessionKey, String> {
+        let manifest = self
+            .kernel_handle
+            .agent_registry()
+            .get("mita")
+            .ok_or_else(|| "Mita agent manifest not found in registry".to_string())?;
 
         let principal = Principal::lookup("system");
         let session_key = mita_session_key();
 
-        match self
-            .kernel_handle
+        self.kernel_handle
             .spawn_with_input(
                 manifest,
                 "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
@@ -85,7 +71,25 @@ impl common_worker::Worker for MitaHeartbeatWorker {
                 Some(session_key),
             )
             .await
-        {
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl common_worker::Worker for MitaHeartbeatWorker {
+    async fn on_start<S: Clone + Send + Sync>(&mut self, ctx: common_worker::WorkerContext<S>) {
+        info!(worker = ctx.name(), "Mita heartbeat worker starting");
+
+        // Ensure Mita's tape exists with a bootstrap anchor.
+        // The tape name must match what the kernel uses: session_key.to_string().
+        let tape_name = mita_session_key().to_string();
+        if let Err(e) = self.tape_service.ensure_bootstrap_anchor(&tape_name).await {
+            error!(error = %e, "failed to bootstrap Mita tape");
+            return;
+        }
+
+        // Spawn Mita as a long-lived session with a fixed session key.
+        match self.spawn_mita_session().await {
             Ok(key) => {
                 info!(session_key = %key, "Mita long-lived session spawned");
             }
@@ -102,7 +106,15 @@ impl common_worker::Worker for MitaHeartbeatWorker {
 
         // Check that Mita's session is still alive in the process table.
         if !self.kernel_handle.process_table().contains(&session_key) {
-            warn!("Mita session not found in process table, skipping heartbeat");
+            warn!("Mita session lost, attempting recovery");
+            match self.spawn_mita_session().await {
+                Ok(key) => info!(session_key = %key, "Mita session recovered"),
+                Err(e) => {
+                    error!(error = %e, "failed to recover Mita session, skipping heartbeat");
+                    return;
+                }
+            }
+            // Session just spawned with initial message, skip this heartbeat's message
             return;
         }
 
