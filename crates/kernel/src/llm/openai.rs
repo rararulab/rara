@@ -411,6 +411,14 @@ impl StreamAccumulator {
                         }
                     }
 
+                    // Collect new arguments but defer sending the delta until
+                    // after ToolCallStart has been emitted.  Some providers
+                    // (e.g. OpenRouter) deliver name + arguments in a single
+                    // SSE chunk; if we send ToolCallArgumentsDelta first the
+                    // receiver has no pending entry yet and silently drops
+                    // the arguments.
+                    let mut new_args: Option<String> = None;
+
                     if let Some(ref func) = tc.function {
                         if let Some(ref name) = func.name {
                             if !name.is_empty() {
@@ -420,17 +428,15 @@ impl StreamAccumulator {
                         if let Some(ref args) = func.arguments {
                             if !args.is_empty() {
                                 entry.arguments.push_str(args);
-                                let _ = tx
-                                    .send(StreamDelta::ToolCallArgumentsDelta {
-                                        index:     tc.index,
-                                        arguments: args.clone(),
-                                    })
-                                    .await;
+                                new_args = Some(args.clone());
                             }
                         }
                     }
 
-                    // Emit ToolCallStart exactly once when we first get both id and name
+                    // Emit ToolCallStart exactly once when we first get both id and name.
+                    // This MUST happen before ToolCallArgumentsDelta so the
+                    // receiver registers the pending entry before accumulating
+                    // arguments.
                     if !entry.started && !entry.id.is_empty() && !entry.name.is_empty() {
                         entry.started = true;
                         let _ = tx
@@ -438,6 +444,17 @@ impl StreamAccumulator {
                                 index: tc.index,
                                 id:    entry.id.clone(),
                                 name:  entry.name.clone(),
+                            })
+                            .await;
+                    }
+
+                    // Now send the argument delta (receiver entry is guaranteed
+                    // to exist if ToolCallStart was emitted above).
+                    if let Some(args) = new_args {
+                        let _ = tx
+                            .send(StreamDelta::ToolCallArgumentsDelta {
+                                index:     tc.index,
+                                arguments: args,
                             })
                             .await;
                     }
