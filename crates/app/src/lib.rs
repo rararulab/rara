@@ -375,25 +375,15 @@ pub async fn start_with_options(
         *lock = Some(kernel_handle.clone());
     }
 
-    // MCP heartbeat: reconnect dead servers + restore context-mode interceptor
+    // MCP heartbeat: reconnect dead servers
     {
         let mcp_mgr = rara.mcp_manager.clone();
-        let interceptor_slot = rara.output_interceptor.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
             ticker.tick().await; // skip immediate first tick
             loop {
                 ticker.tick().await;
-                let reconnected = mcp_mgr.reconnect_dead().await;
-                if reconnected.iter().any(|n| n == "context-mode") {
-                    let mut guard = interceptor_slot.write().await;
-                    if guard.is_none() {
-                        tracing::info!("context-mode reconnected, enabling output interceptor");
-                        *guard = Some(std::sync::Arc::new(
-                            crate::context_mode::ContextModeInterceptor::new(mcp_mgr.clone()),
-                        ));
-                    }
-                }
+                mcp_mgr.reconnect_dead().await;
             }
         });
     }
