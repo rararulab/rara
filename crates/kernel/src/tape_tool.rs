@@ -19,11 +19,14 @@
 //! its own tape directly, giving it full visibility into the underlying memory
 //! mechanism so it can make informed decisions about context management.
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::memory::{HandoffState, TapEntryKind, TapeService};
+use crate::session::{SessionEntry, SessionIndex, SessionKey};
 
 /// LLM-callable tool that exposes raw tape memory primitives.
 ///
@@ -34,13 +37,19 @@ use crate::memory::{HandoffState, TapEntryKind, TapeService};
 pub(crate) struct TapeTool {
     tape_service: TapeService,
     tape_name:    String,
+    sessions:     Arc<dyn SessionIndex>,
 }
 
 impl TapeTool {
-    pub fn new(tape_service: TapeService, tape_name: String) -> Self {
+    pub fn new(
+        tape_service: TapeService,
+        tape_name: String,
+        sessions: Arc<dyn SessionIndex>,
+    ) -> Self {
         Self {
             tape_service,
             tape_name,
+            sessions,
         }
     }
 
@@ -160,6 +169,55 @@ impl TapeTool {
         let count = entries.len();
         Ok(serde_json::json!({ "entries": entries, "count": count }))
     }
+
+    async fn exec_checkout(&self, anchor_name: &str) -> anyhow::Result<serde_json::Value> {
+        use crate::memory::set_fork_metadata;
+        use chrono::Utc;
+
+        // 1. Create a new session with fork metadata.
+        let new_key = SessionKey::new();
+        let mut metadata = None;
+        set_fork_metadata(&mut metadata, &self.tape_name, anchor_name);
+        let now = Utc::now();
+        let entry = SessionEntry {
+            key:           new_key.clone(),
+            title:         Some(format!("Fork from {anchor_name}")),
+            model:         None,
+            system_prompt: None,
+            message_count: 0,
+            preview:       None,
+            metadata,
+            created_at:    now,
+            updated_at:    now,
+        };
+
+        self.sessions
+            .create_session(&entry)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to create fork session: {e}"))?;
+
+        // 2. Copy tape entries up to the anchor into the new tape.
+        let new_tape = new_key.to_string();
+        if let Err(e) = self
+            .tape_service
+            .checkout_anchor(&self.tape_name, anchor_name, &new_tape)
+            .await
+        {
+            // Rollback session on tape failure.
+            let _ = self.sessions.delete_session(&new_key).await;
+            return Err(anyhow::anyhow!("checkout failed: {e}"));
+        }
+
+        Ok(serde_json::json!({
+            "status": "checked_out",
+            "from_anchor": anchor_name,
+            "new_session": new_tape,
+            "message": format!(
+                "Forked from anchor '{}'. New session: {}. Context has been reset to the anchor point.",
+                anchor_name, new_tape
+            )
+        }))
+    }
 }
 
 // ============================================================================
@@ -200,6 +258,10 @@ enum TapeParams {
         #[serde(default)]
         kinds: Option<Vec<String>>,
     },
+    Checkout {
+        /// Anchor name to fork from.
+        name: String,
+    },
 }
 
 // ============================================================================
@@ -238,7 +300,8 @@ impl crate::tool::AgentTool for TapeTool {
          when transitioning topics\n- `anchors` — list checkpoints to find relevant past \
          context\n- `entries` — read raw tape entries in your current context window or after a \
          specific anchor\n- `between_anchors` — recall the full context of a specific past topic \
-         segment"
+         segment\n- `checkout` — fork from a named anchor, creating a new session with context \
+         up to that point"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -248,7 +311,7 @@ impl crate::tool::AgentTool for TapeTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors"],
+                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors", "checkout"],
                     "description": "The tape operation to perform."
                 },
                 "query": {
@@ -257,7 +320,7 @@ impl crate::tool::AgentTool for TapeTool {
                 },
                 "name": {
                     "type": "string",
-                    "description": "[anchor] Name for the checkpoint (e.g. 'topic/weather-done', 'handoff')."
+                    "description": "[anchor, checkout] Name for the checkpoint or anchor to fork from."
                 },
                 "summary": {
                     "type": "string",
@@ -326,6 +389,7 @@ impl crate::tool::AgentTool for TapeTool {
             TapeParams::BetweenAnchors { start, end, kinds } => {
                 self.exec_between_anchors(&start, &end, kinds).await
             }
+            TapeParams::Checkout { name } => self.exec_checkout(&name).await,
         }?;
 
         Ok(json.into())

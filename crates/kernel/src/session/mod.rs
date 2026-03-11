@@ -704,3 +704,6 @@ impl SessionTable {
 impl Default for SessionTable {
     fn default() -> Self { Self::new() }
 }
+
+#[cfg(test)]
+pub(crate) mod test_utils;

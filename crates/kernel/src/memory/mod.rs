@@ -132,18 +132,22 @@
 mod anchors;
 mod context;
 mod error;
+mod fork_metadata;
 pub mod knowledge;
 mod service;
 mod store;
+mod tree;
 
 pub use anchors::{AnchorSummary, HandoffState};
 pub use context::{anchor_context, default_tape_context, user_tape_context};
 pub use error::{TapError, TapResult};
+pub use fork_metadata::{ForkMetadata, get_fork_metadata, set_fork_metadata};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use service::{TapeInfo, TapeService, current_tape};
 pub use store::FileTapeStore;
+pub use tree::{AnchorNode, AnchorTree, ForkEdge, SessionBranch};
 
 pub(crate) const TAPE_FILE_SUFFIX: &str = ".jsonl";
 
