@@ -157,10 +157,10 @@ impl GatewayArgs {
 
         // 0. Create Telegram notifier using gateway config fields.
         let bot_token = &gateway_config.bot_token;
-        let channel_id = gateway_config.notification_channel_id;
+        let chat_id = gateway_config.chat_id;
         let notifier = std::sync::Arc::new(rara_app::gateway::UpdateNotifier::new(
             bot_token,
-            channel_id,
+            chat_id,
             build_info::FULL_VERSION,
             &gateway_config.repo_url,
         ));
@@ -212,7 +212,7 @@ impl GatewayArgs {
         let health_url = format!("http://127.0.0.1:{port}/api/health");
         let listener = rara_app::gateway::GatewayTelegramListener::new(
             bot_token,
-            channel_id,
+            chat_id,
             supervisor_handle,
             update_rx,
             health_url,
