@@ -1186,6 +1186,7 @@ pub(crate) async fn run_agent_loop(
                 async move {
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
+                    info!(tool = %name, args = %args, "tool call started");
 
                     // Runtime permission guard — deny if user cannot use this tool.
                     if let Some(ref user) = user_ref {
