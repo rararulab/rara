@@ -1085,4 +1085,53 @@ mod tests {
         let after = svc.entries(tape).await.unwrap();
         assert_eq!(after.len(), total);
     }
+
+    #[tokio::test]
+    async fn tape_info_estimated_context_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "test-estimated-tokens";
+
+        // User message (no usage)
+        svc.append_message(tape, json!({"role": "user", "content": "hello"}), None)
+            .await
+            .unwrap();
+
+        // Assistant message with usage metadata
+        svc.append_message(
+            tape,
+            json!({"role": "assistant", "content": "hi there, how can I help?"}),
+            Some(json!({"usage": {"prompt_tokens": 500, "completion_tokens": 100, "total_tokens": 600}})),
+        )
+        .await
+        .unwrap();
+
+        // Another user message after (no usage)
+        svc.append_message(tape, json!({"role": "user", "content": "tell me about rust"}), None)
+            .await
+            .unwrap();
+
+        let info = svc.info(tape).await.unwrap();
+
+        // 500 prompt + 100 completion = 600, plus ~chars/4 for the last user message
+        assert!(info.estimated_context_tokens >= 600);
+        assert!(info.estimated_context_tokens < 700); // chars/4 adds a small amount
+    }
+
+    #[tokio::test]
+    async fn tape_info_estimated_context_tokens_no_usage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "test-estimated-no-usage";
+
+        // Only user messages (no usage metadata anywhere)
+        svc.append_message(tape, json!({"role": "user", "content": "hello world"}), None)
+            .await
+            .unwrap();
+
+        let info = svc.info(tape).await.unwrap();
+
+        // No usage data, so all estimation via chars/4
+        assert!(info.estimated_context_tokens > 0);
+    }
 }
