@@ -71,7 +71,7 @@ impl CommandHandler for TapeCommandHandler {
 
 impl TapeCommandHandler {
     async fn handle_anchors(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
         let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => return Ok(CommandResult::Text("No active session.".to_owned())),
@@ -116,7 +116,7 @@ impl TapeCommandHandler {
         args: &str,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
         let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => return Ok(CommandResult::Text("No active session.".to_owned())),
@@ -170,14 +170,3 @@ fn count_sessions(branch: &SessionBranch) -> usize {
         .sum::<usize>()
 }
 
-fn extract_chat_id(context: &CommandContext) -> String {
-    context
-        .metadata
-        .get("telegram_chat_id")
-        .and_then(|v| {
-            v.as_i64()
-                .map(|n| n.to_string())
-                .or_else(|| v.as_str().map(String::from))
-        })
-        .unwrap_or_else(|| "0".to_owned())
-}

@@ -49,7 +49,7 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
 
     async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
         let session_key = &context.data["switch:".len()..];
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         match self
             .client
@@ -72,18 +72,6 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn extract_chat_id(context: &CallbackContext) -> String {
-    context
-        .metadata
-        .get("telegram_chat_id")
-        .and_then(|v| {
-            v.as_i64()
-                .map(|n| n.to_string())
-                .or_else(|| v.as_str().map(String::from))
-        })
-        .unwrap_or_else(|| "0".to_owned())
-}
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")

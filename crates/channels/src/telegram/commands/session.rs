@@ -93,7 +93,7 @@ impl CommandHandler for SessionCommandHandler {
 impl SessionCommandHandler {
     /// `/new` — create a new session and bind the channel to it.
     async fn handle_new(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         match self.client.create_session(Some("Telegram Chat")).await {
             Ok(key) => {
@@ -108,7 +108,7 @@ impl SessionCommandHandler {
 
     /// `/clear` — clear all messages in the current session.
     async fn handle_clear(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => {
@@ -133,7 +133,7 @@ impl SessionCommandHandler {
         &self,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         // Find the currently active session key.
         let active_key = match self.client.get_channel_session(&chat_id).await {
@@ -199,7 +199,7 @@ impl SessionCommandHandler {
 
     /// `/usage` — show details about the current session.
     async fn handle_usage(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
@@ -257,7 +257,7 @@ impl SessionCommandHandler {
         args: &str,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
@@ -344,7 +344,7 @@ impl CommandHandler for StopCommandHandler {
         _command: &CommandInfo,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let chat_id = super::extract_chat_id(&context.metadata)?;
 
         let session_key = match self.client.get_channel_session(&chat_id).await {
             Ok(Some(binding)) => binding.session_key,
@@ -370,18 +370,6 @@ impl CommandHandler for StopCommandHandler {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract chat_id string from command context metadata.
-fn extract_chat_id(context: &CommandContext) -> String {
-    context
-        .metadata
-        .get("telegram_chat_id")
-        .and_then(|v| {
-            v.as_i64()
-                .map(|n| n.to_string())
-                .or_else(|| v.as_str().map(String::from))
-        })
-        .unwrap_or_else(|| "0".to_owned())
-}
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
