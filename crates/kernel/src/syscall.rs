@@ -322,9 +322,16 @@ impl SyscallDispatcher {
                             created_at: Timestamp::now(),
                         };
                         let id = entry.id.clone();
-                        let mut wheel = self.job_wheel.lock().unwrap();
-                        wheel.add(entry);
-                        wheel.persist();
+                        let wheel_ref = self.job_wheel.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let mut wheel = wheel_ref.lock().unwrap();
+                            wheel.add(entry);
+                            wheel.persist();
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            warn!(error = %e, "spawn_blocking panicked during RegisterJob");
+                        });
                         info!(job_id = %id, session = %syscall_sender, "registered scheduled job");
                         Ok(id)
                     }
@@ -335,16 +342,30 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(result);
             }
             Syscall::RemoveJob { job_id, reply_tx } => {
-                let mut wheel = self.job_wheel.lock().unwrap();
-                let result = match wheel.remove(&job_id) {
-                    Some(_) => {
-                        wheel.persist();
-                        info!(job_id = %job_id, "removed scheduled job");
-                        Ok(())
+                let wheel_ref = self.job_wheel.clone();
+                let job_id_clone = job_id.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut wheel = wheel_ref.lock().unwrap();
+                    match wheel.remove(&job_id_clone) {
+                        Some(_) => {
+                            wheel.persist();
+                            true
+                        }
+                        None => false,
                     }
-                    None => Err(crate::error::KernelError::Other {
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "spawn_blocking panicked during RemoveJob");
+                    false
+                });
+                let result = if result {
+                    info!(job_id = %job_id, "removed scheduled job");
+                    Ok(())
+                } else {
+                    Err(crate::error::KernelError::Other {
                         message: format!("job not found: {job_id}").into(),
-                    }),
+                    })
                 };
                 let _ = reply_tx.send(result);
             }
