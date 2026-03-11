@@ -338,6 +338,19 @@ impl Default for BackendConfig {
 
 impl AgentConfig {
     #[must_use]
+    pub fn with_backend_config(&self, backend: &BackendConfig) -> Self {
+        Self {
+            command: backend.command.clone(),
+            backend: backend.backend.clone(),
+            assign_prefix: self.assign_prefix.clone(),
+            core_config_file: backend.core_config_file.clone(),
+            extra_args: backend.extra_args.clone(),
+            run_timeout: backend.run_timeout,
+            backends: self.backends.clone(),
+        }
+    }
+
+    #[must_use]
     pub fn default_backend_config(&self) -> BackendConfig {
         BackendConfig {
             command: self.command.clone(),

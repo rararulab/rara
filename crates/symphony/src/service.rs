@@ -32,8 +32,8 @@ use tracing::{error, info, warn};
 use crate::{
     agent::{AgentTask, RalphAgent},
     config::{
-        RepoConfig, SymphonyConfig, TrackerConfig, default_active_labels,
-        default_repo_checkout_root, default_repo_url,
+        AgentConfig, BackendSelection, RepoConfig, ResolvedAgentConfig, SymphonyConfig,
+        TrackerConfig, default_active_labels, default_repo_checkout_root, default_repo_url,
     },
     error::Result,
     tracker::{GitHubIssueTracker, IssueState, IssueTracker, LinearIssueTracker, TrackedIssue},
@@ -81,8 +81,7 @@ impl SymphonyService {
         info!(lnav = %lnav_hint(), "ralpha issue logs are available");
 
         let tracker: Box<dyn IssueTracker> = self.build_tracker()?;
-        let agent = RalphAgent::new(self.config.agent.clone());
-        let mut runtime = IssueRuntime::new(self.config.clone(), agent);
+        let mut runtime = IssueRuntime::new(self.config.clone(), self.config.agent.clone());
 
         info!("symphony poll loop started");
 
@@ -147,17 +146,17 @@ impl SymphonyService {
 struct IssueRuntime {
     config: SymphonyConfig,
     workspace_manager: WorkspaceManager,
-    agent: RalphAgent,
+    agent_config: AgentConfig,
     running: HashMap<String, RunningIssue>,
     failed: HashMap<String, FinishedIssue>,
 }
 
 impl IssueRuntime {
-    fn new(config: SymphonyConfig, agent: RalphAgent) -> Self {
+    fn new(config: SymphonyConfig, agent_config: AgentConfig) -> Self {
         Self {
             config,
             workspace_manager: WorkspaceManager,
-            agent,
+            agent_config,
             running: HashMap::new(),
             failed: HashMap::new(),
         }
@@ -343,13 +342,16 @@ impl IssueRuntime {
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
     /// transition the issue to `In Progress` once the child is live.
     async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
-        let repo = self
-            .repo_config(&issue.repo)
-            .with_context(|_| crate::error::WorkspaceContextSnafu {
-            message: format!(
-                "failed to resolve repo config for issue {} ({}) in repo {}",
-                issue.identifier, issue.id, issue.repo
-            ),
+        let resolved_agent = self.resolve_agent_config_for_issue(&issue);
+        self.log_backend_selection(&issue, &resolved_agent);
+
+        let repo = self.repo_config(&issue.repo).with_context(|_| {
+            crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to resolve repo config for issue {} ({}) in repo {}",
+                    issue.identifier, issue.id, issue.repo
+                ),
+            }
         })?;
         let workspace = self
             .workspace_manager
@@ -389,8 +391,11 @@ impl IssueRuntime {
             attempt: None,
             workflow_content,
         };
-        let mut handle = self
-            .agent
+        let agent = RalphAgent::new(
+            self.agent_config
+                .with_backend_config(&resolved_agent.config),
+        );
+        let mut handle = agent
             .start(&task, &workspace.path)
             .await
             .with_context(|_| crate::error::WorkspaceContextSnafu {
@@ -418,11 +423,14 @@ impl IssueRuntime {
 
         info!(
             issue_id = %issue.id,
+            issue_identifier = %issue.identifier,
             repo = %issue.repo,
             workspace = %workspace.path.display(),
             branch = %workspace.branch,
             log_path = %log_path.display(),
             created_now = workspace.created_now,
+            backend = %resolved_agent.config.backend,
+            command = %resolved_agent.config.command,
             "spawned ralph task runner"
         );
 
@@ -521,6 +529,45 @@ impl IssueRuntime {
             .tracker
             .as_ref()
             .map_or("ToVerify", TrackerConfig::completed_issue_state)
+    }
+
+    fn resolve_agent_config_for_issue(&self, issue: &TrackedIssue) -> ResolvedAgentConfig {
+        self.agent_config
+            .resolve_for_assign(issue.assign.as_deref())
+    }
+
+    fn log_backend_selection(&self, issue: &TrackedIssue, resolved: &ResolvedAgentConfig) {
+        match &resolved.selection {
+            BackendSelection::Default => info!(
+                issue_id = %issue.id,
+                issue_identifier = %issue.identifier,
+                backend = %resolved.config.backend,
+                "using default backend for issue"
+            ),
+            BackendSelection::Assigned { key, raw } => info!(
+                issue_id = %issue.id,
+                issue_identifier = %issue.identifier,
+                assign = %raw,
+                backend_key = %key,
+                backend = %resolved.config.backend,
+                "resolved backend from issue assign selector"
+            ),
+            BackendSelection::Ignored { raw } => warn!(
+                issue_id = %issue.id,
+                issue_identifier = %issue.identifier,
+                assign = %raw,
+                backend = %resolved.config.backend,
+                "issue assign selector did not use the Ralph prefix; falling back to default backend"
+            ),
+            BackendSelection::Invalid { key, raw } => warn!(
+                issue_id = %issue.id,
+                issue_identifier = %issue.identifier,
+                assign = %raw,
+                backend_key = %key,
+                backend = %resolved.config.backend,
+                "issue assign selector did not match a configured backend; falling back to default backend"
+            ),
+        }
     }
 }
 
@@ -739,10 +786,30 @@ fn resolve_env_var(value: &str) -> crate::error::Result<String> {
 mod tests {
     use std::time::Duration;
 
+    use chrono::Utc;
     use tokio_util::sync::CancellationToken;
 
     use super::{IssueRuntime, ProcessOutputSummary, SymphonyService, issue_log_path, lnav_hint};
-    use crate::config::{AgentConfig, RepoConfig, SymphonyConfig};
+    use crate::{
+        config::{AgentConfig, BackendConfig, BackendSelection, RepoConfig, SymphonyConfig},
+        tracker::{IssueState, TrackedIssue},
+    };
+
+    fn tracked_issue(assign: Option<&str>) -> TrackedIssue {
+        TrackedIssue {
+            id: "lin_123".to_owned(),
+            identifier: "RAR-123".to_owned(),
+            repo: "rararulab/rara".to_owned(),
+            number: 123,
+            title: "Dynamic backend".to_owned(),
+            body: None,
+            assign: assign.map(str::to_owned),
+            labels: vec![],
+            priority: 1,
+            state: IssueState::Active,
+            created_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn process_output_summary_keeps_only_recent_stderr_lines() {
@@ -795,12 +862,9 @@ mod tests {
             None,
         );
 
-        let repo = IssueRuntime::new(
-            service.config.clone(),
-            crate::agent::RalphAgent::new(AgentConfig::default()),
-        )
-        .repo_config("crrowbot/rara-notes")
-        .expect("fallback repo config should resolve");
+        let repo = IssueRuntime::new(service.config.clone(), AgentConfig::default())
+            .repo_config("crrowbot/rara-notes")
+            .expect("fallback repo config should resolve");
 
         assert_eq!(repo.name, "crrowbot/rara-notes");
         assert_eq!(repo.url, "git@github.com:crrowbot/rara-notes.git");
@@ -832,7 +896,7 @@ mod tests {
                 .agent(AgentConfig::default())
                 .repos(vec![configured])
                 .build(),
-            crate::agent::RalphAgent::new(AgentConfig::default()),
+            AgentConfig::default(),
         );
 
         let repo = runtime
@@ -840,5 +904,76 @@ mod tests {
             .expect("configured repo should resolve");
 
         assert_eq!(repo.url, "https://example.com/custom.git");
+    }
+
+    #[test]
+    fn runtime_resolves_issue_specific_backend_configuration() {
+        let mut agent = AgentConfig::default();
+        agent.backends.insert(
+            "docker".to_owned(),
+            BackendConfig::builder()
+                .command("ralph-docker".to_owned())
+                .backend("docker".to_owned())
+                .build(),
+        );
+        let runtime = IssueRuntime::new(
+            SymphonyConfig::builder()
+                .enabled(true)
+                .poll_interval(Duration::from_secs(30))
+                .max_concurrent_agents(2)
+                .stall_timeout(Duration::from_secs(30 * 60))
+                .max_retry_backoff(Duration::from_secs(60 * 60))
+                .workflow_file("WORKFLOW.md".to_owned())
+                .agent(agent.clone())
+                .repos(vec![])
+                .build(),
+            agent,
+        );
+
+        let resolved = runtime.resolve_agent_config_for_issue(&tracked_issue(Some("ralph:docker")));
+
+        assert_eq!(
+            resolved.selection,
+            BackendSelection::Assigned {
+                key: "docker".to_owned(),
+                raw: "ralph:docker".to_owned(),
+            }
+        );
+        assert_eq!(resolved.config.command, "ralph-docker");
+        assert_eq!(resolved.config.backend, "docker");
+    }
+
+    #[test]
+    fn runtime_falls_back_to_default_backend_for_invalid_assign() {
+        let agent = AgentConfig::builder()
+            .command("ralph".to_owned())
+            .backend("codex".to_owned())
+            .build();
+        let runtime = IssueRuntime::new(
+            SymphonyConfig::builder()
+                .enabled(true)
+                .poll_interval(Duration::from_secs(30))
+                .max_concurrent_agents(2)
+                .stall_timeout(Duration::from_secs(30 * 60))
+                .max_retry_backoff(Duration::from_secs(60 * 60))
+                .workflow_file("WORKFLOW.md".to_owned())
+                .agent(agent.clone())
+                .repos(vec![])
+                .build(),
+            agent,
+        );
+
+        let resolved =
+            runtime.resolve_agent_config_for_issue(&tracked_issue(Some("ralph:unknown")));
+
+        assert_eq!(
+            resolved.selection,
+            BackendSelection::Invalid {
+                key: "unknown".to_owned(),
+                raw: "ralph:unknown".to_owned(),
+            }
+        );
+        assert_eq!(resolved.config.command, "ralph");
+        assert_eq!(resolved.config.backend, "codex");
     }
 }
