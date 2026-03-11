@@ -327,6 +327,10 @@ pub enum KernelEvent {
         instruction: String,
     },
 
+    /// Periodic Mita heartbeat — ensures the Mita session exists and
+    /// delivers a heartbeat message to it.
+    MitaHeartbeat,
+
     // === System ===
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
@@ -353,6 +357,7 @@ impl KernelEvent {
             | Self::CreateSession { .. }
             | Self::ScheduledTask { .. }
             | Self::MitaDirective { .. }
+            | Self::MitaHeartbeat
             | Self::IdleCheck => EventPriority::Low,
         }
     }
@@ -542,6 +547,14 @@ impl KernelEventEnvelope {
         }
     }
 
+    /// Create a `MitaHeartbeat` event.
+    pub fn mita_heartbeat() -> Self {
+        Self {
+            base: EventBase::from(SessionKey::new()),
+            kind: KernelEvent::MitaHeartbeat,
+        }
+    }
+
     /// Create an `IdleCheck` event.
     pub fn idle_check() -> Self {
         Self {
@@ -623,6 +636,7 @@ impl KernelEventEnvelope {
             KernelEvent::MitaDirective { .. } => {
                 format!("mita directive for session {}", self.base.session_key)
             }
+            KernelEvent::MitaHeartbeat => "periodic mita heartbeat".to_string(),
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }

@@ -159,6 +159,14 @@ impl JobWheel {
         Self { jobs, path }
     }
 
+    /// Return the next fire time, or `None` if the wheel is empty.
+    pub fn next_deadline(&self) -> Option<jiff::Timestamp> {
+        self.jobs
+            .keys()
+            .next()
+            .map(|(secs, _)| jiff::Timestamp::from_second(*secs).unwrap())
+    }
+
     /// Drain all jobs whose `next_at` is at or before `now`.
     ///
     /// - `Once` jobs are removed permanently.

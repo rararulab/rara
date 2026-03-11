@@ -97,6 +97,9 @@ pub struct KernelConfig {
     /// within this duration, the stream is aborted and retried.
     #[default(_code = "Duration::from_secs(90)")]
     pub streaming_idle_timeout:    Duration,
+    /// Mita heartbeat interval. `None` disables the heartbeat.
+    #[default(_code = "None")]
+    pub mita_heartbeat_interval:   Option<Duration>,
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
     pub event_queue:               ShardedEventQueueConfig,
@@ -362,6 +365,11 @@ impl Kernel {
     ///
     /// Each processor runs independently, allowing parallel event handling
     /// across different agent shards. Drains in batches of up to 32.
+    ///
+    /// Processor id=0 also runs the unified scheduler: instead of a fixed
+    /// 1-second tick, it computes the next deadline from (a) the Mita
+    /// heartbeat interval and (b) the earliest scheduled job, and sleeps
+    /// until the soonest one fires.
     async fn run_processor(
         &self,
         id: usize,
@@ -370,12 +378,44 @@ impl Kernel {
     ) {
         info!(processor_id = id, "event processor started");
 
-        // Only the global processor (id=0) runs the schedule tick.
-        let mut schedule_tick = tokio::time::interval(std::time::Duration::from_secs(1));
-        // Don't fire immediately on startup — wait for the first real tick.
-        schedule_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Only processor id=0 runs the unified scheduler.
+        let mita_interval = self.config.mita_heartbeat_interval;
+        let mut next_mita = mita_interval.map(|d| tokio::time::Instant::now() + d);
 
         loop {
+            // Compute next wake time for the unified scheduler (processor 0 only).
+            let scheduler_sleep = if id == 0 {
+                let next_job_instant = self
+                    .syscall
+                    .job_wheel()
+                    .lock()
+                    .ok()
+                    .and_then(|w| w.next_deadline())
+                    .map(|ts| {
+                        let now_ts = jiff::Timestamp::now();
+                        let delta = ts.duration_since(now_ts);
+                        let clamped = if delta.is_negative() {
+                            std::time::Duration::ZERO
+                        } else {
+                            delta.unsigned_abs()
+                        };
+                        tokio::time::Instant::now() + clamped
+                    });
+
+                // Find the earliest deadline among: mita heartbeat, next scheduled job.
+                let earliest = [next_mita, next_job_instant]
+                    .into_iter()
+                    .flatten()
+                    .min()
+                    .unwrap_or(tokio::time::Instant::now() + std::time::Duration::from_secs(3600));
+
+                tokio::time::sleep_until(earliest)
+            } else {
+                // Non-zero processors never wake for scheduling.
+                tokio::time::sleep(std::time::Duration::from_secs(86400))
+            };
+            tokio::pin!(scheduler_sleep);
+
             tokio::select! {
                 _ = queue.wait() => {
                     loop {
@@ -393,7 +433,20 @@ impl Kernel {
                         join_all(futs).await;
                     }
                 }
-                _ = schedule_tick.tick(), if id == 0 => {
+                _ = &mut scheduler_sleep, if id == 0 => {
+                    let now = tokio::time::Instant::now();
+
+                    // Check if Mita heartbeat is due.
+                    if let Some(mita_at) = next_mita {
+                        if now >= mita_at {
+                            if let Err(e) = self.event_queue.try_push(KernelEventEnvelope::mita_heartbeat()) {
+                                error!(%e, "failed to push MitaHeartbeat");
+                            }
+                            next_mita = mita_interval.map(|d| now + d);
+                        }
+                    }
+
+                    // Drain any expired scheduled jobs.
                     self.drain_scheduled_jobs().await;
                 }
                 _ = shutdown.cancelled() => {
@@ -534,6 +587,9 @@ impl Kernel {
             }
             KernelEvent::MitaDirective { instruction } => {
                 self.handle_mita_directive(base.session_key, instruction).await;
+            }
+            KernelEvent::MitaHeartbeat => {
+                self.handle_mita_heartbeat().await;
             }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
@@ -1283,6 +1339,65 @@ impl Kernel {
 
         // Set metadata flag so start_llm_turn persists as Event (not Message).
         msg.metadata.insert("mita_directive".to_string(), serde_json::json!(true));
+
+        self.deliver_to_session(session_key, msg).await;
+    }
+
+    /// Handle a periodic Mita heartbeat.
+    ///
+    /// Ensures the long-lived Mita session exists (spawning it if necessary)
+    /// and delivers a heartbeat message to it.
+    async fn handle_mita_heartbeat(&self) {
+        let session_key = SessionKey::deterministic("mita");
+
+        if !self.process_table.contains(&session_key) {
+            info!("Mita session not found, bootstrapping");
+
+            // Ensure tape exists with a bootstrap anchor.
+            let tape_name = session_key.to_string();
+            if let Err(e) = self.tape_service.ensure_bootstrap_anchor(&tape_name).await {
+                error!(error = %e, "failed to bootstrap Mita tape");
+                return;
+            }
+
+            let manifest = match self.agent_registry.get("mita") {
+                Some(m) => m,
+                None => {
+                    warn!("Mita agent manifest not found in registry, skipping heartbeat");
+                    return;
+                }
+            };
+
+            let principal = Principal::lookup("system");
+
+            match self
+                .handle_spawn_agent(
+                    manifest,
+                    "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                    principal,
+                    None,
+                    None,
+                    Some(session_key),
+                    None,
+                )
+                .await
+            {
+                Ok(key) => info!(session_key = %key, "Mita long-lived session spawned"),
+                Err(e) => error!(error = %e, "failed to spawn Mita session"),
+            }
+            // Session just spawned with initial message, skip this heartbeat
+            return;
+        }
+
+        // Deliver heartbeat message to the existing Mita session.
+        let msg = InboundMessage::synthetic(
+            "Heartbeat triggered. Analyze active sessions and determine if any proactive \
+             actions are needed. Review your previous tape entries to avoid repeating \
+             recent actions."
+                .to_string(),
+            crate::identity::UserId("system".to_string()),
+            session_key,
+        );
 
         self.deliver_to_session(session_key, msg).await;
     }
