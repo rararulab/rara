@@ -164,6 +164,7 @@ pub(crate) async fn boot(
             skill_registry: skill_registry.clone(),
             mcp_manager: mcp_manager.clone(),
             tape_service: tape_service.clone(),
+            session_index: session_index.clone(),
         },
     );
 
