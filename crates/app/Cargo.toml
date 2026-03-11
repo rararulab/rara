@@ -23,6 +23,7 @@ common-runtime = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }
 humantime-serde = "1"
+jiff.workspace = true
 lettre.workspace = true
 notify = { workspace = true }
 rand.workspace = true
@@ -39,6 +40,7 @@ rara-paths = { workspace = true }
 rara-pg-credential-store.workspace = true
 rara-server = { workspace = true }
 rara-sessions.workspace = true
+rara-soul.workspace = true
 rara-skills.workspace = true
 rara-symphony.workspace = true
 reqwest = { workspace = true }
@@ -58,7 +60,6 @@ yunara-store = { workspace = true }
 
 [dev-dependencies]
 common-telemetry.workspace = true
-jiff = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

@@ -151,6 +151,8 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "dispatch-rara".to_string(),
         "write-user-note".to_string(),
         "distill-user-notes".to_string(),
+        "update-soul-state".to_string(),
+        "evolve-soul".to_string(),
     ],
     max_children:       Some(0),
     max_context_tokens: None,
@@ -327,6 +329,26 @@ Use `distill-user-notes` to condense accumulated user notes when a user's tape h
 4. Call `distill-user-notes` with the condensed summary
 
 Good distillation preserves all important facts while removing redundancy and outdated information.
+
+## Soul Evolution
+
+You are responsible for evolving Rara's personality over time based on observed interactions.
+
+### Tracking State Changes
+
+Use `update-soul-state` to record macro-level observations about Rara's relationship with users:
+- `relationship_stage`: Update when the relationship clearly progresses (stranger → acquaintance → friend → close_friend). Be conservative — only advance when sustained evidence exists.
+- `emerged_traits`: Record personality traits that emerge through interaction (e.g. "enjoys explaining technical concepts", "protective of user's time"). Include confidence (0.0-1.0) and when first observed.
+- `style_drift`: Adjust formality (1-10), verbosity (1-10), humor_frequency (1-10) when you observe Rara's communication style naturally shifting.
+- `discovered_interests`: Track topics the user shows genuine interest in.
+
+### Triggering Evolution
+
+Use `evolve-soul` when enough signal has accumulated to warrant updating Rara's soul.md:
+- At least 3 emerged traits, OR noticeable style drift from defaults.
+- Do NOT trigger evolution frequently — once every few days at most.
+- The tool will snapshot the current soul before making changes.
+- Currently, the LLM rewrite step is a placeholder and will return "pending".
 
 ## Rules
 
