@@ -20,7 +20,6 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use sysinfo::System;
 use teloxide::{prelude::*, types::ChatId};
 use tracing::warn;
 
@@ -31,18 +30,6 @@ use tracing::warn;
 pub struct UpdateNotifier {
     bot:              Bot,
     channel_id:       i64,
-    /// Gateway version string (injected from build_info).
-    version:          String,
-    /// Machine hostname.
-    hostname:         String,
-    /// OS version string.
-    os:               String,
-    /// CPU model string.
-    cpu:              String,
-    /// Total physical memory formatted as GB.
-    memory:           String,
-    /// Wall-clock time the gateway process started.
-    started_at:       chrono::DateTime<chrono::Local>,
     /// Number of times the agent has been (re)started.
     agent_generation: AtomicU32,
     /// Wall-clock time of the most recent agent launch.
@@ -56,36 +43,10 @@ pub struct UpdateNotifier {
 
 impl UpdateNotifier {
     /// Create a new notifier.
-    ///
-    /// System information (hostname, OS, CPU, memory) is gathered automatically
-    /// via `sysinfo` at construction time.
     pub fn new(bot_token: &str, channel_id: i64, version: &str, repo_url: &str) -> Self {
-        let bot = Bot::new(bot_token);
-
-        let hostname = System::host_name().unwrap_or_else(|| "unknown".into());
-        let os = System::long_os_version().unwrap_or_else(|| "unknown".into());
-
-        let mut sys = System::new();
-        sys.refresh_cpu_all();
-        let cpu = sys
-            .cpus()
-            .first()
-            .map(|c| c.brand().to_owned())
-            .unwrap_or_else(|| "unknown".into());
-
-        sys.refresh_memory();
-        let total_gb = sys.total_memory() as f64 / 1_073_741_824.0;
-        let memory = format!("{total_gb:.1} GB");
-
         Self {
-            bot,
+            bot: Bot::new(bot_token),
             channel_id,
-            version: version.to_owned(),
-            hostname,
-            os,
-            cpu,
-            memory,
-            started_at: chrono::Local::now(),
             agent_generation: AtomicU32::new(0),
             agent_started_at: std::sync::Mutex::new(None),
             agent_version: std::sync::Mutex::new(version.to_owned()),
@@ -192,16 +153,8 @@ impl UpdateNotifier {
         let agent_ver = self.agent_version.lock().unwrap().clone();
 
         format!(
-            "\n🖥 host: <code>{}</code>\n💻 os: <code>{}</code>\n🧠 cpu: <code>{}</code>\n💾 mem: \
-             <code>{}</code>\n📦 gateway: <code>{}</code>\n🤖 agent: {}\n⏱ gateway since: {}\n🔄 \
-             agent generation: {}\n🕐 agent since: {}",
-            self.hostname,
-            self.os,
-            self.cpu,
-            self.memory,
-            self.version,
+            "\n🤖 agent: {}\n🔄 generation: {}\n🕐 since: {}",
             self.commit_link(&agent_ver),
-            self.started_at.format("%Y-%m-%d %H:%M:%S"),
             generation,
             agent_since,
         )
