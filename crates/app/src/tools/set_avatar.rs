@@ -21,7 +21,7 @@ use rara_domain_shared::settings::{SettingsProvider, keys};
 use rara_kernel::tool::{AgentTool, ToolOutput};
 use serde_json::json;
 
-/// Set the Telegram bot's profile photo from a local file or URL.
+/// Change the Telegram bot's profile photo from the images directory.
 pub struct SetAvatarTool {
     settings: Arc<dyn SettingsProvider>,
 }
@@ -39,20 +39,20 @@ impl AgentTool for SetAvatarTool {
     }
 
     fn description(&self) -> &str {
-        "Set the bot's Telegram profile photo. Accepts a local file path or an image URL as the \
-         source."
+        "Change the Telegram bot's profile photo. The image file must be placed in the images \
+         directory beforehand. Use a filename relative to the images directory."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "source": {
+                "filename": {
                     "type": "string",
-                    "description": "Local file path or URL of the image to use as the profile photo"
+                    "description": "Image filename in the images directory (e.g. 'avatar.jpg')"
                 }
             },
-            "required": ["source"]
+            "required": ["filename"]
         })
     }
 
@@ -61,10 +61,42 @@ impl AgentTool for SetAvatarTool {
         params: serde_json::Value,
         _context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let source = params
-            .get("source")
+        let filename = params
+            .get("filename")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: source"))?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: filename"))?;
+
+        // Validate extension.
+        let ext = std::path::Path::new(filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+
+        let mime = match ext.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            _ => {
+                return Ok(json!({
+                    "error": "unsupported image format; only jpg, jpeg, and png are allowed"
+                })
+                .into());
+            }
+        };
+
+        // Resolve full path.
+        let path = rara_paths::images_dir().join(filename);
+        if !path.is_file() {
+            return Ok(json!({
+                "error": format!("file not found: {}", path.display())
+            })
+            .into());
+        }
+
+        // Read image bytes.
+        let data = tokio::fs::read(&path)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to read file '{}': {e}", path.display()))?;
 
         // Read bot token from settings.
         let token = self
@@ -73,49 +105,17 @@ impl AgentTool for SetAvatarTool {
             .await
             .ok_or_else(|| anyhow::anyhow!("telegram.bot_token not configured"))?;
 
-        // Obtain image bytes.
-        let image_bytes = if source.starts_with("http://") || source.starts_with("https://") {
-            let client = reqwest::Client::new();
-            let resp = client
-                .get(source)
-                .header("Referer", "https://www.pixiv.net/")
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to download image: {e}"))?;
-
-            if !resp.status().is_success() {
-                return Ok(
-                    json!({ "error": format!("download failed with status {}", resp.status()) })
-                        .into(),
-                );
-            }
-
-            resp.bytes()
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to read image bytes: {e}"))?
-                .to_vec()
-        } else {
-            tokio::fs::read(source)
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to read file '{}': {e}", source))?
-        };
-
         // Build multipart form for Telegram setMyProfilePhoto API.
-        let photo_file_part = reqwest::multipart::Part::bytes(image_bytes)
-            .file_name("photo.png")
-            .mime_str("image/png")?;
-
+        let url = format!("https://api.telegram.org/bot{token}/setMyProfilePhoto");
+        let photo_part = reqwest::multipart::Part::bytes(data)
+            .file_name(filename.to_string())
+            .mime_str(mime)?;
         let form = reqwest::multipart::Form::new()
             .text(
                 "photo",
                 r#"{"type":"static","photo":"attach://photo_file"}"#,
             )
-            .part("photo_file", photo_file_part);
-
-        let url = format!(
-            "https://api.telegram.org/bot{}/setMyProfilePhoto",
-            token
-        );
+            .part("photo_file", photo_part);
 
         let client = reqwest::Client::new();
         let resp = client
@@ -132,10 +132,10 @@ impl AgentTool for SetAvatarTool {
             .map_err(|e| anyhow::anyhow!("failed to parse telegram response: {e}"))?;
 
         if status.is_success() && body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-            tracing::info!(source = %source, "bot profile photo updated");
+            tracing::info!(filename = %filename, "bot profile photo updated");
             Ok(json!({
                 "status": "updated",
-                "source": source,
+                "filename": filename,
             })
             .into())
         } else {
@@ -143,7 +143,7 @@ impl AgentTool for SetAvatarTool {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown error");
-            tracing::error!(source = %source, error = %description, "failed to set profile photo");
+            tracing::error!(filename = %filename, error = %description, "failed to set profile photo");
             Ok(json!({
                 "error": format!("telegram API error: {description}"),
             })

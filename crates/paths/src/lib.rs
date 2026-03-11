@@ -268,6 +268,12 @@ pub fn resources_dir() -> &'static PathBuf {
     RESOURCES_DIR.get_or_init(|| data_dir().join("resources"))
 }
 
+/// Returns the path to the images directory for avatar and media assets.
+pub fn images_dir() -> &'static PathBuf {
+    static IMAGES_DIR: OnceLock<PathBuf> = OnceLock::new();
+    IMAGES_DIR.get_or_init(|| resources_dir().join("images"))
+}
+
 /// Returns the path to the staging directory used for gateway updates.
 ///
 /// Resolves to `<data_dir>/staging/`. The directory is created if it
