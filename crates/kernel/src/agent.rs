@@ -1067,6 +1067,15 @@ pub(crate) async fn run_agent_loop(
         let mut assistant_tool_calls = Vec::new();
         for tool_call in tool_call_list {
             tool_calls_made += 1;
+
+            // Emit ToolCallStart BEFORE parsing so the forwarder always
+            // receives it — even if argument parsing fails below.
+            stream_handle.emit(StreamEvent::ToolCallStart {
+                name:      tool_call.name.clone(),
+                id:        tool_call.id.clone(),
+                arguments: serde_json::Value::Object(Default::default()),
+            });
+
             let args = match parse_tool_call_arguments(&tool_call.arguments_buf) {
                 Ok(args) => args,
                 Err(error_message) => {
@@ -1074,6 +1083,12 @@ pub(crate) async fn run_agent_loop(
                         &tool_call.id,
                         serde_json::json!({ "error": error_message }).to_string(),
                     ));
+                    stream_handle.emit(StreamEvent::ToolCallEnd {
+                        id:             tool_call.id,
+                        result_preview: error_message.chars().take(200).collect(),
+                        success:        false,
+                        error:          Some(error_message),
+                    });
                     continue;
                 }
             };
@@ -1082,12 +1097,6 @@ pub(crate) async fn run_agent_loop(
                 id:        tool_call.id.clone(),
                 name:      tool_call.name.clone(),
                 arguments: tool_call.arguments_buf.clone(),
-            });
-
-            stream_handle.emit(StreamEvent::ToolCallStart {
-                name:      tool_call.name.clone(),
-                id:        tool_call.id.clone(),
-                arguments: args.clone(),
             });
             if let Some(ref mtx) = milestone_tx {
                 let _ = mtx
