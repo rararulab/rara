@@ -660,6 +660,8 @@ impl TapeService {
         // Always render from the original ancestor so the graph is stable no
         // matter which forked session the user is currently in.
         let root_key = self.find_root_session(session_key, sessions).await?;
+        // TODO(perf): walk only the fork chain instead of loading all sessions.
+        // This is O(all_sessions) but anchor trees are rarely deep, so acceptable for now.
         let all_sessions = sessions
             .list_sessions(10_000, 0)
             .await
