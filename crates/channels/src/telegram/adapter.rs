@@ -106,19 +106,21 @@ struct ToolProgress {
 
 /// Progress message state for tool execution feedback.
 struct ProgressMessage {
-    message_id: Option<MessageId>,
-    tools:      Vec<ToolProgress>,
-    last_edit:  Instant,
+    message_id:     Option<MessageId>,
+    tools:          Vec<ToolProgress>,
+    last_edit:      Instant,
+    turn_started:   Instant,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id: None,
-            tools:      Vec::new(),
-            last_edit:  Instant::now()
+            message_id:     None,
+            tools:          Vec::new(),
+            last_edit:      Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
+            turn_started:   Instant::now(),
         }
     }
 }
@@ -162,7 +164,7 @@ fn format_tool_line(t: &ToolProgress) -> String {
 ///
 /// When there are more than 5 tools, older completed steps are collapsed into a
 /// single "\u{22ef} N earlier steps" line to keep the message compact.
-fn render_progress(tools: &[ToolProgress]) -> String {
+fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) -> String {
     let in_progress_count = tools.iter().filter(|t| !t.finished).count();
     let finished_count = tools.iter().filter(|t| t.finished).count();
     let total = tools.len();
@@ -176,6 +178,10 @@ fn render_progress(tools: &[ToolProgress]) -> String {
     if total <= 5 {
         for t in tools {
             lines.push(format_tool_line(t));
+        }
+        // Footer: total elapsed time.
+        if in_progress_count > 0 {
+            lines.push(format!("\u{23f1} {}", format_duration_compact(turn_elapsed)));
         }
         return lines.join("\n");
     }
@@ -228,6 +234,11 @@ fn render_progress(tools: &[ToolProgress]) -> String {
     // In-progress tools.
     for t in tools.iter().filter(|t| !t.finished) {
         lines.push(format_tool_line(t));
+    }
+
+    // Footer: total elapsed time (only while tools are still running).
+    if in_progress_count > 0 {
+        lines.push(format!("\u{23f1} {}", format_duration_compact(turn_elapsed)));
     }
 
     lines.join("\n")
@@ -1278,7 +1289,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = render_progress(&progress.tools);
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1308,7 +1319,7 @@ fn spawn_stream_forwarder(
                                 tp.duration = Some(tp.started_at.elapsed());
                             }
 
-                            let text = render_progress(&progress.tools);
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1387,7 +1398,7 @@ fn spawn_stream_forwarder(
 
                     // Flush throttled progress updates.
                     if progress_dirty && !progress.tools.is_empty() {
-                        let text = render_progress(&progress.tools);
+                        let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot
