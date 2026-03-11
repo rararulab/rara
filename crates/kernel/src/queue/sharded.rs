@@ -17,9 +17,9 @@
 //! [`EventProcessor`](crate::processor::EventProcessor)s.
 //!
 //! Event classification:
-//! - **Global**: `UserMessage`, `SpawnAgent`, `Shutdown`, `Deliver`
+//! - **Global**: `UserMessage`, `SpawnAgent`, `Shutdown`
 //! - **Sharded by session_key**: `Syscall`, `TurnCompleted`, `ChildCompleted`,
-//!   `SendSignal`
+//!   `SendSignal`, `Deliver`
 //!
 //! Shard index is computed as `session_key.0.as_u128() as usize % num_shards`.
 
