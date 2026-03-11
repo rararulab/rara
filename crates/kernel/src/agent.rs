@@ -453,7 +453,6 @@ impl AgentTurnResult {
 }
 
 fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json::Value, String> {
-    let arguments = if arguments.trim().is_empty() { "{}" } else { arguments };
     let args = serde_json::from_str::<serde_json::Value>(arguments)
         .map_err(|err| format!("invalid tool arguments: {err}"))?;
     if !args.is_object() {
@@ -1061,6 +1060,15 @@ pub(crate) async fn run_agent_loop(
         let tool_call_list: Vec<PendingToolCall> = sorted_indices
             .into_iter()
             .filter_map(|idx| pending_tool_calls.remove(&idx))
+            .map(|mut tc| {
+                // LLM may omit argument deltas for no-arg tool calls,
+                // leaving arguments_buf empty. Normalize to valid JSON
+                // so downstream parsing and LLM API round-trips succeed.
+                if tc.arguments_buf.trim().is_empty() {
+                    tc.arguments_buf = "{}".to_string();
+                }
+                tc
+            })
             .collect();
 
         // Parse and validate tool calls
@@ -1080,6 +1088,7 @@ pub(crate) async fn run_agent_loop(
             let args = match parse_tool_call_arguments(&tool_call.arguments_buf) {
                 Ok(args) => args,
                 Err(error_message) => {
+                    warn!(tool = %tool_call.name, %error_message, "tool argument parsing failed");
                     messages.push(llm::Message::tool_result(
                         &tool_call.id,
                         serde_json::json!({ "error": error_message }).to_string(),
@@ -1230,6 +1239,7 @@ pub(crate) async fn run_agent_loop(
                             }
                             Err(e) => {
                                 tool_span.record("success", false);
+                                warn!(tool = %name, error = %e, "tool execution failed");
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 (
                                     false,
@@ -1244,6 +1254,7 @@ pub(crate) async fn run_agent_loop(
                     } else {
                         tool_span.record("success", false);
                         let err = format!("tool not found: {name}");
+                        warn!(%err);
                         let dur = tool_start.elapsed().as_millis() as u64;
                         (
                             false,
