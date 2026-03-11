@@ -275,7 +275,11 @@ impl SyscallDispatcher {
                     let tape_name = syscall_sender.to_string();
                     let syscall_tool = SyscallTool::new(kernel_handle.clone(), syscall_sender);
                     registry.register(Arc::new(syscall_tool));
-                    let tape_tool = TapeTool::new(self.tape_service.clone(), tape_name);
+                    let tape_tool = TapeTool::new(
+                        self.tape_service.clone(),
+                        tape_name,
+                        Arc::clone(kernel_handle.session_index()),
+                    );
                     registry.register(Arc::new(tape_tool));
                     // Schedule tools
                     registry.register(Arc::new(crate::schedule_tool::ScheduleOnceTool));

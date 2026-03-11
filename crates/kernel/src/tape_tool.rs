@@ -19,11 +19,14 @@
 //! its own tape directly, giving it full visibility into the underlying memory
 //! mechanism so it can make informed decisions about context management.
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::memory::{HandoffState, TapEntryKind, TapeService};
+use crate::session::{SessionEntry, SessionIndex, SessionKey};
 
 /// LLM-callable tool that exposes raw tape memory primitives.
 ///
@@ -34,13 +37,19 @@ use crate::memory::{HandoffState, TapEntryKind, TapeService};
 pub(crate) struct TapeTool {
     tape_service: TapeService,
     tape_name:    String,
+    sessions:     Arc<dyn SessionIndex>,
 }
 
 impl TapeTool {
-    pub fn new(tape_service: TapeService, tape_name: String) -> Self {
+    pub fn new(
+        tape_service: TapeService,
+        tape_name: String,
+        sessions: Arc<dyn SessionIndex>,
+    ) -> Self {
         Self {
             tape_service,
             tape_name,
+            sessions,
         }
     }
 
@@ -162,41 +171,52 @@ impl TapeTool {
     }
 
     async fn exec_checkout(&self, anchor_name: &str) -> anyhow::Result<serde_json::Value> {
-        // Validate that the anchor exists without creating a tape.
-        // TapeTool does not have access to SessionIndex, so it cannot create a
-        // proper session + tape pair.  Creating the tape alone would produce an
-        // orphan (nothing points to it and the LLM context doesn't switch).
-        // Instead we return anchor metadata so the user can fork via /checkout.
-        let anchors = self
-            .tape_service
-            .anchors(&self.tape_name, usize::MAX)
+        use crate::memory::set_fork_metadata;
+        use chrono::Utc;
+
+        // 1. Create a new session with fork metadata.
+        let new_key = SessionKey::new();
+        let mut metadata = None;
+        set_fork_metadata(&mut metadata, &self.tape_name, anchor_name);
+        let now = Utc::now();
+        let entry = SessionEntry {
+            key:           new_key.clone(),
+            title:         Some(format!("Fork from {anchor_name}")),
+            model:         None,
+            system_prompt: None,
+            message_count: 0,
+            preview:       None,
+            metadata,
+            created_at:    now,
+            updated_at:    now,
+        };
+
+        self.sessions
+            .create_session(&entry)
             .await
-            .context("checkout: list anchors")?;
+            .map_err(|e| anyhow::anyhow!("failed to create fork session: {e}"))?;
 
-        let found = anchors.iter().find(|a| a.name == anchor_name);
-
-        match found {
-            Some(_anchor) => Ok(serde_json::json!({
-                "status": "anchor_found",
-                "anchor": anchor_name,
-                "message": format!(
-                    "Anchor '{}' found. Use /checkout {} in chat to fork from this point.",
-                    anchor_name, anchor_name
-                )
-            })),
-            None => {
-                let names: Vec<&str> = anchors.iter().map(|a| a.name.as_str()).collect();
-                Ok(serde_json::json!({
-                    "status": "anchor_not_found",
-                    "anchor": anchor_name,
-                    "available_anchors": names,
-                    "message": format!(
-                        "Anchor '{}' not found. Available anchors: {:?}",
-                        anchor_name, names
-                    )
-                }))
-            }
+        // 2. Copy tape entries up to the anchor into the new tape.
+        let new_tape = new_key.to_string();
+        if let Err(e) = self
+            .tape_service
+            .checkout_anchor(&self.tape_name, anchor_name, &new_tape)
+            .await
+        {
+            // Rollback session on tape failure.
+            let _ = self.sessions.delete_session(&new_key).await;
+            return Err(anyhow::anyhow!("checkout failed: {e}"));
         }
+
+        Ok(serde_json::json!({
+            "status": "checked_out",
+            "from_anchor": anchor_name,
+            "new_session": new_tape,
+            "message": format!(
+                "Forked from anchor '{}'. New session: {}. Context has been reset to the anchor point.",
+                anchor_name, new_tape
+            )
+        }))
     }
 }
 
