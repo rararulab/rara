@@ -32,6 +32,12 @@ const SERVER_NAME: &str = "context-mode";
 /// Tool name prefix used by context-mode MCP server.
 const TOOL_PREFIX: &str = "context-mode__";
 
+/// Tools whose output must never be intercepted.
+///
+/// Tape tools return memory/context data that the kernel needs verbatim —
+/// compressing it would destroy the information the agent relies on.
+const SKIP_TOOLS: &[&str] = &["tape", "tape-handoff", "tape-info", "read-tape"];
+
 /// Default output size threshold in bytes.
 const DEFAULT_THRESHOLD: usize = 4096;
 
@@ -114,6 +120,12 @@ impl OutputInterceptor for ContextModeInterceptor {
             return output;
         }
 
+        // Never intercept tape tools — their output is memory/context data
+        // that the kernel needs verbatim.
+        if SKIP_TOOLS.contains(&tool_name) {
+            return output;
+        }
+
         // Only large payloads are worth indexing.
         let json_str = output.json.to_string();
         if json_str.len() <= self.threshold {
@@ -149,7 +161,6 @@ impl OutputInterceptor for ContextModeInterceptor {
                     "index_id": &index_id,
                     "original_bytes": json_str.len(),
                     "summary": summary,
-                    "hint": "Use the context-mode search tool with relevant queries to retrieve details from this output."
                 });
                 let replacement_str = replacement.to_string();
 
