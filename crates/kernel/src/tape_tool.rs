@@ -160,6 +160,30 @@ impl TapeTool {
         let count = entries.len();
         Ok(serde_json::json!({ "entries": entries, "count": count }))
     }
+
+    async fn exec_checkout(&self, anchor_name: &str) -> anyhow::Result<serde_json::Value> {
+        let new_tape = format!(
+            "{}__checkout_{}",
+            self.tape_name,
+            anchor_name.replace('/', "_")
+        );
+
+        self.tape_service
+            .checkout_anchor(&self.tape_name, anchor_name, &new_tape)
+            .await
+            .map_err(|e| anyhow::anyhow!("checkout failed: {e}"))?;
+
+        Ok(serde_json::json!({
+            "status": "checked_out",
+            "from_anchor": anchor_name,
+            "new_tape": new_tape,
+            "message": format!(
+                "Context forked at anchor '{}'. New session tape created. \
+                 Your next turn will use the forked context.",
+                anchor_name
+            )
+        }))
+    }
 }
 
 // ============================================================================
@@ -200,6 +224,10 @@ enum TapeParams {
         #[serde(default)]
         kinds: Option<Vec<String>>,
     },
+    Checkout {
+        /// Anchor name to fork from.
+        name: String,
+    },
 }
 
 // ============================================================================
@@ -238,7 +266,8 @@ impl crate::tool::AgentTool for TapeTool {
          when transitioning topics\n- `anchors` — list checkpoints to find relevant past \
          context\n- `entries` — read raw tape entries in your current context window or after a \
          specific anchor\n- `between_anchors` — recall the full context of a specific past topic \
-         segment"
+         segment\n- `checkout` — fork from a named anchor, creating a new session with context \
+         up to that point"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -248,7 +277,7 @@ impl crate::tool::AgentTool for TapeTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors"],
+                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors", "checkout"],
                     "description": "The tape operation to perform."
                 },
                 "query": {
@@ -257,7 +286,7 @@ impl crate::tool::AgentTool for TapeTool {
                 },
                 "name": {
                     "type": "string",
-                    "description": "[anchor] Name for the checkpoint (e.g. 'topic/weather-done', 'handoff')."
+                    "description": "[anchor, checkout] Name for the checkpoint or anchor to fork from."
                 },
                 "summary": {
                     "type": "string",
@@ -326,6 +355,7 @@ impl crate::tool::AgentTool for TapeTool {
             TapeParams::BetweenAnchors { start, end, kinds } => {
                 self.exec_between_anchors(&start, &end, kinds).await
             }
+            TapeParams::Checkout { name } => self.exec_checkout(&name).await,
         }?;
 
         Ok(json.into())
