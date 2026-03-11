@@ -89,10 +89,11 @@ impl BotServiceClient for KernelBotServiceClient {
 
     async fn get_channel_session(
         &self,
+        channel_type: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, BotServiceError> {
         self.sessions
-            .get_channel_binding("telegram", chat_id)
+            .get_channel_binding(channel_type, chat_id)
             .await
             .map(|opt| opt.as_ref().map(binding_to_client))
             .map_err(map_session_err)

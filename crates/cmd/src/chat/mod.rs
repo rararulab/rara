@@ -23,7 +23,10 @@ use rara_channels::{
     tool_display::{tool_arguments_summary, tool_display_name},
 };
 use rara_kernel::{
-    channel::types::{ChannelType, MessageContent},
+    channel::{
+        command::{CommandContext, CommandHandler, CommandInfo, CommandResult as CmdResult},
+        types::{ChannelType, ChannelUser, MessageContent},
+    },
     handle::KernelHandle,
     identity::UserId,
     io::{
@@ -114,6 +117,8 @@ impl ChatArgs {
         let mut chat_state = ChatState::new(session_alias.clone(), user_id.clone());
         chat_state.model_label = default_model_label;
 
+        let command_handlers = app_handle.command_handlers.clone();
+
         let result = run_chat_tui(
             &mut terminal,
             &mut chat_state,
@@ -121,6 +126,7 @@ impl ChatArgs {
             kernel_handle,
             session_alias,
             user_id,
+            &command_handlers,
         )
         .await;
 
@@ -172,6 +178,7 @@ async fn run_chat_tui(
     kernel_handle: KernelHandle,
     session_key: String,
     user_id: String,
+    command_handlers: &[Arc<dyn CommandHandler>],
 ) -> Result<(), Whatever> {
     let mut tick = tokio::time::interval(Duration::from_millis(100));
 
@@ -190,7 +197,13 @@ async fn run_chat_tui(
                         ChatAction::Continue => {}
                         ChatAction::Back => break,
                         ChatAction::SlashCommand(command) => {
-                            if handle_slash_command(state, &command) {
+                            if handle_slash_command(
+                                state,
+                                &command,
+                                command_handlers,
+                                &session_key,
+                                &user_id,
+                            ).await {
                                 break;
                             }
                         }
@@ -240,52 +253,137 @@ async fn run_chat_tui(
     Ok(())
 }
 
-fn handle_slash_command(state: &mut ChatState, command: &str) -> bool {
+async fn handle_slash_command(
+    state: &mut ChatState,
+    command: &str,
+    handlers: &[Arc<dyn CommandHandler>],
+    session_key: &str,
+    user_id: &str,
+) -> bool {
     let parts: Vec<&str> = command.splitn(2, ' ').collect();
-    match parts[0] {
-        "/help" => state.push_message(
-            Role::System,
-            [
-                "/help         — show this help",
-                "/status       — connection & agent info",
-                "/clear        — clear chat history",
-                "/exit         — end chat session",
-            ]
-            .join("\n"),
-        ),
-        "/clear" => {
-            let agent_name = state.agent_name.clone();
-            let model_label = state.model_label.clone();
-            let mode_label = state.mode_label.clone();
-            let session_label = state.session_label.clone();
-            let user_label = state.user_label.clone();
-            state.reset_messages();
-            state.agent_name = agent_name;
-            state.model_label = model_label;
-            state.mode_label = mode_label;
-            state.session_label = session_label;
-            state.user_label = user_label;
-            state.push_message(Role::System, "Chat history cleared.".to_owned());
+    let cmd_token = parts[0];
+
+    // TUI-local commands take priority.
+    match cmd_token {
+        "/help" => {
+            let mut lines = vec![
+                "/help         — show this help".to_owned(),
+                "/status       — connection & agent info".to_owned(),
+                "/exit         — end chat session".to_owned(),
+            ];
+            // Append registered handler commands to help text.
+            for handler in handlers {
+                for def in handler.commands() {
+                    let usage = def.usage.as_deref().unwrap_or("");
+                    lines.push(format!("{:<14}— {}", usage, def.description));
+                }
+            }
+            state.push_message(Role::System, lines.join("\n"));
+            return false;
         }
-        "/status" => state.push_message(
-            Role::System,
-            format!(
-                "Mode: {}\nSession: {}\nUser: {}\nAgent: {}\nModel: {}",
-                state.mode_label,
-                state.session_label,
-                state.user_label,
-                state.agent_name,
-                state.model_label
-            ),
-        ),
+        "/status" => {
+            state.push_message(
+                Role::System,
+                format!(
+                    "Mode: {}\nSession: {}\nUser: {}\nAgent: {}\nModel: {}",
+                    state.mode_label,
+                    state.session_label,
+                    state.user_label,
+                    state.agent_name,
+                    state.model_label
+                ),
+            );
+            return false;
+        }
         "/exit" | "/quit" => return true,
-        other => state.push_message(
-            Role::System,
-            format!("Unknown command: {other}. Type /help"),
-        ),
+        _ => {}
     }
 
+    // Try kernel command handlers.
+    let cmd_name = cmd_token.trim_start_matches('/');
+    if !cmd_name.is_empty() {
+        let matched_handler = handlers
+            .iter()
+            .find(|h| h.commands().iter().any(|def| def.name == cmd_name));
+
+        if let Some(handler) = matched_handler {
+            let args = if parts.len() > 1 { parts[1] } else { "" };
+            let info = CommandInfo {
+                name: cmd_name.to_owned(),
+                args: args.to_owned(),
+                raw:  command.to_owned(),
+            };
+
+            let mut metadata = HashMap::new();
+            metadata.insert(
+                "cli_chat_id".to_owned(),
+                serde_json::Value::String(session_key.to_owned()),
+            );
+
+            let ctx = CommandContext {
+                channel_type: ChannelType::Cli,
+                session_key:  session_key.to_owned(),
+                user:         ChannelUser {
+                    platform_id:  format!("cli:{user_id}"),
+                    display_name: Some(user_id.to_owned()),
+                },
+                metadata,
+            };
+
+            match handler.handle(&info, &ctx).await {
+                Ok(result) => {
+                    render_command_result(state, result);
+                }
+                Err(e) => {
+                    state.push_message(
+                        Role::System,
+                        format!("Command failed: {e}"),
+                    );
+                }
+            }
+            return false;
+        }
+    }
+
+    state.push_message(
+        Role::System,
+        format!("Unknown command: {cmd_token}. Type /help"),
+    );
     false
+}
+
+/// Render a [`CmdResult`] into the TUI chat state.
+fn render_command_result(state: &mut ChatState, result: CmdResult) {
+    match result {
+        CmdResult::Text(s) => state.push_message(Role::System, s),
+        CmdResult::Html(s) => {
+            // Strip basic HTML tags for terminal display.
+            state.push_message(Role::System, strip_html_tags(&s));
+        }
+        CmdResult::HtmlWithKeyboard { html, .. } => {
+            // Show text portion; inline keyboards are not supported in TUI.
+            state.push_message(Role::System, strip_html_tags(&html));
+        }
+        CmdResult::None => {}
+    }
+}
+
+/// Minimal HTML tag stripper for terminal display.
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    // Unescape common HTML entities.
+    out.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 fn default_model_label(config: &AppConfig) -> String {
@@ -476,11 +574,15 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn exit_slash_command_requests_shutdown_without_message() {
+    #[tokio::test]
+    async fn exit_slash_command_requests_shutdown_without_message() {
         let mut state = ChatState::new("default".into(), "local".into());
+        let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> =
+            vec![];
 
-        assert!(handle_slash_command(&mut state, "/exit"));
+        assert!(
+            handle_slash_command(&mut state, "/exit", &handlers, "default", "local").await
+        );
         assert_eq!(state.messages.len(), 1);
         assert_eq!(state.messages[0].text, CHAT_BANNER);
     }

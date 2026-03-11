@@ -106,9 +106,10 @@ pub enum McpServerStatus {
 pub trait BotServiceClient: Send + Sync {
     // -- Session management --------------------------------------------------
 
-    /// Look up the session bound to a Telegram channel.
+    /// Look up the session bound to a channel.
     async fn get_channel_session(
         &self,
+        channel_type: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, BotServiceError>;
 
