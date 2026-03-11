@@ -32,14 +32,14 @@ const SERVER_NAME: &str = "context-mode";
 /// Tool name prefix used by context-mode MCP server.
 const TOOL_PREFIX: &str = "context-mode__";
 
-/// Tools whose output must never be intercepted.
+/// Tools whose output is safe to intercept (whitelist).
 ///
-/// Tape tools return memory/context data that the kernel needs verbatim —
-/// compressing it would destroy the information the agent relies on.
-const SKIP_TOOLS: &[&str] = &["tape", "tape-handoff", "tape-info", "read-tape"];
+/// Only tools that produce large, non-critical output should be listed here.
+/// All other tools pass through unmodified to avoid breaking agent behavior.
+const INTERCEPTABLE_TOOLS: &[&str] = &["bash"];
 
-/// Default output size threshold in bytes.
-const DEFAULT_THRESHOLD: usize = 4096;
+/// Default output size threshold in bytes (32 KB).
+const DEFAULT_THRESHOLD: usize = 32 * 1024;
 
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -115,14 +115,9 @@ impl ContextModeInterceptor {
 #[async_trait]
 impl OutputInterceptor for ContextModeInterceptor {
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput {
-        // Never intercept context-mode's own tools to avoid recursive indexing.
-        if tool_name.starts_with(TOOL_PREFIX) {
-            return output;
-        }
-
-        // Never intercept tape tools — their output is memory/context data
-        // that the kernel needs verbatim.
-        if SKIP_TOOLS.contains(&tool_name) {
+        // Only intercept whitelisted tools — other tools' output may carry
+        // structured data the agent needs verbatim.
+        if !INTERCEPTABLE_TOOLS.contains(&tool_name) {
             return output;
         }
 
@@ -188,6 +183,6 @@ fn build_summary(tool_name: &str, json_str: &str) -> String {
     let bytes = json_str.len();
     let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
     format!(
-        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use search to query specific content.",
+        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use context-mode search to retrieve specific content.",
     )
 }
