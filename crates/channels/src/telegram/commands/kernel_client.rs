@@ -438,6 +438,8 @@ mod tests {
 
     use super::*;
 
+    // NOTE: duplicated from rara_kernel::session::test_utils — extract to shared
+    // test crate if more duplications appear.
     #[derive(Default)]
     struct InMemorySessionIndex {
         sessions: DashMap<String, SessionEntry>,

@@ -916,120 +916,13 @@ fn extract_searchable_text(payload: &Value, metadata: Option<&Value>) -> String 
 mod tests {
     use std::{path::Path, sync::Arc};
 
-    use async_trait::async_trait;
-    use chrono::Utc;
-    use dashmap::DashMap;
-
     use super::*;
-    use crate::session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey};
+    use crate::session::test_utils::{InMemorySessionIndex, create_test_session};
 
     /// Create a [`TapeService`] backed by a temporary directory.
     async fn temp_tape_service(dir: &Path) -> TapeService {
         let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
         TapeService::new(store)
-    }
-
-    #[derive(Default)]
-    struct InMemorySessionIndex {
-        sessions: DashMap<String, SessionEntry>,
-        bindings: DashMap<(String, String), ChannelBinding>,
-    }
-
-    impl InMemorySessionIndex {
-        fn new() -> Self { Self::default() }
-    }
-
-    #[async_trait]
-    impl SessionIndex for InMemorySessionIndex {
-        async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-            let key = entry.key.to_string();
-            if self.sessions.contains_key(&key) {
-                return Err(SessionError::AlreadyExists { key });
-            }
-            self.sessions.insert(key, entry.clone());
-            Ok(entry.clone())
-        }
-
-        async fn get_session(
-            &self,
-            key: &SessionKey,
-        ) -> Result<Option<SessionEntry>, SessionError> {
-            Ok(self
-                .sessions
-                .get(&key.to_string())
-                .map(|entry| entry.clone()))
-        }
-
-        async fn list_sessions(
-            &self,
-            limit: i64,
-            offset: i64,
-        ) -> Result<Vec<SessionEntry>, SessionError> {
-            let mut entries: Vec<SessionEntry> =
-                self.sessions.iter().map(|entry| entry.clone()).collect();
-            entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            let start = offset.max(0) as usize;
-            let take = limit.max(0) as usize;
-            Ok(entries.into_iter().skip(start).take(take).collect())
-        }
-
-        async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-            let key = entry.key.to_string();
-            if !self.sessions.contains_key(&key) {
-                return Err(SessionError::NotFound { key });
-            }
-            self.sessions.insert(key, entry.clone());
-            Ok(entry.clone())
-        }
-
-        async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError> {
-            self.sessions.remove(&key.to_string());
-            Ok(())
-        }
-
-        async fn bind_channel(
-            &self,
-            binding: &ChannelBinding,
-        ) -> Result<ChannelBinding, SessionError> {
-            self.bindings.insert(
-                (binding.channel_type.clone(), binding.chat_id.clone()),
-                binding.clone(),
-            );
-            Ok(binding.clone())
-        }
-
-        async fn get_channel_binding(
-            &self,
-            channel_type: &str,
-            chat_id: &str,
-        ) -> Result<Option<ChannelBinding>, SessionError> {
-            Ok(self
-                .bindings
-                .get(&(channel_type.to_owned(), chat_id.to_owned()))
-                .map(|entry| entry.clone()))
-        }
-    }
-
-    async fn create_test_session(
-        sessions: &Arc<InMemorySessionIndex>,
-        key: &SessionKey,
-        metadata: Option<Value>,
-    ) {
-        let now = Utc::now();
-        sessions
-            .create_session(&SessionEntry {
-                key: key.clone(),
-                title: None,
-                model: None,
-                system_prompt: None,
-                message_count: 0,
-                preview: None,
-                metadata,
-                created_at: now,
-                updated_at: now,
-            })
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
