@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, info_span, warn};
+use tracing::{error, info, info_span, warn};
 
 use crate::{
     error::{IoSnafu, KernelError, Result},
@@ -806,7 +806,7 @@ pub(crate) async fn run_agent_loop(
             messages_count = messages.len(),
             "calling LLM (inline streaming via LlmDriver)"
         );
-        debug!(
+        info!(
             iteration,
             model = model.as_str(),
             tools_count = tool_defs.len(),
@@ -999,7 +999,7 @@ pub(crate) async fn run_agent_loop(
                 .values()
                 .map(|tc| tc.name.as_str())
                 .collect();
-            debug!(
+            info!(
                 iteration,
                 stream_ms = stream_start.elapsed().as_millis() as u64,
                 has_tool_calls,
