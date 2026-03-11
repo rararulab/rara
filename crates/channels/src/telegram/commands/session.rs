@@ -93,11 +93,11 @@ impl CommandHandler for SessionCommandHandler {
 impl SessionCommandHandler {
     /// `/new` — create a new session and bind the channel to it.
     async fn handle_new(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let (channel_type, chat_id) = extract_channel_info(context);
 
-        match self.client.create_session(Some("Telegram Chat")).await {
+        match self.client.create_session(Some("Chat")).await {
             Ok(key) => {
-                let _ = self.client.bind_channel("telegram", &chat_id, &key).await;
+                let _ = self.client.bind_channel(channel_type, &chat_id, &key).await;
                 Ok(CommandResult::Text("New chat session started.".to_owned()))
             }
             Err(e) => Ok(CommandResult::Text(format!(
@@ -108,9 +108,9 @@ impl SessionCommandHandler {
 
     /// `/clear` — clear all messages in the current session.
     async fn handle_clear(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let (channel_type, chat_id) = extract_channel_info(context);
 
-        match self.client.get_channel_session(&chat_id).await {
+        match self.client.get_channel_session(channel_type, &chat_id).await {
             Ok(Some(binding)) => {
                 match self
                     .client
@@ -133,10 +133,10 @@ impl SessionCommandHandler {
         &self,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let (channel_type, chat_id) = extract_channel_info(context);
 
         // Find the currently active session key.
-        let active_key = match self.client.get_channel_session(&chat_id).await {
+        let active_key = match self.client.get_channel_session(channel_type, &chat_id).await {
             Ok(Some(binding)) => Some(binding.session_key),
             Ok(None) => None,
             Err(e) => {
@@ -199,9 +199,9 @@ impl SessionCommandHandler {
 
     /// `/usage` — show details about the current session.
     async fn handle_usage(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let (channel_type, chat_id) = extract_channel_info(context);
 
-        let session_key = match self.client.get_channel_session(&chat_id).await {
+        let session_key = match self.client.get_channel_session(channel_type, &chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -257,9 +257,9 @@ impl SessionCommandHandler {
         args: &str,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let (channel_type, chat_id) = extract_channel_info(context);
 
-        let session_key = match self.client.get_channel_session(&chat_id).await {
+        let session_key = match self.client.get_channel_session(channel_type, &chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -344,9 +344,9 @@ impl CommandHandler for StopCommandHandler {
         _command: &CommandInfo,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = extract_chat_id(context);
+        let (channel_type, chat_id) = extract_channel_info(context);
 
-        let session_key = match self.client.get_channel_session(&chat_id).await {
+        let session_key = match self.client.get_channel_session(channel_type, &chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text("当前没有活跃的会话。".to_owned()));
@@ -370,17 +370,44 @@ impl CommandHandler for StopCommandHandler {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract chat_id string from command context metadata.
-fn extract_chat_id(context: &CommandContext) -> String {
-    context
-        .metadata
-        .get("telegram_chat_id")
-        .and_then(|v| {
-            v.as_i64()
-                .map(|n| n.to_string())
-                .or_else(|| v.as_str().map(String::from))
-        })
-        .unwrap_or_else(|| "0".to_owned())
+/// Extract channel type string and chat_id from command context metadata.
+///
+/// For Telegram contexts the chat_id comes from the `telegram_chat_id`
+/// metadata entry.  For CLI contexts the chat_id comes from `cli_chat_id`.
+/// Falls back to `"unknown"` / `"0"` when the expected key is missing.
+fn extract_channel_info(context: &CommandContext) -> (&'static str, String) {
+    use rara_kernel::channel::types::ChannelType;
+
+    match context.channel_type {
+        ChannelType::Cli => {
+            let chat_id = context
+                .metadata
+                .get("cli_chat_id")
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "0".to_owned());
+            ("cli", chat_id)
+        }
+        ChannelType::Telegram => {
+            let chat_id = context
+                .metadata
+                .get("telegram_chat_id")
+                .and_then(|v| {
+                    v.as_i64()
+                        .map(|n| n.to_string())
+                        .or_else(|| v.as_str().map(String::from))
+                })
+                .unwrap_or_else(|| "0".to_owned());
+            ("telegram", chat_id)
+        }
+        _ => {
+            let chat_id = context
+                .metadata
+                .get("chat_id")
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "0".to_owned());
+            ("unknown", chat_id)
+        }
+    }
 }
 
 fn html_escape(s: &str) -> String {

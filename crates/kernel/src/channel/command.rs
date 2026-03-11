@@ -81,6 +81,11 @@ pub enum CommandResult {
         html:     String,
         keyboard: Vec<Vec<InlineButton>>,
     },
+    /// Binary photo payload.
+    Photo {
+        data:    Vec<u8>,
+        caption: Option<String>,
+    },
     /// No visible response needed (handler sent its own messages).
     None,
 }

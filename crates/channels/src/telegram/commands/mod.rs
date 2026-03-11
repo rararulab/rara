@@ -26,14 +26,17 @@
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
 //! - [`job`]: `/search` and `/jd` commands.
 //! - [`mcp`]: `/mcp` command.
+//! - [`tape`]: `/anchors` and `/checkout` commands.
 //! - [`callbacks`]: Inline keyboard callback handlers.
 
+pub mod anchor_dot;
 pub mod basic;
 pub mod callbacks;
 pub mod client;
 pub mod kernel_client;
 pub mod mcp;
 pub mod session;
+pub mod tape;
 
 pub use basic::BasicCommandHandler;
 pub use callbacks::SessionSwitchCallbackHandler;
@@ -41,3 +44,23 @@ pub use client::BotServiceClient;
 pub use kernel_client::KernelBotServiceClient;
 pub use mcp::McpCommandHandler;
 pub use session::{SessionCommandHandler, StopCommandHandler};
+pub use tape::TapeCommandHandler;
+
+/// Extract Telegram chat ID from command/callback metadata.
+///
+/// Returns an error if `telegram_chat_id` is missing — never silently
+/// falls back, because a wrong chat ID would bind the wrong channel.
+pub(crate) fn extract_chat_id(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<String, rara_kernel::error::KernelError> {
+    metadata
+        .get("telegram_chat_id")
+        .and_then(|v| {
+            v.as_i64()
+                .map(|n| n.to_string())
+                .or_else(|| v.as_str().map(String::from))
+        })
+        .ok_or_else(|| rara_kernel::error::KernelError::Other {
+            message: "missing telegram_chat_id in command context".into(),
+        })
+}

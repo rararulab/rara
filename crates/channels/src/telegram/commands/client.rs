@@ -26,11 +26,26 @@ use snafu::Snafu;
 // ---------------------------------------------------------------------------
 
 /// Error returned by [`BotServiceClient`] operations.
+///
+/// This is the single error surface for command handlers. Handlers should not
+/// inspect kernel-specific error types directly.
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum BotServiceError {
     /// A generic service-level error.
     #[snafu(display("{message}"))]
     Service { message: String },
+    /// Session index operation failed.
+    #[snafu(display("session operation failed: {source}"))]
+    Session {
+        source: rara_kernel::session::SessionError,
+    },
+    /// Tape operation failed with explicit high-level context.
+    #[snafu(display("{context}: {source}"))]
+    Tape {
+        context: &'static str,
+        source:  rara_kernel::memory::TapError,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +99,23 @@ pub struct McpServerInfo {
     pub status: McpServerStatus,
 }
 
+/// Result of `/checkout` workflow after backend side effects are applied.
+///
+/// The client implementation owns state mutation (forking sessions and binding
+/// channels). Command handlers only map this enum to user-facing text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutResult {
+    /// Current session has no parent, so no state changes were made.
+    NoParent,
+    /// Channel switched to parent session.
+    SwitchedToParent { session_key: String },
+    /// New fork created from anchor and channel switched to the child session.
+    ForkedFromAnchor {
+        anchor_name: String,
+        session_key: String,
+    },
+}
+
 /// Connection status of an MCP server.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
@@ -102,13 +134,17 @@ pub enum McpServerStatus {
 ///
 /// Implementations may call the real HTTP service or return hardcoded data
 /// for testing.
+///
+/// Design rule: this trait owns business side effects. Command handlers are
+/// kept thin (parse input + render output), so orchestration belongs here.
 #[async_trait]
 pub trait BotServiceClient: Send + Sync {
     // -- Session management --------------------------------------------------
 
-    /// Look up the session bound to a Telegram channel.
+    /// Look up the session bound to a channel.
     async fn get_channel_session(
         &self,
+        channel_type: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, BotServiceError>;
 
@@ -138,6 +174,46 @@ pub trait BotServiceClient: Send + Sync {
         key: &str,
         model: Option<&str>,
     ) -> Result<SessionDetail, BotServiceError>;
+
+    // -- Tape / anchor tree -------------------------------------------------
+
+    /// Build the full anchor tree for the given session.
+    ///
+    /// This is used by `/anchors` to render cross-fork topology, including
+    /// ancestor and descendant branches of the current session.
+    async fn anchor_tree(
+        &self,
+        session_key: &str,
+    ) -> Result<rara_kernel::memory::AnchorTree, BotServiceError>;
+
+    /// Fork a new session at the selected anchor from the current session.
+    ///
+    /// Low-level primitive used by higher-level checkout flows.
+    /// Returns the newly created child session key.
+    async fn checkout_anchor(
+        &self,
+        session_key: &str,
+        anchor_name: &str,
+    ) -> Result<String, BotServiceError>;
+
+    /// Return parent session key if the current session is a fork.
+    ///
+    /// Low-level primitive used by higher-level checkout flows.
+    async fn parent_session(&self, session_key: &str) -> Result<Option<String>, BotServiceError>;
+
+    /// Execute checkout behavior and bind channel accordingly.
+    ///
+    /// This is the canonical `/checkout` operation entrypoint.
+    /// It applies side effects (fork/switch + binding) atomically from the
+    /// command layer's perspective.
+    /// - `None` anchor means "switch to parent"
+    /// - `Some(anchor)` means "fork from anchor and switch to child"
+    async fn checkout_session(
+        &self,
+        chat_id: &str,
+        session_key: &str,
+        anchor_name: Option<&str>,
+    ) -> Result<CheckoutResult, BotServiceError>;
 
     // -- Job discovery -------------------------------------------------------
 

@@ -412,24 +412,25 @@ pub async fn start_with_options(
     // tracing goes to stderr, so this does not interfere.
     println!("READY");
 
+    // Build command handlers shared across all channels.
+    let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
+        use rara_channels::telegram::commands::{
+            KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
+        };
+        let bot_client: std::sync::Arc<
+            dyn rara_channels::telegram::commands::BotServiceClient,
+        > = std::sync::Arc::new(KernelBotServiceClient::new(
+            rara.session_index.clone(),
+            rara.tape_service.clone(),
+        ));
+        vec![
+            std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
+            std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
+        ]
+    };
+
     if let Some(ref tg_adapter) = telegram_adapter {
-        // Wire command handlers now that KernelHandle is available.
-        {
-            use rara_channels::telegram::commands::{
-                KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
-            };
-            let bot_client: std::sync::Arc<
-                dyn rara_channels::telegram::commands::BotServiceClient,
-            > = std::sync::Arc::new(KernelBotServiceClient::new(
-                rara.session_index.clone(),
-                rara.tape_service.clone(),
-            ));
-            let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = vec![
-                std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
-                std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
-            ];
-            tg_adapter.set_command_handlers(handlers);
-        }
+        tg_adapter.set_command_handlers(command_handlers.clone());
 
         use rara_kernel::channel::adapter::ChannelAdapter as _;
         match tg_adapter.start(kernel_handle.clone()).await {
@@ -470,6 +471,7 @@ pub async fn start_with_options(
         running:            Arc::clone(&running),
         cancellation_token: cancellation_token.clone(),
         kernel_handle:      Some(kernel_handle),
+        command_handlers,
     };
 
     let running_clone = Arc::clone(&running);
@@ -631,12 +633,14 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:        Option<oneshot::Sender<()>>,
-    running:            Arc<AtomicBool>,
-    cancellation_token: CancellationToken,
+    shutdown_tx:           Option<oneshot::Sender<()>>,
+    running:               Arc<AtomicBool>,
+    cancellation_token:    CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:  Option<rara_kernel::handle::KernelHandle>,
+    pub kernel_handle:     Option<rara_kernel::handle::KernelHandle>,
+    /// Command handlers shared across all channels (Telegram, CLI, etc.).
+    pub command_handlers:  Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
 }
 
 #[allow(dead_code)]
