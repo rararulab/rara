@@ -13,9 +13,7 @@ description = "Predefined agent registry: role-based lookup for built-in agent m
 
 [dependencies]
 rara-kernel.workspace = true
-rara-soul.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
 
 [lints]
 workspace = true

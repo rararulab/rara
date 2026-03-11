@@ -18,10 +18,9 @@
 //! an [`AgentManifest`] ready to be loaded by the boot crate into the kernel's
 //! [`ManifestLoader`].
 //!
-//! Soul prompts are loaded via [`rara_soul::loader`] with a priority chain:
-//! 1. Per-agent file (`~/.config/rara/agents/{name}/soul.md`)
-//! 2. Global file (`~/.config/rara/soul.md`)
-//! 3. Hardcoded defaults from [`rara_soul::defaults`]
+//! Soul prompts are resolved at runtime by the kernel via `rara_soul`.
+//! Agent manifests set `soul_prompt: None`; the kernel loads and renders
+//! the soul file (with runtime state) on each agent invocation.
 //!
 //! Currently defines:
 //! - `rara` — the root conversational agent with full tool access
@@ -40,7 +39,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     description:        "Rara — personal AI assistant with personality and tools".to_string(),
     model:              None,
     system_prompt:      RARA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:        rara_soul::load_and_render("rara").ok().flatten(),
+    soul_prompt:        None,
     provider_hint:      None,
     max_iterations:     Some(25),
     tools:              vec![],
@@ -64,7 +63,7 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     description:        "Nana — friendly chat companion, rara's sister".to_string(),
     model:              None,
     system_prompt:      NANA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:        rara_soul::load_and_render("nana").ok().flatten(),
+    soul_prompt:        None,
     provider_hint:      None,
     max_iterations:     Some(10),
     tools:              vec!["tape".to_string()],
