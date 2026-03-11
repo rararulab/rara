@@ -134,6 +134,10 @@ pub struct GatewayConfig {
     pub bind_address:         String,
     /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
     pub repo_url:             String,
+    /// Telegram bot token for the gateway management bot (separate from rara's bot).
+    pub bot_token:            String,
+    /// Telegram chat ID of the notification channel for management commands.
+    pub notification_channel_id: i64,
 }
 
 mod gateway_defaults {

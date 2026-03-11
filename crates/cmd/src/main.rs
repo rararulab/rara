@@ -155,23 +155,9 @@ impl GatewayArgs {
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
-        // 0. Create Telegram notifier (required — fail fast if not configured).
-        let Some(tg) = config.telegram.as_ref() else {
-            whatever!("Gateway requires [telegram] config for notifications");
-        };
-        let Some(bot_token) = tg.bot_token.as_deref().filter(|s| !s.is_empty()) else {
-            whatever!("Gateway requires telegram.bot_token");
-        };
-        let Some(raw_channel_id) = tg
-            .notification_channel_id
-            .as_deref()
-            .filter(|s| !s.is_empty())
-        else {
-            whatever!("Gateway requires telegram.notification_channel_id");
-        };
-        let channel_id: i64 = raw_channel_id
-            .parse()
-            .whatever_context("telegram.notification_channel_id must be a valid i64")?;
+        // 0. Create Telegram notifier using gateway config fields.
+        let bot_token = &gateway_config.bot_token;
+        let channel_id = gateway_config.notification_channel_id;
         let notifier = std::sync::Arc::new(rara_app::gateway::UpdateNotifier::new(
             bot_token,
             channel_id,
@@ -213,14 +199,28 @@ impl GatewayArgs {
 
         // 4. Build admin HTTP server state and spawn it.
         let admin_state = rara_app::gateway::server::GatewayAppState {
-            supervisor_handle,
-            update_state_rx: update_rx,
+            supervisor_handle: supervisor_handle.clone(),
+            update_state_rx: update_rx.clone(),
             shutdown: cancel.clone(),
         };
         let admin_bind = gateway_config.bind_address.clone();
         let _admin_handle = rara_app::gateway::server::serve(&admin_bind, admin_state)
             .await
             .whatever_context("Failed to start gateway admin HTTP server")?;
+
+        // 4.5 Spawn Telegram command listener for management commands.
+        let health_url = format!("http://127.0.0.1:{port}/api/health");
+        let listener = rara_app::gateway::GatewayTelegramListener::new(
+            bot_token,
+            channel_id,
+            supervisor_handle,
+            update_rx,
+            cancel.clone(),
+            health_url,
+        );
+        tokio::spawn(async move {
+            listener.run().await;
+        });
 
         // 5. Run supervisor (blocking).
         match supervisor.run().await {
