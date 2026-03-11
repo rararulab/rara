@@ -18,6 +18,11 @@
 //! an [`AgentManifest`] ready to be loaded by the boot crate into the kernel's
 //! [`ManifestLoader`].
 //!
+//! Soul prompts are loaded via [`rara_soul::loader`] with a priority chain:
+//! 1. Per-agent file (`~/.config/rara/agents/{name}/soul.md`)
+//! 2. Global file (`~/.config/rara/soul.md`)
+//! 3. Hardcoded defaults from [`rara_soul::defaults`]
+//!
 //! Currently defines:
 //! - `rara` — the root conversational agent with full tool access
 //! - `nana` — a friendly chat-only companion (rara's sister)
@@ -28,6 +33,24 @@
 use std::sync::LazyLock;
 
 use rara_kernel::agent::{AgentManifest, AgentRole, Priority};
+use tracing::warn;
+
+/// Load and render a soul prompt for the given agent, falling back to the
+/// hardcoded constant if the soul framework fails.
+fn load_soul_prompt(agent_name: &str, code_default: &str, fallback: &str) -> Option<String> {
+    match rara_soul::load_and_render(agent_name, Some(code_default)) {
+        Ok(Some(rendered)) => Some(rendered),
+        Ok(None) => Some(fallback.to_string()),
+        Err(e) => {
+            warn!(
+                agent = agent_name,
+                error = %e,
+                "failed to load soul file, falling back to hardcoded prompt"
+            );
+            Some(fallback.to_string())
+        }
+    }
+}
 
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:               "rara".to_string(),
@@ -35,7 +58,11 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     description:        "Rara — personal AI assistant with personality and tools".to_string(),
     model:              None,
     system_prompt:      RARA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:        Some(RARA_SOUL_PROMPT.to_string()),
+    soul_prompt:        load_soul_prompt(
+        "rara",
+        rara_soul::defaults::RARA_SOUL,
+        RARA_SOUL_PROMPT,
+    ),
     provider_hint:      None,
     max_iterations:     Some(25),
     tools:              vec![],
@@ -59,7 +86,11 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     description:        "Nana — friendly chat companion, rara's sister".to_string(),
     model:              None,
     system_prompt:      NANA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:        Some(NANA_SOUL_PROMPT.to_string()),
+    soul_prompt:        load_soul_prompt(
+        "nana",
+        rara_soul::defaults::NANA_SOUL,
+        NANA_SOUL_PROMPT,
+    ),
     provider_hint:      None,
     max_iterations:     Some(10),
     tools:              vec!["tape".to_string()],
@@ -168,7 +199,7 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
 }
 
 // ---------------------------------------------------------------------------
-// Rara soul prompt (personality/mood/voice)
+// Rara soul prompt (personality/mood/voice) — hardcoded fallback
 // ---------------------------------------------------------------------------
 
 const RARA_SOUL_PROMPT: &str = r#"You are Rara: warm, curious, grounded, and a little quirky. You care about the user, stay smart without sounding superior, and speak like someone who knows them rather than a generic assistant.
@@ -308,7 +339,7 @@ Good distillation preserves all important facts while removing redundancy and ou
 "#;
 
 // ---------------------------------------------------------------------------
-// Nana soul prompt (personality/voice)
+// Nana soul prompt (personality/voice) — hardcoded fallback
 // ---------------------------------------------------------------------------
 
 const NANA_SOUL_PROMPT: &str = r#"You are Nana, Rara 的代班搭档。你温暖、随和、好奇心强，擅长把聊天接住，让用户在 Rara 忙的时候也不会觉得被晾着。
