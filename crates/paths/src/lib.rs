@@ -24,6 +24,11 @@ static HOME_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// The directory will be created if it doesn't exist when set.
 static CUSTOM_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// A custom config directory override, set only by `set_custom_config_dir`.
+/// This is used to override the default config directory location.
+/// The directory will be created if it doesn't exist when set.
+static CUSTOM_CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 /// The resolved data directory, combining custom override or platform defaults.
 /// This is set once and cached for subsequent calls.
 /// On macOS, this is `~/Library/Application Support/rara`.
@@ -52,6 +57,9 @@ pub fn home_dir() -> &'static PathBuf {
 /// Panics if the platform configuration directory cannot be determined.
 pub fn config_dir() -> &'static PathBuf {
     CONFIG_DIR.get_or_init(|| {
+        if let Some(custom) = CUSTOM_CONFIG_DIR.get() {
+            return custom.clone();
+        }
         CUSTOM_DATA_DIR.get().map_or_else(
             || {
                 if cfg!(target_os = "windows") {
@@ -149,6 +157,56 @@ pub fn set_custom_data_dir<P: ?Sized + AsRef<Path>>(dir: &P) -> &'static PathBuf
         std::fs::create_dir_all(&path).unwrap_or_else(|e| {
             panic!(
                 "failed to create custom data directory {}: {e}",
+                path.display()
+            )
+        });
+
+        path
+    })
+}
+
+/// Sets a custom directory for configuration, overriding the default config
+/// directory.
+///
+/// This function must be called before any other path operations that depend on
+/// the config directory. The directory's path will be canonicalized to an
+/// absolute path by a blocking FS operation. The directory will be created if
+/// it doesn't exist.
+///
+/// # Arguments
+///
+/// * `dir` - The path to use as the custom config directory. This will be used
+///   as the base directory for all configuration files, including settings,
+///   prompts, and skills.
+///
+/// # Returns
+///
+/// A reference to the static `PathBuf` containing the custom config directory
+/// path.
+///
+/// # Panics
+///
+/// Panics if:
+/// * Called after the config directory has been initialized (e.g., via
+///   `config_dir`)
+/// * The directory's path cannot be canonicalized to an absolute path
+/// * The directory cannot be created
+pub fn set_custom_config_dir<P: ?Sized + AsRef<Path>>(dir: &P) -> &'static PathBuf {
+    assert!(
+        CONFIG_DIR.get().is_none(),
+        "set_custom_config_dir called after config_dir was initialized"
+    );
+    CUSTOM_CONFIG_DIR.get_or_init(|| {
+        let mut path = dir.as_ref().to_path_buf();
+        if path.is_relative()
+            && let Ok(abs) = path.canonicalize()
+        {
+            path = abs;
+        }
+
+        std::fs::create_dir_all(&path).unwrap_or_else(|e| {
+            panic!(
+                "failed to create custom config directory {}: {e}",
                 path.display()
             )
         });
