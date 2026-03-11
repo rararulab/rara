@@ -126,7 +126,7 @@ fn format_tool_line(t: &ToolProgress) -> String {
     let label = if t.summary.is_empty() {
         t.name.clone()
     } else {
-        format!("{}: {}", t.name, t.summary)
+        format!("[{}] {}", t.name, t.summary)
     };
     if t.finished {
         if t.success {
@@ -159,7 +159,33 @@ fn render_progress(tools: &[ToolProgress]) -> String {
     let collapsed = finished_count.saturating_sub(last_finished.len());
 
     if collapsed > 0 {
-        lines.push(format!("\u{22ef} {} earlier steps", collapsed));
+        // Build category breakdown: "⋯ 8×bash, 5×search, 4×tape"
+        let collapsed_tools: Vec<_> = tools
+            .iter()
+            .filter(|t| t.finished)
+            .take(collapsed)
+            .collect();
+        let mut counts: Vec<(&str, usize)> = Vec::new();
+        for t in &collapsed_tools {
+            if let Some(entry) = counts.iter_mut().find(|(n, _)| *n == t.name.as_str()) {
+                entry.1 += 1;
+            } else {
+                counts.push((&t.name, 1));
+            }
+        }
+        // Sort by count descending, take top 4 to keep it compact.
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        let parts: Vec<_> = counts
+            .iter()
+            .take(4)
+            .map(|(name, count)| format!("{count}\u{00d7}{name}"))
+            .collect();
+        let remaining: usize = counts.iter().skip(4).map(|(_, c)| c).sum();
+        let mut breakdown = parts.join(", ");
+        if remaining > 0 {
+            breakdown.push_str(&format!(", +{remaining}"));
+        }
+        lines.push(format!("\u{22ef} {breakdown}"));
     }
 
     // Last 2 finished (in original order).
