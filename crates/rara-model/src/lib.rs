@@ -18,3 +18,9 @@
 //! and the SQL migrations that define and evolve those tables.
 
 #![deny(unsafe_code)]
+
+mod auth;
+
+pub use auth::{
+    AUTH_PROVIDER_GITHUB, AUTH_PROVIDER_GOOGLE, AuthOAuthAccountRecord, AuthUserRecord,
+};

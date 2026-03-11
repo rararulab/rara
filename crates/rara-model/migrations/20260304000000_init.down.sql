@@ -12,6 +12,8 @@ DROP TABLE IF EXISTS coding_task;
 DROP TABLE IF EXISTS skill_cache;
 DROP TABLE IF EXISTS kernel_outbox;
 DROP TABLE IF EXISTS kernel_audit_events;
+DROP TABLE IF EXISTS auth_oauth_accounts;
+DROP TABLE IF EXISTS auth_users;
 DROP TABLE IF EXISTS kernel_users;
 DROP TABLE IF EXISTS channel_binding;
 DROP TABLE IF EXISTS chat_session;

@@ -43,9 +43,9 @@ const DEBOUNCE_MS: u64 = 1500;
 
 /// Bidirectional sync between config.yaml and the settings KV store.
 pub struct ConfigFileSync {
-    settings:          Arc<dyn SettingsProvider>,
-    app_config:        Arc<RwLock<AppConfig>>,
-    config_path:       PathBuf,
+    settings: Arc<dyn SettingsProvider>,
+    app_config: Arc<RwLock<AppConfig>>,
+    config_path: PathBuf,
     last_written_hash: Arc<AtomicU64>,
 }
 
@@ -299,6 +299,17 @@ knowledge:
 
 gateway:
   repo_url: "https://github.com/example/repo"
+  bot_token: "gateway-bot-token"
+  chat_id: 42
+auth:
+  jwt:
+    secret: "test-secret"
+  oauth:
+    github:
+      client_id: "github-client"
+      scopes:
+        - "read:user"
+        - "user:email"
 "#;
 
     #[tokio::test]
@@ -475,6 +486,22 @@ composio:
                 .telegram
                 .as_ref()
                 .and_then(|t| t.allowed_group_chat_id.as_deref()),
+        );
+        assert_eq!(
+            config.auth.as_ref().and_then(|a| a.jwt.secret.as_deref()),
+            reparsed.auth.as_ref().and_then(|a| a.jwt.secret.as_deref()),
+        );
+        assert_eq!(
+            config
+                .auth
+                .as_ref()
+                .and_then(|a| a.oauth.github.as_ref())
+                .map(|github| github.scopes.clone()),
+            reparsed
+                .auth
+                .as_ref()
+                .and_then(|a| a.oauth.github.as_ref())
+                .map(|github| github.scopes.clone()),
         );
     }
 }

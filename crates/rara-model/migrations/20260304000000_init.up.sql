@@ -76,6 +76,57 @@ BEGIN
 END;
 
 --------------------------------------------------------------------------------
+-- auth_users: login credentials and lockout state
+--------------------------------------------------------------------------------
+
+CREATE TABLE auth_users (
+    user_id                TEXT NOT NULL PRIMARY KEY REFERENCES kernel_users(id) ON DELETE CASCADE,
+    email                  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash          TEXT,
+    email_verified_at      TEXT,
+    failed_login_attempts  INTEGER NOT NULL DEFAULT 0,
+    locked_until           TEXT,
+    last_login_at          TEXT,
+    created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_auth_users_email ON auth_users (email);
+CREATE INDEX idx_auth_users_locked_until ON auth_users (locked_until);
+
+CREATE TRIGGER set_auth_users_updated_at AFTER UPDATE ON auth_users
+BEGIN
+    UPDATE auth_users SET updated_at = datetime('now') WHERE user_id = NEW.user_id;
+END;
+
+--------------------------------------------------------------------------------
+-- auth_oauth_accounts: external OAuth identities linked to local users
+--------------------------------------------------------------------------------
+
+CREATE TABLE auth_oauth_accounts (
+    id                TEXT NOT NULL PRIMARY KEY,
+    user_id           TEXT NOT NULL REFERENCES kernel_users(id) ON DELETE CASCADE,
+    provider          TEXT NOT NULL,
+    provider_user_id  TEXT NOT NULL,
+    provider_email    TEXT,
+    provider_login    TEXT,
+    last_login_at     TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (provider, provider_user_id),
+    UNIQUE (provider, user_id)
+);
+
+CREATE INDEX idx_auth_oauth_accounts_user_id ON auth_oauth_accounts (user_id);
+CREATE INDEX idx_auth_oauth_accounts_provider_user
+    ON auth_oauth_accounts (provider, provider_user_id);
+
+CREATE TRIGGER set_auth_oauth_accounts_updated_at AFTER UPDATE ON auth_oauth_accounts
+BEGIN
+    UPDATE auth_oauth_accounts SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+--------------------------------------------------------------------------------
 -- kernel_audit_events: persistent audit trail
 --------------------------------------------------------------------------------
 

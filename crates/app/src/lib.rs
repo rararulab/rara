@@ -13,8 +13,8 @@
 // limitations under the License.
 
 mod boot;
-mod context_mode;
 pub mod config_sync;
+mod context_mode;
 pub mod flatten;
 pub mod gateway;
 mod tools;
@@ -57,39 +57,42 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
     #[serde(default = "default_database_config")]
-    pub database:    DatabaseConfig,
+    pub database: DatabaseConfig,
     /// HTTP server bind / limits.
-    pub http:        RestServerConfig,
+    pub http: RestServerConfig,
     /// gRPC server bind / limits.
-    pub grpc:        GrpcServerConfig,
+    pub grpc: GrpcServerConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
-    pub telemetry:   TelemetryConfig,
+    pub telemetry: TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_token: Option<String>,
     /// LLM provider configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm:         Option<flatten::LlmConfig>,
+    pub llm: Option<flatten::LlmConfig>,
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub telegram:    Option<flatten::TelegramConfig>,
+    pub telegram: Option<flatten::TelegramConfig>,
     /// Composio credentials (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub composio:    Option<flatten::ComposioConfig>,
+    pub composio: Option<flatten::ComposioConfig>,
+    /// User authentication configuration (JWT, password policy, OAuth providers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthConfig>,
     /// Configured users with platform identity mappings (required).
-    pub users:       Vec<crate::boot::UserConfig>,
+    pub users: Vec<crate::boot::UserConfig>,
     /// Mita proactive agent configuration (required).
-    pub mita:        MitaConfig,
+    pub mita: MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub knowledge:   Option<flatten::KnowledgeConfig>,
+    pub knowledge: Option<flatten::KnowledgeConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gateway:     Option<GatewayConfig>,
+    pub gateway: Option<GatewayConfig>,
     /// Symphony autonomous coding agent orchestrator (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symphony:    Option<rara_symphony::SymphonyConfig>,
+    pub symphony: Option<rara_symphony::SymphonyConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -112,10 +115,10 @@ pub struct GatewayConfig {
         deserialize_with = "humantime_serde::deserialize",
         serialize_with = "humantime_serde::serialize"
     )]
-    pub check_interval:       Duration,
+    pub check_interval: Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
-    pub health_timeout:       u64,
+    pub health_timeout: u64,
     /// HTTP health poll interval (e.g. "2s").
     #[serde(
         default = "gateway_defaults::health_poll_interval",
@@ -128,26 +131,165 @@ pub struct GatewayConfig {
     pub max_restart_attempts: u32,
     /// Whether to auto-apply upstream updates.
     #[serde(default = "gateway_defaults::auto_update")]
-    pub auto_update:          bool,
+    pub auto_update: bool,
     /// Bind address for the gateway admin HTTP API.
     #[serde(default = "gateway_defaults::bind_address")]
-    pub bind_address:         String,
+    pub bind_address: String,
     /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
-    pub repo_url:             String,
+    pub repo_url: String,
     /// Telegram bot token for the gateway management bot (separate from rara's bot).
-    pub bot_token:            String,
+    pub bot_token: String,
     /// Telegram chat ID for the gateway bot (typically the admin's private chat).
     pub chat_id: i64,
 }
 
+/// Static user authentication configuration.
+#[derive(Debug, Clone, Default, bon::Builder, Serialize, Deserialize)]
+#[builder(on(String, into))]
+#[serde(default)]
+pub struct AuthConfig {
+    pub jwt: JwtConfig,
+    pub password: PasswordAuthConfig,
+    pub oauth: OAuthConfig,
+}
+
+/// JWT signing configuration for login responses.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+#[builder(on(String, into))]
+#[serde(default)]
+pub struct JwtConfig {
+    pub issuer: String,
+    pub audience: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    #[serde(
+        default = "auth_defaults::access_token_ttl",
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize"
+    )]
+    pub access_token_ttl: Duration,
+}
+
+impl Default for JwtConfig {
+    fn default() -> Self {
+        Self {
+            issuer: auth_defaults::jwt_issuer(),
+            audience: auth_defaults::jwt_audience(),
+            secret: None,
+            access_token_ttl: auth_defaults::access_token_ttl(),
+        }
+    }
+}
+
+/// Password-authentication policy and lockout settings.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PasswordAuthConfig {
+    pub min_length: u8,
+    pub bcrypt_cost: u32,
+    pub max_attempts: u32,
+    #[serde(default = "auth_defaults::require_email_verification")]
+    pub require_email_verification: bool,
+    #[serde(
+        default = "auth_defaults::lockout_window",
+        deserialize_with = "humantime_serde::deserialize",
+        serialize_with = "humantime_serde::serialize"
+    )]
+    pub lockout_window: Duration,
+}
+
+impl Default for PasswordAuthConfig {
+    fn default() -> Self {
+        Self {
+            min_length: auth_defaults::password_min_length(),
+            bcrypt_cost: auth_defaults::bcrypt_cost(),
+            max_attempts: auth_defaults::max_attempts(),
+            require_email_verification: auth_defaults::require_email_verification(),
+            lockout_window: auth_defaults::lockout_window(),
+        }
+    }
+}
+
+/// OAuth provider configuration for third-party login.
+#[derive(Debug, Clone, Default, bon::Builder, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OAuthConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<OAuthProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google: Option<OAuthProviderConfig>,
+}
+
+/// Configuration for a single OAuth provider.
+#[derive(Debug, Clone, Default, bon::Builder, Serialize, Deserialize)]
+#[builder(on(String, into))]
+#[serde(default)]
+pub struct OAuthProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redirect_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorize_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub userinfo_url: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
+}
+
 mod gateway_defaults {
     use std::time::Duration;
-    pub fn check_interval() -> Duration { Duration::from_secs(300) }
-    pub fn health_timeout() -> u64 { 30 }
-    pub fn health_poll_interval() -> Duration { Duration::from_secs(2) }
-    pub fn max_restart_attempts() -> u32 { 3 }
-    pub fn auto_update() -> bool { true }
-    pub fn bind_address() -> String { "127.0.0.1:25556".to_owned() }
+    pub fn check_interval() -> Duration {
+        Duration::from_secs(300)
+    }
+    pub fn health_timeout() -> u64 {
+        30
+    }
+    pub fn health_poll_interval() -> Duration {
+        Duration::from_secs(2)
+    }
+    pub fn max_restart_attempts() -> u32 {
+        3
+    }
+    pub fn auto_update() -> bool {
+        true
+    }
+    pub fn bind_address() -> String {
+        "127.0.0.1:25556".to_owned()
+    }
+}
+
+mod auth_defaults {
+    use std::time::Duration;
+
+    pub fn jwt_issuer() -> String {
+        "rara".to_owned()
+    }
+    pub fn jwt_audience() -> String {
+        "rara-web".to_owned()
+    }
+    pub fn access_token_ttl() -> Duration {
+        Duration::from_secs(60 * 60 * 24)
+    }
+    pub fn password_min_length() -> u8 {
+        12
+    }
+    pub fn bcrypt_cost() -> u32 {
+        12
+    }
+    pub fn max_attempts() -> u32 {
+        5
+    }
+    pub fn require_email_verification() -> bool {
+        true
+    }
+    pub fn lockout_window() -> Duration {
+        Duration::from_secs(60 * 15)
+    }
 }
 
 /// General OTLP telemetry configuration.
@@ -161,7 +303,9 @@ pub struct TelemetryConfig {
     pub otlp_protocol: Option<String>,
 }
 
-fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
+fn default_database_config() -> DatabaseConfig {
+    DatabaseConfig::builder().build()
+}
 
 // ---------------------------------------------------------------------------
 // StartOptions
@@ -434,12 +578,11 @@ pub async fn start_with_options(
         use rara_channels::telegram::commands::{
             KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
         };
-        let bot_client: std::sync::Arc<
-            dyn rara_channels::telegram::commands::BotServiceClient,
-        > = std::sync::Arc::new(KernelBotServiceClient::new(
-            rara.session_index.clone(),
-            rara.tape_service.clone(),
-        ));
+        let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
+            std::sync::Arc::new(KernelBotServiceClient::new(
+                rara.session_index.clone(),
+                rara.tape_service.clone(),
+            ));
         vec![
             std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
             std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
@@ -484,10 +627,10 @@ pub async fn start_with_options(
     info!("Application started successfully");
 
     let app_handle = AppHandle {
-        shutdown_tx:        Some(shutdown_tx),
-        running:            Arc::clone(&running),
+        shutdown_tx: Some(shutdown_tx),
+        running: Arc::clone(&running),
         cancellation_token: cancellation_token.clone(),
-        kernel_handle:      Some(kernel_handle),
+        kernel_handle: Some(kernel_handle),
         command_handlers,
     };
 
@@ -531,6 +674,9 @@ http:
 grpc:
   bind_address: "127.0.0.1:50051"
   server_address: "127.0.0.1:50051"
+auth:
+  jwt:
+    secret: "test-secret"
 users:
   - name: test
     role: root
@@ -564,6 +710,21 @@ mita:
 
         let config = AppConfig::load_from_paths(&global, &local).expect("load config");
         assert_eq!(config.http.bind_address, "127.0.0.1:35555");
+    }
+
+    #[test]
+    fn app_config_parses_auth_defaults() {
+        let config: AppConfig = serde_yaml::from_str(BASE_YAML).expect("parse config");
+        let auth = config.auth.expect("auth config");
+
+        assert_eq!(auth.jwt.secret.as_deref(), Some("test-secret"));
+        assert_eq!(auth.jwt.issuer, "rara");
+        assert_eq!(auth.jwt.audience, "rara-web");
+        assert_eq!(auth.password.max_attempts, 5);
+        assert_eq!(auth.password.bcrypt_cost, 12);
+        assert!(auth.password.require_email_verification);
+        assert!(auth.oauth.github.is_none());
+        assert!(auth.oauth.google.is_none());
     }
 }
 
@@ -650,14 +811,14 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:           Option<oneshot::Sender<()>>,
-    running:               Arc<AtomicBool>,
-    cancellation_token:    CancellationToken,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    running: Arc<AtomicBool>,
+    cancellation_token: CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:     Option<rara_kernel::handle::KernelHandle>,
+    pub kernel_handle: Option<rara_kernel::handle::KernelHandle>,
     /// Command handlers shared across all channels (Telegram, CLI, etc.).
-    pub command_handlers:  Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
+    pub command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
 }
 
 #[allow(dead_code)]
@@ -675,10 +836,14 @@ impl AppHandle {
 
     /// Check if the application is still running.
     #[must_use]
-    pub fn is_running(&self) -> bool { self.running.load(Ordering::SeqCst) }
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
 
     /// Wait for the application to shutdown.
-    pub async fn wait_for_shutdown(&self) { self.cancellation_token.cancelled().await; }
+    pub async fn wait_for_shutdown(&self) {
+        self.cancellation_token.cancelled().await;
+    }
 }
 
 async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
