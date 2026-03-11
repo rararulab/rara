@@ -57,6 +57,7 @@ impl TapeTool {
             "last_anchor": info.last_anchor,
             "entries_since_last_anchor": info.entries_since_last_anchor,
             "last_token_usage": info.last_token_usage,
+            "estimated_context_tokens": info.estimated_context_tokens,
         }))
     }
 
