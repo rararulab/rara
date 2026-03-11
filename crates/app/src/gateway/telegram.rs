@@ -40,15 +40,19 @@ pub struct GatewayTelegramListener {
 }
 
 impl GatewayTelegramListener {
+    /// Create a new listener.
+    ///
+    /// The `bot` should be built via [`rara_channels::telegram::build_bot`]
+    /// which handles proxy and timeout configuration.
     pub fn new(
-        bot_token: &str,
+        bot: Bot,
         channel_id: i64,
         supervisor_handle: SupervisorHandle,
         update_state_rx: watch::Receiver<UpdateState>,
         health_url: String,
     ) -> Self {
         Self {
-            bot: Bot::new(bot_token),
+            bot,
             channel_id,
             supervisor_handle,
             update_state_rx,
