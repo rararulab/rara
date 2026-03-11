@@ -95,11 +95,13 @@ const STREAM_SPLIT_THRESHOLD: usize = 3800;
 
 /// Single tool's progress state within a streaming turn.
 struct ToolProgress {
-    id:       String,
-    name:     String,
-    summary:  String,
-    finished: bool,
-    success:  bool,
+    id:         String,
+    name:       String,
+    summary:    String,
+    started_at: Instant,
+    finished:   bool,
+    success:    bool,
+    duration:   Option<std::time::Duration>,
 }
 
 /// Progress message state for tool execution feedback.
@@ -122,6 +124,18 @@ impl ProgressMessage {
 }
 
 /// Format a single tool-progress line.
+/// Format a duration as a compact human-readable string.
+fn format_duration_compact(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 1 {
+        format!("{}ms", d.as_millis())
+    } else if secs < 60 {
+        format!("{}.{}s", secs, d.subsec_millis() / 100)
+    } else {
+        format!("{}m{}s", secs / 60, secs % 60)
+    }
+}
+
 fn format_tool_line(t: &ToolProgress) -> String {
     let label = if t.summary.is_empty() {
         t.name.clone()
@@ -129,13 +143,18 @@ fn format_tool_line(t: &ToolProgress) -> String {
         format!("[{}] {}", t.name, t.summary)
     };
     if t.finished {
+        let time = t
+            .duration
+            .map(|d| format!(" ({})", format_duration_compact(d)))
+            .unwrap_or_default();
         if t.success {
-            format!("\u{2705} {label}")
+            format!("\u{2705} {label}{time}")
         } else {
-            format!("\u{274c} {label}")
+            format!("\u{274c} {label}{time}")
         }
     } else {
-        format!("\u{1f527} {label}...")
+        let elapsed = format_duration_compact(t.started_at.elapsed());
+        format!("\u{1f527} {label}... {elapsed}")
     }
 }
 
@@ -144,22 +163,28 @@ fn format_tool_line(t: &ToolProgress) -> String {
 /// When there are more than 5 tools, older completed steps are collapsed into a
 /// single "\u{22ef} N earlier steps" line to keep the message compact.
 fn render_progress(tools: &[ToolProgress]) -> String {
+    let in_progress_count = tools.iter().filter(|t| !t.finished).count();
+    let finished_count = tools.iter().filter(|t| t.finished).count();
     let total = tools.len();
-    if total <= 5 {
-        return tools
-            .iter()
-            .map(format_tool_line)
-            .collect::<Vec<_>>()
-            .join("\n");
+
+    // Header: show concurrent count when multiple tools running.
+    let mut lines = Vec::new();
+    if in_progress_count > 1 {
+        lines.push(format!("\u{26a1} {in_progress_count} tools running"));
     }
 
-    let mut lines = Vec::new();
-    let finished_count = tools.iter().filter(|t| t.finished).count();
+    if total <= 5 {
+        for t in tools {
+            lines.push(format_tool_line(t));
+        }
+        return lines.join("\n");
+    }
+
     let last_finished: Vec<_> = tools.iter().filter(|t| t.finished).rev().take(2).collect();
     let collapsed = finished_count.saturating_sub(last_finished.len());
 
     if collapsed > 0 {
-        // Build category breakdown: "⋯ 8×bash, 5×search, 4×tape"
+        // Build category breakdown with total time: "⋯ 8×bash, 5×search (12.3s)"
         let collapsed_tools: Vec<_> = tools
             .iter()
             .filter(|t| t.finished)
@@ -173,7 +198,6 @@ fn render_progress(tools: &[ToolProgress]) -> String {
                 counts.push((&t.name, 1));
             }
         }
-        // Sort by count descending, take top 4 to keep it compact.
         counts.sort_by(|a, b| b.1.cmp(&a.1));
         let parts: Vec<_> = counts
             .iter()
@@ -184,6 +208,14 @@ fn render_progress(tools: &[ToolProgress]) -> String {
         let mut breakdown = parts.join(", ");
         if remaining > 0 {
             breakdown.push_str(&format!(", +{remaining}"));
+        }
+        // Sum durations of collapsed tools.
+        let total_dur: std::time::Duration = collapsed_tools
+            .iter()
+            .filter_map(|t| t.duration)
+            .sum();
+        if !total_dur.is_zero() {
+            breakdown.push_str(&format!(" ({})", format_duration_compact(total_dur)));
         }
         lines.push(format!("\u{22ef} {breakdown}"));
     }
@@ -1233,8 +1265,10 @@ fn spawn_stream_forwarder(
                                 id,
                                 name: display,
                                 summary,
+                                started_at: Instant::now(),
                                 finished: false,
                                 success: false,
+                                duration: None,
                             });
 
                             // Send typing indicator before the first progress message.
@@ -1271,6 +1305,7 @@ fn spawn_stream_forwarder(
                             if let Some(tp) = progress.tools.iter_mut().find(|t| t.id == id) {
                                 tp.finished = true;
                                 tp.success = success;
+                                tp.duration = Some(tp.started_at.elapsed());
                             }
 
                             let text = render_progress(&progress.tools);
