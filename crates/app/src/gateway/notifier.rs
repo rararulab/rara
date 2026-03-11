@@ -94,11 +94,12 @@ impl UpdateNotifier {
         .await;
     }
 
-    pub async fn update_success(&self, new_rev: &str) {
+    pub async fn update_success(&self, new_rev: &str, build_duration: std::time::Duration) {
         *self.agent_version.lock().unwrap() = new_rev.to_owned();
         self.send(&format!(
-            "✅ <b>Auto-update: updated, restarting agent</b>\nnew rev: {}\n{}",
+            "✅ <b>Auto-update: updated, restarting agent</b>\nnew rev: {}\n⏱ build: {}\n{}",
             self.commit_link(new_rev),
+            format_duration(build_duration),
             self.status_block(),
         ))
         .await;
@@ -114,10 +115,11 @@ impl UpdateNotifier {
         .await;
     }
 
-    pub async fn build_failed(&self, rev: &str, reason: &str) {
+    pub async fn build_failed(&self, rev: &str, reason: &str, build_duration: std::time::Duration) {
         self.send(&format!(
-            "❌ <b>Auto-update: build failed</b>\ntarget: {}\n{}\n<pre>{reason}</pre>",
+            "❌ <b>Auto-update: build failed</b>\ntarget: {}\n⏱ build: {}\n{}\n<pre>{reason}</pre>",
             self.commit_link(rev),
+            format_duration(build_duration),
             self.status_block(),
         ))
         .await;
@@ -174,5 +176,17 @@ impl UpdateNotifier {
         if let Err(e) = result {
             warn!(error = %e, "UpdateNotifier: failed to send Telegram notification");
         }
+    }
+}
+
+/// Format a [`std::time::Duration`] as a human-readable string (e.g. "2m 35s").
+fn format_duration(d: std::time::Duration) -> String {
+    let total_secs = d.as_secs();
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    if mins > 0 {
+        format!("{mins}m {secs}s")
+    } else {
+        format!("{secs}s")
     }
 }

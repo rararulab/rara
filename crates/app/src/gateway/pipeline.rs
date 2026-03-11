@@ -132,15 +132,17 @@ async fn execute_and_handle(
     info!("Auto-update: building new version...");
     notifier.build_in_progress().await;
 
+    let build_start = std::time::Instant::now();
     let result = executor
         .execute_update(upstream_rev)
         .await
         .map_err(|e| format!("execute_update error: {e}"))?;
+    let build_duration = build_start.elapsed();
 
     match result {
         UpdateResult::Success { new_rev } => {
-            info!(rev = %new_rev, "Auto-update: successfully updated to {}, restarting agent", new_rev);
-            notifier.update_success(&new_rev).await;
+            info!(rev = %new_rev, ?build_duration, "Auto-update: successfully updated to {}, restarting agent", new_rev);
+            notifier.update_success(&new_rev, build_duration).await;
             if let Err(e) = supervisor_handle.restart().await {
                 warn!(error = %e, "Auto-update: failed to send restart command");
                 notifier.restart_failed(&e.to_string()).await;
@@ -150,8 +152,8 @@ async fn execute_and_handle(
             }
         }
         UpdateResult::BuildFailed { reason } => {
-            warn!(reason = %reason, "Auto-update: build failed for {}: {}", upstream_rev, reason);
-            notifier.build_failed(upstream_rev, &reason).await;
+            warn!(reason = %reason, ?build_duration, "Auto-update: build failed for {}: {}", upstream_rev, reason);
+            notifier.build_failed(upstream_rev, &reason, build_duration).await;
         }
         UpdateResult::ActivationFailed {
             reason,
