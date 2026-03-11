@@ -18,7 +18,7 @@
 //! and [`JobWheel`] (the scheduling data structure backed by a `BTreeMap`).
 //! Jobs are persisted as JSON and restored on startup.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -47,12 +47,12 @@ pub enum Trigger {
         /// Interval in seconds.
         every_secs: u64,
         /// Next scheduled fire time.
-        next_at:    Timestamp,
+        next_at: Timestamp,
     },
     /// Fire according to a cron expression.
     Cron {
         /// The cron expression string (e.g. `"0 9 * * *"`).
-        expr:    String,
+        expr: String,
         /// Next scheduled fire time.
         next_at: Timestamp,
     },
@@ -94,17 +94,17 @@ impl Trigger {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobEntry {
     /// Unique job identifier.
-    pub id:          JobId,
+    pub id: JobId,
     /// When/how this job fires.
-    pub trigger:     Trigger,
+    pub trigger: Trigger,
     /// Text injected as a `UserMessage` when the job fires.
-    pub message:     String,
+    pub message: String,
     /// Session this job is bound to.
     pub session_key: SessionKey,
     /// The principal who created the job.
-    pub principal:   Principal,
+    pub principal: Principal,
     /// When this job was created.
-    pub created_at:  Timestamp,
+    pub created_at: Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +130,9 @@ pub struct JobWheel {
 
 impl JobWheel {
     /// Build a wheel key from a job entry.
-    fn key(entry: &JobEntry) -> WheelKey { (entry.trigger.next_at().as_second(), entry.id.0) }
+    fn key(entry: &JobEntry) -> WheelKey {
+        (entry.trigger.next_at().as_second(), entry.id.0)
+    }
 
     /// Load jobs from the JSON persistence file, or create an empty wheel.
     pub fn load(path: PathBuf) -> Self {
@@ -202,8 +204,8 @@ impl JobWheel {
                         };
                         self.jobs.insert(Self::key(&rescheduled), rescheduled);
                     }
-                    Trigger::Cron { expr, .. } => match Self::next_cron_time(&expr, now) {
-                        Some(next) => {
+                    Trigger::Cron { expr, .. } => match next_cron_time(&expr, now) {
+                        Ok(next) => {
                             let mut rescheduled = entry;
                             rescheduled.trigger = Trigger::Cron {
                                 expr,
@@ -211,7 +213,7 @@ impl JobWheel {
                             };
                             self.jobs.insert(Self::key(&rescheduled), rescheduled);
                         }
-                        None => {
+                        Err(_) => {
                             warn!(job_id = %entry.id, expr = expr, "cron expression yields no future time, removing job");
                         }
                     },
@@ -260,19 +262,65 @@ impl JobWheel {
             }
         }
     }
+}
 
-    /// Compute the next fire time for a cron expression after `after`.
-    fn next_cron_time(expr: &str, after: Timestamp) -> Option<Timestamp> {
-        use std::str::FromStr;
+#[derive(Debug)]
+pub(crate) enum CronNextError {
+    Invalid(croner::errors::CronError),
+    NoFutureTime,
+}
 
-        let schedule = cron::Schedule::from_str(expr).ok()?;
-        // Convert jiff::Timestamp to chrono::DateTime<Utc>.
-        let after_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(
-            after.as_second(),
-            after.subsec_nanosecond() as u32,
-        )?;
-        let next_chrono = schedule.upcoming(chrono::Utc).find(|t| *t > after_chrono)?;
-        let next_ts = Timestamp::from_second(next_chrono.timestamp()).ok()?;
-        Some(next_ts)
+impl std::fmt::Display for CronNextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(err) => write!(f, "{err}"),
+            Self::NoFutureTime => write!(f, "expression yields no future time"),
+        }
+    }
+}
+
+impl std::error::Error for CronNextError {}
+
+/// Compute the next fire time for a 5-field cron expression after `after`.
+pub(crate) fn next_cron_time(expr: &str, after: Timestamp) -> Result<Timestamp, CronNextError> {
+    let cron = croner::Cron::from_str(expr).map_err(CronNextError::Invalid)?;
+    let after_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(
+        after.as_second(),
+        after.subsec_nanosecond() as u32,
+    )
+    .ok_or(CronNextError::NoFutureTime)?;
+    let next = cron
+        .find_next_occurrence(&after_chrono, false)
+        .map_err(|_| CronNextError::NoFutureTime)?;
+    Timestamp::from_second(next.timestamp()).map_err(|_| CronNextError::NoFutureTime)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Timelike;
+
+    use super::*;
+
+    #[test]
+    fn next_cron_time_accepts_standard_five_field_expression() {
+        let after = Timestamp::from_second(1_763_254_800).expect("valid timestamp");
+
+        let next = next_cron_time("0 23 * * *", after).expect("valid cron expression");
+        let next_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(next.as_second(), 0)
+            .expect("timestamp converts to chrono");
+
+        assert!(next > after);
+        assert_eq!(next_chrono.minute(), 0);
+        assert_eq!(next_chrono.hour(), 23);
+    }
+
+    #[test]
+    fn next_cron_time_rejects_invalid_expression() {
+        let after = Timestamp::from_second(1_763_254_800).expect("valid timestamp");
+
+        assert!(matches!(
+            next_cron_time("not-a-cron", after),
+            Err(CronNextError::Invalid(_))
+        ));
     }
 }

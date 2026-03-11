@@ -28,7 +28,7 @@ use tracing::debug;
 
 use crate::{
     event::{KernelEventEnvelope, Syscall},
-    schedule::{JobId, Trigger},
+    schedule::{CronNextError, JobId, Trigger, next_cron_time},
     tool::{AgentTool, ToolContext, ToolOutput},
 };
 
@@ -82,12 +82,14 @@ pub struct ScheduleOnceTool;
 #[derive(Debug, Deserialize)]
 struct ScheduleOnceParams {
     after_seconds: u64,
-    message:       String,
+    message: String,
 }
 
 #[async_trait]
 impl AgentTool for ScheduleOnceTool {
-    fn name(&self) -> &str { "schedule-once" }
+    fn name(&self) -> &str {
+        "schedule-once"
+    }
 
     fn description(&self) -> &str {
         "Schedule a one-shot task. It fires once after the specified delay in seconds."
@@ -140,14 +142,18 @@ pub struct ScheduleIntervalTool;
 #[derive(Debug, Deserialize)]
 struct ScheduleIntervalParams {
     interval_seconds: u64,
-    message:          String,
+    message: String,
 }
 
 #[async_trait]
 impl AgentTool for ScheduleIntervalTool {
-    fn name(&self) -> &str { "schedule-interval" }
+    fn name(&self) -> &str {
+        "schedule-interval"
+    }
 
-    fn description(&self) -> &str { "Schedule a repeating task. It fires every N seconds." }
+    fn description(&self) -> &str {
+        "Schedule a repeating task. It fires every N seconds."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -203,13 +209,15 @@ pub struct ScheduleCronTool;
 
 #[derive(Debug, Deserialize)]
 struct ScheduleCronParams {
-    cron:    String,
+    cron: String,
     message: String,
 }
 
 #[async_trait]
 impl AgentTool for ScheduleCronTool {
-    fn name(&self) -> &str { "schedule-cron" }
+    fn name(&self) -> &str {
+        "schedule-cron"
+    }
 
     fn description(&self) -> &str {
         "Schedule a task using a cron expression (e.g. '0 9 * * *' for daily at 9am UTC)."
@@ -244,24 +252,19 @@ impl AgentTool for ScheduleCronTool {
             return Err(anyhow::anyhow!("cron expression must not be empty"));
         }
 
-        use std::str::FromStr;
-        let schedule = cron::Schedule::from_str(&p.cron)
-            .map_err(|e| anyhow::anyhow!("invalid cron expression '{}': {e}", p.cron))?;
-
         let now = jiff::Timestamp::now();
-        let now_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(
-            now.as_second(),
-            now.subsec_nanosecond() as u32,
-        )
-        .ok_or_else(|| anyhow::anyhow!("failed to convert timestamp"))?;
-
-        let next_chrono = schedule
-            .upcoming(chrono::Utc)
-            .find(|t| *t > now_chrono)
-            .ok_or_else(|| anyhow::anyhow!("cron expression '{}' yields no future time", p.cron))?;
-
-        let next_at = jiff::Timestamp::from_second(next_chrono.timestamp())
-            .map_err(|e| anyhow::anyhow!("timestamp conversion error: {e}"))?;
+        let next_at = match next_cron_time(&p.cron, now) {
+            Ok(next) => next,
+            Err(CronNextError::Invalid(e)) => {
+                return Err(anyhow::anyhow!("invalid cron expression '{}': {e}", p.cron));
+            }
+            Err(CronNextError::NoFutureTime) => {
+                return Err(anyhow::anyhow!(
+                    "cron expression '{}' yields no future time",
+                    p.cron
+                ));
+            }
+        };
 
         register_job(
             Trigger::Cron {
@@ -289,9 +292,13 @@ struct ScheduleRemoveParams {
 
 #[async_trait]
 impl AgentTool for ScheduleRemoveTool {
-    fn name(&self) -> &str { "schedule-remove" }
+    fn name(&self) -> &str {
+        "schedule-remove"
+    }
 
-    fn description(&self) -> &str { "Remove a previously scheduled task by its job ID." }
+    fn description(&self) -> &str {
+        "Remove a previously scheduled task by its job ID."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -351,9 +358,13 @@ pub struct ScheduleListTool;
 
 #[async_trait]
 impl AgentTool for ScheduleListTool {
-    fn name(&self) -> &str { "schedule-list" }
+    fn name(&self) -> &str {
+        "schedule-list"
+    }
 
-    fn description(&self) -> &str { "List all scheduled tasks for the current session." }
+    fn description(&self) -> &str {
+        "List all scheduled tasks for the current session."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -403,5 +414,46 @@ impl AgentTool for ScheduleListTool {
             "count": list.len(),
         })
         .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn schedule_cron_accepts_valid_five_field_expression() {
+        let tool = ScheduleCronTool;
+        let err = tool
+            .execute(
+                json!({
+                    "cron": "0 23 * * *",
+                    "message": "nightly task"
+                }),
+                &ToolContext::default(),
+            )
+            .await
+            .expect_err("missing event queue should fail after cron validation");
+
+        assert!(err.to_string().contains("no event queue in tool context"));
+    }
+
+    #[tokio::test]
+    async fn schedule_cron_rejects_invalid_expression() {
+        let tool = ScheduleCronTool;
+        let err = tool
+            .execute(
+                json!({
+                    "cron": "not-a-cron",
+                    "message": "nightly task"
+                }),
+                &ToolContext::default(),
+            )
+            .await
+            .expect_err("invalid cron expression should fail");
+
+        assert!(err.to_string().contains("invalid cron expression"));
     }
 }
