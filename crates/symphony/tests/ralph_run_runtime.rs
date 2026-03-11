@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use chrono::Utc;
 use rara_symphony::{
     agent::{AgentTask, RalphAgent, merge_core_config},
-    config::{AgentConfig, RepoConfig, TrackerConfig},
+    config::{AgentConfig, BackendSelection, RepoConfig, TrackerConfig},
     tracker::{IssueState, TrackedIssue},
 };
 
@@ -111,19 +111,20 @@ fn default_agent_command_uses_autonomous_mode() {
 fn default_prompt_requires_push_pr_and_linear_comment() {
     let agent = RalphAgent::new(AgentConfig::default());
     let task = AgentTask {
-        issue:            TrackedIssue {
-            id:         "lin_123".to_owned(),
+        issue: TrackedIssue {
+            id: "lin_123".to_owned(),
             identifier: "RAR-123".to_owned(),
-            repo:       "rararulab/rara".to_owned(),
-            number:     123,
-            title:      "Add merge tracking".to_owned(),
-            body:       Some("Track PR merge status before closing the Linear issue.".to_owned()),
-            labels:     vec![],
-            priority:   1,
-            state:      IssueState::Active,
+            repo: "rararulab/rara".to_owned(),
+            number: 123,
+            title: "Add merge tracking".to_owned(),
+            body: Some("Track PR merge status before closing the Linear issue.".to_owned()),
+            assign: None,
+            labels: vec![],
+            priority: 1,
+            state: IssueState::Active,
             created_at: Utc::now(),
         },
-        attempt:          None,
+        attempt: None,
         workflow_content: None,
     };
 
@@ -142,14 +143,14 @@ fn default_prompt_requires_push_pr_and_linear_comment() {
 #[test]
 fn tracker_config_defaults_completion_state_to_to_verify() {
     let tracker = TrackerConfig::Linear {
-        api_key:               "token".to_owned(),
-        team_key:              "RAR".to_owned(),
-        project_slug:          None,
-        endpoint:              "https://api.linear.app/graphql".to_owned(),
-        active_states:         vec!["Todo".to_owned()],
-        terminal_states:       vec!["Done".to_owned()],
-        repo_label_prefix:     "repo:".to_owned(),
-        started_issue_state:   "In Progress".to_owned(),
+        api_key: "token".to_owned(),
+        team_key: "RAR".to_owned(),
+        project_slug: None,
+        endpoint: "https://api.linear.app/graphql".to_owned(),
+        active_states: vec!["Todo".to_owned()],
+        terminal_states: vec!["Done".to_owned()],
+        repo_label_prefix: "repo:".to_owned(),
+        started_issue_state: "In Progress".to_owned(),
         completed_issue_state: "ToVerify".to_owned(),
     };
 
@@ -161,14 +162,14 @@ fn tracker_config_defaults_completion_state_to_to_verify() {
 #[test]
 fn tracker_config_allows_custom_completion_state() {
     let tracker = TrackerConfig::Linear {
-        api_key:               "token".to_owned(),
-        team_key:              "RAR".to_owned(),
-        project_slug:          None,
-        endpoint:              "https://api.linear.app/graphql".to_owned(),
-        active_states:         vec!["Todo".to_owned()],
-        terminal_states:       vec!["Done".to_owned()],
-        repo_label_prefix:     "repo:".to_owned(),
-        started_issue_state:   "In Dev".to_owned(),
+        api_key: "token".to_owned(),
+        team_key: "RAR".to_owned(),
+        project_slug: None,
+        endpoint: "https://api.linear.app/graphql".to_owned(),
+        active_states: vec!["Todo".to_owned()],
+        terminal_states: vec!["Done".to_owned()],
+        repo_label_prefix: "repo:".to_owned(),
+        started_issue_state: "In Dev".to_owned(),
         completed_issue_state: "QA".to_owned(),
     };
 
@@ -188,4 +189,64 @@ fn merge_core_config_overlays_core_fields_onto_generated_config() {
     assert!(merged.contains("RObot:"));
     assert!(merged.contains("enabled: true"));
     assert!(merged.contains("timeout_seconds: 120"));
+}
+
+#[test]
+fn agent_config_resolves_named_backend_from_assign_selector() {
+    let mut agent = AgentConfig::default();
+    agent.backends.insert(
+        "docker".to_owned(),
+        rara_symphony::config::BackendConfig::builder()
+            .backend("docker".to_owned())
+            .extra_args(vec!["--max-iterations".to_owned(), "3".to_owned()])
+            .build(),
+    );
+
+    let resolved = agent.resolve_for_assign(Some("ralph:docker"));
+
+    assert_eq!(
+        resolved.selection,
+        BackendSelection::Assigned {
+            key: "docker".to_owned(),
+            raw: "ralph:docker".to_owned(),
+        }
+    );
+    assert_eq!(resolved.config.backend, "docker");
+    assert_eq!(
+        resolved.config.command_args(),
+        vec![
+            "run".to_owned(),
+            "--autonomous".to_owned(),
+            "--max-iterations".to_owned(),
+            "3".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn agent_config_falls_back_for_invalid_or_irrelevant_assign_values() {
+    let agent = AgentConfig::default();
+
+    let ignored = agent.resolve_for_assign(Some("ops:docker"));
+    assert_eq!(
+        ignored.selection,
+        BackendSelection::Ignored {
+            raw: "ops:docker".to_owned(),
+        }
+    );
+    assert_eq!(ignored.config.backend, "codex");
+
+    let invalid = agent.resolve_for_assign(Some("ralph:unknown"));
+    assert_eq!(
+        invalid.selection,
+        BackendSelection::Invalid {
+            key: "unknown".to_owned(),
+            raw: "ralph:unknown".to_owned(),
+        }
+    );
+    assert_eq!(invalid.config.backend, "codex");
+
+    let defaulted = agent.resolve_for_assign(None);
+    assert_eq!(defaulted.selection, BackendSelection::Default);
+    assert_eq!(defaulted.config.backend, "codex");
 }

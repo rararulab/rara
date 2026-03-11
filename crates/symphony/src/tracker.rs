@@ -47,6 +47,8 @@ pub struct TrackedIssue {
     pub title: String,
     /// Issue body/description.
     pub body: Option<String>,
+    /// Raw assignment selector used for per-issue backend resolution.
+    pub assign: Option<String>,
     /// Labels attached to the issue.
     pub labels: Vec<String>,
     /// Priority (lower = higher priority).
@@ -149,6 +151,7 @@ impl GitHubIssueTracker {
                     number: item.number,
                     title: item.title,
                     body: item.body,
+                    assign: None,
                     labels,
                     priority,
                     state: IssueState::Active,
@@ -523,6 +526,7 @@ impl IssueTracker for LinearIssueTracker {
                         .get("description")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_owned()),
+                    assign: None,
                     labels,
                     priority,
                     state: IssueState::Active,
@@ -763,6 +767,7 @@ mod tests {
             number,
             title: format!("Issue {number}"),
             body: None,
+            assign: None,
             labels: vec![],
             priority,
             state: IssueState::Active,
