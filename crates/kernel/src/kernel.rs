@@ -1255,8 +1255,8 @@ impl Kernel {
         }
     }
 
-    /// Handle a Mita directive — deliver an ephemeral instruction to a target
-    /// session without persisting to tape.
+    /// Handle a Mita directive — deliver an instruction to a target session.
+    /// The directive is persisted as an Event entry in the session tape.
     async fn handle_mita_directive(&self, session_key: SessionKey, instruction: String) {
         // Check target session exists
         if !self.process_table.contains(&session_key) {
@@ -1277,7 +1277,7 @@ impl Kernel {
         let system_user = crate::identity::UserId("system".to_string());
         let mut msg = InboundMessage::synthetic(directive_text, system_user, session_key);
 
-        // Set metadata flag so start_llm_turn knows not to persist to tape.
+        // Set metadata flag so start_llm_turn persists as Event (not Message).
         msg.metadata.insert("mita_directive".to_string(), serde_json::json!(true));
 
         self.deliver_to_session(session_key, msg).await;
@@ -1537,9 +1537,21 @@ impl Kernel {
             if msgs.is_empty() { None } else { Some(msgs) }
         };
 
-        // Skip tape persistence for Mita directives — they are ephemeral.
+        // Persist to tape: Mita directives go as Event entries (recorded but
+        // excluded from LLM context by default_tape_context), regular messages
+        // go as Message entries.
         let is_mita_directive = msg.metadata.get("mita_directive").and_then(|v| v.as_bool()).unwrap_or(false);
-        if !is_mita_directive {
+        if is_mita_directive {
+            if let Err(e) = &self
+                .tape_service
+                .append_event(&tape_name, "mita-directive", serde_json::json!({
+                    "instruction": &user_text,
+                }))
+                .await
+            {
+                warn!(%e, "failed to persist Mita directive to tape");
+            }
+        } else {
             let tape_payload = serde_json::json!({
                 "role": "user",
                 "content": &user_text,
