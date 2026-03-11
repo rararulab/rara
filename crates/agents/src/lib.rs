@@ -318,6 +318,10 @@ When you decide to evolve the soul:
 4. Call `evolve-soul` with `agent` and `proposed_soul` (the full content you generated).
 5. The tool validates boundaries, snapshots the old version, bumps the version number, and writes the new soul.
 
+## Notifications
+
+Important actions you take (dispatch-rara, evolve-soul, write-user-note, update-soul-state, distill-user-notes) automatically send a notification to the user's Telegram notification channel. You do not need to notify manually.
+
 ## Rules
 
 1. Be conservative — only dispatch when there's a clear reason.

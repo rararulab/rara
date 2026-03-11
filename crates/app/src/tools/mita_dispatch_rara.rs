@@ -26,6 +26,8 @@ use rara_kernel::{
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
+use super::notify::push_notification;
+
 /// Mita tool that dispatches an instruction to Rara for a given session.
 ///
 /// The instruction is delivered as a synthetic internal message to the
@@ -82,7 +84,7 @@ impl AgentTool for DispatchRaraTool {
         })
     }
 
-    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn execute(&self, params: Value, ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let session_id_str = params
             .get("session_id")
             .and_then(|v| v.as_str())
@@ -128,6 +130,11 @@ impl AgentTool for DispatchRaraTool {
         handle.dispatch_directive(session_key, instruction.to_string()).map_err(|e| {
             anyhow::anyhow!("failed to dispatch directive to session '{session_id_str}': {e}")
         })?;
+
+        push_notification(
+            ctx,
+            format!("📨 Mita → Rara [{session_id_str}]: {instruction}"),
+        );
 
         Ok(json!({
             "status": "dispatched",

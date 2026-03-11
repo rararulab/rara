@@ -27,6 +27,8 @@ use tracing::info;
 
 use rara_soul::state::{EmergedTrait, HistoryEntry, RelationshipStage, StyleDrift};
 
+use super::notify::push_notification;
+
 /// Valid field names that can be updated.
 const UPDATABLE_FIELDS: &[&str] = &[
     "relationship_stage",
@@ -78,7 +80,7 @@ impl AgentTool for UpdateSoulStateTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let agent = params
             .get("agent")
@@ -194,6 +196,11 @@ impl AgentTool for UpdateSoulStateTool {
         // Persist the updated state.
         rara_soul::loader::save_state(agent, &state)
             .map_err(|e| anyhow::anyhow!("failed to save soul state: {e}"))?;
+
+        push_notification(
+            context,
+            format!("⚙️ Soul state updated: {agent}.{field}"),
+        );
 
         Ok(json!({
             "status": "ok",

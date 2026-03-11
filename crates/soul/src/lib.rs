@@ -40,8 +40,8 @@ pub mod state;
 
 // Re-export key types for convenience.
 pub use error::SoulError;
-pub use evolution::{create_snapshot, list_snapshots, load_snapshot, validate_boundaries, SoulEvolver};
+pub use evolution::{create_snapshot, list_snapshots, load_snapshot, validate_boundaries};
 pub use file::{Boundaries, EvolutionConfig, SoulFile, SoulFrontmatter};
-pub use loader::{load_and_render, load_soul, LoadedSoul, SoulSource};
+pub use loader::{load_and_render, load_soul, soul_path, LoadedSoul, SoulSource};
 pub use render::render;
 pub use state::{MoodLabel, RelationshipStage, SoulState, StyleDrift};

@@ -33,6 +33,7 @@ mod mita_list_sessions;
 mod mita_read_tape;
 mod mita_update_soul_state;
 mod mita_write_user_note;
+mod notify;
 mod read_file;
 mod screenshot;
 mod send_email;

@@ -23,10 +23,11 @@
 use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{AgentTool, ToolOutput},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::json;
 
+use super::notify::push_notification;
 use super::user_note::NOTE_CATEGORIES;
 
 /// Mita-exclusive tool: write a structured note into any user's tape.
@@ -83,7 +84,7 @@ impl AgentTool for MitaWriteUserNoteTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let user_id = params
             .get("user_id")
@@ -118,6 +119,11 @@ impl AgentTool for MitaWriteUserNoteTool {
             .append_user_note(user_id, category, content)
             .await
             .map_err(|e| anyhow::anyhow!("failed to write user note: {e}"))?;
+
+        push_notification(
+            context,
+            format!("📝 User note [{category}] for {user_id}: {content}"),
+        );
 
         Ok(json!({
             "status": "ok",

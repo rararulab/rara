@@ -14,52 +14,24 @@
 
 //! Mita-exclusive tool for triggering soul evolution.
 //!
-//! Orchestrates the full evolution pipeline:
-//! 1. Load current soul file + state
-//! 2. Validate sufficient signal for evolution
-//! 3. Snapshot current soul
-//! 4. (Placeholder) Generate evolved soul via LLM
-//! 5. Validate boundaries
-//! 6. Write new soul file
-//! 7. Return evolution summary
+//! Mita (the LLM) generates the proposed soul content herself, then passes
+//! it to this tool for validation, snapshotting, and writing.
 
 use async_trait::async_trait;
 use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
 use serde_json::json;
 use tracing::info;
 
-use rara_soul::state::StyleDrift;
+use super::notify::push_notification;
 
-/// Minimum number of emerged traits required to trigger evolution.
-const MIN_EMERGED_TRAITS: usize = 3;
-
-/// Mita-exclusive tool: trigger soul.md evolution for an agent.
+/// Mita-exclusive tool: evolve an agent's soul.md.
+///
+/// Mita generates the new soul content and passes it as `proposed_soul`.
+/// The tool validates boundaries, snapshots the old soul, and writes the new one.
 pub struct EvolveSoulTool;
 
 impl EvolveSoulTool {
     pub fn new() -> Self { Self }
-}
-
-/// Check whether the soul state has accumulated enough signal to warrant
-/// evolution. Returns `None` if ready, or `Some(reason)` if not.
-fn check_evolution_readiness(
-    state: &rara_soul::state::SoulState,
-) -> Option<String> {
-    let default_drift = StyleDrift::default();
-    let has_drift = state.style_drift.formality != default_drift.formality
-        || state.style_drift.verbosity != default_drift.verbosity
-        || state.style_drift.humor_frequency != default_drift.humor_frequency;
-
-    let trait_count = state.emerged_traits.len();
-
-    if trait_count < MIN_EMERGED_TRAITS && !has_drift {
-        Some(format!(
-            "Not enough signal to evolve: {} emerged trait(s) (need {}+) and no style drift",
-            trait_count, MIN_EMERGED_TRAITS
-        ))
-    } else {
-        None
-    }
 }
 
 #[async_trait]
@@ -67,9 +39,12 @@ impl AgentTool for EvolveSoulTool {
     fn name(&self) -> &str { "evolve-soul" }
 
     fn description(&self) -> &str {
-        "Trigger soul.md evolution for an agent. Checks whether enough signal has \
-         accumulated (emerged traits, style drift), snapshots the current soul, and \
-         initiates evolution. Currently uses a placeholder for the LLM rewrite step."
+        "Write an evolved soul.md for an agent. You (Mita) must generate the full \
+         proposed soul content (frontmatter + markdown body) based on the accumulated \
+         state signals (emerged traits, style drift, discovered interests, relationship \
+         stage). The tool validates boundaries, snapshots the current soul, and writes \
+         the new version. The proposed_soul must preserve all immutable_traits and \
+         respect formality bounds from the current soul's boundaries section."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -79,9 +54,17 @@ impl AgentTool for EvolveSoulTool {
                 "agent": {
                     "type": "string",
                     "description": "Target agent name (e.g. \"rara\")"
+                },
+                "proposed_soul": {
+                    "type": "string",
+                    "description": "Full proposed soul.md content (YAML frontmatter + markdown body). Must be valid soul format with --- delimiters."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief summary of what changed and why (e.g. \"added playful humor based on observed style drift; relationship upgraded to friend\")"
                 }
             },
-            "required": ["agent"]
+            "required": ["agent", "proposed_soul", "reason"]
         })
     }
 
@@ -94,93 +77,94 @@ impl AgentTool for EvolveSoulTool {
             .get("agent")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: agent"))?;
+        let proposed_content = params
+            .get("proposed_soul")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: proposed_soul"))?;
+        let reason = params
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: reason"))?;
 
-        // 1. Load current soul file.
+        // 1. Load current soul.
         let loaded = rara_soul::load_soul(agent)
             .map_err(|e| anyhow::anyhow!("failed to load soul file: {e}"))?
-            .ok_or_else(|| anyhow::anyhow!(
-                "no soul file found for agent '{agent}'"
-            ))?;
+            .ok_or_else(|| anyhow::anyhow!("no soul file found for agent '{agent}'"))?;
 
-        let soul = loaded.soul;
-        let current_version = soul.frontmatter.version;
+        let current_soul = loaded.soul;
+        let current_version = current_soul.frontmatter.version;
 
-        // 2. Load current state.
-        let state = rara_soul::loader::load_state(agent)
-            .map_err(|e| anyhow::anyhow!("failed to load soul state: {e}"))?
-            .unwrap_or_default();
+        // 2. Parse proposed soul.
+        let mut proposed_soul = rara_soul::SoulFile::parse(proposed_content)
+            .map_err(|e| anyhow::anyhow!("proposed soul is not valid: {e}"))?;
 
-        // 3. Check evolution readiness.
-        if let Some(reason) = check_evolution_readiness(&state) {
-            info!(agent, %reason, "soul evolution skipped: insufficient signal");
+        // 3. Validate boundaries.
+        let violations = rara_soul::validate_boundaries(
+            &current_soul.frontmatter,
+            &proposed_soul.frontmatter,
+        );
+        if !violations.is_empty() {
             return Ok(json!({
-                "status": "skipped",
+                "status": "rejected",
                 "agent": agent,
-                "reason": reason,
-                "emerged_traits_count": state.emerged_traits.len(),
-                "style_drift": {
-                    "formality": state.style_drift.formality,
-                    "verbosity": state.style_drift.verbosity,
-                    "humor_frequency": state.style_drift.humor_frequency
-                }
+                "reason": "boundary violations",
+                "violations": violations,
             })
             .into());
         }
 
-        // 4. Create snapshot of current soul.
+        // 4. Snapshot current soul.
         let snapshots_dir = rara_soul::loader::snapshots_dir(agent);
-        let snapshot_path = rara_soul::create_snapshot(&soul, &snapshots_dir)
-            .map_err(|e| anyhow::anyhow!("failed to create soul snapshot: {e}"))?;
+        let snapshot_path = rara_soul::create_snapshot(&current_soul, &snapshots_dir)
+            .map_err(|e| anyhow::anyhow!("failed to create snapshot: {e}"))?;
 
+        // 5. Bump version and write new soul.
+        proposed_soul.frontmatter.version = current_version + 1;
+        let new_content = proposed_soul
+            .to_string()
+            .map_err(|e| anyhow::anyhow!("failed to serialize proposed soul: {e}"))?;
+
+        let soul_file_path = rara_soul::soul_path(agent);
+        if let Some(parent) = soul_file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&soul_file_path, &new_content)?;
+
+        // 6. Log evolution event in state history.
+        if let Ok(Some(mut state)) = rara_soul::loader::load_state(agent) {
+            state.append_history(rara_soul::state::HistoryEntry {
+                timestamp:   jiff::Timestamp::now(),
+                r#type:      "soul_evolved".to_string(),
+                description: format!(
+                    "v{} → v{}: {reason}",
+                    current_version,
+                    current_version + 1,
+                ),
+            });
+            let _ = rara_soul::loader::save_state(agent, &state);
+        }
+
+        let new_version = current_version + 1;
         info!(
             agent,
-            version = current_version,
+            old_version = current_version,
+            new_version,
             snapshot = %snapshot_path.display(),
-            "soul snapshot created before evolution"
+            "soul evolved successfully"
         );
 
-        // 5. Placeholder: LLM-driven evolution not yet implemented.
-        //
-        // When implemented, this will call `SoulEvolver::propose_evolution()`
-        // to generate a new soul.md based on the accumulated state changes.
-        // For now, we record that evolution was requested and return a pending
-        // status so Mita knows to retry later.
-        let summary = format!(
-            "Evolution pending for agent '{agent}' (v{current_version}). \
-             Snapshot saved at {}. \
-             Signal: {} emerged trait(s), style_drift=({},{},{}), \
-             {} discovered interest(s), relationship={:?}. \
-             LLM-driven soul rewrite not yet implemented.",
-            snapshot_path.display(),
-            state.emerged_traits.len(),
-            state.style_drift.formality,
-            state.style_drift.verbosity,
-            state.style_drift.humor_frequency,
-            state.discovered_interests.len(),
-            state.relationship_stage,
+        push_notification(
+            _context,
+            format!("🧬 Soul evolved: {agent} v{current_version} → v{new_version}\n{reason}"),
         );
-
-        info!(agent, %summary, "soul evolution: pending LLM implementation");
 
         Ok(json!({
-            "status": "pending",
+            "status": "evolved",
             "agent": agent,
-            "current_version": current_version,
+            "old_version": current_version,
+            "new_version": new_version,
             "snapshot_path": snapshot_path.display().to_string(),
-            "signal": {
-                "emerged_traits_count": state.emerged_traits.len(),
-                "emerged_traits": state.emerged_traits.iter()
-                    .map(|t| t.r#trait.clone())
-                    .collect::<Vec<_>>(),
-                "style_drift": {
-                    "formality": state.style_drift.formality,
-                    "verbosity": state.style_drift.verbosity,
-                    "humor_frequency": state.style_drift.humor_frequency
-                },
-                "discovered_interests_count": state.discovered_interests.len(),
-                "relationship_stage": format!("{:?}", state.relationship_stage)
-            },
-            "message": summary
+            "soul_path": soul_file_path.display().to_string(),
         })
         .into())
     }
@@ -189,44 +173,13 @@ impl AgentTool for EvolveSoulTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rara_soul::state::{EmergedTrait, SoulState};
 
     #[test]
-    fn readiness_default_state_not_ready() {
-        let state = SoulState::default();
-        let result = check_evolution_readiness(&state);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("Not enough signal"));
-    }
-
-    #[test]
-    fn readiness_enough_traits() {
-        let mut state = SoulState::default();
-        for i in 0..3 {
-            state.emerged_traits.push(EmergedTrait {
-                r#trait:    format!("trait_{i}"),
-                confidence: 0.8,
-                first_seen: None,
-            });
-        }
-        assert!(check_evolution_readiness(&state).is_none());
-    }
-
-    #[test]
-    fn readiness_style_drift_only() {
-        let mut state = SoulState::default();
-        state.style_drift.formality = 8; // deviated from default 5
-        assert!(check_evolution_readiness(&state).is_none());
-    }
-
-    #[test]
-    fn readiness_few_traits_no_drift_not_ready() {
-        let mut state = SoulState::default();
-        state.emerged_traits.push(EmergedTrait {
-            r#trait:    "curious".to_string(),
-            confidence: 0.7,
-            first_seen: None,
-        });
-        assert!(check_evolution_readiness(&state).is_some());
+    fn tool_has_required_params() {
+        let tool = EvolveSoulTool::new();
+        let schema = tool.parameters_schema();
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "agent"));
+        assert!(required.iter().any(|v| v == "proposed_soul"));
     }
 }

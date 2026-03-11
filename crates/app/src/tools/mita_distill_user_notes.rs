@@ -23,9 +23,11 @@
 use async_trait::async_trait;
 use rara_kernel::{
     memory::{HandoffState, TapeService},
-    tool::{AgentTool, ToolOutput},
+    tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::json;
+
+use super::notify::push_notification;
 
 /// Mita-exclusive tool: distill accumulated user notes into a compact anchor.
 pub struct DistillUserNotesTool {
@@ -67,7 +69,7 @@ impl AgentTool for DistillUserNotesTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let user_id = params
             .get("user_id")
@@ -97,6 +99,11 @@ impl AgentTool for DistillUserNotesTool {
             .handoff(&user_tape, "distill", handoff_state)
             .await
             .map_err(|e| anyhow::anyhow!("failed to write distillation anchor: {e}"))?;
+
+        push_notification(
+            context,
+            format!("🗜️ User notes distilled for {user_id}"),
+        );
 
         Ok(json!({
             "status": "ok",

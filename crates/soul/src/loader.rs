@@ -115,6 +115,14 @@ pub fn save_state(agent_name: &str, state: &SoulState) -> Result<()> {
     state.save(&path)
 }
 
+/// Returns the path to the per-agent soul file.
+pub fn soul_path(agent_name: &str) -> PathBuf {
+    rara_paths::config_dir()
+        .join("agents")
+        .join(agent_name)
+        .join("soul.md")
+}
+
 /// Returns the path to the soul state file for an agent.
 pub fn state_path(agent_name: &str) -> PathBuf {
     rara_paths::config_dir()

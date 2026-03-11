@@ -150,28 +150,6 @@ pub fn validate_boundaries(
     violations
 }
 
-/// Placeholder for future LLM-driven soul evolution.
-///
-/// When implemented, this will:
-/// 1. Read current soul.md + soul-state.yaml
-/// 2. Use LLM to generate an updated soul.md
-/// 3. Validate boundaries
-/// 4. Snapshot + write new soul.md
-/// 5. Log evolution event
-pub trait SoulEvolver: Send + Sync {
-    /// Propose an evolved soul based on current state divergence.
-    ///
-    /// Returns the proposed new soul file content, or `None` if no evolution
-    /// is warranted.
-    fn propose_evolution(
-        &self,
-        current_soul: &SoulFile,
-        state: &crate::state::SoulState,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>,
-    >;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
