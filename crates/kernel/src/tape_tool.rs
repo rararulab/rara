@@ -301,7 +301,18 @@ impl crate::tool::AgentTool for TapeTool {
          context\n- `entries` — read raw tape entries in your current context window or after a \
          specific anchor\n- `between_anchors` — recall the full context of a specific past topic \
          segment\n- `checkout` — fork from a named anchor, creating a new session with context \
-         up to that point"
+         up to that point\n\n### checkout in detail\n\n**When to use**: The user wants to return to \
+         a past topic's state and continue from there, or explore a different direction from a \
+         previous checkpoint. For example, the user says \"let's go back to where we were debugging \
+         that lifetime issue and try a different approach.\"\n\n**What happens**: A new session is \
+         created containing all tape entries up to and including the named anchor. The original \
+         session is untouched — nothing is lost or overwritten. Your context window in the new \
+         session starts from that anchor's state, so you can continue working as if you were back \
+         at that point in time.\n\n**checkout vs between_anchors**: `between_anchors` is read-only \
+         recall — you see past entries but stay in the current session and context. `checkout` forks \
+         a new session where you actually continue working from that earlier point. Use \
+         `between_anchors` when you just need to reference old information; use `checkout` when the \
+         user wants to resume or diverge from a past state."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
