@@ -48,6 +48,10 @@ pub(crate) struct BootResult {
     /// `KernelHandle` after kernel startup.
     pub dispatch_rara_handle:
         std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
+    /// Handle reference for `ListSessionsTool` — must be wired with a
+    /// `KernelHandle` after kernel startup.
+    pub list_sessions_handle:
+        std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
     /// Knowledge layer service for long-term memory.
     pub knowledge_service:    rara_kernel::memory::knowledge::KnowledgeServiceRef,
 }
@@ -160,7 +164,6 @@ pub(crate) async fn boot(
             skill_registry: skill_registry.clone(),
             mcp_manager: mcp_manager.clone(),
             tape_service: tape_service.clone(),
-            session_index: session_index.clone(),
         },
     );
 
@@ -201,6 +204,7 @@ pub(crate) async fn boot(
         identity_resolver,
         agent_registry,
         dispatch_rara_handle: tool_result.dispatch_rara_handle,
+        list_sessions_handle: tool_result.list_sessions_handle,
         knowledge_service,
     })
 }
