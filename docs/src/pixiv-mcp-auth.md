@@ -33,3 +33,21 @@ After the user provides the OAuth result:
 
 - For DXT-style installs, `set_refresh_token` is the preferred path because the packaged extension may be read-only.
 - For local env-based runs, `PIXIV_REFRESH_TOKEN` can be persisted in the server's environment file.
+- In Rara's MCP admin UI, prefer forwarding the host env var name `PIXIV_REFRESH_TOKEN` via `env_vars` instead of storing the secret value directly in the MCP server config payload.
+
+## Rara MCP Config Example
+
+For a local stdio-managed Pixiv server, the relevant MCP server config should include:
+
+```json
+{
+  "name": "pixiv",
+  "command": "uvx",
+  "args": ["pixiv-mcp-server"],
+  "env_vars": ["PIXIV_REFRESH_TOKEN"],
+  "enabled": true,
+  "transport": "stdio"
+}
+```
+
+The actual token value stays in the host environment. The MCP config only references the variable name to forward.

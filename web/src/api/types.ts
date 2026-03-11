@@ -125,6 +125,7 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  env_vars: string[];
   enabled: boolean;
   transport: string;
   url: string | null;
@@ -164,6 +165,7 @@ export interface CreateMcpServerRequest {
   command: string;
   args: string[];
   env: Record<string, string>;
+  env_vars?: string[];
   enabled: boolean;
   transport: string;
   url?: string;
@@ -235,5 +237,4 @@ export interface CreateCodingTaskRequest {
   repo_url?: string;
   session_key?: string;
 }
-
 

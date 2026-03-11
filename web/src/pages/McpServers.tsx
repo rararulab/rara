@@ -69,6 +69,10 @@ interface EnvEntry {
   value: string;
 }
 
+interface EnvVarEntry {
+  name: string;
+}
+
 const EMPTY_FORM: FormState = {
   name: "",
   transport: "stdio",
@@ -76,6 +80,7 @@ const EMPTY_FORM: FormState = {
   args: "",
   url: "",
   env: [],
+  envVars: [],
   enabled: true,
   startupTimeout: "",
   toolTimeout: "",
@@ -88,6 +93,7 @@ interface FormState {
   args: string;
   url: string;
   env: EnvEntry[];
+  envVars: EnvVarEntry[];
   enabled: boolean;
   startupTimeout: string;
   toolTimeout: string;
@@ -120,6 +126,9 @@ function formToRequest(form: FormState): CreateMcpServerRequest {
     const k = entry.key.trim();
     if (k) env[k] = entry.value;
   }
+  const envVars = form.envVars
+    .map((entry) => entry.name.trim())
+    .filter(Boolean);
   const req: CreateMcpServerRequest = {
     name: form.name.trim(),
     command: form.command.trim(),
@@ -131,6 +140,9 @@ function formToRequest(form: FormState): CreateMcpServerRequest {
     enabled: form.enabled,
     transport: form.transport,
   };
+  if (envVars.length > 0) {
+    req.env_vars = envVars;
+  }
   if (form.transport === "sse" && form.url.trim()) {
     req.url = form.url.trim();
   }
@@ -156,6 +168,7 @@ function serverToForm(server: McpServerInfo): FormState {
       key,
       value,
     })),
+    envVars: server.config.env_vars.map((name) => ({ name })),
     enabled: server.config.enabled,
     startupTimeout: server.config.startup_timeout_secs?.toString() ?? "",
     toolTimeout: server.config.tool_timeout_secs?.toString() ?? "",
@@ -368,6 +381,29 @@ export default function McpServers() {
     setForm((prev) => ({
       ...prev,
       env: prev.env.filter((_, i) => i !== index),
+    }));
+  };
+
+  const addEnvVarEntry = () => {
+    setForm((prev) => ({
+      ...prev,
+      envVars: [...prev.envVars, { name: "" }],
+    }));
+  };
+
+  const updateEnvVarEntry = (index: number, value: string) => {
+    setForm((prev) => ({
+      ...prev,
+      envVars: prev.envVars.map((entry, i) =>
+        i === index ? { name: value } : entry,
+      ),
+    }));
+  };
+
+  const removeEnvVarEntry = (index: number) => {
+    setForm((prev) => ({
+      ...prev,
+      envVars: prev.envVars.filter((_, i) => i !== index),
     }));
   };
 
@@ -605,6 +641,49 @@ export default function McpServers() {
                     size="icon"
                     className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
                     onClick={() => removeEnvEntry(index)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Forwarded Host Env Vars</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addEnvVarEntry}
+                >
+                  <Plus className="mr-1 h-3 w-3" />
+                  Add
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Forward secret names from the host environment instead of storing
+                literal values here. Example: <span className="font-mono">PIXIV_REFRESH_TOKEN</span>
+              </p>
+              {form.envVars.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No forwarded host environment variables configured.
+                </p>
+              )}
+              {form.envVars.map((entry, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <Input
+                    value={entry.name}
+                    onChange={(e) => updateEnvVarEntry(index, e.target.value)}
+                    placeholder="PIXIV_REFRESH_TOKEN"
+                    className="flex-1 font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => removeEnvVarEntry(index)}
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
@@ -914,6 +993,14 @@ function ConfigDetails({ server }: { server: McpServerInfo }) {
           <>
             <span className="text-muted-foreground">Env Vars</span>
             <span>{Object.keys(config.env).length} configured</span>
+          </>
+        )}
+        {config.env_vars.length > 0 && (
+          <>
+            <span className="text-muted-foreground">Forwarded Host Env</span>
+            <span className="font-mono text-xs break-all">
+              {config.env_vars.join(", ")}
+            </span>
           </>
         )}
         {config.tools_disabled.length > 0 && (
