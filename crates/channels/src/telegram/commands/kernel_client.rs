@@ -236,6 +236,8 @@ impl BotServiceClient for KernelBotServiceClient {
         let anchor_entry_id = entries
             .iter()
             .rev()
+            // Use the most recent anchor with this name, matching user
+            // expectation when names repeat across handoffs.
             .find(|entry| {
                 entry.kind == TapEntryKind::Anchor
                     && entry.payload.get("name").and_then(|v| v.as_str()) == Some(anchor_name)
@@ -277,6 +279,9 @@ impl BotServiceClient for KernelBotServiceClient {
         };
 
         let new_tape = created.key.to_string();
+        // Read full fork tape then re-append into the new session tape.
+        // We intentionally avoid FileTapeStore::merge here because merge only
+        // applies entries created *after* the fork point.
         let fork_entries = match self.tape.store().read(&fork_tape_name).await {
             Ok(Some(entries)) => entries,
             Ok(None) => Vec::new(),
@@ -301,6 +306,7 @@ impl BotServiceClient for KernelBotServiceClient {
             }
         }
 
+        // Fork tape is temporary and should never remain after checkout.
         let _ = self.tape.store().discard(&fork_tape_name).await;
         Ok(created.key.to_string())
     }

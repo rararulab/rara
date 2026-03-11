@@ -91,6 +91,8 @@ impl TapeCommandHandler {
         let png = match anchor_dot::render_png(&dot) {
             Ok(png) => png,
             Err(e) => {
+                // Explicitly no text fallback: /anchors is expected to return
+                // an image or a hard error.
                 return Ok(CommandResult::Text(format!(
                     "Failed to render anchor tree image: {e}"
                 )));
@@ -124,6 +126,7 @@ impl TapeCommandHandler {
 
         let anchor_name = args.trim();
         if anchor_name.is_empty() {
+            // `/checkout` with no args means "go to parent session".
             let parent = match self.client.parent_session(&session_key).await {
                 Ok(parent) => parent,
                 Err(e) => {
@@ -151,6 +154,7 @@ impl TapeCommandHandler {
             )));
         }
 
+        // `/checkout <anchor>` creates a child fork and rebinds the chat.
         let new_session = match self.client.checkout_anchor(&session_key, anchor_name).await {
             Ok(new_session) => new_session,
             Err(e) => {

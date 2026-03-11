@@ -45,6 +45,7 @@ fn render_branch(dot: &mut String, branch: &SessionBranch, current_session: &str
 
     let mut previous_node_id: Option<String> = None;
     for anchor in &branch.anchors {
+        // One node per anchor, chained in-session by append order.
         let node = node_id(&branch.session_key, &anchor.name);
         let mut label = format!(
             "[{}]\\n({})\\n{}",
@@ -72,6 +73,7 @@ fn render_branch(dot: &mut String, branch: &SessionBranch, current_session: &str
     for fork in &branch.forks {
         let parent = node_id(&branch.session_key, &fork.at_anchor);
         if let Some(first_child_anchor) = fork.branch.anchors.first() {
+            // Dashed edge marks branch/fork transition between sessions.
             let child = node_id(&fork.branch.session_key, &first_child_anchor.name);
             dot.push_str(&format!(
                 "  {parent} -> {child} [style=dashed, color=\"#1f6feb\", label=\"fork\"];\n"
@@ -82,6 +84,7 @@ fn render_branch(dot: &mut String, branch: &SessionBranch, current_session: &str
 }
 
 fn node_id(session_key: &str, anchor_name: &str) -> String {
+    // Deterministic ID avoids collisions and keeps snapshots stable.
     let raw = format!("{session_key}::{anchor_name}");
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     raw.hash(&mut hasher);

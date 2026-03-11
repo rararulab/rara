@@ -623,6 +623,8 @@ impl TapeService {
         session_key: &str,
         sessions: &dyn SessionIndex,
     ) -> TapResult<AnchorTree> {
+        // Always render from the original ancestor so the graph is stable no
+        // matter which forked session the user is currently in.
         let root_key = self.find_root_session(session_key, sessions).await?;
         let all_sessions = sessions
             .list_sessions(10_000, 0)
@@ -635,6 +637,8 @@ impl TapeService {
 
         for entry in all_sessions {
             let key = entry.key.to_string();
+            // Build parent -> (anchor, child) index from metadata so we can
+            // attach fork branches in one recursive pass.
             if let Some(fm) = get_fork_metadata(&entry.metadata) {
                 fork_index
                     .entry(fm.forked_from)
@@ -652,6 +656,8 @@ impl TapeService {
 
         let mut anchors_by_key = std::collections::HashMap::new();
         for key in sessions_by_key.keys() {
+            // Preload all branch anchor nodes up front. This keeps recursive
+            // branch assembly synchronous and deterministic.
             anchors_by_key.insert(key.clone(), self.load_anchor_nodes(key).await?);
         }
 
@@ -678,6 +684,7 @@ impl TapeService {
         let mut visited = std::collections::HashSet::new();
 
         loop {
+            // Defend against corrupted metadata chains.
             if !visited.insert(current.clone()) {
                 return Err(super::TapError::State {
                     message: format!("cycle detected in fork metadata at session: {current}"),
@@ -709,6 +716,8 @@ impl TapeService {
             .into_iter()
             .filter(|entry| entry.kind == TapEntryKind::Anchor)
             .map(|entry| {
+                // Be permissive with malformed payloads to avoid dropping the
+                // entire tree for one bad anchor record.
                 let name = entry
                     .payload
                     .get("name")
@@ -754,6 +763,7 @@ impl TapeService {
         let mut forks = Vec::new();
         if let Some(children) = fork_index.get(session_key) {
             let mut ordered = children.clone();
+            // Keep output ordering stable for deterministic snapshots/tests.
             ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
             for (at_anchor, child_key) in ordered {
                 let child_branch = self.build_session_branch(
@@ -782,6 +792,7 @@ impl TapeService {
 }
 
 fn map_session_error(error: SessionError) -> super::TapError {
+    // Keep a tape-local error surface for callers in memory subsystem.
     super::TapError::State {
         message: error.to_string(),
     }
