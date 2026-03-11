@@ -36,7 +36,6 @@ pub struct GatewayTelegramListener {
     channel_id:        i64,
     supervisor_handle: SupervisorHandle,
     update_state_rx:   watch::Receiver<UpdateState>,
-    shutdown:          CancellationToken,
     health_url:        String,
 }
 
@@ -46,7 +45,6 @@ impl GatewayTelegramListener {
         channel_id: i64,
         supervisor_handle: SupervisorHandle,
         update_state_rx: watch::Receiver<UpdateState>,
-        shutdown: CancellationToken,
         health_url: String,
     ) -> Self {
         Self {
@@ -54,14 +52,12 @@ impl GatewayTelegramListener {
             channel_id,
             supervisor_handle,
             update_state_rx,
-            shutdown,
             health_url,
         }
     }
 
-    /// Run the polling loop until the shutdown token is cancelled.
-    pub async fn run(self) {
-        let cancel = &self.shutdown;
+    /// Run the polling loop until cancelled.
+    pub async fn run(self, cancel: CancellationToken) {
         // Delete any stale webhook so getUpdates works.
         if let Err(e) = self.bot.delete_webhook().await {
             warn!(error = %e, "gateway telegram: failed to delete webhook");
@@ -149,10 +145,6 @@ impl GatewayTelegramListener {
                 let reply = self.handle_command(command, args).await;
                 self.reply(&reply).await;
 
-                // If shutdown was requested, cancel the token after replying.
-                if command == "/shutdown" {
-                    self.shutdown.cancel();
-                }
             }
         }
     }
@@ -161,7 +153,6 @@ impl GatewayTelegramListener {
     async fn handle_command(&self, command: &str, args: &[&str]) -> String {
         match command {
             "/restart" => self.cmd_restart().await,
-            "/shutdown" => self.cmd_shutdown(),
             "/status" => self.cmd_status(),
             "/sync" => self.cmd_sync(args).await,
             "/logs" => self.cmd_logs().await,
@@ -178,10 +169,6 @@ impl GatewayTelegramListener {
             Ok(()) => "Restart initiated. Agent process will be restarted.".to_owned(),
             Err(e) => format!("<b>Restart failed</b>\n<pre>{e}</pre>"),
         }
-    }
-
-    fn cmd_shutdown(&self) -> String {
-        "Shutdown initiated. Gateway and agent will shut down.".to_owned()
     }
 
     fn cmd_status(&self) -> String {
@@ -321,7 +308,6 @@ impl GatewayTelegramListener {
     fn cmd_help(&self) -> String {
         "<b>Gateway Commands</b>\n\n\
          /restart — Restart the agent process\n\
-         /shutdown — Shut down gateway + agent\n\
          /status — Show running status and update info\n\
          /sync — Git pull latest code (ff-only)\n\
          /sync --restart — Git pull + restart agent\n\

@@ -215,11 +215,11 @@ impl GatewayArgs {
             channel_id,
             supervisor_handle,
             update_rx,
-            cancel.clone(),
             health_url,
         );
+        let listener_cancel = cancel.clone();
         tokio::spawn(async move {
-            listener.run().await;
+            listener.run(listener_cancel).await;
         });
 
         // 5. Run supervisor (blocking).
