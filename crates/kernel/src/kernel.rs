@@ -41,7 +41,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use futures::{FutureExt, future::join_all};
+use futures::FutureExt;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -371,7 +371,7 @@ impl Kernel {
     /// heartbeat interval and (b) the earliest scheduled job, and sleeps
     /// until the soonest one fires.
     async fn run_processor(
-        &self,
+        self: &Arc<Self>,
         id: usize,
         queue: Arc<crate::queue::ShardQueue>,
         shutdown: CancellationToken,
@@ -421,16 +421,18 @@ impl Kernel {
                     loop {
                         let mut events = queue.drain(32).peekable();
                         if events.peek().is_none() { break; }
-                        let futs = events.map(|event| {
+                        for event in events {
+                            let this = Arc::clone(self);
                             let event_type: &'static str = (&event.kind).into();
                             let span = info_span!(
                                 "handle_event",
                                 processor_id = id,
                                 event_type,
                             );
-                            self.handle_event(event).instrument(span)
-                        });
-                        join_all(futs).await;
+                            tokio::spawn(async move {
+                                this.handle_event(event).instrument(span).await;
+                            });
+                        }
                     }
                 }
                 _ = &mut scheduler_sleep, if id == 0 => {
