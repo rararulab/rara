@@ -574,7 +574,7 @@ async fn ensure_context_mode_builtin(registry: &rara_mcp::manager::registry::FSM
 
     let config = McpServerConfig {
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "claude-context-mode@latest".to_string()],
+        args: vec!["-y".to_string(), "context-mode@latest".to_string()],
         enabled: true,
         builtin: true,
         ..Default::default()
