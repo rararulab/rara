@@ -359,7 +359,8 @@ pub async fn start_with_options(
 
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
-    // Wire DispatchRaraTool and ListSessionsTool with the now-available KernelHandle.
+    // Wire DispatchRaraTool and ListSessionsTool with the now-available
+    // KernelHandle.
     {
         let mut lock = rara.dispatch_rara_handle.write().await;
         *lock = Some(kernel_handle.clone());
@@ -415,6 +416,7 @@ pub async fn start_with_options(
         {
             use rara_channels::telegram::commands::{
                 KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
+                TapeCommandHandler,
             };
             let bot_client: std::sync::Arc<
                 dyn rara_channels::telegram::commands::BotServiceClient,
@@ -424,7 +426,11 @@ pub async fn start_with_options(
             ));
             let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = vec![
                 std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
-                std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
+                std::sync::Arc::new(StopCommandHandler::new(
+                    bot_client.clone(),
+                    kernel_handle.clone(),
+                )),
+                std::sync::Arc::new(TapeCommandHandler::new(bot_client)),
             ];
             tg_adapter.set_command_handlers(handlers);
         }

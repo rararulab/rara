@@ -24,7 +24,11 @@ use rapidfuzz::fuzz::RatioBatchComparator;
 use serde_json::{Map, Value, json};
 use unicode_normalization::UnicodeNormalization;
 
-use super::{AnchorSummary, FileTapeStore, HandoffState, TapEntry, TapEntryKind, TapResult};
+use super::{
+    AnchorNode, AnchorSummary, AnchorTree, FileTapeStore, ForkEdge, HandoffState, SessionBranch,
+    TapEntry, TapEntryKind, TapResult, get_fork_metadata,
+};
+use crate::session::{SessionError, SessionIndex, SessionKey};
 
 thread_local! {
     /// Per-thread current tape context used while executing fork closures.
@@ -393,10 +397,7 @@ impl TapeService {
 
         // Compute estimated context tokens for entries since last anchor.
         let anchor_id = anchors.last().map(|a| a.id).unwrap_or(0);
-        let since_anchor: Vec<&TapEntry> = entries
-            .iter()
-            .filter(|e| e.id > anchor_id)
-            .collect();
+        let since_anchor: Vec<&TapEntry> = entries.iter().filter(|e| e.id > anchor_id).collect();
 
         // Find the last assistant entry with usage metadata.
         let mut last_known_tokens: u64 = 0;
@@ -426,10 +427,12 @@ impl TapeService {
         let additional_chars: usize = since_anchor
             .iter()
             .filter(|e| e.id > last_usage_entry_id)
-            .filter(|e| matches!(
-                e.kind,
-                TapEntryKind::Message | TapEntryKind::ToolCall | TapEntryKind::ToolResult
-            ))
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    TapEntryKind::Message | TapEntryKind::ToolCall | TapEntryKind::ToolResult
+                )
+            })
             .map(|e| e.payload.to_string().len())
             .sum();
         let estimated_context_tokens = last_known_tokens + (additional_chars as u64 / 4);
@@ -613,6 +616,175 @@ impl TapeService {
 
     /// List all tape names known to the underlying store.
     pub async fn list_tapes(&self) -> TapResult<Vec<String>> { self.store.list_tapes().await }
+
+    /// Build the anchor tree for `session_key`, rooted at its oldest ancestor.
+    pub async fn build_anchor_tree(
+        &self,
+        session_key: &str,
+        sessions: &dyn SessionIndex,
+    ) -> TapResult<AnchorTree> {
+        let root_key = self.find_root_session(session_key, sessions).await?;
+        let all_sessions = sessions
+            .list_sessions(10_000, 0)
+            .await
+            .map_err(map_session_error)?;
+
+        let mut sessions_by_key = std::collections::HashMap::new();
+        let mut fork_index: std::collections::HashMap<String, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+
+        for entry in all_sessions {
+            let key = entry.key.to_string();
+            if let Some(fm) = get_fork_metadata(&entry.metadata) {
+                fork_index
+                    .entry(fm.forked_from)
+                    .or_default()
+                    .push((fm.forked_at_anchor, key.clone()));
+            }
+            sessions_by_key.insert(key, entry);
+        }
+
+        if !sessions_by_key.contains_key(&root_key) {
+            return Err(super::TapError::State {
+                message: format!("root session not found: {root_key}"),
+            });
+        }
+
+        let mut anchors_by_key = std::collections::HashMap::new();
+        for key in sessions_by_key.keys() {
+            anchors_by_key.insert(key.clone(), self.load_anchor_nodes(key).await?);
+        }
+
+        let root = self.build_session_branch(
+            &root_key,
+            &sessions_by_key,
+            &anchors_by_key,
+            &fork_index,
+            &mut std::collections::HashSet::new(),
+        )?;
+
+        Ok(AnchorTree {
+            root,
+            current_session: session_key.to_owned(),
+        })
+    }
+
+    async fn find_root_session(
+        &self,
+        session_key: &str,
+        sessions: &dyn SessionIndex,
+    ) -> TapResult<String> {
+        let mut current = session_key.to_owned();
+        let mut visited = std::collections::HashSet::new();
+
+        loop {
+            if !visited.insert(current.clone()) {
+                return Err(super::TapError::State {
+                    message: format!("cycle detected in fork metadata at session: {current}"),
+                });
+            }
+
+            let key = SessionKey::try_from_raw(&current).map_err(|e| super::TapError::State {
+                message: format!("invalid session key while resolving root: {current} ({e})"),
+            })?;
+            let Some(entry) = sessions
+                .get_session(&key)
+                .await
+                .map_err(map_session_error)?
+            else {
+                break;
+            };
+            let Some(fm) = get_fork_metadata(&entry.metadata) else {
+                break;
+            };
+            current = fm.forked_from;
+        }
+
+        Ok(current)
+    }
+
+    async fn load_anchor_nodes(&self, session_key: &str) -> TapResult<Vec<AnchorNode>> {
+        let entries = self.entries(session_key).await?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.kind == TapEntryKind::Anchor)
+            .map(|entry| {
+                let name = entry
+                    .payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_owned();
+                let summary = entry
+                    .payload
+                    .get("state")
+                    .and_then(|state| state.get("summary"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                AnchorNode {
+                    name,
+                    summary,
+                    entry_id: entry.id,
+                }
+            })
+            .collect())
+    }
+
+    fn build_session_branch(
+        &self,
+        session_key: &str,
+        sessions_by_key: &std::collections::HashMap<String, crate::session::SessionEntry>,
+        anchors_by_key: &std::collections::HashMap<String, Vec<AnchorNode>>,
+        fork_index: &std::collections::HashMap<String, Vec<(String, String)>>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> TapResult<SessionBranch> {
+        if !visited.insert(session_key.to_owned()) {
+            return Err(super::TapError::State {
+                message: format!("cycle detected while building tree at session: {session_key}"),
+            });
+        }
+
+        let session_entry =
+            sessions_by_key
+                .get(session_key)
+                .ok_or_else(|| super::TapError::State {
+                    message: format!("session not found while building tree: {session_key}"),
+                })?;
+
+        let mut forks = Vec::new();
+        if let Some(children) = fork_index.get(session_key) {
+            let mut ordered = children.clone();
+            ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            for (at_anchor, child_key) in ordered {
+                let child_branch = self.build_session_branch(
+                    &child_key,
+                    sessions_by_key,
+                    anchors_by_key,
+                    fork_index,
+                    visited,
+                )?;
+                forks.push(ForkEdge {
+                    at_anchor,
+                    branch: child_branch,
+                });
+            }
+        }
+
+        visited.remove(session_key);
+
+        Ok(SessionBranch {
+            session_key: session_key.to_owned(),
+            title: session_entry.title.clone(),
+            anchors: anchors_by_key.get(session_key).cloned().unwrap_or_default(),
+            forks,
+        })
+    }
+}
+
+fn map_session_error(error: SessionError) -> super::TapError {
+    super::TapError::State {
+        message: error.to_string(),
+    }
 }
 
 /// Find the most recent anchor ID for a named anchor.
@@ -731,14 +903,178 @@ fn extract_searchable_text(payload: &Value, metadata: Option<&Value>) -> String 
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{path::Path, sync::Arc};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use dashmap::DashMap;
 
     use super::*;
+    use crate::session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey};
 
     /// Create a [`TapeService`] backed by a temporary directory.
     async fn temp_tape_service(dir: &Path) -> TapeService {
         let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
         TapeService::new(store)
+    }
+
+    #[derive(Default)]
+    struct InMemorySessionIndex {
+        sessions: DashMap<String, SessionEntry>,
+        bindings: DashMap<(String, String), ChannelBinding>,
+    }
+
+    impl InMemorySessionIndex {
+        fn new() -> Self { Self::default() }
+    }
+
+    #[async_trait]
+    impl SessionIndex for InMemorySessionIndex {
+        async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
+            let key = entry.key.to_string();
+            if self.sessions.contains_key(&key) {
+                return Err(SessionError::AlreadyExists { key });
+            }
+            self.sessions.insert(key, entry.clone());
+            Ok(entry.clone())
+        }
+
+        async fn get_session(
+            &self,
+            key: &SessionKey,
+        ) -> Result<Option<SessionEntry>, SessionError> {
+            Ok(self
+                .sessions
+                .get(&key.to_string())
+                .map(|entry| entry.clone()))
+        }
+
+        async fn list_sessions(
+            &self,
+            limit: i64,
+            offset: i64,
+        ) -> Result<Vec<SessionEntry>, SessionError> {
+            let mut entries: Vec<SessionEntry> =
+                self.sessions.iter().map(|entry| entry.clone()).collect();
+            entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            let start = offset.max(0) as usize;
+            let take = limit.max(0) as usize;
+            Ok(entries.into_iter().skip(start).take(take).collect())
+        }
+
+        async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
+            let key = entry.key.to_string();
+            if !self.sessions.contains_key(&key) {
+                return Err(SessionError::NotFound { key });
+            }
+            self.sessions.insert(key, entry.clone());
+            Ok(entry.clone())
+        }
+
+        async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError> {
+            self.sessions.remove(&key.to_string());
+            Ok(())
+        }
+
+        async fn bind_channel(
+            &self,
+            binding: &ChannelBinding,
+        ) -> Result<ChannelBinding, SessionError> {
+            self.bindings.insert(
+                (binding.channel_type.clone(), binding.chat_id.clone()),
+                binding.clone(),
+            );
+            Ok(binding.clone())
+        }
+
+        async fn get_channel_binding(
+            &self,
+            channel_type: &str,
+            chat_id: &str,
+        ) -> Result<Option<ChannelBinding>, SessionError> {
+            Ok(self
+                .bindings
+                .get(&(channel_type.to_owned(), chat_id.to_owned()))
+                .map(|entry| entry.clone()))
+        }
+    }
+
+    async fn create_test_session(
+        sessions: &Arc<InMemorySessionIndex>,
+        key: &SessionKey,
+        metadata: Option<Value>,
+    ) {
+        let now = Utc::now();
+        sessions
+            .create_session(&SessionEntry {
+                key: key.clone(),
+                title: None,
+                model: None,
+                system_prompt: None,
+                message_count: 0,
+                preview: None,
+                metadata,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn build_anchor_tree_single_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let sessions = Arc::new(InMemorySessionIndex::new());
+
+        let key = SessionKey::new();
+        let key_raw = key.to_string();
+        create_test_session(&sessions, &key, None).await;
+        svc.ensure_bootstrap_anchor(&key_raw).await.unwrap();
+        svc.handoff(
+            &key_raw,
+            "topic/first",
+            HandoffState {
+                summary: Some("first topic".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let tree = svc.build_anchor_tree(&key_raw, &*sessions).await.unwrap();
+        assert_eq!(tree.root.session_key, key_raw);
+        assert_eq!(tree.current_session, tree.root.session_key);
+        assert_eq!(tree.root.anchors.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn build_anchor_tree_with_forks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let sessions = Arc::new(InMemorySessionIndex::new());
+
+        let root = SessionKey::new();
+        let root_raw = root.to_string();
+        create_test_session(&sessions, &root, None).await;
+        svc.ensure_bootstrap_anchor(&root_raw).await.unwrap();
+        svc.handoff(&root_raw, "topic/a", HandoffState::default())
+            .await
+            .unwrap();
+
+        let fork = SessionKey::new();
+        let fork_raw = fork.to_string();
+        let mut metadata = None;
+        super::super::set_fork_metadata(&mut metadata, &root_raw, "topic/a");
+        create_test_session(&sessions, &fork, metadata).await;
+        svc.ensure_bootstrap_anchor(&fork_raw).await.unwrap();
+
+        let tree = svc.build_anchor_tree(&fork_raw, &*sessions).await.unwrap();
+        assert_eq!(tree.root.session_key, root_raw);
+        assert_eq!(tree.current_session, fork_raw);
+        assert_eq!(tree.root.forks.len(), 1);
+        assert_eq!(tree.root.forks[0].at_anchor, "topic/a");
+        assert_eq!(tree.root.forks[0].branch.session_key, tree.current_session);
     }
 
     #[tokio::test]
@@ -989,9 +1325,13 @@ mod tests {
         .unwrap();
 
         // Another user message after (no usage)
-        svc.append_message(tape, json!({"role": "user", "content": "tell me about rust"}), None)
-            .await
-            .unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": "tell me about rust"}),
+            None,
+        )
+        .await
+        .unwrap();
 
         let info = svc.info(tape).await.unwrap();
 
@@ -1007,9 +1347,13 @@ mod tests {
         let tape = "test-estimated-no-usage";
 
         // Only user messages (no usage metadata anywhere)
-        svc.append_message(tape, json!({"role": "user", "content": "hello world"}), None)
-            .await
-            .unwrap();
+        svc.append_message(
+            tape,
+            json!({"role": "user", "content": "hello world"}),
+            None,
+        )
+        .await
+        .unwrap();
 
         let info = svc.info(tape).await.unwrap();
 

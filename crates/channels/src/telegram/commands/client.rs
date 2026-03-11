@@ -139,6 +139,26 @@ pub trait BotServiceClient: Send + Sync {
         model: Option<&str>,
     ) -> Result<SessionDetail, BotServiceError>;
 
+    // -- Tape / anchor tree -------------------------------------------------
+
+    /// Build the full anchor tree for the given session.
+    async fn anchor_tree(
+        &self,
+        session_key: &str,
+    ) -> Result<rara_kernel::memory::AnchorTree, BotServiceError>;
+
+    /// Fork a new session at the selected anchor from the current session.
+    ///
+    /// Returns the newly created session key.
+    async fn checkout_anchor(
+        &self,
+        session_key: &str,
+        anchor_name: &str,
+    ) -> Result<String, BotServiceError>;
+
+    /// Return parent session key if the current session is a fork.
+    async fn parent_session(&self, session_key: &str) -> Result<Option<String>, BotServiceError>;
+
     // -- Job discovery -------------------------------------------------------
 
     /// Search for jobs matching the given criteria.

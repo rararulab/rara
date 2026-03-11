@@ -26,14 +26,17 @@
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
 //! - [`job`]: `/search` and `/jd` commands.
 //! - [`mcp`]: `/mcp` command.
+//! - [`tape`]: `/anchors` and `/checkout` commands.
 //! - [`callbacks`]: Inline keyboard callback handlers.
 
+pub mod anchor_dot;
 pub mod basic;
 pub mod callbacks;
 pub mod client;
 pub mod kernel_client;
 pub mod mcp;
 pub mod session;
+pub mod tape;
 
 pub use basic::BasicCommandHandler;
 pub use callbacks::SessionSwitchCallbackHandler;
@@ -41,3 +44,4 @@ pub use client::BotServiceClient;
 pub use kernel_client::KernelBotServiceClient;
 pub use mcp::McpCommandHandler;
 pub use session::{SessionCommandHandler, StopCommandHandler};
+pub use tape::TapeCommandHandler;

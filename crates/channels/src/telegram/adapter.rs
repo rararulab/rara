@@ -62,7 +62,7 @@ use rara_kernel::{
     },
 };
 use teloxide::{
-    payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters},
+    payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters},
     requests::{Request, Requester},
     types::{
         AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId,
@@ -1093,6 +1093,15 @@ async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: Comm
                 .parse_mode(ParseMode::Html)
                 .reply_markup(markup)
                 .await;
+        }
+        CommandResult::Photo { data, caption } => {
+            use teloxide::types::InputFile;
+
+            let mut request = bot.send_photo(ChatId(chat_id), InputFile::memory(data));
+            if let Some(caption) = caption {
+                request = request.caption(caption);
+            }
+            let _ = request.await;
         }
         CommandResult::None => {}
     }
