@@ -794,6 +794,7 @@ pub(crate) async fn run_agent_loop(
         let mut accumulated_reasoning = String::new();
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
+        let mut last_usage: Option<llm::Usage> = None;
 
         loop {
             let delta = tokio::select! {
@@ -873,6 +874,7 @@ pub(crate) async fn run_agent_loop(
                             warn!(error = %e, "failed to persist llm usage event");
                         }
                     }
+                    last_usage = usage;
                     break;
                 }
             }
@@ -932,6 +934,13 @@ pub(crate) async fn run_agent_loop(
         // Terminal response (no tool calls, or recovery iteration must exit)
         if !has_tool_calls || llm_error_recovery_used {
             // Persist final assistant message to tape.
+            let usage_meta = last_usage.as_ref().map(|u| serde_json::json!({
+                "usage": {
+                    "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens,
+                    "total_tokens": u.total_tokens
+                }
+            }));
             let _ = tape
                 .append_message(
                     tape_name,
@@ -939,7 +948,7 @@ pub(crate) async fn run_agent_loop(
                         "role": "assistant",
                         "content": &accumulated_text,
                     }),
-                    None,
+                    usage_meta.clone(),
                 )
                 .await;
 
@@ -1048,8 +1057,15 @@ pub(crate) async fn run_agent_loop(
                     })
                 })
                 .collect();
+            let usage_meta = last_usage.as_ref().map(|u| serde_json::json!({
+                "usage": {
+                    "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens,
+                    "total_tokens": u.total_tokens
+                }
+            }));
             let _ = tape
-                .append_tool_call(tape_name, serde_json::json!({ "calls": calls_json }), None)
+                .append_tool_call(tape_name, serde_json::json!({ "calls": calls_json }), usage_meta)
                 .await;
         }
 
