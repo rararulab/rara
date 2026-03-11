@@ -1036,7 +1036,7 @@ async fn handle_update(
     let raw = if let Some(photos) = msg.photo() {
         if let Some(largest) = photos.last() {
             match download_and_compress_photo(&bot, &largest.file.id).await {
-                Ok((media_type, b64_data)) => {
+                Ok((media_type, b64_data, original_path, compressed_path)) => {
                     // Combine text + image into multimodal content.
                     let text = match raw.content {
                         MessageContent::Text(ref t) => t.clone(),
@@ -1050,8 +1050,18 @@ async fn handle_update(
                         media_type,
                         data: b64_data,
                     });
+                    let mut updated_metadata = raw.metadata.clone();
+                    updated_metadata.insert(
+                        "image_original_path".to_owned(),
+                        serde_json::Value::String(original_path.to_string_lossy().into_owned()),
+                    );
+                    updated_metadata.insert(
+                        "image_compressed_path".to_owned(),
+                        serde_json::Value::String(compressed_path.to_string_lossy().into_owned()),
+                    );
                     RawPlatformMessage {
                         content: MessageContent::Multimodal(blocks),
+                        metadata: updated_metadata,
                         ..raw
                     }
                 }
@@ -1681,11 +1691,12 @@ pub fn telegram_to_raw_platform_message(
 
 /// Download a photo from Telegram and compress it for LLM vision input.
 ///
-/// Returns `(media_type, base64_data)`.
+/// Returns `(media_type, base64_data, original_path, compressed_path)`.
+/// Both the original and compressed images are saved to `images_dir()`.
 async fn download_and_compress_photo(
     bot: &teloxide::Bot,
     file_id: &teloxide::types::FileId,
-) -> anyhow::Result<(String, String)> {
+) -> anyhow::Result<(String, String, std::path::PathBuf, std::path::PathBuf)> {
     use base64::Engine;
     use rara_kernel::llm::image::{DEFAULT_MAX_EDGE, DEFAULT_QUALITY};
     use teloxide::net::Download;
@@ -1699,7 +1710,31 @@ async fn download_and_compress_photo(
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
 
-    Ok((media_type, b64))
+    // Determine file extension from media type.
+    let ext = match media_type.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        _ => "bin",
+    };
+
+    // Save original and compressed images to images_dir.
+    let images_dir = rara_paths::images_dir();
+    tokio::fs::create_dir_all(images_dir).await?;
+
+    let id = uuid::Uuid::new_v4();
+    let original_path = images_dir.join(format!("photo_{id}.{ext}"));
+    let compressed_path = images_dir.join(format!("photo_{id}_compressed.{ext}"));
+
+    tokio::fs::write(&original_path, &buf).await?;
+    tokio::fs::write(&compressed_path, &compressed).await?;
+
+    tracing::info!(
+        original = %original_path.display(),
+        compressed = %compressed_path.display(),
+        "saved uploaded photo to images_dir"
+    );
+
+    Ok((media_type, b64, original_path, compressed_path))
 }
 
 pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }
