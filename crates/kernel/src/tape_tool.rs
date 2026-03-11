@@ -218,6 +218,32 @@ impl TapeTool {
             )
         }))
     }
+
+    async fn exec_checkout_root(&self) -> anyhow::Result<serde_json::Value> {
+        let root = self
+            .tape_service
+            .find_root_session(&self.tape_name, self.sessions.as_ref())
+            .await
+            .context("checkout_root")?;
+
+        if root == self.tape_name {
+            return Ok(serde_json::json!({
+                "status": "already_at_root",
+                "session": root,
+                "message": "This session is already the root — there is no parent to return to."
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "status": "root_found",
+            "root_session": root,
+            "current_session": self.tape_name,
+            "message": format!(
+                "Root session is {}. Use this session ID to navigate back to the original conversation.",
+                root
+            )
+        }))
+    }
 }
 
 // ============================================================================
@@ -262,6 +288,7 @@ enum TapeParams {
         /// Anchor name to fork from.
         name: String,
     },
+    CheckoutRoot,
 }
 
 // ============================================================================
@@ -301,7 +328,9 @@ impl crate::tool::AgentTool for TapeTool {
          context\n- `entries` — read raw tape entries in your current context window or after a \
          specific anchor\n- `between_anchors` — recall the full context of a specific past topic \
          segment\n- `checkout` — fork from a named anchor, creating a new session with context \
-         up to that point\n\n### checkout in detail\n\n**When to use**: The user wants to return to \
+         up to that point\n- `checkout_root` — find and return to the root (original) session by \
+         walking the fork chain. Use this when you or the user want to go back to the main \
+         conversation after working in a forked session.\n\n### checkout in detail\n\n**When to use**: The user wants to return to \
          a past topic's state and continue from there, or explore a different direction from a \
          previous checkpoint. For example, the user says \"let's go back to where we were debugging \
          that lifetime issue and try a different approach.\"\n\n**What happens**: A new session is \
@@ -312,7 +341,8 @@ impl crate::tool::AgentTool for TapeTool {
          recall — you see past entries but stay in the current session and context. `checkout` forks \
          a new session where you actually continue working from that earlier point. Use \
          `between_anchors` when you just need to reference old information; use `checkout` when the \
-         user wants to resume or diverge from a past state."
+         user wants to resume or diverge from a past state. To return to the original session \
+         after checking out, use `checkout_root`."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -322,7 +352,7 @@ impl crate::tool::AgentTool for TapeTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors", "checkout"],
+                    "enum": ["info", "search", "anchor", "anchors", "entries", "between_anchors", "checkout", "checkout_root"],
                     "description": "The tape operation to perform."
                 },
                 "query": {
@@ -401,6 +431,7 @@ impl crate::tool::AgentTool for TapeTool {
                 self.exec_between_anchors(&start, &end, kinds).await
             }
             TapeParams::Checkout { name } => self.exec_checkout(&name).await,
+            TapeParams::CheckoutRoot => self.exec_checkout_root().await,
         }?;
 
         Ok(json.into())

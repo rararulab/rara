@@ -711,7 +711,7 @@ impl TapeService {
         })
     }
 
-    async fn find_root_session(
+    pub(crate) async fn find_root_session(
         &self,
         session_key: &str,
         sessions: &dyn SessionIndex,
