@@ -475,6 +475,40 @@ impl TapeService {
         })
     }
 
+    /// Create a new tape at `target` containing all entries from `source`
+    /// up to and including the anchor named `anchor_name`.
+    ///
+    /// This is the kernel-level primitive for session forking from an anchor
+    /// checkpoint. The caller is responsible for session metadata creation.
+    pub async fn checkout_anchor(
+        &self,
+        source: &str,
+        anchor_name: &str,
+        target: &str,
+    ) -> TapResult<()> {
+        let entries = self.entries(source).await?;
+
+        let anchor_id = entries
+            .iter()
+            .rev()
+            .find(|e| {
+                e.kind == TapEntryKind::Anchor
+                    && e.payload.get("name").and_then(|v| v.as_str()) == Some(anchor_name)
+            })
+            .map(|e| e.id)
+            .ok_or_else(|| super::TapError::State {
+                message: format!("anchor not found: {anchor_name}"),
+            })?;
+
+        for entry in entries.iter().filter(|e| e.id <= anchor_id) {
+            self.store
+                .append(target, entry.kind, entry.payload.clone(), entry.metadata.clone())
+                .await?;
+        }
+
+        Ok(())
+    }
+
     /// Return the most recent `limit` anchors, oldest-to-newest within the
     /// returned window.
     pub async fn anchors(&self, tape_name: &str, limit: usize) -> TapResult<Vec<AnchorSummary>> {
@@ -1263,5 +1297,37 @@ mod tests {
 
         // No usage data, so all estimation via chars/4
         assert!(info.estimated_context_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn checkout_anchor_creates_forked_tape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+
+        let source = "test-checkout-source";
+        svc.ensure_bootstrap_anchor(source).await.unwrap();
+        svc.handoff(source, "topic/a", HandoffState {
+            summary: Some("discussed A".into()),
+            ..Default::default()
+        }).await.unwrap();
+        svc.append_message(
+            source,
+            serde_json::json!({"role":"user","content":"after anchor"}),
+            None,
+        ).await.unwrap();
+
+        let target = "test-checkout-target";
+        svc.checkout_anchor(source, "topic/a", target).await.unwrap();
+
+        let entries = svc.entries(target).await.unwrap();
+        // Should have entries up to and including the "topic/a" anchor
+        assert!(entries.iter().any(|e| {
+            e.kind == TapEntryKind::Anchor
+                && e.payload.get("name").and_then(|v| v.as_str()) == Some("topic/a")
+        }));
+        // Should NOT have the "after anchor" message
+        assert!(!entries.iter().any(|e| {
+            e.payload.get("content").and_then(|v| v.as_str()) == Some("after anchor")
+        }));
     }
 }

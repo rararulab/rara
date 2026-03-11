@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use snafu::ResultExt;
 use rara_kernel::{
-    memory::{TapEntryKind, TapeService, get_fork_metadata, set_fork_metadata},
+    memory::{TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
 };
 
@@ -216,39 +216,6 @@ impl BotServiceClient for KernelBotServiceClient {
         session_key: &str,
         anchor_name: &str,
     ) -> Result<String, BotServiceError> {
-        // 1) Resolve the checkout target to a concrete anchor entry id.
-        let entries = self
-            .tape
-            .entries(session_key)
-            .await
-            .context(TapeSnafu {
-                context: "failed to load tape",
-            })?;
-
-        let anchor_entry_id = entries
-            .iter()
-            .rev()
-            // Use the most recent anchor with this name, matching user
-            // expectation when names repeat across handoffs.
-            .find(|entry| {
-                entry.kind == TapEntryKind::Anchor
-                    && entry.payload.get("name").and_then(|v| v.as_str()) == Some(anchor_name)
-            })
-            .map(|entry| entry.id)
-            .ok_or_else(|| BotServiceError::Service {
-                message: format!("anchor not found: {anchor_name}"),
-            })?;
-
-        // 2) Fork the tape from anchor boundary.
-        let fork_tape_name = self
-            .tape
-            .store()
-            .fork(session_key, Some(anchor_entry_id))
-            .await
-            .context(TapeSnafu {
-                context: "failed to fork tape",
-            })?;
-
         let now = Utc::now();
         let new_key = SessionKey::new();
         let mut metadata = None;
@@ -264,59 +231,16 @@ impl BotServiceClient for KernelBotServiceClient {
             created_at: now,
             updated_at: now,
         };
+        self.sessions.create_session(&entry).await.context(SessionSnafu)?;
 
-        let created = match self.sessions.create_session(&entry).await {
-            Ok(created) => created,
-            Err(e) => {
-                // Session creation failed: ensure temporary fork is cleaned up.
-                let _ = self.tape.store().discard(&fork_tape_name).await;
-                return Err(BotServiceError::Session { source: e });
-            }
-        };
+        self.tape
+            .checkout_anchor(session_key, anchor_name, &new_key.to_string())
+            .await
+            .context(TapeSnafu {
+                context: "checkout anchor",
+            })?;
 
-        let new_tape = created.key.to_string();
-        // 3) Materialize fork contents into the new session tape.
-        // Note: FileTapeStore::merge copies only "post-fork" deltas, so we
-        // explicitly re-append all forked entries to preserve full child state.
-        // Read full fork tape then re-append into the new session tape.
-        // We intentionally avoid FileTapeStore::merge here because merge only
-        // applies entries created *after* the fork point.
-        let fork_entries = match self.tape.store().read(&fork_tape_name).await {
-            Ok(Some(entries)) => entries,
-            Ok(None) => Vec::new(),
-            Err(e) => {
-                // If fork read fails, remove both temp fork and just-created
-                // session metadata to avoid dangling half-created sessions.
-                let _ = self.tape.store().discard(&fork_tape_name).await;
-                let _ = self.sessions.delete_session(&created.key).await;
-                return Err(BotServiceError::Tape {
-                    context: "failed to read forked tape",
-                    source:  e,
-                });
-            }
-        };
-
-        for entry in fork_entries {
-            if let Err(e) = self
-                .tape
-                .store()
-                .append(&new_tape, entry.kind, entry.payload, entry.metadata)
-                .await
-            {
-                // Copy failed mid-way: rollback new tape/session as best effort.
-                let _ = self.tape.store().discard(&fork_tape_name).await;
-                let _ = self.tape.store().reset(&new_tape).await;
-                let _ = self.sessions.delete_session(&created.key).await;
-                return Err(BotServiceError::Tape {
-                    context: "failed to copy forked entries",
-                    source:  e,
-                });
-            }
-        }
-
-        // Fork tape is temporary and should never remain after checkout.
-        let _ = self.tape.store().discard(&fork_tape_name).await;
-        Ok(created.key.to_string())
+        Ok(new_key.to_string())
     }
 
     async fn parent_session(&self, session_key: &str) -> Result<Option<String>, BotServiceError> {
@@ -571,7 +495,8 @@ mod tests {
             entry.kind == TapEntryKind::Anchor
                 && entry.payload.get("name").and_then(Value::as_str) == Some("topic/a")
         }));
-        assert!(entries.iter().any(|entry| {
+        // The message appended *after* the anchor should NOT be in the fork.
+        assert!(!entries.iter().any(|entry| {
             entry.kind == TapEntryKind::Message
                 && entry.payload.get("content").and_then(Value::as_str)
                     == Some("message after topic/a")
