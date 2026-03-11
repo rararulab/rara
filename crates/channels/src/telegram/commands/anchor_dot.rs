@@ -84,7 +84,8 @@ fn render_branch(dot: &mut String, branch: &SessionBranch, current_session: &str
 }
 
 fn node_id(session_key: &str, anchor_name: &str) -> String {
-    // Deterministic ID avoids collisions and keeps snapshots stable.
+    // Deterministic within a single build to avoid node-id collisions.
+    // Note: DefaultHasher output may change across Rust versions.
     let raw = format!("{session_key}::{anchor_name}");
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     raw.hash(&mut hasher);
