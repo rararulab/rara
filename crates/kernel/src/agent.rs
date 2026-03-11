@@ -787,6 +787,10 @@ pub(crate) async fn run_agent_loop(
         // Spawn driver.stream() — it sends deltas to tx and returns when done.
         let stream_task = tokio::spawn(async move { driver_clone.stream(request_clone, tx).await });
 
+        stream_handle.emit(StreamEvent::Progress {
+            stage: format!("Waiting for LLM response (iteration {})...", iteration + 1),
+        });
+
         // Consume streaming deltas
         let stream_start = Instant::now();
         let mut first_token_at: Option<Instant> = None;
