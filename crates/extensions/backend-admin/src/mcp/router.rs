@@ -32,6 +32,15 @@ use super::{
 
 type McpState = McpManager;
 
+fn api_server_status(status: ConnectionStatus) -> McpServerStatus {
+    match status {
+        ConnectionStatus::Connected => McpServerStatus::Connected,
+        ConnectionStatus::Connecting => McpServerStatus::Connecting,
+        ConnectionStatus::Disconnected => McpServerStatus::Disconnected,
+        ConnectionStatus::Error { message } => McpServerStatus::Error { message },
+    }
+}
+
 pub fn mcp_router(manager: McpState) -> Router {
     Router::new()
         .route("/api/v1/mcp/servers", get(list_servers).post(add_server))
@@ -50,10 +59,7 @@ pub fn mcp_router(manager: McpState) -> Router {
             get(list_server_resources),
         )
         .route("/api/v1/mcp/servers/{name}/logs", get(list_server_logs))
-        .route(
-            "/api/v1/mcp/context-mode/status",
-            get(context_mode_status),
-        )
+        .route("/api/v1/mcp/context-mode/status", get(context_mode_status))
         .with_state(manager)
 }
 
@@ -78,11 +84,7 @@ async fn build_server_info(
             }
             .build()
         })?;
-    let status = match manager.server_connection_status(name).await {
-        ConnectionStatus::Connected => McpServerStatus::Connected,
-        ConnectionStatus::Connecting => McpServerStatus::Connecting,
-        ConnectionStatus::Disconnected => McpServerStatus::Disconnected,
-    };
+    let status = api_server_status(manager.server_connection_status(name).await);
     Ok(McpServerInfo {
         name: name.to_string(),
         config: McpServerConfigView::from(config),
@@ -110,11 +112,7 @@ async fn list_servers(
             .build()
         })?;
         if let Some(config) = config {
-            let status = match manager.server_connection_status(&name).await {
-                ConnectionStatus::Connected => McpServerStatus::Connected,
-                ConnectionStatus::Connecting => McpServerStatus::Connecting,
-                ConnectionStatus::Disconnected => McpServerStatus::Disconnected,
-            };
+            let status = api_server_status(manager.server_connection_status(&name).await);
             servers.push(McpServerInfo {
                 name,
                 config: McpServerConfigView::from(config),
@@ -195,8 +193,10 @@ async fn update_server(
     drop(registry);
 
     // If server was running (connected or connecting), spawn background restart
-    let was_running =
-        manager.server_connection_status(&name).await != ConnectionStatus::Disconnected;
+    let was_running = !matches!(
+        manager.server_connection_status(&name).await,
+        ConnectionStatus::Disconnected | ConnectionStatus::Error { .. }
+    );
     if was_running {
         let mgr = manager.clone();
         let restart_name = name.clone();
@@ -364,8 +364,8 @@ async fn list_server_tools(
     let views = tools
         .into_iter()
         .map(|t| McpToolView {
-            name:         t.name.to_string(),
-            description:  t.description.as_deref().map(str::to_owned),
+            name: t.name.to_string(),
+            description: t.description.as_deref().map(str::to_owned),
             input_schema: serde_json::to_value(&*t.input_schema).unwrap_or_default(),
         })
         .collect();
@@ -396,10 +396,10 @@ async fn list_server_resources(
         .resources
         .into_iter()
         .map(|r| McpResourceView {
-            uri:         r.raw.uri,
-            name:        Some(r.raw.name),
+            uri: r.raw.uri,
+            name: Some(r.raw.name),
             description: r.raw.description,
-            mime_type:   r.raw.mime_type,
+            mime_type: r.raw.mime_type,
         })
         .collect();
 
@@ -414,14 +414,13 @@ async fn list_server_logs(
     Ok(Json(entries))
 }
 
-async fn context_mode_status(
-    State(manager): State<McpState>,
-) -> Json<serde_json::Value> {
+async fn context_mode_status(State(manager): State<McpState>) -> Json<serde_json::Value> {
     let status = manager.server_connection_status("context-mode").await;
     let (status_str, interceptor_enabled) = match status {
         ConnectionStatus::Connected => ("connected", true),
         ConnectionStatus::Connecting => ("connecting", false),
         ConnectionStatus::Disconnected => ("disconnected", false),
+        ConnectionStatus::Error { .. } => ("error", false),
     };
     let recent_logs = manager.log_buffer().entries("context-mode").await;
     let log_entries: Vec<serde_json::Value> = recent_logs
@@ -443,4 +442,19 @@ async fn context_mode_status(
         "interceptor_enabled": interceptor_enabled,
         "recent_logs": log_entries,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_server_status_preserves_error_messages() {
+        assert!(matches!(
+            api_server_status(ConnectionStatus::Error {
+                message: "startup failed".to_string(),
+            }),
+            McpServerStatus::Error { message } if message == "startup failed"
+        ));
+    }
 }

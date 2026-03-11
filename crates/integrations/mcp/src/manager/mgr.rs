@@ -36,7 +36,7 @@ use crate::{
 };
 
 /// Possible connection states for a managed server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionStatus {
     /// Not in the clients map at all.
     Disconnected,
@@ -44,23 +44,26 @@ pub enum ConnectionStatus {
     Connecting,
     /// Startup future resolved successfully.
     Connected,
+    /// Startup failed and the last error message is retained for diagnostics.
+    Error { message: String },
 }
 
 /// Manages the lifecycle of multiple MCP server connections.
 #[derive(Clone)]
 pub struct McpManager {
-    inner:      Arc<RwLock<McpManagerInner>>,
+    inner: Arc<RwLock<McpManagerInner>>,
     /// Per-server log ring buffer.  Lives outside the `RwLock` because
     /// `McpLogBuffer` carries its own `Arc<RwLock<…>>` internally.
     log_buffer: McpLogBuffer,
 }
 
 struct McpManagerInner {
-    clients:              HashMap<String, AsyncManagedClient>,
+    clients: HashMap<String, AsyncManagedClient>,
+    errors: HashMap<String, String>,
     elicitation_requests: ElicitationRequestManager,
-    registry:             McpRegistryRef,
-    store_mode:           OAuthCredentialsStoreMode,
-    store:                KeyringStoreRef,
+    registry: McpRegistryRef,
+    store_mode: OAuthCredentialsStoreMode,
+    store: KeyringStoreRef,
 }
 
 impl McpManager {
@@ -71,8 +74,9 @@ impl McpManager {
         store: KeyringStoreRef,
     ) -> Self {
         Self {
-            inner:      Arc::new(RwLock::new(McpManagerInner {
+            inner: Arc::new(RwLock::new(McpManagerInner {
                 clients: HashMap::new(),
+                errors: HashMap::new(),
                 elicitation_requests: ElicitationRequestManager::default(),
                 registry,
                 store_mode,
@@ -83,7 +87,9 @@ impl McpManager {
     }
 
     /// Return a reference to the per-server log buffer.
-    pub fn log_buffer(&self) -> &McpLogBuffer { &self.log_buffer }
+    pub fn log_buffer(&self) -> &McpLogBuffer {
+        &self.log_buffer
+    }
 
     /// Start all enabled servers from the registry concurrently.
     ///
@@ -157,19 +163,23 @@ impl McpManager {
         // Store immediately so concurrent callers can await the same startup.
         {
             let mut inner = self.inner.write().await;
+            inner.errors.remove(name);
             inner.clients.insert(name.to_string(), managed.clone());
         }
 
         // Wait for startup to finish.
         if let Err(e) = managed.client().await {
+            let error = e.to_string();
             self.log_buffer
-                .push(name, "error", format!("connection failed: {e}"))
+                .push(name, "error", format!("connection failed: {error}"))
                 .await;
             let mut inner = self.inner.write().await;
             inner.clients.remove(name);
-            return Err(anyhow::anyhow!("{e}"));
+            inner.errors.insert(name.to_string(), error.clone());
+            return Err(anyhow::anyhow!("{error}"));
         }
 
+        self.inner.write().await.errors.remove(name);
         info!(server = %name, "MCP server started");
         Ok(())
     }
@@ -182,6 +192,7 @@ impl McpManager {
     pub async fn stop_server(&self, name: &str) {
         let client = {
             let mut inner = self.inner.write().await;
+            inner.errors.remove(name);
             inner.clients.remove(name)
         };
         if let Some(client) = client {
@@ -302,7 +313,9 @@ impl McpManager {
 
     /// Get the registry reference (for use in routes, etc.).
     #[instrument(skip(self))]
-    pub async fn registry(&self) -> McpRegistryRef { Arc::clone(&self.inner.read().await.registry) }
+    pub async fn registry(&self) -> McpRegistryRef {
+        Arc::clone(&self.inner.read().await.registry)
+    }
 
     // ── MCP operations ──────────────────────────────────────────────
 
@@ -383,13 +396,19 @@ impl McpManager {
     ///
     /// Checks both startup completion and transport health:
     /// - `Disconnected` — not in the clients map at all.
+    /// - `Error` — startup failed and a diagnostic message is retained.
     /// - `Connecting` — startup future still in flight.
     /// - `Connected` — handshake completed and transport is alive.
     /// - `Disconnected` — startup succeeded but transport has since closed.
     pub async fn server_connection_status(&self, name: &str) -> ConnectionStatus {
         let inner = self.inner.read().await;
         match inner.clients.get(name) {
-            None => ConnectionStatus::Disconnected,
+            None => inner
+                .errors
+                .get(name)
+                .cloned()
+                .map(|message| ConnectionStatus::Error { message })
+                .unwrap_or(ConnectionStatus::Disconnected),
             Some(managed) => {
                 if managed.is_alive().await {
                     ConnectionStatus::Connected
@@ -487,5 +506,96 @@ impl McpManager {
             .get(name)
             .cloned()
             .with_context(|| format!("MCP server '{name}' is not connected"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use rara_keyring_store::{KeyringStore, KeyringStoreRef};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::manager::registry::FSMcpRegistry;
+
+    #[derive(Debug)]
+    struct TestKeyringStore;
+
+    #[async_trait]
+    impl KeyringStore for TestKeyringStore {
+        async fn load(
+            &self,
+            _service: &str,
+            _account: &str,
+        ) -> rara_keyring_store::Result<Option<String>> {
+            Ok(None)
+        }
+
+        async fn save(
+            &self,
+            _service: &str,
+            _account: &str,
+            _value: &str,
+        ) -> rara_keyring_store::Result<()> {
+            Ok(())
+        }
+
+        async fn delete(&self, _service: &str, _account: &str) -> rara_keyring_store::Result<bool> {
+            Ok(false)
+        }
+    }
+
+    async fn test_manager() -> (TempDir, McpManager) {
+        let tempdir = TempDir::new().expect("tempdir");
+        let registry = FSMcpRegistry::load(tempdir.path().join("mcp-registry.json"))
+            .await
+            .expect("registry");
+        let registry: McpRegistryRef = Arc::new(registry);
+        let store: KeyringStoreRef = Arc::new(TestKeyringStore);
+        (
+            tempdir,
+            McpManager::new(registry, OAuthCredentialsStoreMode::File, store),
+        )
+    }
+
+    #[tokio::test]
+    async fn startup_failure_surfaces_as_error_status() {
+        let (_tempdir, manager) = test_manager().await;
+
+        let error = manager
+            .start_server("bad/name", &McpServerConfig::default())
+            .await
+            .expect_err("startup should fail");
+        assert!(error.to_string().contains("invalid MCP server name"));
+
+        assert_eq!(
+            manager.server_connection_status("bad/name").await,
+            ConnectionStatus::Error {
+                message: "MCP startup failed: invalid MCP server name 'bad/name': must match [a-zA-Z0-9_-]+".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_server_clears_retained_error_status() {
+        let (_tempdir, manager) = test_manager().await;
+
+        manager
+            .start_server("bad/name", &McpServerConfig::default())
+            .await
+            .expect_err("startup should fail");
+        assert!(matches!(
+            manager.server_connection_status("bad/name").await,
+            ConnectionStatus::Error { .. }
+        ));
+
+        manager.stop_server("bad/name").await;
+
+        assert_eq!(
+            manager.server_connection_status("bad/name").await,
+            ConnectionStatus::Disconnected
+        );
     }
 }
