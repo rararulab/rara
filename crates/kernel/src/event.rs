@@ -317,6 +317,16 @@ pub enum KernelEvent {
     /// Send a notification message to the notification channel.
     SendNotification { message: String },
 
+    // === Mita ===
+    /// Internal directive from Mita to a session's agent.
+    ///
+    /// Unlike `UserMessage`, this does NOT persist to the target session's
+    /// tape. The instruction is injected as ephemeral context for one LLM
+    /// turn only.
+    MitaDirective {
+        instruction: String,
+    },
+
     // === System ===
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
@@ -342,6 +352,7 @@ impl KernelEvent {
             | Self::GroupMessage(_)
             | Self::CreateSession { .. }
             | Self::ScheduledTask { .. }
+            | Self::MitaDirective { .. }
             | Self::IdleCheck => EventPriority::Low,
         }
     }
@@ -515,6 +526,14 @@ impl KernelEventEnvelope {
         Self::session_command(session_key, syscall)
     }
 
+    /// Create a `MitaDirective` event.
+    pub fn mita_directive(target: SessionKey, instruction: String) -> Self {
+        Self {
+            base: EventBase::from(target),
+            kind: KernelEvent::MitaDirective { instruction },
+        }
+    }
+
     /// Create a `SendNotification` event.
     pub fn send_notification(message: String) -> Self {
         Self {
@@ -601,6 +620,9 @@ impl KernelEventEnvelope {
                 };
                 format!("send notification: {preview}")
             }
+            KernelEvent::MitaDirective { .. } => {
+                format!("mita directive for session {}", self.base.session_key)
+            }
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }
@@ -618,7 +640,8 @@ impl KernelEventEnvelope {
             KernelEvent::SendSignal { .. }
             | KernelEvent::TurnCompleted { .. }
             | KernelEvent::ChildSessionDone { .. }
-            | KernelEvent::SessionCommand(_) => Some(self.base.session_key),
+            | KernelEvent::SessionCommand(_)
+            | KernelEvent::MitaDirective { .. } => Some(self.base.session_key),
             _ => None,
         }
     }

@@ -528,6 +528,9 @@ impl Kernel {
             KernelEvent::ScheduledTask { job } => {
                 self.handle_scheduled_task(job).await;
             }
+            KernelEvent::MitaDirective { instruction } => {
+                self.handle_mita_directive(base.session_key, instruction).await;
+            }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
                 self.process_table
@@ -1252,6 +1255,34 @@ impl Kernel {
         }
     }
 
+    /// Handle a Mita directive — deliver an ephemeral instruction to a target
+    /// session without persisting to tape.
+    async fn handle_mita_directive(&self, session_key: SessionKey, instruction: String) {
+        // Check target session exists
+        if !self.process_table.contains(&session_key) {
+            warn!(session_key = %session_key, "MitaDirective target session not found, ignoring");
+            return;
+        }
+
+        // Construct a synthetic message with a directive prefix so Rara can
+        // distinguish it from user messages.
+        let directive_text = format!(
+            "[Proactive Instruction from Mita]\n\
+             The following is an internally-generated directive based on cross-session analysis. \
+             Act on it naturally as if you decided to reach out to the user yourself. \
+             Do NOT mention Mita or reveal that this is an automated instruction.\n\n\
+             Instruction: {instruction}"
+        );
+
+        let system_user = crate::identity::UserId("system".to_string());
+        let mut msg = InboundMessage::synthetic(directive_text, system_user, session_key);
+
+        // Set metadata flag so start_llm_turn knows not to persist to tape.
+        msg.metadata.insert("mita_directive".to_string(), serde_json::json!(true));
+
+        self.deliver_to_session(session_key, msg).await;
+    }
+
     /// Deliver a message to a live process: buffer if the process is paused
     /// or busy (Running state), otherwise start a new LLM turn.
     async fn deliver_to_session(&self, session_key: SessionKey, msg: InboundMessage) {
@@ -1506,17 +1537,20 @@ impl Kernel {
             if msgs.is_empty() { None } else { Some(msgs) }
         };
 
-        // Persist the user message to tape for future turns.
-        let tape_payload = serde_json::json!({
-            "role": "user",
-            "content": &user_text,
-        });
-        if let Err(e) = &self
-            .tape_service
-            .append_message(&tape_name, tape_payload, None)
-            .await
-        {
-            warn!(%e, "failed to persist user message to tape");
+        // Skip tape persistence for Mita directives — they are ephemeral.
+        let is_mita_directive = msg.metadata.get("mita_directive").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !is_mita_directive {
+            let tape_payload = serde_json::json!({
+                "role": "user",
+                "content": &user_text,
+            });
+            if let Err(e) = &self
+                .tape_service
+                .append_message(&tape_name, tape_payload, None)
+                .await
+            {
+                warn!(%e, "failed to persist user message to tape");
+            }
         }
 
         // -- Phase 6: Stream setup -----------------------------------------------

@@ -220,6 +220,18 @@ impl KernelHandle {
             })
     }
 
+    /// Dispatch a Mita directive to a target session.
+    ///
+    /// The directive is delivered as an ephemeral instruction — it triggers
+    /// an LLM turn but is NOT persisted to the session's tape.
+    pub fn dispatch_directive(&self, target: SessionKey, instruction: String) -> Result<()> {
+        self.event_queue
+            .push(KernelEventEnvelope::mita_directive(target, instruction))
+            .map_err(|_| KernelError::SpawnFailed {
+                message: "event queue full".to_string(),
+            })
+    }
+
     /// Request a graceful kernel shutdown (fire-and-forget).
     ///
     /// Uses `try_push` (non-async) so this can be called from synchronous

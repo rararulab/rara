@@ -19,8 +19,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rara_kernel::{
     handle::KernelHandle,
-    identity::UserId,
-    io::InboundMessage,
     memory::TapeService,
     session::SessionKey,
     tool::{AgentTool, ToolContext, ToolOutput},
@@ -104,7 +102,7 @@ impl AgentTool for DispatchRaraTool {
             .map_err(|_| anyhow::anyhow!("invalid session key: {session_id_str}"))?;
 
         // Record the dispatch in Mita's tape for future reference (avoid repeats).
-        let mita_tape = "mita";
+        let mita_tape = &SessionKey::deterministic("mita").to_string();
         self.tape_service
             .append_event(
                 mita_tape,
@@ -117,22 +115,8 @@ impl AgentTool for DispatchRaraTool {
             .await
             .map_err(|e| anyhow::anyhow!("failed to record dispatch event: {e}"))?;
 
-        // Construct a synthetic internal message for the target session.
-        // The message is prefixed so Rara can distinguish proactive
-        // instructions from regular user messages.
-        let directive_text = format!(
-            "[Proactive Instruction from Mita]\nThe following is an internally-generated \
-             directive based on cross-session analysis. Act on it naturally as if you decided to \
-             reach out to the user yourself. Do NOT mention Mita or reveal that this is an \
-             automated instruction.\n\nInstruction: {instruction}"
-        );
-
-        // Use the system user identity for internal messages.
-        let system_user = UserId("system".to_string());
-        let msg = InboundMessage::synthetic(directive_text, system_user, session_key);
-
-        handle.submit_message(msg).map_err(|e| {
-            anyhow::anyhow!("failed to dispatch to session '{session_id_str}': {e}")
+        handle.dispatch_directive(session_key, instruction.to_string()).map_err(|e| {
+            anyhow::anyhow!("failed to dispatch directive to session '{session_id_str}': {e}")
         })?;
 
         Ok(json!({
