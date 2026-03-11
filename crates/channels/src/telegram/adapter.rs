@@ -1290,6 +1290,39 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
+                            // Suppress intermediate narration: delete any
+                            // already-sent streaming text messages and reset
+                            // the accumulated buffer so narration from
+                            // previous agent-loop iterations doesn't leak
+                            // into the final reply.
+                            //
+                            // Extract message IDs first, then drop the guard
+                            // before making async Telegram API calls.
+                            let narration_msg_ids: Vec<MessageId> = {
+                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                    if !state.accumulated.is_empty() || state.streamed_prefix_chars > 0 {
+                                        let ids: Vec<MessageId> = state.message_ids
+                                            .iter()
+                                            .copied()
+                                            .filter(|mid| mid.0 != 0)
+                                            .collect();
+                                        state.message_ids.clear();
+                                        state.accumulated.clear();
+                                        state.streamed_prefix_chars = 0;
+                                        state.dirty = false;
+                                        ids
+                                    } else {
+                                        Vec::new()
+                                    }
+                                } else {
+                                    Vec::new()
+                                }
+                                // Guard dropped here.
+                            };
+                            for mid in narration_msg_ids {
+                                let _ = bot.delete_message(ChatId(chat_id), mid).await;
+                            }
+
                             let (display, summary) = tool_display_info(&name, &arguments);
                             progress.tools.push(ToolProgress {
                                 id,
