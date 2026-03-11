@@ -41,6 +41,7 @@ rara-server = { workspace = true }
 rara-sessions.workspace = true
 rara-skills.workspace = true
 rara-symphony.workspace = true
+jiff = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

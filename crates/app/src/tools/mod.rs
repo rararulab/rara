@@ -73,7 +73,6 @@ pub struct ToolDeps {
     pub skill_registry:         rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
     pub tape_service:           rara_kernel::memory::TapeService,
-    pub session_index:          Arc<dyn rara_kernel::session::SessionIndex>,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -81,6 +80,10 @@ pub struct ToolRegistrationResult {
     /// Handle reference for the `DispatchRaraTool`, to be wired with the
     /// `KernelHandle` after kernel startup.
     pub dispatch_rara_handle:
+        std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
+    /// Handle reference for the `ListSessionsTool`, to be wired with the
+    /// `KernelHandle` after kernel startup.
+    pub list_sessions_handle:
         std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
 }
 
@@ -92,9 +95,11 @@ pub struct ToolRegistrationResult {
 pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistrationResult {
     let project_root = rara_paths::workspace_dir().clone();
 
-    // Mita tools — constructed first so we can capture the dispatch handle.
+    // Mita tools — constructed first so we can capture the handle refs.
     let dispatch_rara = Arc::new(DispatchRaraTool::new(deps.tape_service.clone()));
     let dispatch_handle_ref = dispatch_rara.handle_ref();
+    let list_sessions = Arc::new(ListSessionsTool::new());
+    let list_sessions_handle_ref = list_sessions.handle_ref();
 
     // Core tools
     let tools: Vec<AgentToolRef> = vec![
@@ -128,7 +133,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // User memory
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
         // Mita-exclusive tools
-        Arc::new(ListSessionsTool::new(deps.session_index)),
+        list_sessions,
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
         Arc::new(MitaWriteUserNoteTool::new(deps.tape_service.clone())),
         Arc::new(DistillUserNotesTool::new(deps.tape_service)),
@@ -141,5 +146,6 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
 
     ToolRegistrationResult {
         dispatch_rara_handle: dispatch_handle_ref,
+        list_sessions_handle: list_sessions_handle_ref,
     }
 }

@@ -355,9 +355,13 @@ pub async fn start_with_options(
 
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
-    // Wire DispatchRaraTool with the now-available KernelHandle.
+    // Wire DispatchRaraTool and ListSessionsTool with the now-available KernelHandle.
     {
         let mut lock = rara.dispatch_rara_handle.write().await;
+        *lock = Some(kernel_handle.clone());
+    }
+    {
+        let mut lock = rara.list_sessions_handle.write().await;
         *lock = Some(kernel_handle.clone());
     }
 
