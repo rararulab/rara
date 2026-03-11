@@ -41,6 +41,7 @@ pub(crate) struct BootResult {
     pub tape_service:         rara_kernel::memory::TapeService,
     pub skill_registry:       rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:          rara_mcp::manager::mgr::McpManager,
+    pub output_interceptor:   Option<rara_kernel::tool::OutputInterceptorRef>,
     pub settings_provider:    Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     pub identity_resolver:    Arc<dyn rara_kernel::io::IdentityResolver>,
     pub agent_registry:       Arc<rara_kernel::agent::AgentRegistry>,
@@ -153,6 +154,21 @@ pub(crate) async fn boot(
         .await
         .whatever_context("Failed to initialize MCP manager")?;
 
+    // -- output interceptor (context-mode) --------------------------------
+
+    let output_interceptor: Option<rara_kernel::tool::OutputInterceptorRef> = {
+        let status = mcp_manager.server_connection_status("context-mode").await;
+        if status == rara_mcp::manager::mgr::ConnectionStatus::Connected {
+            info!("context-mode connected, enabling output interceptor");
+            Some(Arc::new(crate::context_mode::ContextModeInterceptor::new(
+                mcp_manager.clone(),
+            )))
+        } else {
+            info!("context-mode not available, output interceptor disabled");
+            None
+        }
+    };
+
     // -- tools -------------------------------------------------------------
 
     let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
@@ -201,6 +217,7 @@ pub(crate) async fn boot(
         tape_service,
         skill_registry,
         mcp_manager,
+        output_interceptor,
         settings_provider,
         identity_resolver,
         agent_registry,
@@ -519,6 +536,8 @@ async fn init_mcp_manager(
     let registry = FSMcpRegistry::load(&path)
         .await
         .whatever_context("failed to load MCP registry")?;
+    ensure_context_mode_builtin(&registry).await;
+
     let manager = McpManager::new(
         Arc::new(registry),
         OAuthCredentialsStoreMode::default(),
@@ -531,6 +550,31 @@ async fn init_mcp_manager(
         info!(servers = ?started, "MCP servers started");
     }
     Ok(manager)
+}
+
+/// Register context-mode as a builtin MCP server if not already present.
+async fn ensure_context_mode_builtin(registry: &rara_mcp::manager::registry::FSMcpRegistry) {
+    use rara_mcp::manager::registry::{McpRegistry, McpServerConfig};
+
+    const NAME: &str = "context-mode";
+
+    if let Ok(Some(_)) = registry.get(NAME).await {
+        return;
+    }
+
+    let config = McpServerConfig {
+        command: "npx".to_string(),
+        args: vec!["-y".to_string(), "claude-context-mode@latest".to_string()],
+        enabled: true,
+        builtin: true,
+        ..Default::default()
+    };
+
+    if let Err(e) = registry.add(NAME.to_string(), config).await {
+        tracing::warn!(error = %e, "failed to register builtin context-mode MCP server");
+    } else {
+        info!("registered builtin context-mode MCP server");
+    }
 }
 
 // =========================================================================

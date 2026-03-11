@@ -643,7 +643,15 @@ fn build_runtime_contract_prompt(
 /// Respects `turn_cancel` at every `tokio::select!` point — both before the
 /// stream starts and during delta consumption.
 #[tracing::instrument(
-    skip(handle, history, stream_handle, turn_cancel, tape, tape_name),
+    skip(
+        handle,
+        history,
+        stream_handle,
+        turn_cancel,
+        tape,
+        tape_name,
+        output_interceptor
+    ),
     fields(
         session_key = %session_key,
     )
@@ -659,6 +667,7 @@ pub(crate) async fn run_agent_loop(
     tape_name: &str,
     tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
+    output_interceptor: Option<crate::tool::OutputInterceptorRef>,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1134,6 +1143,7 @@ pub(crate) async fn run_agent_loop(
                 let tc = tool_context.clone();
                 let user_ref = runtime_user.clone();
                 let tool_cancel = turn_cancel.clone();
+                let output_interceptor = output_interceptor.clone();
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -1182,6 +1192,11 @@ pub(crate) async fn run_agent_loop(
                         match tool_result {
                             Ok(result) => {
                                 tool_span.record("success", true);
+                                let result = if let Some(ref interceptor) = output_interceptor {
+                                    interceptor.intercept(&name, result).await
+                                } else {
+                                    result
+                                };
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 (true, result, None::<String>, dur)
                             }

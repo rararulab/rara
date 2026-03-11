@@ -160,6 +160,8 @@ pub struct Kernel {
     started_at:       Timestamp,
     /// Knowledge layer service for long-term memory extraction.
     knowledge:        crate::memory::knowledge::KnowledgeServiceRef,
+    /// Optional hook to transform tool outputs before sending to the LLM.
+    output_interceptor: Option<crate::tool::OutputInterceptorRef>,
 }
 
 impl Kernel {
@@ -177,6 +179,7 @@ impl Kernel {
         security: SecurityRef,
         io: IOSubsystem,
         knowledge: crate::memory::knowledge::KnowledgeServiceRef,
+        output_interceptor: Option<crate::tool::OutputInterceptorRef>,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
@@ -225,6 +228,7 @@ impl Kernel {
             sharded_queue,
             started_at: Timestamp::now(),
             knowledge,
+            output_interceptor,
         }
     }
 
@@ -1765,6 +1769,7 @@ impl Kernel {
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(&self.io.stream_hub());
+        let output_interceptor = self.output_interceptor.clone();
 
         let milestone_tx = self
             .process_table
@@ -1888,6 +1893,7 @@ impl Kernel {
                     effective_tape,
                     tool_context,
                     milestone_tx,
+                    output_interceptor,
                 )
                 .await;
 

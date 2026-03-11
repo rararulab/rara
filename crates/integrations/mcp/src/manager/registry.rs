@@ -121,6 +121,11 @@ impl McpRegistry for FSMcpRegistry {
 
     async fn remove(&self, name: &str) -> Result<bool> {
         let mut inner = self.inner.write().await;
+        if let Some(cfg) = inner.servers.get(name) {
+            if cfg.builtin {
+                anyhow::bail!("cannot remove builtin MCP server '{name}'");
+            }
+        }
         let removed = inner.servers.remove(name).is_some();
         if removed {
             info!(server = %name, "removed MCP server");
@@ -183,6 +188,10 @@ pub struct McpServerConfig {
     #[default = true]
     #[builder(into, default = true)]
     pub enabled:   bool,
+    /// Whether this server is a builtin that cannot be removed by users.
+    #[serde(default)]
+    #[builder(default)]
+    pub builtin:   bool,
     pub transport: TransportType,
     /// URL for SSE/HTTP transport. Required when `transport` is `Sse`.
     #[serde(skip_serializing_if = "Option::is_none")]
