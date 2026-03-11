@@ -1208,6 +1208,7 @@ pub(crate) async fn run_agent_loop(
                     }
 
                     if let Some(tool) = tool {
+                        let args_snapshot = args.to_string();
                         let tool_result = tokio::select! {
                             result = tool.execute(args, &tc) => result,
                             _ = tool_cancel.cancelled() => {
@@ -1241,7 +1242,7 @@ pub(crate) async fn run_agent_loop(
                             }
                             Err(e) => {
                                 tool_span.record("success", false);
-                                warn!(tool = %name, error = %e, "tool execution failed");
+                                warn!(tool = %name, args = %args_snapshot, error = %e, "tool execution failed");
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 (
                                     false,
