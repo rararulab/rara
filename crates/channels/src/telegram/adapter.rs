@@ -1302,39 +1302,6 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
-                            // Suppress intermediate narration: delete any
-                            // already-sent streaming text messages and reset
-                            // the accumulated buffer so narration from
-                            // previous agent-loop iterations doesn't leak
-                            // into the final reply.
-                            //
-                            // Extract message IDs first, then drop the guard
-                            // before making async Telegram API calls.
-                            let narration_msg_ids: Vec<MessageId> = {
-                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
-                                    if !state.accumulated.is_empty() || state.streamed_prefix_chars > 0 {
-                                        let ids: Vec<MessageId> = state.message_ids
-                                            .iter()
-                                            .copied()
-                                            .filter(|mid| mid.0 != 0)
-                                            .collect();
-                                        state.message_ids.clear();
-                                        state.accumulated.clear();
-                                        state.streamed_prefix_chars = 0;
-                                        state.dirty = false;
-                                        ids
-                                    } else {
-                                        Vec::new()
-                                    }
-                                } else {
-                                    Vec::new()
-                                }
-                                // Guard dropped here.
-                            };
-                            for mid in narration_msg_ids {
-                                let _ = bot.delete_message(ChatId(chat_id), mid).await;
-                            }
-
                             let (display, summary) = tool_display_info(&name, &arguments);
                             progress.tools.push(ToolProgress {
                                 id,
@@ -1406,7 +1373,37 @@ fn spawn_stream_forwarder(
                                 progress_dirty = true;
                             }
                         }
-                        Ok(_) => {} // Ignore other events (ReasoningDelta, Progress, etc.)
+                        Ok(StreamEvent::TextClear) => {
+                            // Non-blocking narration clear: extract message IDs
+                            // synchronously, then spawn deletion in background so
+                            // we return to rx.recv() immediately and never lag.
+                            let narration_msg_ids: Vec<MessageId> = {
+                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                    let ids: Vec<MessageId> = state.message_ids
+                                        .iter()
+                                        .copied()
+                                        .filter(|mid| mid.0 != 0)
+                                        .collect();
+                                    state.message_ids.clear();
+                                    state.accumulated.clear();
+                                    state.streamed_prefix_chars = 0;
+                                    state.dirty = false;
+                                    ids
+                                } else {
+                                    Vec::new()
+                                }
+                                // Guard dropped here.
+                            };
+                            if !narration_msg_ids.is_empty() {
+                                let bot_bg = bot.clone();
+                                tokio::spawn(async move {
+                                    for mid in narration_msg_ids {
+                                        let _ = bot_bg.delete_message(ChatId(chat_id), mid).await;
+                                    }
+                                });
+                            }
+                        }
+                        Ok(_) => {} // Ignore: ReasoningDelta, Progress, TurnMetrics
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }

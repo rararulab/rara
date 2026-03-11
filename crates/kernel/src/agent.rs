@@ -928,6 +928,13 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
+        // Signal forwarder to discard intermediate narration text.
+        // This MUST happen before ToolCallStart so the forwarder clears
+        // state while the broadcast channel is not congested.
+        if has_tool_calls {
+            stream_handle.emit(StreamEvent::TextClear);
+        }
+
         // Wait for the stream task to complete (the driver accumulates the
         // full response internally).
         let driver_result = match stream_task.await {

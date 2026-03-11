@@ -142,7 +142,7 @@ fn default_user_id() -> String { "anonymous".to_owned() }
 fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     match event {
         StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
-        StreamEvent::ReasoningDelta { .. } => None,
+        StreamEvent::ReasoningDelta { .. } | StreamEvent::TextClear => None,
         StreamEvent::ToolCallStart {
             name,
             id,
