@@ -1284,31 +1284,34 @@ pub(crate) async fn run_agent_loop(
         }
 
         // ── Runtime context guard ──────────────────────────────────────
-        match classify_context_pressure(&messages, capabilities.context_window_tokens) {
-            ContextPressure::Critical {
-                estimated_tokens,
-                usage_ratio,
-            } => {
-                let warning = format!(
-                    "[Context Usage Critical] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。你 \
-                     MUST 立即使用 tape 工具创建 anchor，写好 summary 和 \
-                     next_steps；如果后面需要旧信息，就用 tape.search 找回。",
-                    usage_ratio * 100.0
-                );
-                messages.push(llm::Message::user(warning));
+        let pressure = classify_context_pressure(&messages, capabilities.context_window_tokens);
+        if !matches!(pressure, ContextPressure::Normal) {
+            if let Ok(tape_info) = tape.info(tape_name).await {
+                match pressure {
+                    ContextPressure::Critical { usage_ratio, .. } => {
+                        let warning = format!(
+                            "[Context Usage Critical] 当前上下文约 {} tokens ({:.0}%)，\
+                             context window 容量 {} tokens。你 MUST 立即使用 tape 工具创建 anchor，\
+                             写好 summary 和 next_steps。",
+                            tape_info.estimated_context_tokens,
+                            usage_ratio * 100.0,
+                            capabilities.context_window_tokens,
+                        );
+                        messages.push(llm::Message::user(warning));
+                    }
+                    ContextPressure::Warning { usage_ratio, .. } => {
+                        let warning = format!(
+                            "[Context Usage Warning] 当前上下文约 {} tokens ({:.0}%)，\
+                             context window 容量 {} tokens。你 SHOULD 考虑使用 tape 工具创建 anchor。",
+                            tape_info.estimated_context_tokens,
+                            usage_ratio * 100.0,
+                            capabilities.context_window_tokens,
+                        );
+                        messages.push(llm::Message::user(warning));
+                    }
+                    ContextPressure::Normal => {}
+                }
             }
-            ContextPressure::Warning {
-                estimated_tokens,
-                usage_ratio,
-            } => {
-                let warning = format!(
-                    "[Context Usage Warning] 当前上下文约 {estimated_tokens} tokens ({:.0}%)。你 \
-                     SHOULD 考虑立即使用 tape 工具创建 anchor，写好 summary 和 next_steps。",
-                    usage_ratio * 100.0
-                );
-                messages.push(llm::Message::user(warning));
-            }
-            ContextPressure::Normal => {}
         }
 
         // Track consecutive silent (tool-only, no text) iterations and emit
