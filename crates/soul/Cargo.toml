@@ -1,5 +1,5 @@
 [package]
-name = "rara-agents"
+name = "rara-soul"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -9,13 +9,18 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Predefined agent registry: role-based lookup for built-in agent manifests"
+description = "Structured, evolvable persona system for rara agents"
 
 [dependencies]
-rara-kernel.workspace = true
-rara-soul.workspace = true
-serde_json.workspace = true
+rara-paths.workspace = true
+jiff.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+snafu.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
