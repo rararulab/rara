@@ -26,6 +26,9 @@ use snafu::Snafu;
 // ---------------------------------------------------------------------------
 
 /// Error returned by [`BotServiceClient`] operations.
+///
+/// This is the single error surface for command handlers. Handlers should not
+/// inspect kernel-specific error types directly.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum BotServiceError {
@@ -97,6 +100,9 @@ pub struct McpServerInfo {
 }
 
 /// Result of `/checkout` workflow after backend side effects are applied.
+///
+/// The client implementation owns state mutation (forking sessions and binding
+/// channels). Command handlers only map this enum to user-facing text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutResult {
     /// Current session has no parent, so no state changes were made.
@@ -128,6 +134,9 @@ pub enum McpServerStatus {
 ///
 /// Implementations may call the real HTTP service or return hardcoded data
 /// for testing.
+///
+/// Design rule: this trait owns business side effects. Command handlers are
+/// kept thin (parse input + render output), so orchestration belongs here.
 #[async_trait]
 pub trait BotServiceClient: Send + Sync {
     // -- Session management --------------------------------------------------
@@ -168,6 +177,9 @@ pub trait BotServiceClient: Send + Sync {
     // -- Tape / anchor tree -------------------------------------------------
 
     /// Build the full anchor tree for the given session.
+    ///
+    /// This is used by `/anchors` to render cross-fork topology, including
+    /// ancestor and descendant branches of the current session.
     async fn anchor_tree(
         &self,
         session_key: &str,
@@ -175,7 +187,8 @@ pub trait BotServiceClient: Send + Sync {
 
     /// Fork a new session at the selected anchor from the current session.
     ///
-    /// Returns the newly created session key.
+    /// Low-level primitive used by higher-level checkout flows.
+    /// Returns the newly created child session key.
     async fn checkout_anchor(
         &self,
         session_key: &str,
@@ -183,10 +196,15 @@ pub trait BotServiceClient: Send + Sync {
     ) -> Result<String, BotServiceError>;
 
     /// Return parent session key if the current session is a fork.
+    ///
+    /// Low-level primitive used by higher-level checkout flows.
     async fn parent_session(&self, session_key: &str) -> Result<Option<String>, BotServiceError>;
 
     /// Execute checkout behavior and bind channel accordingly.
     ///
+    /// This is the canonical `/checkout` operation entrypoint.
+    /// It applies side effects (fork/switch + binding) atomically from the
+    /// command layer's perspective.
     /// - `None` anchor means "switch to parent"
     /// - `Some(anchor)` means "fork from anchor and switch to child"
     async fn checkout_session(
