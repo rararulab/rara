@@ -556,6 +556,33 @@ fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::
     medium_results >= 2
 }
 
+/// Resolve the soul prompt for an agent at runtime.
+///
+/// Attempts to load the soul file and runtime state via `rara_soul::load_and_render`,
+/// which re-renders the soul template with current mood, relationship stage, emerged
+/// traits, and style drift. Falls back to the pre-rendered `fallback` string (from
+/// `AgentManifest::soul_prompt`) if loading or rendering fails.
+fn resolve_soul_prompt(agent_name: &str, fallback: Option<&str>) -> Option<String> {
+    match rara_soul::load_and_render(agent_name, None) {
+        Ok(Some(rendered)) => {
+            info!(agent = agent_name, "soul prompt rendered with runtime state");
+            Some(rendered)
+        }
+        Ok(None) => {
+            // No soul file found on disk; use the pre-rendered fallback from manifest.
+            fallback.map(|s| s.to_string())
+        }
+        Err(e) => {
+            warn!(
+                agent = agent_name,
+                error = %e,
+                "failed to render soul prompt at runtime, using manifest fallback"
+            );
+            fallback.map(|s| s.to_string())
+        }
+    }
+}
+
 fn build_runtime_contract_prompt(
     base_prompt: &str,
     has_kernel_tool: bool,
@@ -678,9 +705,12 @@ pub(crate) async fn run_agent_loop(
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     let has_kernel_tool = tools.get("kernel").is_some();
-    let effective_prompt = match &manifest.soul_prompt {
-        Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
-        None => manifest.system_prompt.clone(),
+    let effective_prompt = {
+        let soul_text = resolve_soul_prompt(&manifest.name, manifest.soul_prompt.as_deref());
+        match soul_text {
+            Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
+            None => manifest.system_prompt.clone(),
+        }
     };
     let effective_prompt =
         build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
@@ -1359,7 +1389,7 @@ mod tests {
 
     use super::{
         ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
-        should_remind_tape_anchor, should_remind_tape_search,
+        resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
     };
     use crate::llm::Message;
 
@@ -1441,5 +1471,19 @@ mod tests {
         assert!(prompt.contains("<context_contract>"));
         assert!(!prompt.contains("<delegation_contract>"));
         assert!(!prompt.contains("action: \"spawn\""));
+    }
+
+    #[test]
+    fn resolve_soul_prompt_falls_back_when_no_soul_file() {
+        // For a nonexistent agent, no soul file on disk → returns the fallback.
+        let fallback = "You are warm and friendly.";
+        let result = resolve_soul_prompt("__nonexistent_test_agent__", Some(fallback));
+        assert_eq!(result, Some(fallback.to_string()));
+    }
+
+    #[test]
+    fn resolve_soul_prompt_returns_none_when_no_file_and_no_fallback() {
+        let result = resolve_soul_prompt("__nonexistent_test_agent__", None);
+        assert!(result.is_none());
     }
 }

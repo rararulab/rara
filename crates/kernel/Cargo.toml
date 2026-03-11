@@ -39,6 +39,7 @@ prometheus.workspace = true
 rapidfuzz.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
+rara-soul.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rustix = { workspace = true, features = ["fs"] }
