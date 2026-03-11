@@ -180,7 +180,7 @@ pub enum KernelError {
 /// Used by retry and fallback logic to decide whether to retry, fall back to
 /// another model, or give up.
 pub fn classify_provider_error(msg: &str, status_code: Option<u16>) -> KernelError {
-    if matches!(status_code, Some(500 | 502 | 503 | 529)) {
+    if matches!(status_code, Some(429 | 500 | 502 | 503 | 529)) {
         return KernelError::RetryableServer;
     }
 
@@ -245,12 +245,20 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "http 502",
     "http 503",
     "http 529",
+    "http 429",
     "server_error",
     "internal server error",
     "overloaded",
     "bad gateway",
     "service unavailable",
     "the server had an error processing your request",
+    "rate limit",
+    "ratelimited",
+    "too many requests",
+    "rpm reached",
+    "tpm reached",
+    "requests per minute",
+    "tokens per minute",
 ];
 
 fn is_retryable_server_error(msg: &str) -> bool {

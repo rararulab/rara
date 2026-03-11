@@ -68,6 +68,13 @@ struct ResolvedConfig {
 /// SSE idle timeout — if no event is received within this duration, abort.
 const SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Maximum number of retries for rate-limited (429) requests.
+const RATE_LIMIT_MAX_RETRIES: u32 = 4;
+/// Initial backoff delay for rate-limited retries.
+const RATE_LIMIT_INITIAL_DELAY: Duration = Duration::from_secs(5);
+/// Maximum backoff delay for rate-limited retries.
+const RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
+
 impl OpenAiDriver {
     /// Build a reqwest client with connect and overall read timeouts.
     fn build_http_client() -> reqwest::Client {
@@ -147,6 +154,9 @@ impl OpenAiDriver {
     }
 
     /// Send a request and return the successful HTTP response.
+    ///
+    /// Automatically retries on HTTP 429 (rate limited) with exponential
+    /// backoff, respecting the `Retry-After` header when present.
     async fn send_request(
         &self,
         request: &CompletionRequest,
@@ -163,19 +173,57 @@ impl OpenAiDriver {
             "sending LLM request"
         );
 
-        let response = self
-            .client
-            .post(format!("{}/chat/completions", config.base_url))
-            .bearer_auth(&config.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| KernelError::Provider {
-                message: format!("LLM provider request failed: {e}").into(),
-            })?;
+        let mut attempt = 0u32;
 
-        if !response.status().is_success() {
+        loop {
+            let response = self
+                .client
+                .post(format!("{}/chat/completions", config.base_url))
+                .bearer_auth(&config.api_key)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| KernelError::Provider {
+                    message: format!("LLM provider request failed: {e}").into(),
+                })?;
+
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
             let status = response.status();
+
+            // Rate limited — retry with backoff
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                && attempt < RATE_LIMIT_MAX_RETRIES
+            {
+                let retry_after = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(Duration::from_secs);
+
+                let backoff =
+                    retry_after.unwrap_or_else(|| {
+                        (RATE_LIMIT_INITIAL_DELAY * 2u32.saturating_pow(attempt))
+                            .min(RATE_LIMIT_MAX_DELAY)
+                    });
+
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    max_retries = RATE_LIMIT_MAX_RETRIES,
+                    backoff_secs = backoff.as_secs(),
+                    model = request.model.as_str(),
+                    "rate limited (429), backing off"
+                );
+
+                tokio::time::sleep(backoff).await;
+                attempt += 1;
+                continue;
+            }
+
+            // Non-429 error — fail immediately
             let text = response.text().await.unwrap_or_default();
 
             if let Ok(request_body) = serde_json::to_string(&body) {
@@ -187,12 +235,11 @@ impl OpenAiDriver {
                 );
             }
 
-            return Err(KernelError::Provider {
-                message: format!("HTTP {status}: {text}").into(),
-            });
+            return Err(crate::error::classify_provider_error(
+                &format!("HTTP {status}: {text}"),
+                Some(status.as_u16()),
+            ));
         }
-
-        Ok(response)
     }
 }
 
