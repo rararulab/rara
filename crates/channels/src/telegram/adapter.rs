@@ -1150,6 +1150,9 @@ fn spawn_stream_forwarder(
         let mut throttle = tokio::time::interval(MIN_EDIT_INTERVAL);
         throttle.tick().await; // skip immediate first tick
 
+        let mut typing_interval = tokio::time::interval(std::time::Duration::from_secs(4));
+        typing_interval.tick().await; // skip immediate first tick
+
         let mut progress = ProgressMessage::new();
         let mut progress_dirty = false;
 
@@ -1342,6 +1345,11 @@ fn spawn_stream_forwarder(
                         progress.last_edit = Instant::now();
                         progress_dirty = false;
                     }
+                }
+                _ = typing_interval.tick() => {
+                    let _ = bot
+                        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+                        .await;
                 }
             }
         }
