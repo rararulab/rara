@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use rara_kernel::{
-    memory::TapeService,
+    memory::{TapeService, user_tape_name},
     tool::{AgentTool, ToolContext, ToolOutput},
 };
 use serde_json::{Value, json};
@@ -38,9 +38,9 @@ impl AgentTool for ReadTapeTool {
     fn name(&self) -> &str { "read-tape" }
 
     fn description(&self) -> &str {
-        "Read tape entries from a specific session. Returns message history including user \
+        "Read tape entries from a session or user tape. Returns message history including user \
          messages, assistant responses, and tool calls. Use `recent_n` to limit to the most recent \
-         entries."
+         entries. Provide either `session_id` or `user_id`, not both."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -51,29 +51,42 @@ impl AgentTool for ReadTapeTool {
                     "type": "string",
                     "description": "The session key to read tape from"
                 },
+                "user_id": {
+                    "type": "string",
+                    "description": "Read the user's personal tape (contains notes, preferences, facts). Mutually exclusive with session_id."
+                },
                 "recent_n": {
                     "type": "integer",
                     "description": "Only return the most recent N entries (default: all entries from last anchor)"
                 }
             },
-            "required": ["session_id"]
+            "required": []
         })
     }
 
     async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let session_id = params
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: session_id"))?;
+        let session_id = params.get("session_id").and_then(|v| v.as_str());
+        let user_id = params.get("user_id").and_then(|v| v.as_str());
+
+        let tape_name = match (session_id, user_id) {
+            (Some(_), Some(_)) => {
+                anyhow::bail!("session_id and user_id are mutually exclusive");
+            }
+            (Some(sid), None) => sid.to_string(),
+            (None, Some(uid)) => user_tape_name(uid),
+            (None, None) => {
+                anyhow::bail!("either session_id or user_id is required");
+            }
+        };
 
         let recent_n = params.get("recent_n").and_then(|v| v.as_u64());
 
         // Read entries from the last anchor onward (the current conversation context).
         let entries = self
             .tape_service
-            .from_last_anchor(session_id, None)
+            .from_last_anchor(&tape_name, None)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to read tape for session '{session_id}': {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to read tape '{tape_name}': {e}"))?;
 
         // Apply recent_n limit if specified.
         let entries = if let Some(n) = recent_n {
@@ -100,7 +113,7 @@ impl AgentTool for ReadTapeTool {
             .collect();
 
         Ok(json!({
-            "session_id": session_id,
+            "tape_name": tape_name,
             "entry_count": formatted.len(),
             "entries": formatted,
         })
