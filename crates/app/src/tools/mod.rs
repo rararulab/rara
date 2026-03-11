@@ -38,6 +38,7 @@ mod read_file;
 mod screenshot;
 mod send_email;
 mod send_image;
+mod set_avatar;
 mod settings;
 mod skill_tools;
 mod tape_handoff;
@@ -64,6 +65,7 @@ use read_file::ReadFileTool;
 use screenshot::ScreenshotTool;
 use send_email::SendEmailTool;
 use send_image::SendImageTool;
+use set_avatar::SetAvatarTool;
 use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use tape_handoff::TapeHandoffTool;
@@ -118,6 +120,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendImageTool::new()),
+        Arc::new(SetAvatarTool::new(deps.settings.clone())),
         Arc::new(SettingsTool::new(deps.settings.clone())),
         Arc::new(ComposioTool::from_auth_provider(
             deps.composio_auth_provider,
