@@ -29,6 +29,29 @@ After the user provides the OAuth result:
 2. Trigger auth refresh.
 3. Verify at least one Pixiv tool call succeeds.
 
+## Verification Status
+
+As of 2026-03-12, the external Pixiv MCP server still has no auth material available for runtime verification:
+
+- No `PIXIV_REFRESH_TOKEN` is present in the host environment.
+- No `.env` file exists in `/Users/rara/.config/rara/workspace/pixiv-mcp-server`.
+- Running the server's bundled verification script with its own virtualenv stops at the expected missing-token check:
+
+```bash
+/Users/rara/.config/rara/workspace/pixiv-mcp-server/.venv/bin/python \
+  /Users/rara/.config/rara/workspace/pixiv-mcp-server/test_token_refresh.py
+```
+
+Observed result:
+
+```text
+=== Pixiv Token 刷新功能测试 ===
+❌ 错误：未找到PIXIV_REFRESH_TOKEN环境变量
+请先设置环境变量或运行 get_token.py 获取token
+```
+
+This confirms the remaining blocker is the missing OAuth result, not a broken verification path in the repository or the external Pixiv MCP server package.
+
 ## Notes
 
 - For DXT-style installs, `set_refresh_token` is the preferred path because the packaged extension may be read-only.
