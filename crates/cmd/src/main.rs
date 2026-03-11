@@ -155,23 +155,9 @@ impl GatewayArgs {
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
-        // 0. Create Telegram notifier (required — fail fast if not configured).
-        let Some(tg) = config.telegram.as_ref() else {
-            whatever!("Gateway requires [telegram] config for notifications");
-        };
-        let Some(bot_token) = tg.bot_token.as_deref().filter(|s| !s.is_empty()) else {
-            whatever!("Gateway requires telegram.bot_token");
-        };
-        let Some(raw_channel_id) = tg
-            .notification_channel_id
-            .as_deref()
-            .filter(|s| !s.is_empty())
-        else {
-            whatever!("Gateway requires telegram.notification_channel_id");
-        };
-        let channel_id: i64 = raw_channel_id
-            .parse()
-            .whatever_context("telegram.notification_channel_id must be a valid i64")?;
+        // 0. Create Telegram notifier using gateway config fields.
+        let bot_token = &gateway_config.bot_token;
+        let channel_id = gateway_config.notification_channel_id;
         let notifier = std::sync::Arc::new(rara_app::gateway::UpdateNotifier::new(
             bot_token,
             channel_id,
