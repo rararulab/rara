@@ -14,29 +14,30 @@
 
 //! Mita heartbeat worker — drives the background proactive agent.
 //!
-//! On each heartbeat tick, creates (or reuses) Mita's dedicated session
-//! and submits a synthetic message to trigger the Mita agent loop.
+//! Mita spawns once at startup with a deterministic [`SessionKey`] and
+//! receives heartbeat messages on the existing session via `submit_message`.
+//! The session stays in Ready state between heartbeats, and its tape
+//! accumulates naturally since tape name = session_key.
 
-use rara_kernel::{handle::KernelHandle, identity::Principal, memory::TapeService};
+use rara_kernel::{
+    handle::KernelHandle,
+    identity::{Principal, UserId},
+    io::InboundMessage,
+    memory::TapeService,
+    session::SessionKey,
+};
 use tracing::{error, info, warn};
 
-/// Fixed tape name for Mita's own session.
-const MITA_TAPE: &str = "mita";
-
-/// Default entry count threshold above which a tape becomes eligible for
-/// compaction.  Tapes with fewer entries are left untouched.
-const DEFAULT_COMPACT_THRESHOLD: usize = 500;
-
-/// Number of recent entries to preserve verbatim during compaction.
-const DEFAULT_COMPACT_KEEP_RECENT: usize = 200;
+/// Deterministic session key for Mita — derived from the fixed name "mita".
+fn mita_session_key() -> SessionKey {
+    SessionKey::deterministic("mita")
+}
 
 /// Worker that runs the Mita heartbeat.
 ///
-/// Each heartbeat:
-/// 1. Ensures Mita's tape has a bootstrap anchor.
-/// 2. Spawns a Mita agent session via `KernelHandle::spawn_with_input`.
-/// 3. The agent loop runs with Mita's tools (list_sessions, read_tape,
-///    dispatch_rara).
+/// On startup, spawns a long-lived Mita session with a deterministic key.
+/// Each heartbeat delivers a synthetic message to that existing session
+/// via `submit_message`, so the session and its tape persist across ticks.
 pub struct MitaHeartbeatWorker {
     kernel_handle: KernelHandle,
     tape_service:  TapeService,
@@ -49,82 +50,20 @@ impl MitaHeartbeatWorker {
             tape_service,
         }
     }
-
-    /// Check all tapes and compact any that exceed the entry threshold.
-    ///
-    /// This runs before the Mita agent loop on each heartbeat to keep tape
-    /// sizes bounded.  Compaction preserves structurally important entries
-    /// (anchors, notes, summaries, system, events) and the most recent N
-    /// entries, discarding old message/tool entries.
-    async fn auto_compact_tapes(&self) {
-        let tapes = match self.tape_service.list_tapes().await {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(error = %e, "failed to list tapes for auto-compaction");
-                return;
-            }
-        };
-
-        for tape_name in tapes {
-            let info = match self.tape_service.info(&tape_name).await {
-                Ok(i) => i,
-                Err(e) => {
-                    warn!(tape = %tape_name, error = %e, "failed to read tape info for compaction check");
-                    continue;
-                }
-            };
-
-            if info.entries < DEFAULT_COMPACT_THRESHOLD {
-                continue;
-            }
-
-            match self
-                .tape_service
-                .compact_tape(&tape_name, DEFAULT_COMPACT_KEEP_RECENT)
-                .await
-            {
-                Ok(0) => {} // nothing to compact
-                Ok(discarded) => {
-                    info!(
-                        tape = %tape_name,
-                        discarded,
-                        original = info.entries,
-                        "auto-compacted tape"
-                    );
-                }
-                Err(e) => {
-                    error!(
-                        tape = %tape_name,
-                        error = %e,
-                        "failed to compact tape"
-                    );
-                }
-            }
-        }
-    }
 }
 
 #[async_trait::async_trait]
 impl common_worker::Worker for MitaHeartbeatWorker {
     async fn on_start<S: Clone + Send + Sync>(&mut self, ctx: common_worker::WorkerContext<S>) {
-        info!(worker = ctx.name(), "Mita heartbeat worker started");
-    }
-
-    async fn work<S: Clone + Send + Sync>(&mut self, ctx: common_worker::WorkerContext<S>) {
-        info!(worker = ctx.name(), "Mita heartbeat triggered");
-
-        // ---------------------------------------------------------------
-        // Auto-compact oversized tapes before running the agent loop.
-        // ---------------------------------------------------------------
-        self.auto_compact_tapes().await;
+        info!(worker = ctx.name(), "Mita heartbeat worker starting");
 
         // Ensure Mita's tape exists with a bootstrap anchor.
-        if let Err(e) = self.tape_service.ensure_bootstrap_anchor(MITA_TAPE).await {
+        if let Err(e) = self.tape_service.ensure_bootstrap_anchor("mita").await {
             error!(error = %e, "failed to bootstrap Mita tape");
             return;
         }
 
-        // Resolve agent manifest for Mita.
+        // Spawn Mita as a long-lived session with a fixed session key.
         let manifest = match self.kernel_handle.agent_registry().get("mita") {
             Some(m) => m,
             None => {
@@ -133,31 +72,52 @@ impl common_worker::Worker for MitaHeartbeatWorker {
             }
         };
 
-        // Provide a lookup principal — `spawn_with_input` will resolve it
-        // through `SecuritySubsystem::resolve_principal()` before storing
-        // it in the session, so this is just a query key.
         let principal = Principal::lookup("system");
-
-        // Spawn a new agent session for this heartbeat cycle.
-        let input = "Heartbeat triggered. Analyze active sessions and determine if any proactive \
-                     actions are needed. Review your previous tape entries to avoid repeating \
-                     recent actions."
-            .to_string();
+        let session_key = mita_session_key();
 
         match self
             .kernel_handle
-            .spawn_with_input(manifest, input, principal, None, None)
+            .spawn_with_input(
+                manifest,
+                "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                principal,
+                None,
+                Some(session_key),
+            )
             .await
         {
-            Ok(session_key) => {
-                info!(
-                    session_key = %session_key,
-                    "Mita heartbeat session spawned"
-                );
+            Ok(key) => {
+                info!(session_key = %key, "Mita long-lived session spawned");
             }
             Err(e) => {
-                error!(error = %e, "failed to spawn Mita heartbeat session");
+                error!(error = %e, "failed to spawn Mita session");
             }
+        }
+    }
+
+    async fn work<S: Clone + Send + Sync>(&mut self, ctx: common_worker::WorkerContext<S>) {
+        info!(worker = ctx.name(), "Mita heartbeat triggered");
+
+        let session_key = mita_session_key();
+
+        // Check that Mita's session is still alive in the process table.
+        if !self.kernel_handle.process_table().contains(&session_key) {
+            warn!("Mita session not found in process table, skipping heartbeat");
+            return;
+        }
+
+        // Deliver heartbeat message to the existing Mita session.
+        let msg = InboundMessage::synthetic(
+            "Heartbeat triggered. Analyze active sessions and determine if any proactive \
+             actions are needed. Review your previous tape entries to avoid repeating \
+             recent actions."
+                .to_string(),
+            UserId("system".to_string()),
+            session_key,
+        );
+
+        if let Err(e) = self.kernel_handle.submit_message(msg) {
+            error!(error = %e, "failed to deliver heartbeat to Mita session");
         }
     }
 }
