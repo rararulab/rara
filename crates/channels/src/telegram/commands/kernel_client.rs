@@ -19,14 +19,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use snafu::ResultExt;
 use rara_kernel::{
     memory::{TapEntryKind, TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
 };
 
 use super::client::{
-    BotServiceClient, BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
-    SessionListItem,
+    BotServiceClient, BotServiceError, ChannelBinding, CheckoutResult, DiscoveryJob, McpServerInfo,
+    SessionDetail, SessionListItem, SessionSnafu, TapeSnafu,
 };
 
 /// A [`BotServiceClient`] that calls [`SessionIndex`] and [`TapeService`]
@@ -39,22 +40,6 @@ pub struct KernelBotServiceClient {
 impl KernelBotServiceClient {
     pub fn new(sessions: Arc<dyn SessionIndex>, tape: TapeService) -> Self {
         Self { sessions, tape }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn map_session_err(e: ks::SessionError) -> BotServiceError {
-    BotServiceError::Service {
-        message: e.to_string(),
-    }
-}
-
-fn map_tape_err(context: &'static str, e: rara_kernel::memory::TapError) -> BotServiceError {
-    BotServiceError::Service {
-        message: format!("{context}: {e}"),
     }
 }
 
@@ -101,7 +86,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .get_channel_binding("telegram", chat_id)
             .await
             .map(|opt| opt.as_ref().map(binding_to_client))
-            .map_err(map_session_err)
+            .context(SessionSnafu)
     }
 
     async fn bind_channel(
@@ -125,7 +110,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .bind_channel(&binding)
             .await
             .map(|b| binding_to_client(&b))
-            .map_err(map_session_err)
+            .context(SessionSnafu)
     }
 
     async fn create_session(&self, title: Option<&str>) -> Result<String, BotServiceError> {
@@ -145,7 +130,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .sessions
             .create_session(&entry)
             .await
-            .map_err(map_session_err)?;
+            .context(SessionSnafu)?;
         Ok(created.key.to_string())
     }
 
@@ -154,8 +139,8 @@ impl BotServiceClient for KernelBotServiceClient {
         self.tape
             .reset(session_key, true)
             .await
-            .map_err(|e| BotServiceError::Service {
-                message: format!("failed to clear tape: {e}"),
+            .context(TapeSnafu {
+                context: "failed to clear tape",
             })?;
         Ok(())
     }
@@ -165,7 +150,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .list_sessions(limit as i64, 0)
             .await
             .map(|v| v.iter().map(entry_to_list_item).collect())
-            .map_err(map_session_err)
+            .context(SessionSnafu)
     }
 
     async fn get_session(&self, key: &str) -> Result<SessionDetail, BotServiceError> {
@@ -176,7 +161,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .sessions
             .get_session(&sk)
             .await
-            .map_err(map_session_err)?
+            .context(SessionSnafu)?
         {
             Some(entry) => Ok(entry_to_detail(&entry)),
             None => Err(BotServiceError::Service {
@@ -197,7 +182,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .sessions
             .get_session(&sk)
             .await
-            .map_err(map_session_err)?
+            .context(SessionSnafu)?
             .ok_or_else(|| BotServiceError::Service {
                 message: format!("session not found: {key}"),
             })?;
@@ -208,7 +193,7 @@ impl BotServiceClient for KernelBotServiceClient {
             .sessions
             .update_session(&entry)
             .await
-            .map_err(map_session_err)?;
+            .context(SessionSnafu)?;
         Ok(entry_to_detail(&updated))
     }
 
@@ -219,7 +204,9 @@ impl BotServiceClient for KernelBotServiceClient {
         self.tape
             .build_anchor_tree(session_key, &*self.sessions)
             .await
-            .map_err(|e| map_tape_err("failed to build anchor tree", e))
+            .context(TapeSnafu {
+                context: "failed to build anchor tree",
+            })
     }
 
     async fn checkout_anchor(
@@ -231,7 +218,9 @@ impl BotServiceClient for KernelBotServiceClient {
             .tape
             .entries(session_key)
             .await
-            .map_err(|e| map_tape_err("failed to load tape", e))?;
+            .context(TapeSnafu {
+                context: "failed to load tape",
+            })?;
 
         let anchor_entry_id = entries
             .iter()
@@ -252,7 +241,9 @@ impl BotServiceClient for KernelBotServiceClient {
             .store()
             .fork(session_key, Some(anchor_entry_id))
             .await
-            .map_err(|e| map_tape_err("failed to fork tape", e))?;
+            .context(TapeSnafu {
+                context: "failed to fork tape",
+            })?;
 
         let now = Utc::now();
         let new_key = SessionKey::new();
@@ -274,7 +265,7 @@ impl BotServiceClient for KernelBotServiceClient {
             Ok(created) => created,
             Err(e) => {
                 let _ = self.tape.store().discard(&fork_tape_name).await;
-                return Err(map_session_err(e));
+                return Err(BotServiceError::Session { source: e });
             }
         };
 
@@ -288,7 +279,10 @@ impl BotServiceClient for KernelBotServiceClient {
             Err(e) => {
                 let _ = self.tape.store().discard(&fork_tape_name).await;
                 let _ = self.sessions.delete_session(&created.key).await;
-                return Err(map_tape_err("failed to read forked tape", e));
+                return Err(BotServiceError::Tape {
+                    context: "failed to read forked tape",
+                    source:  e,
+                });
             }
         };
 
@@ -302,7 +296,10 @@ impl BotServiceClient for KernelBotServiceClient {
                 let _ = self.tape.store().discard(&fork_tape_name).await;
                 let _ = self.tape.store().reset(&new_tape).await;
                 let _ = self.sessions.delete_session(&created.key).await;
-                return Err(map_tape_err("failed to copy forked entries", e));
+                return Err(BotServiceError::Tape {
+                    context: "failed to copy forked entries",
+                    source:  e,
+                });
             }
         }
 
@@ -319,10 +316,39 @@ impl BotServiceClient for KernelBotServiceClient {
             .sessions
             .get_session(&sk)
             .await
-            .map_err(map_session_err)?;
+            .context(SessionSnafu)?;
         Ok(entry.and_then(|session| {
             get_fork_metadata(&session.metadata).map(|metadata| metadata.forked_from)
         }))
+    }
+
+    async fn checkout_session(
+        &self,
+        chat_id: &str,
+        session_key: &str,
+        anchor_name: Option<&str>,
+    ) -> Result<CheckoutResult, BotServiceError> {
+        let anchor_name = anchor_name.map(str::trim).filter(|name| !name.is_empty());
+
+        match anchor_name {
+            Some(anchor_name) => {
+                let child_key = self.checkout_anchor(session_key, anchor_name).await?;
+                self.bind_channel("telegram", chat_id, &child_key).await?;
+                Ok(CheckoutResult::ForkedFromAnchor {
+                    anchor_name: anchor_name.to_owned(),
+                    session_key: child_key,
+                })
+            }
+            None => {
+                let Some(parent_key) = self.parent_session(session_key).await? else {
+                    return Ok(CheckoutResult::NoParent);
+                };
+                self.bind_channel("telegram", chat_id, &parent_key).await?;
+                Ok(CheckoutResult::SwitchedToParent {
+                    session_key: parent_key,
+                })
+            }
+        }
     }
 
     // -- Job discovery (not yet implemented) ----------------------------------

@@ -27,10 +27,22 @@ use snafu::Snafu;
 
 /// Error returned by [`BotServiceClient`] operations.
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum BotServiceError {
     /// A generic service-level error.
     #[snafu(display("{message}"))]
     Service { message: String },
+    /// Session index operation failed.
+    #[snafu(display("session operation failed: {source}"))]
+    Session {
+        source: rara_kernel::session::SessionError,
+    },
+    /// Tape operation failed with explicit high-level context.
+    #[snafu(display("{context}: {source}"))]
+    Tape {
+        context: &'static str,
+        source:  rara_kernel::memory::TapError,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +94,20 @@ pub struct DiscoveryJob {
 pub struct McpServerInfo {
     pub name:   String,
     pub status: McpServerStatus,
+}
+
+/// Result of `/checkout` workflow after backend side effects are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutResult {
+    /// Current session has no parent, so no state changes were made.
+    NoParent,
+    /// Channel switched to parent session.
+    SwitchedToParent { session_key: String },
+    /// New fork created from anchor and channel switched to the child session.
+    ForkedFromAnchor {
+        anchor_name: String,
+        session_key: String,
+    },
 }
 
 /// Connection status of an MCP server.
@@ -158,6 +184,17 @@ pub trait BotServiceClient: Send + Sync {
 
     /// Return parent session key if the current session is a fork.
     async fn parent_session(&self, session_key: &str) -> Result<Option<String>, BotServiceError>;
+
+    /// Execute checkout behavior and bind channel accordingly.
+    ///
+    /// - `None` anchor means "switch to parent"
+    /// - `Some(anchor)` means "fork from anchor and switch to child"
+    async fn checkout_session(
+        &self,
+        chat_id: &str,
+        session_key: &str,
+        anchor_name: Option<&str>,
+    ) -> Result<CheckoutResult, BotServiceError>;
 
     // -- Job discovery -------------------------------------------------------
 

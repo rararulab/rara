@@ -25,7 +25,10 @@ use rara_kernel::{
     memory::SessionBranch,
 };
 
-use super::{anchor_dot, client::BotServiceClient};
+use super::{
+    anchor_dot,
+    client::{BotServiceClient, CheckoutResult},
+};
 
 /// Handles tape visualization and anchor-based forking.
 pub struct TapeCommandHandler {
@@ -125,58 +128,37 @@ impl TapeCommandHandler {
         };
 
         let anchor_name = args.trim();
-        if anchor_name.is_empty() {
-            // `/checkout` with no args means "go to parent session".
-            let parent = match self.client.parent_session(&session_key).await {
-                Ok(parent) => parent,
-                Err(e) => {
-                    return Ok(CommandResult::Text(format!(
-                        "Failed to resolve parent session: {e}"
-                    )));
-                }
-            };
-            let Some(parent_key) = parent else {
-                return Ok(CommandResult::Text(
-                    "Current session has no parent session.".to_owned(),
-                ));
-            };
-            if let Err(e) = self
-                .client
-                .bind_channel("telegram", &chat_id, &parent_key)
-                .await
-            {
-                return Ok(CommandResult::Text(format!(
-                    "Failed to switch to parent session: {e}"
-                )));
-            }
-            return Ok(CommandResult::Text(format!(
-                "Switched to parent session: {parent_key}"
-            )));
-        }
-
-        // `/checkout <anchor>` creates a child fork and rebinds the chat.
-        let new_session = match self.client.checkout_anchor(&session_key, anchor_name).await {
-            Ok(new_session) => new_session,
-            Err(e) => {
-                return Ok(CommandResult::Text(format!(
-                    "Failed to checkout anchor: {e}"
-                )));
-            }
-        };
-
-        if let Err(e) = self
+        let checkout = match self
             .client
-            .bind_channel("telegram", &chat_id, &new_session)
+            .checkout_session(
+                &chat_id,
+                &session_key,
+                if anchor_name.is_empty() {
+                    None
+                } else {
+                    Some(anchor_name)
+                },
+            )
             .await
         {
-            return Ok(CommandResult::Text(format!(
-                "Fork created but failed to bind channel: {e}"
-            )));
-        }
+            Ok(checkout) => checkout,
+            Err(e) => return Ok(CommandResult::Text(format!("Failed to checkout: {e}"))),
+        };
 
-        Ok(CommandResult::Text(format!(
-            "Forked from anchor '{anchor_name}' into session: {new_session}"
-        )))
+        match checkout {
+            CheckoutResult::NoParent => Ok(CommandResult::Text(
+                "Current session has no parent session.".to_owned(),
+            )),
+            CheckoutResult::SwitchedToParent { session_key } => Ok(CommandResult::Text(format!(
+                "Switched to parent session: {session_key}"
+            ))),
+            CheckoutResult::ForkedFromAnchor {
+                anchor_name,
+                session_key,
+            } => Ok(CommandResult::Text(format!(
+                "Forked from anchor '{anchor_name}' into session: {session_key}"
+            ))),
+        }
     }
 }
 
