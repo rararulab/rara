@@ -470,6 +470,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             result_preview,
         },
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
+        StreamEvent::TextClear => CliEvent::Progress {
+            text: String::new(),
+        },
         StreamEvent::TurnMetrics {
             duration_ms,
             iterations,

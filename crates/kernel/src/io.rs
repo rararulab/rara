@@ -795,6 +795,11 @@ pub enum StreamEvent {
     TextDelta { text: String },
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
+    /// Signal to discard accumulated text from an intermediate iteration.
+    ///
+    /// Emitted by the agent when an iteration ends with tool calls — the
+    /// narration text is noise and should not be shown to the user.
+    TextClear,
     /// A tool call has started executing.
     ToolCallStart {
         name:      String,
