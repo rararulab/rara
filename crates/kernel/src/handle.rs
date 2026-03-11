@@ -56,7 +56,7 @@ use crate::{
 ///
 /// ```ignore
 /// let handle = kernel.handle();
-/// let session_key = handle.spawn_with_input(manifest, "hello".into(), principal, None).await?;
+/// let session_key = handle.spawn_with_input(manifest, "hello".into(), principal, None, None).await?;
 /// handle.send_signal(session_key, Signal::Pause)?;
 /// handle.shutdown()?;
 /// ```
@@ -131,10 +131,11 @@ impl KernelHandle {
         input: String,
         principal: Principal,
         parent_id: Option<SessionKey>,
+        desired_session_key: Option<SessionKey>,
     ) -> Result<SessionKey> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let event =
-            KernelEventEnvelope::spawn_agent(manifest, input, principal, parent_id, reply_tx);
+            KernelEventEnvelope::spawn_agent(manifest, input, principal, parent_id, desired_session_key, reply_tx);
         self.event_queue
             .push(event)
             .map_err(|_| KernelError::SpawnFailed {
@@ -162,7 +163,7 @@ impl KernelHandle {
                     name: agent_name.to_string(),
                 })?;
 
-        self.spawn_with_input(manifest, input, principal, parent_id)
+        self.spawn_with_input(manifest, input, principal, parent_id, None)
             .await
     }
 
@@ -362,6 +363,7 @@ impl KernelHandle {
             input,
             principal.clone(),
             Some(*session_key),
+            None,
             reply_tx,
         );
         self.syscall_push(event).await?;

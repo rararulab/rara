@@ -146,7 +146,7 @@ impl common_worker::Worker for MitaHeartbeatWorker {
 
         match self
             .kernel_handle
-            .spawn_with_input(manifest, input, principal, None)
+            .spawn_with_input(manifest, input, principal, None, None)
             .await
         {
             Ok(session_key) => {

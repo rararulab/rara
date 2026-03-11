@@ -263,13 +263,14 @@ pub enum KernelEvent {
     /// reactivates an existing suspended session.
     CreateSession {
         #[debug("{}", manifest.name)]
-        manifest:  AgentManifest,
-        input:     String,
-        principal: Principal,
-        parent_id: Option<SessionKey>,
+        manifest:            AgentManifest,
+        input:               String,
+        principal:           Principal,
+        parent_id:           Option<SessionKey>,
+        desired_session_key: Option<SessionKey>,
         #[debug(skip)]
         #[serde(skip_serializing)]
-        reply_tx:  oneshot::Sender<crate::error::Result<SessionKey>>,
+        reply_tx:            oneshot::Sender<crate::error::Result<SessionKey>>,
     },
 
     /// Send a control signal to a session.
@@ -413,15 +414,17 @@ impl KernelEventEnvelope {
         input: String,
         principal: Principal,
         parent_id: Option<SessionKey>,
+        desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
     ) -> Self {
         Self {
-            base: EventBase::from(SessionKey::new()),
+            base: EventBase::from(desired_session_key.unwrap_or_else(SessionKey::new)),
             kind: KernelEvent::CreateSession {
                 manifest,
                 input,
                 principal,
                 parent_id,
+                desired_session_key,
                 reply_tx,
             },
         }
@@ -433,9 +436,10 @@ impl KernelEventEnvelope {
         input: String,
         principal: Principal,
         parent_id: Option<SessionKey>,
+        desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
     ) -> Self {
-        Self::create_session(manifest, input, principal, parent_id, reply_tx)
+        Self::create_session(manifest, input, principal, parent_id, desired_session_key, reply_tx)
     }
 
     /// Create a `SendSignal` event.

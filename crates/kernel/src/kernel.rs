@@ -476,11 +476,12 @@ impl Kernel {
                 input,
                 principal,
                 parent_id,
+                desired_session_key,
                 reply_tx,
             } => {
                 // CreateSession from SessionHandle::create_child() — subagent.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, parent_id, None, None, None)
+                    .handle_spawn_agent(manifest, input, principal, parent_id, None, desired_session_key, None)
                     .await;
                 let _ = reply_tx.send(result);
             }
@@ -575,6 +576,13 @@ impl Kernel {
 
         let session_key = desired_session_key.unwrap_or_default();
         tracing::Span::current().record("session_key", tracing::field::display(&session_key));
+
+        // Reject if a process with this key already exists (e.g. Mita still running).
+        if self.process_table.contains(&session_key) {
+            return Err(KernelError::SpawnFailed {
+                message: format!("session {session_key} already exists in process table"),
+            });
+        }
 
         // Create process-level cancellation token.
         // Child processes derive their token from the parent's, so cancelling
