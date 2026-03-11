@@ -97,3 +97,6 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file
 - Do NOT use noop/hollow trait implementations to糊弄编译器 — trait method 有真正实现时不允许默认空体（silently return `Ok(())` / `Ok(None)` / `vec![]`）；可选 UX hook（`typing_indicator`, lifecycle hooks）是唯一例外
 - Do NOT 构造空壳身份对象 — `Principal` 必须通过 `SecuritySubsystem::resolve_principal()` 或 `Principal::from_user()` 从数据库获得完整的 role + permissions，不允许用 placeholder 值存入 Session
+- Do NOT 在 agent system prompt 中添加"先说计划再行动"类规则 — "先发 plan 再执行" 会导致 LLM 在简单交互（hello）中也产生冗余/重复的叙述文本。正确原则是 "act first, report after"（参见 #201）
+- Do NOT 用过于宽泛的条件触发 memory search — "proactively search memory" 会让每次交互都触发搜索+无意义叙述。触发条件必须明确限定（如"用户明确问到过去的事"）
+- Do NOT 修改 agent system prompt 后不测试 — 至少用 "hello"、"你好" 等简单输入验证不会产生异常/重复输出
