@@ -86,3 +86,80 @@ GroupPolicy::All                 → respond to everything
 - Do NOT change the `#[default]` attribute away from `MentionOrSmallGroup` — existing deployments have no `group_policy` in their config. Changing the default silently changes their bot behavior (e.g. switching to `All` would make the bot reply to every group message, spamming the chat).
 - Do NOT add manual string parsing for GroupPolicy — the enum derives `strum::EnumString` with `#[strum(serialize_all = "snake_case")]`. Manual match-arms duplicate the variant list and will silently ignore new variants when someone adds one to the enum. `str::parse()` handles it automatically.
 - Do NOT put group policy logic in the kernel — the `MentionOrSmallGroup` variant calls `bot.get_chat_member_count()`, which is a Telegram Bot API call. The kernel has no Telegram dependency and must not acquire one. Policy evaluation requires platform-specific context that only the adapter has.
+
+---
+
+## Critical: Tape-Driven Message Rebuild + Context Budget
+
+### What
+
+Agent loop 每次迭代从 tape 重建 LLM messages，而不是在内存中累积。配合两层 context budget 截断，控制发给 LLM 的 token 量。
+
+### Why
+
+之前 `run_agent_loop` 在 turn 开始时从 tape 加载 history 到内存 `messages` 向量，然后每次迭代同时 push 到 messages 和写入 tape（双写）。问题：
+
+1. **messages 只增不减** — 第 N 次迭代发送前 N-1 次所有内容给 LLM，O(N²) token 增长
+2. **无法在重建时做截断** — 内存 messages 是独立副本，截断它不影响 tape，但也无法利用 tape 做选择性重建
+3. **警告消息跨迭代累积** — context pressure warning 本身也被 push 进 messages，越警告 context 越大
+
+### How
+
+```
+tape (JSONL, append-only) ← 唯一真相源
+         │
+         ▼  每次迭代
+rebuild_messages_for_llm()
+  = [system prompt] + [anchor context] + [user memory] + [对话历史 since last anchor]
+         │
+         ▼  临时注入（不持久化）
+  + [tape search reminder]      只在第一次迭代
+  + [anchor reminder]           上次迭代有大 tool output 时
+  + [context pressure warning]  超过阈值时
+  + [LLM error recovery msg]   上次迭代 LLM 出错时
+         │
+         ▼  截断（只影响发给 LLM 的，tape 不变）
+  Layer 1: truncate_tool_result()    单个 tool result > 30% context window
+  Layer 2: apply_context_guard()     总 tool results > 75% headroom → 旧结果压缩到 2K
+         │
+         ▼
+       LLM call
+         │
+         ▼  只写 tape
+  tape.append_message(assistant)
+  tape.append_tool_call(calls)
+  tape.append_tool_result(results)
+```
+
+### The Invariant
+
+- **Tape 是唯一真相源** — loop 内不 `messages.push`，下次迭代从 tape 重建
+- **临时注入不持久化** — reminder/warning 只在本次迭代的 messages 中，下次重建时消失
+- **截断只影响 LLM 视角** — `context_budget` 修改的是重建后的 messages 副本，tape 保留完整原始数据
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `agent.rs` | Loop 内每次迭代调用 `rebuild_messages_for_llm`，临时注入 + context guard |
+| `memory/service.rs` | `rebuild_messages_for_llm()` — system prompt + tape history 重建 |
+| `memory/context.rs` | `default_tape_context()` — tape entries → LLM messages 转换 |
+| `context_budget.rs` | Layer 1 (`truncate_tool_result`) + Layer 2 (`apply_context_guard`) |
+
+### Context Budget Parameters
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `TOOL_CHARS_PER_TOKEN` | 3 | Tool output density (code/JSON) |
+| `per_result_cap` | 30% of context window | Layer 1: 单个 tool result 上限 |
+| `single_result_max` | 50% of context window | Layer 2 Pass 1: 硬上限 |
+| `total_tool_headroom` | 75% of context window | Layer 2 Pass 2: 总量阈值 |
+| `COMPACT_TARGET_CHARS` | 2,000 | Layer 2 Pass 2: 旧结果压缩目标 |
+
+### What NOT To Do
+
+- Do NOT add `messages.push` in the agent loop — 所有新内容只写 tape，下次迭代重建。如果你 push 了，这条消息会在下次重建时**重复出现**（tape 有一份 + push 一份）。
+- Do NOT persist reminder/warning messages to tape — 它们是临时的 LLM 指令，不应该成为对话历史的一部分。持久化会导致每次重建都注入旧的警告。
+- Do NOT truncate tape entries — tape 是完整历史，截断只发生在 `rebuild_messages_for_llm()` 之后的 `context_budget` 阶段。
+- Do NOT bypass `rebuild_messages_for_llm` for "performance" by caching messages across iterations — tape 是 append-only JSONL 本地文件，读取 <1ms。缓存引入双写一致性问题，正是我们刚消除的。
+- Do NOT change `context_budget` thresholds without testing — 30%/50%/75% 是参考 OpenFang 的经验值，过低会截断有用信息，过高会 context overflow。
