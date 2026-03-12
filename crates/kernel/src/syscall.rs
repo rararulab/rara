@@ -605,8 +605,12 @@ impl SyscallTool {
     async fn exec_spawn_parallel(
         &self,
         tasks: Vec<SpawnRequest>,
+        max_concurrency: usize,
     ) -> Result<serde_json::Value, anyhow::Error> {
-        info!(count = tasks.len(), "kernel: spawning agents in parallel");
+        info!(
+            count = tasks.len(),
+            max_concurrency, "kernel: spawning agents in parallel"
+        );
         let principal = self.principal()?;
 
         let mut handles: Vec<(String, AgentHandle)> = Vec::new();
@@ -633,50 +637,53 @@ impl SyscallTool {
             }
         }
 
-        let mut results = Vec::new();
-        for (agent_name, handle) in handles {
-            let _agent_id = handle.session_key;
-            let mut rx = handle.result_rx;
-            let mut milestones = Vec::new();
-            let mut final_result = None;
+        // Collect results with bounded concurrency via buffer_unordered.
+        use futures::stream::{self, StreamExt};
 
-            while let Some(event) = rx.recv().await {
-                match event {
-                    crate::io::AgentEvent::Milestone { stage, detail } => {
-                        milestones.push(serde_json::json!({
-                            "stage": stage,
-                            "detail": detail,
-                        }));
-                    }
-                    crate::io::AgentEvent::Done(result) => {
-                        final_result = Some(result);
-                        break;
+        let results: Vec<serde_json::Value> = stream::iter(handles)
+            .map(|(agent_name, handle)| async move {
+                let _agent_id = handle.session_key;
+                let mut rx = handle.result_rx;
+                let mut milestones = Vec::new();
+                let mut final_result = None;
+
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        crate::io::AgentEvent::Milestone { stage, detail } => {
+                            milestones.push(serde_json::json!({
+                                "stage": stage,
+                                "detail": detail,
+                            }));
+                        }
+                        crate::io::AgentEvent::Done(result) => {
+                            final_result = Some(result);
+                            break;
+                        }
                     }
                 }
-            }
 
-            match final_result {
-                Some(result) => {
-                    results.push(serde_json::json!({
+                match final_result {
+                    Some(result) => serde_json::json!({
                         "agent": agent_name,
                         "milestones": milestones,
                         "output": result.output,
                         "iterations": result.iterations,
                         "tool_calls": result.tool_calls,
-                    }));
-                }
-                None => {
-                    results.push(serde_json::json!({
+                    }),
+                    None => serde_json::json!({
                         "agent": agent_name,
                         "error": "agent was dropped without producing a result",
-                    }));
+                    }),
                 }
-            }
-        }
+            })
+            .buffer_unordered(max_concurrency)
+            .collect()
+            .await;
 
+        let total = results.len();
         Ok(serde_json::json!({
             "results": results,
-            "total": results.len(),
+            "total": total,
         }))
     }
 
@@ -989,8 +996,11 @@ impl crate::tool::AgentTool for SyscallTool {
             SyscallParams::Spawn { agent, task } => self.exec_spawn(&agent, &task).await,
             SyscallParams::SpawnParallel {
                 parallel,
-                max_concurrency: _,
-            } => self.exec_spawn_parallel(parallel).await,
+                max_concurrency,
+            } => {
+                self.exec_spawn_parallel(parallel, max_concurrency.unwrap_or(4))
+                    .await
+            }
             SyscallParams::Status { target } => self.exec_status(&target).await,
             SyscallParams::Children => self.exec_children().await,
             SyscallParams::Kill { target } => self.exec_signal(&target, "kill").await,

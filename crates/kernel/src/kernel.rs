@@ -706,6 +706,7 @@ impl Kernel {
             origin_endpoint,
             pause_buffer: Vec::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            _parent_child_permit: None,
             _global_permit: global_permit,
         };
         self.process_table.insert(process);
