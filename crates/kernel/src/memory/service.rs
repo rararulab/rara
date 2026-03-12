@@ -319,6 +319,34 @@ impl TapeService {
         Ok(messages)
     }
 
+    /// Rebuild the complete LLM message list from tape.
+    ///
+    /// This is the single source of truth for what the LLM sees:
+    /// 1. System prompt (effective_prompt)
+    /// 2. Anchor context (if any)
+    /// 3. User memory context (if any)
+    /// 4. Conversation history since last anchor
+    ///
+    /// Called at the start of each agent loop iteration instead of
+    /// maintaining an in-memory messages vector.
+    #[tracing::instrument(skip(self, system_prompt))]
+    pub async fn rebuild_messages_for_llm(
+        &self,
+        tape_name: &str,
+        user_id: Option<&str>,
+        system_prompt: &str,
+    ) -> TapResult<Vec<crate::llm::Message>> {
+        let mut messages = vec![crate::llm::Message::system(system_prompt)];
+
+        let history = match user_id {
+            Some(uid) => self.build_llm_context_with_user(tape_name, uid).await?,
+            None => self.build_llm_context(tape_name).await?,
+        };
+        messages.extend(history);
+
+        Ok(messages)
+    }
+
     // -----------------------------------------------------------------------
     // User tape helpers
     // -----------------------------------------------------------------------

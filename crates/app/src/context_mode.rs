@@ -32,11 +32,39 @@ const SERVER_NAME: &str = "context-mode";
 /// Tool name prefix used by context-mode MCP server.
 const TOOL_PREFIX: &str = "context-mode__";
 
-/// Tools whose output is safe to intercept (whitelist).
+/// Tools excluded from interception (their output is binary, always small,
+/// or must be returned verbatim to the agent).
 ///
-/// Only tools that produce large, non-critical output should be listed here.
-/// All other tools pass through unmodified to avoid breaking agent behavior.
-const INTERCEPTABLE_TOOLS: &[&str] = &["bash"];
+/// Everything else is intercepted by default — any tool that can produce
+/// large textual output will be indexed into context-mode when it exceeds
+/// the size threshold.
+const NON_INTERCEPTABLE_TOOLS: &[&str] = &[
+    // Binary / image tools
+    "send_image",
+    "screenshot",
+    "set_avatar",
+    // Scheduler tools (tiny confirmation output)
+    "schedule_once",
+    "schedule_interval",
+    "schedule_cron",
+    "schedule_remove",
+    "schedule_list",
+    // Small metadata tools
+    "settings",
+    "session_info",
+    "tape_info",
+    "tape_handoff",
+    // MCP server admin (small output)
+    "install_mcp_server",
+    "remove_mcp_server",
+    "list_mcp_servers",
+    // Write-only / confirmation-only tools
+    "send_email",
+    "update_soul_state",
+    "evolve_soul",
+    "write_user_note",
+    "distill_user_notes",
+];
 
 /// Default output size threshold in bytes (32 KB).
 const DEFAULT_THRESHOLD: usize = 32 * 1024;
@@ -115,9 +143,9 @@ impl ContextModeInterceptor {
 #[async_trait]
 impl OutputInterceptor for ContextModeInterceptor {
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput {
-        // Only intercept whitelisted tools — other tools' output may carry
-        // structured data the agent needs verbatim.
-        if !INTERCEPTABLE_TOOLS.contains(&tool_name) {
+        // Intercept everything by default — skip only tools whose output is
+        // binary, always small, or must be returned verbatim.
+        if NON_INTERCEPTABLE_TOOLS.contains(&tool_name) {
             return output;
         }
 
