@@ -52,7 +52,7 @@ use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
         command::{CallbackHandler, CommandContext, CommandHandler, CommandInfo, CommandResult},
-        types::{ChannelType, ChannelUser, InlineButton, MessageContent, ReplyMarkup},
+        types::{ChannelType, ChannelUser, GroupPolicy, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
     handle::KernelHandle,
@@ -313,6 +313,8 @@ pub struct TelegramConfig {
     /// Allowed group chat ID. Only this group is authorized for bot
     /// interaction.
     pub allowed_group_chat_id: Option<i64>,
+    /// How the bot handles group chat messages.
+    pub group_policy:          GroupPolicy,
 }
 
 impl Default for TelegramConfig {
@@ -320,6 +322,7 @@ impl Default for TelegramConfig {
         Self {
             primary_chat_id:       None,
             allowed_group_chat_id: None,
+            group_policy:          GroupPolicy::MentionOrSmallGroup,
         }
     }
 }
