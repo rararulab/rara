@@ -49,7 +49,6 @@ mod user_note;
 mod write_file;
 
 use bash::BashTool;
-use composio::ComposioTool;
 use edit_file::EditFileTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -129,9 +128,6 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(SendImageTool::new()),
         Arc::new(SetAvatarTool::new(deps.settings.clone())),
         Arc::new(SettingsTool::new(deps.settings.clone())),
-        Arc::new(ComposioTool::from_auth_provider(
-            deps.composio_auth_provider,
-        )),
         // Screenshot
         Arc::new(ScreenshotTool::new(project_root)),
         // Skill tools
@@ -166,6 +162,11 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     ];
 
     for tool in tools {
+        registry.register(tool);
+    }
+
+    // Composio tool suite (4 focused tools)
+    for tool in composio::build_tools(deps.composio_auth_provider) {
         registry.register(tool);
     }
 
