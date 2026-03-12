@@ -24,6 +24,7 @@
 //! [`crate::agent::run_agent_loop`] so the kernel can route to either.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -149,6 +150,7 @@ pub(crate) async fn run_plan_loop(
     notification_bus: NotificationBusRef,
 ) -> Result<AgentTurnResult> {
     info!(session_key = %session_key, "plan executor: starting v2 plan-execute loop");
+    let start = Instant::now();
 
     // -- Phase 1: Plan creation -----------------------------------------------
     //
@@ -314,7 +316,7 @@ pub(crate) async fn run_plan_loop(
         tool_calls: total_tool_calls,
         model:      last_model.clone(),
         trace:      crate::agent::TurnTrace {
-            duration_ms:      0,
+            duration_ms:      start.elapsed().as_millis() as u64,
             model:            last_model,
             input_text:       Some(user_text),
             iterations:       vec![],
@@ -404,8 +406,8 @@ async fn execute_inline_step(
             (StepOutcome::Success, summary)
         }
         Err(e) => {
-            let reason = e.to_string();
-            (StepOutcome::Failed { reason: reason.clone() }, reason)
+            let summary = e.to_string();
+            (StepOutcome::Failed { reason: summary.clone() }, summary)
         }
     }
 }

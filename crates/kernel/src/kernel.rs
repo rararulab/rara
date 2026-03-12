@@ -1909,7 +1909,11 @@ impl Kernel {
                 // 3. AgentManifest has default_execution_mode: "plan" → v2
                 // 4. Otherwise → v1 (existing run_agent_loop)
                 let (use_plan_executor, effective_user_text) =
-                    if let Some(stripped) = user_text.strip_prefix("/plan ") {
+                    if user_text == "/plan" || user_text.strip_prefix("/plan ").is_some_and(|s| s.trim().is_empty()) {
+                        // Bare "/plan" with no goal — treat as v1 so the LLM
+                        // can respond with a usage hint naturally.
+                        (false, user_text)
+                    } else if let Some(stripped) = user_text.strip_prefix("/plan ") {
                         (true, stripped.to_owned())
                     } else {
                         // TODO: check session metadata for execution_mode == "plan"
