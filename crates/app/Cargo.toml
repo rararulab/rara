@@ -48,6 +48,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
 snafu = { workspace = true }
+sysinfo.workspace = true
 sqlx = { workspace = true }
 teloxide = { workspace = true }
 tokio = { workspace = true }
