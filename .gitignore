@@ -90,3 +90,4 @@ config/*
 
 .ralph/
 logs/
+.claude/worktrees/
