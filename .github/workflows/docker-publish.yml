@@ -1,12 +1,10 @@
 name: Docker Publish
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      - ".github/workflows/web.yml"
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -23,27 +21,28 @@ env:
   BASE_IMAGE: ghcr.io/rararulab/rara-base
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
   build-base:
     name: Build Base Image
-    needs: [ci]
     runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
 
-      - uses: docker/login-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
 
-      - uses: docker/build-push-action@v6
+      - name: Build and push base image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
         with:
           context: .
           file: docker/base.Dockerfile
@@ -58,17 +57,23 @@ jobs:
     needs: [build-base]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
 
-      - uses: docker/login-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
 
-      - uses: docker/build-push-action@v6
+      - name: Build and push backend image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
         with:
           context: .
           file: docker/Dockerfile
@@ -83,21 +88,26 @@ jobs:
 
   build-frontend:
     name: Build Frontend Image
-    needs: [ci]
     runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
 
-      - uses: docker/login-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
 
       - name: Setup mdBook
-        uses: jontze/action-mdbook@v4
+        uses: jontze/action-mdbook@6c0be56d14c4bf16861b00af61f50ff7400ce502 # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           use-linkcheck: true
@@ -107,7 +117,8 @@ jobs:
       - name: Build mdbook
         run: mdbook build docs
 
-      - uses: docker/build-push-action@v6
+      - name: Build and push frontend image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
         with:
           context: .
           file: docker/web.Dockerfile
