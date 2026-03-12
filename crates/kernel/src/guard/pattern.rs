@@ -114,7 +114,7 @@ pub struct PatternGuard;
 impl PatternGuard {
     /// Scan tool arguments for known dangerous patterns.
     pub fn scan(&self, tool_name: &str, args: &serde_json::Value) -> Vec<PatternMatch> {
-        let text = flatten_args_to_text(args).to_lowercase();
+        let texts = flatten_args_to_texts(args);
         let is_shell = is_shell_tool(tool_name);
         let mut matches = Vec::new();
 
@@ -123,19 +123,29 @@ impl PatternGuard {
                 continue;
             }
             for pattern in rule.patterns {
-                if text.contains(pattern) {
-                    matches.push(PatternMatch {
-                        rule_name: rule.name,
-                        category: rule.category,
-                        severity: rule.severity,
-                        matched_pattern: pattern,
-                    });
+                for text in &texts {
+                    let normalized = normalize_text(&text.to_lowercase());
+                    if normalized.contains(pattern) {
+                        matches.push(PatternMatch {
+                            rule_name: rule.name,
+                            category: rule.category,
+                            severity: rule.severity,
+                            matched_pattern: pattern,
+                        });
+                        break; // one match per pattern is enough
+                    }
                 }
             }
         }
 
         if is_shell {
-            let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let command = normalize_text(
+                &args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase(),
+            );
             for (pattern, _desc) in SHELL_METACHARS {
                 if command.contains(pattern) {
                     matches.push(PatternMatch {
@@ -156,29 +166,36 @@ fn is_shell_tool(name: &str) -> bool {
     matches!(name, "bash" | "shell_exec")
 }
 
-/// Recursively extract all string values from a JSON value.
-fn flatten_args_to_text(value: &serde_json::Value) -> String {
-    let mut buf = String::new();
-    flatten_recursive(value, &mut buf);
-    buf
+/// Strip zero-width characters and collapse whitespace.
+fn normalize_text(text: &str) -> String {
+    let stripped: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{00AD}'))
+        .collect();
+    let collapsed: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
 }
 
-fn flatten_recursive(value: &serde_json::Value, buf: &mut String) {
+/// Recursively extract all leaf string values from a JSON value.
+fn flatten_args_to_texts(value: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    flatten_recursive(value, &mut out);
+    out
+}
+
+fn flatten_recursive(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::String(s) => {
-            if !buf.is_empty() {
-                buf.push(' ');
-            }
-            buf.push_str(s);
+            out.push(s.clone());
         }
         serde_json::Value::Array(arr) => {
             for v in arr {
-                flatten_recursive(v, buf);
+                flatten_recursive(v, out);
             }
         }
         serde_json::Value::Object(map) => {
             for v in map.values() {
-                flatten_recursive(v, buf);
+                flatten_recursive(v, out);
             }
         }
         _ => {}

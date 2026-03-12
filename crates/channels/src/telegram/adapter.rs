@@ -904,7 +904,21 @@ async fn handle_guard_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
+    allowed_user_ids: &[i64],
 ) {
+    // Verify the user clicking the button is authorized.
+    let from_id = callback.from.id.0 as i64;
+    if !allowed_user_ids.is_empty() && !allowed_user_ids.contains(&from_id) {
+        warn!(
+            user_id = from_id,
+            "guard callback: unauthorized user attempted approval"
+        );
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("⚠️ Unauthorized")
+            .await;
+        return;
+    }
     // Parse "guard:approve:{uuid}" or "guard:deny:{uuid}"
     let parts: Vec<&str> = data.splitn(3, ':').collect();
     if parts.len() != 3 {
@@ -952,9 +966,14 @@ async fn handle_guard_callback(
 
     // Edit the original message to show the decision (remove buttons).
     if let Some(msg) = &callback.message {
-        let (msg_id, chat_id) = match msg {
-            teloxide::types::MaybeInaccessibleMessage::Regular(m) => (m.id, m.chat.id),
-            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => (m.message_id, m.chat.id),
+        let (msg_id, chat_id, original_text) = match msg {
+            teloxide::types::MaybeInaccessibleMessage::Regular(m) => {
+                let text = m.text().unwrap_or("Guard decision").to_owned();
+                (m.id, m.chat.id, text)
+            }
+            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => {
+                (m.message_id, m.chat.id, "Guard decision".to_owned())
+            }
         };
 
         let status = match (&decision, &result) {
@@ -964,8 +983,8 @@ async fn handle_guard_callback(
             _ => "Done".to_string(),
         };
 
-        // Append decision status to original text by editing the message.
-        let new_text = format!("{status}");
+        // Preserve original message content and append the decision status.
+        let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
         let _ = bot
             .edit_message_text(chat_id, msg_id, new_text)
             .parse_mode(ParseMode::Html)
@@ -1006,7 +1025,7 @@ async fn approval_listener(
                     Ok(r) => r,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(skipped = n, "telegram approval listener: lagged, skipping");
+                        error!(skipped = n, "telegram approval listener: {n} approval requests lost due to lag — affected tool calls will time out after 120s");
                         continue;
                     }
                 };
@@ -1071,7 +1090,7 @@ async fn handle_update(
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
             if data.starts_with("guard:") {
-                handle_guard_callback(handle, bot, callback, data).await;
+                handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
         }

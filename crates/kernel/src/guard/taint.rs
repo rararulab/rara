@@ -6,6 +6,7 @@
 //! of all input labels in the session context.
 
 use dashmap::DashMap;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::instrument;
@@ -38,10 +39,22 @@ pub struct TaintViolation {
 }
 
 /// Session-level taint state — tracks accumulated labels in LLM context.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SessionTaintState {
     /// Union of all taint labels in this session's LLM context.
     context_labels: HashSet<TaintLabel>,
+    /// When this entry was created, used by [`TaintTracker::sweep_stale`] to
+    /// evict leaked entries from crashed sessions.
+    created_at: Timestamp,
+}
+
+impl Default for SessionTaintState {
+    fn default() -> Self {
+        Self {
+            context_labels: HashSet::new(),
+            created_at: Timestamp::now(),
+        }
+    }
 }
 
 /// Tracks taint labels across all sessions.
@@ -129,6 +142,7 @@ impl TaintTracker {
                 *child,
                 SessionTaintState {
                     context_labels: parent_labels,
+                    created_at: Timestamp::now(),
                 },
             );
         }
@@ -150,11 +164,60 @@ impl TaintTracker {
             .insert(TaintLabel::Secret);
     }
 
+    /// Manually inject a [`TaintLabel::UserInput`] label.
+    ///
+    /// Call this at the message-ingress boundary (e.g. when the user sends a
+    /// chat message) so that downstream sink policies for `bash`/`shell_exec`
+    /// can block tool calls whose context contains raw user input.
+    /// Without this, the `UserInput` label would never be produced — no tool
+    /// output emits it — making the sink rule in [`sink_for_tool`] dead code.
+    #[instrument(skip(self), fields(%session))]
+    pub fn record_user_input(&self, session: &SessionKey) {
+        self.sessions
+            .entry(*session)
+            .or_default()
+            .context_labels
+            .insert(TaintLabel::UserInput);
+    }
+
+    /// Remove session entries older than `max_age`.
+    ///
+    /// Returns the number of entries removed. Call this periodically (e.g. from
+    /// a heartbeat task) to prevent unbounded memory growth when
+    /// [`clear_session`](Self::clear_session) is never called due to a crash
+    /// or panic.
+    #[instrument(skip(self))]
+    pub fn sweep_stale(&self, max_age: std::time::Duration) -> usize {
+        let now = Timestamp::now();
+        let max_age_secs = max_age.as_secs() as i64;
+        let mut removed = 0usize;
+        self.sessions.retain(|_key, state| {
+            let age = now.since(state.created_at);
+            match age {
+                Ok(span) => {
+                    if span.get_seconds() > max_age_secs {
+                        removed += 1;
+                        false
+                    } else {
+                        true
+                    }
+                }
+                Err(_) => true, // keep on error
+            }
+        });
+        removed
+    }
+
     /// Tool output → taint label mapping.
     ///
     /// Determines which labels a tool's output introduces into the session
     /// context. Only tools that bring external/untrusted data need labels;
     /// internal tools (file_read, search, etc.) produce no taint.
+    ///
+    /// **Note:** `web_fetch` plays a dual role — it is both a taint *source*
+    /// here (producing [`TaintLabel::ExternalNetwork`]) and a taint *sink* in
+    /// [`sink_for_tool`] (blocking `Secret`/`Pii`). See the doc comment on
+    /// `sink_for_tool` for the asymmetry implications.
     fn labels_for_tool_output(tool_name: &str) -> HashSet<TaintLabel> {
         match tool_name {
             // Network tools fetch content from untrusted external sources.
@@ -178,6 +241,23 @@ impl TaintTracker {
     /// - File write: blocks external/untrusted data → prevents disk poisoning.
     /// - Network out: blocks secrets/PII → prevents data exfiltration.
     /// - Agent messaging: blocks secrets → prevents leaks to sub-agents.
+    ///
+    /// # `web_fetch` source/sink asymmetry
+    ///
+    /// `web_fetch` is both a taint source ([`labels_for_tool_output`] emits
+    /// `ExternalNetwork`) and a taint sink (this function blocks `Secret` and
+    /// `Pii`). The practical consequence is **one-directional** protection:
+    ///
+    /// - `record_secret()` → `web_fetch` → **blocked** (prevents exfiltration).
+    /// - `web_fetch` → (reads a secret later) → `web_fetch` → **allowed**,
+    ///   because the second `web_fetch` only checks for `Secret`/`Pii` labels
+    ///   in the session context, and the first `web_fetch` only introduced
+    ///   `ExternalNetwork`. The secret read would need to go through
+    ///   `record_secret()` to actually block the second fetch.
+    ///
+    /// This is intentional: the taint model tracks *data provenance*, not
+    /// temporal ordering. If a secret is read via a tool that does not call
+    /// `record_secret`, the tracker has no knowledge of it.
     fn sink_for_tool(tool_name: &str) -> Option<HashSet<TaintLabel>> {
         match tool_name {
             "bash" | "shell_exec" => Some(HashSet::from([
