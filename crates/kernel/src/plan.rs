@@ -714,6 +714,7 @@ async fn execute_worker_step(
         priority:           crate::agent::Priority::Normal,
         metadata:           serde_json::Value::Null,
         sandbox:            None,
+        default_execution_mode: None,
     };
 
     info!(
