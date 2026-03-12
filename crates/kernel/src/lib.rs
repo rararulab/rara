@@ -30,6 +30,7 @@
 
 pub mod agent;
 pub mod channel;
+pub(crate) mod context_budget;
 pub mod error;
 pub mod event;
 pub mod guard;

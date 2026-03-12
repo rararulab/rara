@@ -820,6 +820,16 @@ pub(crate) async fn run_agent_loop(
             "LLM request"
         );
 
+        // Layer 2: compact oversized tool results before sending to LLM
+        let compacted = crate::context_budget::apply_context_guard(
+            &mut messages,
+            capabilities.context_window_tokens,
+            &tool_defs,
+        );
+        if compacted > 0 {
+            info!(compacted, "context guard compacted tool results");
+        }
+
         // Build completion request
         let request = llm::CompletionRequest {
             model:               model.clone(),
@@ -1456,7 +1466,12 @@ pub(crate) async fn run_agent_loop(
                 error: err.clone(),
             });
 
-            messages.push(llm::Message::tool_result(id, result_str));
+            // Layer 1: truncate individual tool result before pushing
+            let truncated_result = crate::context_budget::truncate_tool_result(
+                &result_str,
+                capabilities.context_window_tokens,
+            );
+            messages.push(llm::Message::tool_result(id, truncated_result));
         }
 
         // Collect iteration trace (with tool calls)
