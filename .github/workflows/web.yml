@@ -13,6 +13,8 @@ on:
     branches:
       - stable
       - main
+    paths:
+      - docs/**
 
 concurrency:
   group: web-${{ github.ref }}
