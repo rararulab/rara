@@ -498,6 +498,9 @@ pub enum IOError {
     /// Failed to resolve platform identity to a unified user ID.
     #[snafu(display("identity resolution failed: {message}"))]
     IdentityResolutionFailed { message: String },
+    /// Ingress rate limit exceeded for this user/channel.
+    #[snafu(display("Rate limited: {message}"))]
+    RateLimited { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,6 +1147,56 @@ pub type ChannelAdapterRef = crate::channel::adapter::ChannelAdapterRef;
 pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 
 // ---------------------------------------------------------------------------
+// IngressRateLimiter
+// ---------------------------------------------------------------------------
+
+/// Per-key sliding-window rate limiter for ingress messages.
+///
+/// Uses a 60-second window with a configurable max count per key.
+/// Keys are formatted as `"{channel_type}:{platform_user_id}"`.
+///
+/// Ref: OpenFang `openfang-channels/src/bridge.rs` — `ChannelRateLimiter`.
+pub struct IngressRateLimiter {
+    /// Per-key timestamps of accepted messages within the current window.
+    buckets: DashMap<String, Vec<std::time::Instant>>,
+    /// Maximum messages per key per 60-second window.
+    max_per_minute: u32,
+}
+
+impl IngressRateLimiter {
+    /// Create a new rate limiter with the given per-key limit.
+    pub fn new(max_per_minute: u32) -> Self {
+        Self {
+            buckets: DashMap::new(),
+            max_per_minute,
+        }
+    }
+
+    /// Check whether a key is within its rate limit.
+    ///
+    /// Returns `Ok(())` if allowed, `Err(IOError::RateLimited)` if exceeded.
+    pub fn check_rate(&self, key: &str) -> Result<(), IOError> {
+        let now = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(60);
+
+        let mut entry = self.buckets.entry(key.to_string()).or_default();
+        entry.retain(|ts| now.duration_since(*ts) < window);
+
+        if entry.len() >= self.max_per_minute as usize {
+            return Err(IOError::RateLimited {
+                message: format!(
+                    "Rate limit exceeded ({} messages/minute). Please wait.",
+                    self.max_per_minute
+                ),
+            });
+        }
+
+        entry.push(now);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IOSubsystem
 // ---------------------------------------------------------------------------
 
@@ -1490,5 +1543,34 @@ mod agent_event_tests {
             AgentEvent::Done(r) => assert_eq!(r.output, "done"),
             _ => panic!("expected Done"),
         }
+    }
+}
+
+#[cfg(test)]
+mod ingress_rate_limiter_tests {
+    use super::*;
+
+    #[test]
+    fn rate_limiter_allows_within_limit() {
+        let limiter = IngressRateLimiter::new(3);
+        let key = "telegram:user123".to_string();
+        assert!(limiter.check_rate(&key).is_ok());
+        assert!(limiter.check_rate(&key).is_ok());
+        assert!(limiter.check_rate(&key).is_ok());
+        assert!(limiter.check_rate(&key).is_err());
+    }
+
+    #[test]
+    fn rate_limiter_independent_keys() {
+        let limiter = IngressRateLimiter::new(1);
+        assert!(limiter.check_rate("user_a").is_ok());
+        assert!(limiter.check_rate("user_b").is_ok());
+        assert!(limiter.check_rate("user_a").is_err());
+    }
+
+    #[test]
+    fn rate_limiter_zero_limit_blocks_all() {
+        let limiter = IngressRateLimiter::new(0);
+        assert!(limiter.check_rate("user").is_err());
     }
 }
