@@ -127,6 +127,85 @@ impl ClawhubClient {
         }
         unreachable!()
     }
+
+    /// Search for skills on ClawHub using vector/semantic search.
+    ///
+    /// Uses `GET /api/v1/search?q=...&limit=...`.
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<ClawhubSearchResponse, crate::error::SkillError> {
+        let url = format!(
+            "{}/search?q={}&limit={}",
+            self.base_url,
+            urlencoded(query),
+            limit.min(50)
+        );
+        let resp = self.get_with_retry(&url, "ClawHub search").await?;
+        resp.json::<ClawhubSearchResponse>()
+            .await
+            .map_err(|e| crate::error::SkillError::InvalidInput {
+                message: format!("failed to parse ClawHub search response: {e}"),
+            })
+    }
+
+    /// Browse skills by sort order.
+    ///
+    /// Uses `GET /api/v1/skills?limit=...&sort=...`.
+    pub async fn browse(
+        &self,
+        sort: ClawhubSort,
+        limit: u32,
+    ) -> Result<ClawhubBrowseResponse, crate::error::SkillError> {
+        let url = format!(
+            "{}/skills?limit={}&sort={}",
+            self.base_url,
+            limit.min(50),
+            sort.as_str()
+        );
+        let resp = self.get_with_retry(&url, "ClawHub browse").await?;
+        resp.json::<ClawhubBrowseResponse>()
+            .await
+            .map_err(|e| crate::error::SkillError::InvalidInput {
+                message: format!("failed to parse ClawHub browse response: {e}"),
+            })
+    }
+
+    /// Get detailed info about a specific skill.
+    ///
+    /// Uses `GET /api/v1/skills/{slug}`.
+    pub async fn get_skill(
+        &self,
+        slug: &str,
+    ) -> Result<ClawhubSkillDetail, crate::error::SkillError> {
+        let url = format!("{}/skills/{}", self.base_url, urlencoded(slug));
+        let resp = self.get_with_retry(&url, "ClawHub skill detail").await?;
+        resp.json::<ClawhubSkillDetail>()
+            .await
+            .map_err(|e| crate::error::SkillError::InvalidInput {
+                message: format!("failed to parse ClawHub detail response: {e}"),
+            })
+    }
+}
+
+/// RFC 3986 percent-encoding for query parameters.
+fn urlencoded(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(b as char);
+            }
+            b' ' => result.push('+'),
+            _ => {
+                result.push('%');
+                result.push(char::from(b"0123456789ABCDEF"[(b >> 4) as usize]));
+                result.push(char::from(b"0123456789ABCDEF"[(b & 0xf) as usize]));
+            }
+        }
+    }
+    result
 }
 
 // -- Search: GET /api/v1/search?q=...&limit=N --------------------------------
@@ -346,5 +425,12 @@ mod tests {
         assert_eq!(detail.skill.slug, "gifgrep");
         assert_eq!(detail.latest_version.unwrap().version, "1.2.3");
         assert_eq!(detail.owner.unwrap().handle.unwrap(), "steipete");
+    }
+
+    #[test]
+    fn urlencoded_handles_special_chars() {
+        assert_eq!(urlencoded("hello world"), "hello+world");
+        assert_eq!(urlencoded("foo/bar"), "foo%2Fbar");
+        assert_eq!(urlencoded("a-b_c.d~e"), "a-b_c.d~e");
     }
 }
