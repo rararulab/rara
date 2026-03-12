@@ -825,15 +825,29 @@ pub enum StreamEvent {
         tool_calls:  usize,
         model:       String,
     },
-    /// A new plan has been created.
-    PlanCreated { goal: String, steps: Vec<String> },
+    /// A plan has been created with a goal and ordered steps.
+    PlanCreated {
+        goal:  String,
+        steps: Vec<String>,
+    },
     /// A plan step has started executing.
-    PlanStepStart { index: usize, task: String, mode: String },
-    /// A plan step has finished executing.
-    PlanStepEnd { index: usize, outcome: String, summary: String },
-    /// The plan has been revised.
-    PlanReplan { reason: String, new_steps: Vec<String> },
-    /// The plan has completed.
+    PlanStepStart {
+        index: usize,
+        task:  String,
+        mode:  String,
+    },
+    /// A plan step has finished.
+    PlanStepEnd {
+        index:   usize,
+        outcome: String,
+        summary: String,
+    },
+    /// The plan has been revised with new steps.
+    PlanReplan {
+        reason:    String,
+        new_steps: Vec<String>,
+    },
+    /// The plan has completed successfully.
     PlanCompleted { summary: String },
 }
 
