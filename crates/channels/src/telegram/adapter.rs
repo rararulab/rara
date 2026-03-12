@@ -60,9 +60,10 @@ use rara_kernel::{
         EgressError, Endpoint, EndpointAddress, IOError, InteractionType, PlatformOutbound,
         RawPlatformMessage, ReplyContext, StreamHubRef,
     },
+    security::{ApprovalDecision, ApprovalRequest},
 };
 use teloxide::{
-    payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters},
+    payloads::{AnswerCallbackQuerySetters, EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters},
     requests::{Request, Requester},
     types::{
         AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId,
@@ -722,6 +723,17 @@ impl ChannelAdapter for TelegramAdapter {
             .clone()
             .into();
 
+        // Spawn approval request listener — sends inline keyboard to primary chat.
+        {
+            let approval_rx = handle.security().approval().subscribe_requests();
+            let approval_bot = self.bot.clone();
+            let approval_config = Arc::clone(&self.config);
+            let mut approval_shutdown = self.shutdown_rx.clone();
+            tokio::spawn(async move {
+                approval_listener(approval_bot, approval_rx, approval_config, &mut approval_shutdown).await;
+            });
+        }
+
         tokio::spawn(async move {
             polling_loop(
                 bot,
@@ -877,6 +889,167 @@ async fn polling_loop(
     info!("telegram adapter: polling loop stopped");
 }
 
+// ---------------------------------------------------------------------------
+// Approval request listener
+// ---------------------------------------------------------------------------
+
+/// Minimal HTML escaping for text embedded in Telegram HTML messages.
+fn guard_html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Handle a guard approval/deny callback query from an inline keyboard button.
+async fn handle_guard_callback(
+    handle: &KernelHandle,
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+) {
+    // Parse "guard:approve:{uuid}" or "guard:deny:{uuid}"
+    let parts: Vec<&str> = data.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        warn!(data, "guard callback: malformed data");
+        return;
+    }
+
+    let (action, id_str) = (parts[1], parts[2]);
+    let request_id = match uuid::Uuid::parse_str(id_str) {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(id_str, error = %e, "guard callback: invalid UUID");
+            return;
+        }
+    };
+
+    let decision = match action {
+        "approve" => ApprovalDecision::Approved,
+        "deny" => ApprovalDecision::Denied,
+        _ => {
+            warn!(action, "guard callback: unknown action");
+            return;
+        }
+    };
+
+    let decided_by = callback
+        .from
+        .username
+        .as_deref()
+        .unwrap_or("unknown")
+        .to_string();
+
+    let result = handle
+        .security()
+        .approval()
+        .resolve(request_id, decision, Some(decided_by.clone()));
+
+    // Answer the callback query (removes the loading spinner on the button).
+    let answer_text = match decision {
+        ApprovalDecision::Approved => "✅ Approved",
+        ApprovalDecision::Denied => "❌ Denied",
+        _ => "Done",
+    };
+    let _ = bot.answer_callback_query(callback.id.clone()).text(answer_text).await;
+
+    // Edit the original message to show the decision (remove buttons).
+    if let Some(msg) = &callback.message {
+        let (msg_id, chat_id) = match msg {
+            teloxide::types::MaybeInaccessibleMessage::Regular(m) => (m.id, m.chat.id),
+            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => (m.message_id, m.chat.id),
+        };
+
+        let status = match (&decision, &result) {
+            (ApprovalDecision::Approved, Ok(_)) => format!("✅ <b>Approved</b> by @{decided_by}"),
+            (ApprovalDecision::Denied, Ok(_)) => format!("❌ <b>Denied</b> by @{decided_by}"),
+            (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(e)),
+            _ => "Done".to_string(),
+        };
+
+        // Append decision status to original text by editing the message.
+        let new_text = format!("{status}");
+        let _ = bot
+            .edit_message_text(chat_id, msg_id, new_text)
+            .parse_mode(ParseMode::Html)
+            .await;
+    }
+
+    match result {
+        Ok(resp) => info!(
+            request_id = %request_id,
+            decision = ?resp.decision,
+            decided_by = ?resp.decided_by,
+            "guard approval resolved via Telegram"
+        ),
+        Err(e) => warn!(
+            request_id = %request_id,
+            error = %e,
+            "guard approval resolution failed"
+        ),
+    }
+}
+
+/// Listens for new approval requests and sends inline keyboard messages
+/// to the primary Telegram chat so the user can approve or deny.
+async fn approval_listener(
+    bot: teloxide::Bot,
+    mut rx: tokio::sync::broadcast::Receiver<ApprovalRequest>,
+    config: Arc<StdRwLock<TelegramConfig>>,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                info!("telegram approval listener: shutting down");
+                return;
+            }
+            result = rx.recv() => {
+                let req = match result {
+                    Ok(r) => r,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "telegram approval listener: lagged, skipping");
+                        continue;
+                    }
+                };
+
+                let chat_id = {
+                    let cfg = config.read().unwrap_or_else(|e| e.into_inner());
+                    cfg.primary_chat_id
+                };
+                let Some(chat_id) = chat_id else {
+                    warn!("telegram approval listener: no primary_chat_id configured, cannot send approval prompt");
+                    continue;
+                };
+
+                let text = format!(
+                    "<b>🛡 Guard Blocked Tool Call</b>\n\n\
+                     <b>Tool:</b> <code>{tool}</code>\n\
+                     <b>Reason:</b> {summary}\n\
+                     <b>Risk:</b> {risk:?}\n\n\
+                     Approve or deny this action:",
+                    tool = guard_html_escape(&req.tool_name),
+                    summary = guard_html_escape(&req.summary),
+                    risk = req.risk_level,
+                );
+
+                let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                    InlineKeyboardButton::callback("✅ Approve", format!("guard:approve:{}", req.id)),
+                    InlineKeyboardButton::callback("❌ Deny", format!("guard:deny:{}", req.id)),
+                ]]);
+
+                let result = bot
+                    .send_message(ChatId(chat_id), &text)
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(keyboard)
+                    .await;
+
+                if let Err(e) = result {
+                    warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                }
+            }
+        }
+    }
+}
+
 async fn handle_update(
     update: Update,
     handle: &KernelHandle,
@@ -894,9 +1067,15 @@ async fn handle_update(
         Err(e) => e.into_inner().clone(),
     };
 
-    // Skip callback queries for now in sink mode — they need special handling.
-    if matches!(&update.kind, UpdateKind::CallbackQuery(_)) {
-        // TODO: Convert callbacks to RawPlatformMessage with InteractionType::Callback
+    // Handle guard approval callback queries.
+    if let UpdateKind::CallbackQuery(callback) = &update.kind {
+        if let Some(data) = &callback.data {
+            if data.starts_with("guard:") {
+                handle_guard_callback(handle, bot, callback, data).await;
+                return;
+            }
+        }
+        // Non-guard callbacks: TODO — convert to RawPlatformMessage.
         return;
     }
 
