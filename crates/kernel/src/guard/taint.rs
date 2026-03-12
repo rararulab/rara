@@ -7,12 +7,12 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fmt};
+use std::collections::HashSet;
 
 use crate::session::SessionKey;
 
 /// Classification label applied to data flowing through the system.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display)]
 pub enum TaintLabel {
     /// Data from external network requests (web_fetch, browser_*).
     ExternalNetwork,
@@ -24,18 +24,6 @@ pub enum TaintLabel {
     Secret,
     /// Data produced by an untrusted / sandboxed sub-agent.
     UntrustedAgent,
-}
-
-impl fmt::Display for TaintLabel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ExternalNetwork => write!(f, "ExternalNetwork"),
-            Self::UserInput => write!(f, "UserInput"),
-            Self::Pii => write!(f, "Pii"),
-            Self::Secret => write!(f, "Secret"),
-            Self::UntrustedAgent => write!(f, "UntrustedAgent"),
-        }
-    }
 }
 
 /// A value annotated with taint labels tracking its provenance.
@@ -144,24 +132,14 @@ impl TaintSink {
 }
 
 /// A taint policy violation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, snafu::Snafu)]
+#[snafu(display("taint violation: label '{label}' from source '{source}' is not allowed to reach sink '{sink_name}'"))]
 pub struct TaintViolation {
     pub label: TaintLabel,
     pub sink_name: String,
+    #[snafu(source(false))]
     pub source: String,
 }
-
-impl fmt::Display for TaintViolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "taint violation: label '{}' from source '{}' is not allowed to reach sink '{}'",
-            self.label, self.source, self.sink_name
-        )
-    }
-}
-
-impl std::error::Error for TaintViolation {}
 
 /// Session-level taint state — tracks accumulated labels in LLM context.
 #[derive(Debug, Default)]

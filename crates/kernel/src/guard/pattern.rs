@@ -5,7 +5,7 @@
 use crate::security::RiskLevel;
 
 /// Threat category for matched patterns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
 pub enum ThreatCategory {
     /// Prompt override attempts.
     InjectionMarker,
