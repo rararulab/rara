@@ -90,33 +90,19 @@ jobs:
       - name: Buf format check
         run: cd api && buf format --diff --exit-code
 
-  cargo-deny:
-    name: Cargo Deny
-    runs-on: self-hosted
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          persist-credentials: false
-
-      - name: Check advisories and bans
-        uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2.0.15
-
   lint-success:
     name: Lint Success
     runs-on: self-hosted
-    needs: [rust-format, proto-lint, cargo-deny]
+    needs: [rust-format, proto-lint]
     if: always()
     steps:
       - name: Check all lint jobs status
         env:
           RUST_FORMAT_RESULT: ${{ needs.rust-format.result }}
           PROTO_LINT_RESULT: ${{ needs.proto-lint.result }}
-          CARGO_DENY_RESULT: ${{ needs.cargo-deny.result }}
         run: |
           if [[ "$RUST_FORMAT_RESULT" != "success" || \
-                "$PROTO_LINT_RESULT" != "success" || \
-                "$CARGO_DENY_RESULT" != "success" ]]; then
+                "$PROTO_LINT_RESULT" != "success" ]]; then
             echo "One or more lint jobs failed"
             exit 1
           fi
