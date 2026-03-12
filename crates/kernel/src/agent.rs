@@ -787,8 +787,9 @@ pub(crate) async fn run_agent_loop(
         if iteration == 0 && should_remind_tape_search(&input_text) {
             messages.push(llm::Message::user(
                 "[Recall Verification] \
-                 用户在问一个可能来自更早上下文的精确事实。如果当前上下文里没有明确证据，\
-                 你必须先用 tape.search 验证，再回答。",
+                 The user is asking about a precise fact that may come from earlier context. \
+                 If you don't have clear evidence in your current context, you MUST use \
+                 tape.search to verify before answering.",
             ));
         }
 
@@ -796,9 +797,9 @@ pub(crate) async fn run_agent_loop(
         if needs_anchor_reminder {
             messages.push(llm::Message::user(
                 "[Large Tool Output] \
-                 你刚刚处理了会明显膨胀上下文的大工具结果。在继续回答前，优先使用 tape 的 \
-                 action:\"anchor\" 创建 handoff，写出 summary 和 \
-                 next_steps；后面需要旧细节时再用 tape.search。",
+                 You just processed a large tool result that significantly bloats context. \
+                 Before continuing, use tape with action:\"anchor\" to create a handoff \
+                 with summary and next_steps. Use tape.search later for older details.",
             ));
             needs_anchor_reminder = false;
         }
@@ -995,8 +996,8 @@ pub(crate) async fn run_agent_loop(
                 );
                 llm_error_recovery_used = true;
                 llm_error_recovery_message = Some(format!(
-                    "[系统提示] 上一次请求遇到了服务端错误（{e}），请直接回复用户的问题，\
-                     不要使用工具。"
+                    "[System] The previous request encountered a server error ({e}). \
+                     Please reply to the user's question directly without using tools."
                 ));
                 tool_defs = vec![];
                 continue;
@@ -1498,9 +1499,9 @@ pub(crate) async fn run_agent_loop(
                 match pressure {
                     ContextPressure::Critical { usage_ratio, .. } => {
                         let warning = format!(
-                            "[Context Usage Critical] 当前上下文约 {} tokens ({:.0}%)，\
-                             context window 容量 {} tokens。你 MUST 立即使用 tape 工具创建 anchor，\
-                             写好 summary 和 next_steps。",
+                            "[Context Usage Critical] Current context ~{} tokens ({:.0}%), \
+                             context window capacity {} tokens. You MUST immediately create \
+                             a tape anchor with summary and next_steps.",
                             tape_info.estimated_context_tokens,
                             usage_ratio * 100.0,
                             capabilities.context_window_tokens,
@@ -1509,8 +1510,9 @@ pub(crate) async fn run_agent_loop(
                     }
                     ContextPressure::Warning { usage_ratio, .. } => {
                         let warning = format!(
-                            "[Context Usage Warning] 当前上下文约 {} tokens ({:.0}%)，\
-                             context window 容量 {} tokens。你 SHOULD 考虑使用 tape 工具创建 anchor。",
+                            "[Context Usage Warning] Current context ~{} tokens ({:.0}%), \
+                             context window capacity {} tokens. You SHOULD consider creating \
+                             a tape anchor.",
                             tape_info.estimated_context_tokens,
                             usage_ratio * 100.0,
                             capabilities.context_window_tokens,
