@@ -195,7 +195,7 @@ smart-default = "0.7"
 snafu = "^0.8"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono", "uuid"] }
 strum = "^0.27"
-strum_macros = "^0.27"
+strum_macros = "^0.28"
 sysinfo = "0.34"
 teloxide = { version = "^0.17", features = ["macros"] }
 tokio = { version = "^1.45", features = ["full", "tracing"] }
