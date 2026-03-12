@@ -155,11 +155,19 @@ pub(crate) async fn boot(
         .whatever_context("Failed to initialize MCP manager")?;
 
     // -- output interceptor (context-mode) --------------------------------
-    // Disabled: intercepting tool output caused agent confusion (empty bash
-    // args, ctx_search loops). Kept as infrastructure for future use.
 
-    let output_interceptor: rara_kernel::tool::DynamicOutputInterceptor =
-        Arc::new(tokio::sync::RwLock::new(None));
+    let output_interceptor: rara_kernel::tool::DynamicOutputInterceptor = {
+        let status = mcp_manager.server_connection_status("context-mode").await;
+        if status == rara_mcp::manager::mgr::ConnectionStatus::Connected {
+            info!("context-mode connected, enabling output interceptor");
+            Arc::new(tokio::sync::RwLock::new(Some(Arc::new(
+                crate::context_mode::ContextModeInterceptor::new(mcp_manager.clone()),
+            ))))
+        } else {
+            info!("context-mode not available, output interceptor disabled");
+            Arc::new(tokio::sync::RwLock::new(None))
+        }
+    };
 
     // -- tools -------------------------------------------------------------
 
