@@ -152,6 +152,8 @@ pub(crate) async fn boot(
 
     let marketplace_service = Arc::new(rara_skills::marketplace::MarketplaceService::new());
     info!("marketplace service initialized");
+    let clawhub_client = Arc::new(rara_skills::clawhub::ClawhubClient::new());
+    info!("clawhub client initialized");
 
     // -- MCP manager -------------------------------------------------------
 
@@ -187,6 +189,7 @@ pub(crate) async fn boot(
             tape_service: tape_service.clone(),
             session_index: session_index.clone(),
             marketplace_service: marketplace_service.clone(),
+            clawhub_client: clawhub_client.clone(),
         },
     );
 

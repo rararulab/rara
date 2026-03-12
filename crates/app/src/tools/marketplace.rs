@@ -19,16 +19,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_skills::clawhub::{ClawhubClient, ClawhubSort};
 use rara_skills::marketplace::MarketplaceService;
 use serde_json::{json, Value};
 
 pub struct MarketplaceTool {
     service: Arc<MarketplaceService>,
+    clawhub: Arc<ClawhubClient>,
 }
 
 impl MarketplaceTool {
-    pub fn new(service: Arc<MarketplaceService>) -> Self {
-        Self { service }
+    pub fn new(service: Arc<MarketplaceService>, clawhub: Arc<ClawhubClient>) -> Self {
+        Self { service, clawhub }
     }
 }
 
@@ -39,8 +41,9 @@ impl AgentTool for MarketplaceTool {
     }
 
     fn description(&self) -> &str {
-        "Browse, search, install, enable/disable plugins from Claude Code marketplace repos. \
-         Actions: browse, search, install, enable, disable, add_source, refresh."
+        "Browse, search, install, enable/disable plugins from Claude Code marketplace repos \
+         and ClawHub (clawhub.ai). Actions: browse, search, install, enable, disable, \
+         add_source, refresh, clawhub_search, clawhub_browse, clawhub_install."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -49,7 +52,11 @@ impl AgentTool for MarketplaceTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["browse", "search", "install", "enable", "disable", "add_source", "refresh"],
+                    "enum": [
+                        "browse", "search", "install", "enable", "disable",
+                        "add_source", "refresh",
+                        "clawhub_search", "clawhub_browse", "clawhub_install"
+                    ],
                     "description": "The operation to perform"
                 },
                 "query": {
@@ -67,6 +74,19 @@ impl AgentTool for MarketplaceTool {
                 "marketplace": {
                     "type": "string",
                     "description": "Limit operation to a specific marketplace (optional)"
+                },
+                "sort": {
+                    "type": "string",
+                    "enum": ["trending", "updated", "downloads", "stars"],
+                    "description": "Sort order for clawhub_browse (default: trending)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results for clawhub_search/clawhub_browse (default: 20)"
+                },
+                "slug": {
+                    "type": "string",
+                    "description": "Skill slug for clawhub_install"
                 }
             },
             "required": ["action"]
@@ -187,6 +207,63 @@ impl AgentTool for MarketplaceTool {
                     }
                 }
                 Ok(json!({ "refreshed": true }).into())
+            }
+            "clawhub_search" => {
+                let query = params
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("'clawhub_search' requires 'query' parameter")
+                    })?;
+                let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+                let resp = self
+                    .clawhub
+                    .search(query, limit)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                let count = resp.results.len();
+                Ok(json!({
+                    "source": "clawhub",
+                    "query": query,
+                    "results": resp.results,
+                    "count": count,
+                })
+                .into())
+            }
+            "clawhub_browse" => {
+                let sort = match params.get("sort").and_then(|v| v.as_str()) {
+                    Some("updated") => ClawhubSort::Updated,
+                    Some("downloads") => ClawhubSort::Downloads,
+                    Some("stars") => ClawhubSort::Stars,
+                    _ => ClawhubSort::Trending,
+                };
+                let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+                let resp = self
+                    .clawhub
+                    .browse(sort, limit)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                let count = resp.items.len();
+                Ok(json!({
+                    "source": "clawhub",
+                    "skills": resp.items,
+                    "count": count,
+                })
+                .into())
+            }
+            "clawhub_install" => {
+                let slug = params
+                    .get("slug")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("'clawhub_install' requires 'slug' parameter"))?;
+                let install_dir =
+                    rara_skills::install::default_install_dir().map_err(|e| anyhow::anyhow!("{e}"))?;
+                let result = self
+                    .clawhub
+                    .install(slug, &install_dir)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(json!(result).into())
             }
             other => Err(anyhow::anyhow!("unknown action: {other}")),
         }

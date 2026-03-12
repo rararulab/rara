@@ -86,6 +86,7 @@ pub struct ToolDeps {
     pub tape_service:           rara_kernel::memory::TapeService,
     pub session_index:          rara_kernel::session::SessionIndexRef,
     pub marketplace_service:    std::sync::Arc<rara_skills::marketplace::MarketplaceService>,
+    pub clawhub_client:         std::sync::Arc<rara_skills::clawhub::ClawhubClient>,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -138,7 +139,10 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(CreateSkillTool::new(deps.skill_registry.clone())),
         Arc::new(DeleteSkillTool::new(deps.skill_registry)),
         // Marketplace
-        Arc::new(MarketplaceTool::new(deps.marketplace_service)),
+        Arc::new(MarketplaceTool::new(
+            deps.marketplace_service,
+            deps.clawhub_client,
+        )),
         // MCP management tools
         Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
         Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
