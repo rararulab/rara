@@ -1663,27 +1663,12 @@ impl Kernel {
 
         let tape_name = session_key.to_string();
 
-        // -- Phase 5: Context assembly -------------------------------------------
+        // -- Phase 5: Persist user message to tape --------------------------------
         //
-        // Why: The LLM needs the full conversation history plus cross-session
-        // user memory to generate a contextually appropriate response.
-        // `build_llm_context_with_user` loads the session tape (conversation
-        // history) and the user tape (persistent facts, preferences, TODOs
-        // about this user), combining them into a single message list.
+        // The user message is written to tape BEFORE the agent loop starts.
+        // `run_agent_loop` rebuilds LLM messages from tape each iteration
+        // (tape-driven), so the user message will be included automatically.
         //
-        // Build context BEFORE appending the user message to tape.
-        // `run_agent_loop` adds user_text explicitly, so including it
-        // in the tape-loaded history would cause duplication.
-        let history = {
-            let msgs = self
-                .tape_service
-                .clone()
-                .build_llm_context_with_user(&tape_name, &user.0)
-                .await
-                .unwrap_or_default();
-            if msgs.is_empty() { None } else { Some(msgs) }
-        };
-
         // Persist to tape: Mita directives go as Event entries (recorded but
         // excluded from LLM context by default_tape_context), regular messages
         // go as Message entries.
@@ -1910,7 +1895,6 @@ impl Kernel {
                     &kernel_handle,
                     rt_session_key,
                     user_text,
-                    history,
                     &stream_handle,
                     &turn_cancel,
                     tape_service.clone(),
