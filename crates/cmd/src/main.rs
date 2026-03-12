@@ -262,6 +262,8 @@ impl GatewayArgs {
             supervisor_handle,
             update_rx,
             health_url,
+            process_snapshot,
+            alert_thresholds,
         );
         let listener_cancel = cancel.clone();
         tokio::spawn(async move {
