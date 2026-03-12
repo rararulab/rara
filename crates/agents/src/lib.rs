@@ -78,6 +78,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     priority:           Priority::default(),
     metadata:           serde_json::Value::Null,
     sandbox:            None,
+    default_execution_mode: None,
 });
 
 /// Build the **rara** agent manifest — the default user-facing chat agent.
@@ -102,6 +103,7 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     priority:           Priority::default(),
     metadata:           serde_json::Value::Null,
     sandbox:            None,
+    default_execution_mode: None,
 });
 
 /// Build the **nana** agent manifest — a chat-only companion for regular users.
@@ -127,6 +129,7 @@ static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest
     priority:           Priority::default(),
     metadata:           serde_json::Value::Null,
     sandbox:            None,
+    default_execution_mode: None,
 });
 
 /// Build the **worker** agent manifest — a lightweight sub-agent for task
@@ -162,6 +165,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     priority:           Priority::default(),
     metadata:           serde_json::Value::Null,
     sandbox:            None,
+    default_execution_mode: None,
 });
 
 /// Build the **mita** agent manifest — a background proactive agent that
@@ -200,6 +204,7 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
         priority:           Priority::default(),
         metadata:           serde_json::Value::Null,
         sandbox:            None,
+        default_execution_mode: None,
     }
 }
 

@@ -50,8 +50,8 @@ use tracing::{Instrument, error, info, info_span, warn};
 use crate::{
     KernelError,
     agent::{
-        AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, Priority,
-        run_agent_loop,
+        AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, ExecutionMode,
+        Priority, run_agent_loop,
     },
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
@@ -699,6 +699,7 @@ impl Kernel {
             created_files: vec![],
             metrics,
             turn_traces: vec![],
+            execution_mode: None,
             // -- cancellation --
             turn_cancel: CancellationToken::new(),
             process_cancel,
@@ -1181,6 +1182,7 @@ impl Kernel {
             priority:           Priority::default(),
             metadata:           serde_json::Value::Null,
             sandbox:            None,
+            default_execution_mode: None,
         };
 
         // 3. Spawn the agent.
@@ -1472,6 +1474,35 @@ impl Kernel {
     /// Start an LLM turn for a session, spawning the work as a background
     /// async task.
     ///
+    /// Resolve the effective execution mode for a session.
+    ///
+    /// Priority order:
+    /// 1. Session-level override (set via `/msg_version`) — highest priority.
+    /// 2. Agent manifest `default_execution_mode` — agent-level default.
+    /// 3. Fall back to `ExecutionMode::Reactive` (v1).
+    fn resolve_execution_mode(&self, session_key: &SessionKey) -> ExecutionMode {
+        // Check session-level override first.
+        if let Some(mode) = self
+            .process_table
+            .with(session_key, |p| p.execution_mode)
+            .flatten()
+        {
+            return mode;
+        }
+
+        // Check agent manifest default.
+        if let Some(mode) = self
+            .process_table
+            .with(session_key, |p| p.manifest.default_execution_mode)
+            .flatten()
+        {
+            return mode;
+        }
+
+        // Default: reactive (v1).
+        ExecutionMode::Reactive
+    }
+
     /// # What this method does
     ///
     /// This is the heart of the agent execution pipeline. It takes an inbound
@@ -1592,6 +1623,56 @@ impl Kernel {
                 .try_push(KernelEventEnvelope::deliver(envelope))
             {
                 error!(%e, "failed to push runtime-not-found error Deliver");
+            }
+            return;
+        }
+
+        // -- Phase 1b: Kernel commands (short-circuit) ----------------------------
+        //
+        // Kernel-level commands are handled here before the LLM turn starts.
+        // They modify session state and return a text response directly,
+        // without invoking the agent loop.
+        let raw_text = msg.content.as_text();
+        if raw_text.starts_with("/msg_version") {
+            let arg = raw_text.strip_prefix("/msg_version").unwrap().trim();
+            let user = msg.user.clone();
+            let msg_id = msg.id.clone();
+            let origin_endpoint = msg.origin_endpoint().or_else(|| {
+                self.process_table
+                    .with(&session_key, |p| p.origin_endpoint.clone())
+                    .flatten()
+            });
+
+            let response_text = if arg.is_empty() {
+                // Query current mode.
+                let current = self.resolve_execution_mode(&session_key);
+                format!("Current execution mode: {} (v{})", current, current.version())
+            } else if let Some(mode) = ExecutionMode::from_version_str(arg) {
+                // Set session execution mode.
+                self.process_table.with_mut(&session_key, |p| {
+                    p.execution_mode = Some(mode);
+                });
+                format!("Execution mode set to {} (v{})", mode, mode.version())
+            } else {
+                format!("Invalid version: {arg}. Use /msg_version 1 (reactive) or /msg_version 2 (plan)")
+            };
+
+            // Deliver the response directly — no LLM turn needed.
+            if origin_endpoint.is_some() {
+                let envelope = OutboundEnvelope::reply(
+                    msg_id,
+                    user,
+                    session_key,
+                    crate::channel::types::MessageContent::Text(response_text),
+                    vec![],
+                )
+                .with_origin(origin_endpoint);
+                if let Err(e) = self
+                    .event_queue
+                    .try_push(KernelEventEnvelope::deliver(envelope))
+                {
+                    error!(%e, "failed to push /msg_version reply");
+                }
             }
             return;
         }
@@ -1797,6 +1878,20 @@ impl Kernel {
             .flatten();
         let parent_span = tracing::Span::current();
 
+        // -- Phase 6b: Resolve execution mode ------------------------------------
+        //
+        // Determine whether this turn uses reactive (v1) or plan-execute (v2).
+        // Priority:
+        //   1. `/plan <goal>` prefix in user text → v2 (this turn only)
+        //   2. Session execution_mode override (set via `/msg_version`) → persistent
+        //   3. AgentManifest default_execution_mode → agent-level default
+        //   4. Otherwise → v1 (reactive)
+        let use_plan_executor = if user_text.starts_with("/plan ") {
+            true
+        } else {
+            self.resolve_execution_mode(&session_key) == ExecutionMode::Plan
+        };
+
         // -- Phase 7: Spawn background task --------------------------------------
         //
         // Why: LLM turns are slow (seconds to minutes) and may involve multiple
@@ -1902,10 +1997,26 @@ impl Kernel {
                     event_queue: Some(event_queue.clone()),
                 };
 
+                // Route to v1 (reactive) or v2 (plan-execute) based on the
+                // resolved execution mode. For `/plan <goal>`, strip the
+                // command prefix and pass the goal text.
+                let (effective_user_text, _is_plan) = if use_plan_executor {
+                    let goal = user_text
+                        .strip_prefix("/plan ")
+                        .unwrap_or(&user_text)
+                        .to_string();
+                    (goal, true)
+                } else {
+                    (user_text, false)
+                };
+
+                // TODO(plan-execute): When _is_plan is true, route to
+                // plan_executor instead of run_agent_loop. The plan executor
+                // will be implemented in plan.rs by another agent.
                 let turn_result = run_agent_loop(
                     &kernel_handle,
                     rt_session_key,
-                    user_text,
+                    effective_user_text,
                     &stream_handle,
                     &turn_cancel,
                     tape_service.clone(),

@@ -126,6 +126,50 @@ pub struct SandboxConfig {
     pub isolated_workspace: bool,
 }
 
+/// Execution mode for message processing routing.
+///
+/// Controls whether a session uses the standard reactive agent loop (v1)
+/// or the plan-execute architecture (v2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    /// Standard reactive agent loop (v1). The agent processes each message
+    /// through the normal LLM → tool → LLM cycle.
+    #[default]
+    Reactive,
+    /// Plan-execute mode (v2). The agent first generates a plan, then
+    /// executes each step with verification.
+    Plan,
+}
+
+impl std::fmt::Display for ExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reactive => write!(f, "reactive"),
+            Self::Plan => write!(f, "plan"),
+        }
+    }
+}
+
+impl ExecutionMode {
+    /// Return the version number (1 for reactive, 2 for plan).
+    pub fn version(&self) -> u8 {
+        match self {
+            Self::Reactive => 1,
+            Self::Plan => 2,
+        }
+    }
+
+    /// Parse from a version number string ("1" or "2").
+    pub fn from_version_str(s: &str) -> Option<Self> {
+        match s.trim() {
+            "1" => Some(Self::Reactive),
+            "2" => Some(Self::Plan),
+            _ => None,
+        }
+    }
+}
+
 /// Agent "binary" — static definition, loadable from YAML or constructed
 /// dynamically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +214,11 @@ pub struct AgentManifest {
     /// Optional sandbox configuration for file access control.
     #[serde(default)]
     pub sandbox:            Option<SandboxConfig>,
+    /// Default execution mode for this agent ("reactive" or "plan").
+    /// When set, sessions using this manifest default to this mode
+    /// unless overridden by session-level `/msg_version`.
+    #[serde(default)]
+    pub default_execution_mode: Option<ExecutionMode>,
 }
 
 /// Process environment — isolated per-agent context.
