@@ -53,6 +53,7 @@ use crate::{
         AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, Priority,
         run_agent_loop,
     },
+    plan::run_plan_loop,
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -1890,7 +1891,7 @@ impl Kernel {
                 };
                 let effective_tape = fork_name.as_deref().unwrap_or(&tape_name);
 
-                // -- 7d: Run the agent loop --
+                // -- 7d: Run the agent loop (v1/v2 routing) --
                 // Why: This is the core LLM reasoning loop. It may make multiple
                 // LLM calls interspersed with tool executions (bash, file I/O,
                 // etc.). The ToolContext carries the authenticated user_id so
@@ -1902,21 +1903,53 @@ impl Kernel {
                     event_queue: Some(event_queue.clone()),
                 };
 
-                let turn_result = run_agent_loop(
-                    &kernel_handle,
-                    rt_session_key,
-                    user_text,
-                    &stream_handle,
-                    &turn_cancel,
-                    tape_service.clone(),
-                    effective_tape,
-                    tool_context,
-                    milestone_tx,
-                    output_interceptor,
-                    guard_pipeline,
-                    notification_bus,
-                )
-                .await;
+                // Routing rules (in priority order):
+                // 1. User message starts with "/plan " → v2, strip prefix
+                // 2. Session has execution_mode == "plan" metadata → v2
+                // 3. AgentManifest has default_execution_mode: "plan" → v2
+                // 4. Otherwise → v1 (existing run_agent_loop)
+                let (use_plan_executor, effective_user_text) =
+                    if let Some(stripped) = user_text.strip_prefix("/plan ") {
+                        (true, stripped.to_owned())
+                    } else {
+                        // TODO: check session metadata for execution_mode == "plan"
+                        // TODO: check AgentManifest for default_execution_mode: "plan"
+                        (false, user_text)
+                    };
+
+                let turn_result = if use_plan_executor {
+                    run_plan_loop(
+                        &kernel_handle,
+                        rt_session_key,
+                        effective_user_text,
+                        &stream_handle,
+                        &turn_cancel,
+                        tape_service.clone(),
+                        effective_tape,
+                        tool_context,
+                        milestone_tx,
+                        output_interceptor,
+                        guard_pipeline,
+                        notification_bus,
+                    )
+                    .await
+                } else {
+                    run_agent_loop(
+                        &kernel_handle,
+                        rt_session_key,
+                        effective_user_text,
+                        &stream_handle,
+                        &turn_cancel,
+                        tape_service.clone(),
+                        effective_tape,
+                        tool_context,
+                        milestone_tx,
+                        output_interceptor,
+                        guard_pipeline,
+                        notification_bus,
+                    )
+                    .await
+                };
 
                 // -- 7e: Tape fork resolution --
                 if let Some(ref fork) = fork_name {

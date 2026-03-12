@@ -184,6 +184,8 @@ pub enum TapEntryKind {
     Note,
     /// Compaction summary replacing older entries that were pruned.
     Summary,
+    /// Execution plan created by the plan-execute architecture.
+    Plan,
 }
 
 /// Canonical tape name prefix for per-user tapes.

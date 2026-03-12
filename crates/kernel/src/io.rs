@@ -825,6 +825,32 @@ pub enum StreamEvent {
         tool_calls:  usize,
         model:       String,
     },
+
+    // -- Plan-execute events --------------------------------------------------
+
+    /// A new execution plan has been created.
+    PlanCreated {
+        plan: serde_json::Value,
+    },
+    /// A plan step has started executing.
+    PlanStepStart {
+        step_index: usize,
+        task:       String,
+    },
+    /// A plan step has finished executing.
+    PlanStepEnd {
+        step_index: usize,
+        outcome:    String,
+    },
+    /// The plan has been revised after a step failure or replan request.
+    PlanReplan {
+        reason:   String,
+        new_plan: serde_json::Value,
+    },
+    /// The entire plan has completed.
+    PlanCompleted {
+        summary: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

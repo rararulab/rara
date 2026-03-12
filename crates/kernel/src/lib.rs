@@ -43,6 +43,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mood;
 pub mod notification;
+pub mod plan;
 pub mod proactive;
 pub mod queue;
 pub mod schedule;
