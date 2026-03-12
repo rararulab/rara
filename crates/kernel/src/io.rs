@@ -1194,6 +1194,19 @@ impl IngressRateLimiter {
         entry.push(now);
         Ok(())
     }
+
+    /// Remove keys whose window has fully expired.
+    ///
+    /// Call periodically (e.g. from a background timer) to reclaim memory
+    /// from users who have gone idle.
+    pub fn gc(&self) {
+        let now = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(60);
+        self.buckets.retain(|_, v| {
+            v.retain(|ts| now.duration_since(*ts) < window);
+            !v.is_empty()
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1591,5 +1604,22 @@ mod ingress_rate_limiter_tests {
         // Simulate window expiry without sleeping 60s.
         limiter.buckets.entry(key.clone()).and_modify(|v| v.clear());
         assert!(limiter.check_rate(&key).is_ok());
+    }
+
+    #[test]
+    fn rate_limiter_gc_removes_expired_keys() {
+        let limiter = IngressRateLimiter::new(10);
+        assert!(limiter.check_rate("active").is_ok());
+        assert!(limiter.check_rate("stale").is_ok());
+        assert_eq!(limiter.buckets.len(), 2);
+
+        // Simulate "stale" key having only expired timestamps.
+        limiter.buckets.entry("stale".to_string()).and_modify(|v| v.clear());
+
+        limiter.gc();
+
+        // "stale" should be evicted, "active" should remain.
+        assert!(limiter.buckets.contains_key("active"));
+        assert!(!limiter.buckets.contains_key("stale"));
     }
 }

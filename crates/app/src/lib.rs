@@ -82,6 +82,9 @@ pub struct AppConfig {
     pub composio:    Option<flatten::ComposioConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
+    /// Maximum ingress messages per user per minute (rate limiting).
+    #[serde(default = "default_max_ingress_per_minute")]
+    pub max_ingress_per_minute: u32,
     /// Mita proactive agent configuration (required).
     pub mita:        MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
@@ -165,6 +168,7 @@ pub struct TelemetryConfig {
 }
 
 fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
+fn default_max_ingress_per_minute() -> u32 { 30 }
 
 // ---------------------------------------------------------------------------
 // StartOptions
@@ -315,7 +319,7 @@ pub async fn start_with_options(
         rara.identity_resolver.clone(),
         rara.session_index.clone(),
         notification_channel_id,
-        30,
+        config.max_ingress_per_minute,
     );
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
@@ -587,21 +591,12 @@ async fn try_build_telegram(
     use rara_domain_shared::settings::{SettingsProvider, keys};
 
     fn parse_group_policy(raw: Option<String>) -> GroupPolicy {
-        let Some(raw) = raw else {
-            return GroupPolicy::MentionOrSmallGroup;
-        };
-        let normalized = raw.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "ignore" => GroupPolicy::Ignore,
-            "mention_only" => GroupPolicy::MentionOnly,
-            "mention_or_small_group" => GroupPolicy::MentionOrSmallGroup,
-            "proactive_judgment" => GroupPolicy::ProactiveJudgment,
-            "all" => GroupPolicy::All,
-            _ => {
-                warn!(group_policy = %raw, "invalid telegram.group_policy, using default");
-                GroupPolicy::MentionOrSmallGroup
-            }
-        }
+        raw.and_then(|s| {
+            serde_json::from_value::<GroupPolicy>(serde_json::Value::String(s.trim().to_string()))
+                .map_err(|e| warn!(error = %e, "invalid telegram.group_policy, using default"))
+                .ok()
+        })
+        .unwrap_or_default()
     }
 
     let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
