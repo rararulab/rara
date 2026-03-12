@@ -290,9 +290,13 @@ pub struct Session {
     /// triggering message is synthetic (no platform origin).
     pub origin_endpoint: Option<Endpoint>,
     /// Per-session semaphore limiting concurrent child sessions.
-    pub child_semaphore: Arc<Semaphore>,
+    pub child_semaphore:        Arc<Semaphore>,
+    /// Permit from the *parent*'s `child_semaphore`.
+    /// Held for the lifetime of this child session; dropping it releases the
+    /// slot so the parent can spawn another child.
+    pub _parent_child_permit:   Option<OwnedSemaphorePermit>,
     /// Global semaphore permit.
-    pub _global_permit:  OwnedSemaphorePermit,
+    pub _global_permit:         OwnedSemaphorePermit,
 }
 
 /// Per-process runtime metrics using atomic counters for lock-free updates.
