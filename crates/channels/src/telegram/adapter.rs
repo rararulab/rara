@@ -1695,7 +1695,10 @@ fn spawn_stream_forwarder(
                     }
 
                     // Flush throttled progress updates.
-                    if progress_dirty && !progress.tools.is_empty() {
+                    // Also refresh when tools are still running so the elapsed
+                    // timer keeps ticking even without new stream events.
+                    let has_running = progress.tools.iter().any(|t| !t.finished);
+                    if (progress_dirty || has_running) && !progress.tools.is_empty() {
                         let text = render_progress(&progress.tools, progress.turn_started.elapsed());
                         match progress.message_id {
                             Some(mid) => {
