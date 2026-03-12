@@ -38,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    agent::{AgentEnv, AgentManifest, TurnTrace},
+    agent::{AgentEnv, AgentManifest, ExecutionMode, TurnTrace},
     error::Result as KernelResult,
     event::KernelEventEnvelope,
     identity::Principal,
@@ -281,6 +281,10 @@ pub struct Session {
     pub turn_cancel:     CancellationToken,
     /// Session-level cancellation token.
     pub process_cancel:  CancellationToken,
+    /// Execution mode override for this session. When `Some`, this takes
+    /// priority over the agent manifest's `default_execution_mode`.
+    /// Set via the `/msg_version` kernel command.
+    pub execution_mode:  Option<ExecutionMode>,
     /// Whether this session is paused.
     pub paused:          bool,
     /// Buffered events received while the session was paused or busy.

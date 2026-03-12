@@ -170,6 +170,7 @@ async fn create_agent(
         priority:           Default::default(),
         metadata:           Default::default(),
         sandbox:            None,
+        default_execution_mode: None,
     };
 
     registry
