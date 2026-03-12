@@ -287,6 +287,8 @@ impl SyscallDispatcher {
                     registry.register(Arc::new(crate::schedule_tool::ScheduleCronTool));
                     registry.register(Arc::new(crate::schedule_tool::ScheduleRemoveTool));
                     registry.register(Arc::new(crate::schedule_tool::ScheduleListTool));
+                    // Plan tools
+                    registry.register(Arc::new(crate::create_plan_tool::CreatePlanTool));
                 }
                 // Inject dynamic tools (e.g. MCP server tools).
                 if let Some(ref provider) = self.dynamic_tool_provider {

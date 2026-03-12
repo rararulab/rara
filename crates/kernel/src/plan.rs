@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Plan status.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
     Active,
@@ -31,13 +31,17 @@ pub enum PlanStatus {
 }
 
 /// Step execution mode.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
     /// Execute in the main agent loop.
     Inline,
     /// Spawn an independent worker session.
     Worker,
+}
+
+impl Default for ExecutionMode {
+    fn default() -> Self { Self::Inline }
 }
 
 /// Step outcome after execution.
@@ -54,6 +58,7 @@ pub enum StepOutcome {
 pub struct PlanStep {
     pub index:      usize,
     pub task:       String,
+    #[serde(default)]
     pub mode:       ExecutionMode,
     pub acceptance: String,
 }

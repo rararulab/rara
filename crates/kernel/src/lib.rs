@@ -30,6 +30,7 @@
 
 pub mod agent;
 pub mod channel;
+pub(crate) mod create_plan_tool;
 pub mod error;
 pub mod event;
 pub mod guard;
@@ -44,6 +45,7 @@ pub mod metrics;
 pub mod plan;
 pub mod mood;
 pub mod notification;
+pub mod plan;
 pub mod proactive;
 pub mod queue;
 pub mod schedule;
