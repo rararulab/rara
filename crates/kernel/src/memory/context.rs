@@ -26,6 +26,13 @@ use serde_json::Value;
 use super::{HandoffState, TapEntry, TapEntryKind, TapResult};
 use crate::llm::{Message, ToolCallRequest};
 
+/// Maximum number of user-tape notes injected into LLM context.
+///
+/// When the user tape contains more notes than this limit, only the most recent
+/// entries are kept and a short notice is prepended indicating how many were
+/// omitted.
+const MAX_USER_NOTES: usize = 20;
+
 /// Reconstruct LLM messages from persisted tape entries.
 ///
 /// The reconstruction mirrors Bub's behavior:
@@ -240,14 +247,29 @@ pub fn user_tape_context(
     entries: &[TapEntry],
     anchor_summary: Option<&str>,
 ) -> Option<Message> {
-    let notes: Vec<&TapEntry> = entries
+    let all_notes: Vec<&TapEntry> = entries
         .iter()
         .filter(|e| e.kind == TapEntryKind::Note)
         .collect();
 
+    // Cap the number of notes to avoid unbounded context growth.  Entries are
+    // already sorted chronologically (by ID), so the tail is the most recent.
+    let total_notes = all_notes.len();
+    let notes: &[&TapEntry] = if total_notes > MAX_USER_NOTES {
+        &all_notes[total_notes - MAX_USER_NOTES..]
+    } else {
+        &all_notes
+    };
+
     let mut sections: Vec<String> = Vec::new();
 
-    for entry in &notes {
+    if total_notes > MAX_USER_NOTES {
+        sections.push(format!(
+            "[Earlier notes omitted — {total_notes} total notes, showing most recent {MAX_USER_NOTES}]"
+        ));
+    }
+
+    for entry in notes {
         let category = entry
             .payload
             .get("category")
