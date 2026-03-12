@@ -215,6 +215,7 @@ Changes are broadcast to all subscribers in-process via a `watch` channel, takin
 | `bot_token` | Telegram bot token |
 | `chat_id` | Primary chat ID |
 | `allowed_group_chat_id` | Allowed group chat |
+| `group_policy` | Group chat response policy: `ignore`, `mention_only`, `mention_or_small_group` (default), `proactive_judgment`, `all` |
 | `notification_channel_id` | Channel for automated notifications |
 
 #### Agent (`agent.*`)
