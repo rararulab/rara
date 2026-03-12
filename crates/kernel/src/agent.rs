@@ -697,6 +697,15 @@ pub(crate) async fn run_agent_loop(
 
     // Filter tools by manifest.tools whitelist.
     let manifest_filtered = full_tools.filtered(&manifest.tools);
+    if manifest_filtered.len() < full_tools.len() {
+        info!(
+            agent = %manifest.name,
+            total = full_tools.len(),
+            allowed = manifest_filtered.len(),
+            allowlist = ?manifest.tools,
+            "filtered tools by agent manifest allowlist"
+        );
+    }
 
     // Filter tools by user permissions — users can only see tools they are
     // authorized to use.  This prevents the LLM from even attempting to call

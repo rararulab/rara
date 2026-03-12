@@ -195,15 +195,20 @@ impl ToolRegistry {
     }
 
     /// Create a new registry containing only the named tools.
-    /// If `tool_names` is empty, returns a clone of all tools.
+    ///
+    /// - If `tool_names` is empty or contains `"*"`, returns a clone of all
+    ///   tools (no filtering).
+    /// - Otherwise only tools whose name appears in `tool_names` are kept.
     #[must_use]
     pub fn filtered(&self, tool_names: &[String]) -> Self {
-        if tool_names.is_empty() {
+        if tool_names.is_empty() || tool_names.iter().any(|n| n == "*") {
             return self.clone();
         }
+        let allow: std::collections::HashSet<&str> =
+            tool_names.iter().map(String::as_str).collect();
         let mut new = Self::new();
         for (name, tool) in &self.tools {
-            if tool_names.iter().any(|n| n == name) {
+            if allow.contains(name.as_str()) {
                 new.register(Arc::clone(tool));
             }
         }
@@ -299,6 +304,37 @@ mod tests {
         assert!(filtered.get("read-file").is_some());
         assert!(filtered.get("bash").is_none());
         assert!(filtered.get("write-file").is_none());
+    }
+
+    #[test]
+    fn filtered_empty_returns_all() {
+        let reg = build_registry();
+        let filtered = reg.filtered(&[]);
+        assert_eq!(filtered.len(), 4, "empty allowlist should return all tools");
+    }
+
+    #[test]
+    fn filtered_wildcard_returns_all() {
+        let reg = build_registry();
+        let filtered = reg.filtered(&["*".to_string()]);
+        assert_eq!(filtered.len(), 4, "wildcard '*' should return all tools");
+    }
+
+    #[test]
+    fn filtered_specific_names() {
+        let reg = build_registry();
+        let filtered = reg.filtered(&["bash".to_string(), "read-file".to_string()]);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.get("bash").is_some());
+        assert!(filtered.get("read-file").is_some());
+        assert!(filtered.get("http-fetch").is_none());
+    }
+
+    #[test]
+    fn filtered_unknown_names_ignored() {
+        let reg = build_registry();
+        let filtered = reg.filtered(&["nonexistent".to_string()]);
+        assert!(filtered.is_empty(), "unknown tool names should result in empty registry");
     }
 
     struct TestInterceptor {
