@@ -589,51 +589,42 @@ fn build_runtime_contract_prompt(
     max_children: Option<usize>,
 ) -> String {
     let mut prompt = format!(
-        "{base_prompt}\n\n<context_contract>\nYou have access to the `tape` tool — this is your \
-         memory system.\n\n## How tape works:\n- `tape` with `action: \"anchor\"` creates a \
-         handoff checkpoint and trims your default context window\n- Older entries are not \
-         deleted after an anchor; they remain searchable with `tape` + `action: \"search\"`\n- If \
-         you need details from before a handoff, search the tape instead of guessing\n- If the \
-         user asks about anything that may be before an anchor or outside your current window, \
-         you MUST call `tape` with `action: \"search\"` before answering\n- Never answer a \
-         pre-anchor factual question from memory alone; verify it from the tape first\n\n## When \
-         you MUST create an anchor:\n- Before your context becomes too long to complete the \
-         task\n- After receiving a very large tool result (>2000 chars of output)\n- When \
-         performing iterative tasks (screenshots, OCR, web scraping, file listing) that \
-         accumulate large outputs\n- When the system injects a [Context Usage Warning]\n\n## When \
-         you SHOULD create an anchor:\n- After completing a logical phase of work (discovery → \
-         implementation → verification)\n- When switching between unrelated subtasks\n- After \
-         processing multiple tool results in sequence\n\n## How to use the tape system \
-         effectively:\n1. Always provide a detailed `summary` of what happened so far\n2. Always \
-         provide `next_steps` with concrete actionable items\n3. After an anchor, use `tape` with \
-         `action: \"search\"` or `action: \"entries\"` to recall older details when needed\n4. A \
-         good handoff preserves your progress — a missing summary means lost context\n5. For \
-         exact tokens, IDs, codes, names, or quoted details from pre-anchor context, search first \
-         and only then answer\n\nFailing to use the tape system when needed will cause context \
-         window overflow and task failure.\n\n## Navigating anchor history\n\nYou can fork from any \
-         past anchor to explore alternative paths:\n- Use `tape` with `action: \"anchors\"` to see \
-         all checkpoints\n- Use `tape` with `action: \"checkout\", name: \"<anchor_name>\"` to fork \
-         a new session from that anchor\n- After checkout, your context resets to the anchor point \
-         — post-anchor entries are excluded\n- Use this when: the conversation went in a wrong \
-         direction, you want to retry from a checkpoint, or the user asks to \"go back to\" a \
-         previous topic\n\nCheckout creates a new session fork — the original session remains \
-         unchanged.\n</context_contract>"
+        "{base_prompt}\n\n<context_contract>\nThe `tape` tool is your persistent memory.\n\n\
+         ## Tape actions\n\
+         - `anchor`: checkpoint + trim context. Older entries stay searchable via `search`.\n\
+         - `search` / `entries`: recall details from before an anchor.\n\
+         - `anchors`: list all checkpoints.\n\
+         - `checkout`: fork a new session from a past anchor (original unchanged).\n\n\
+         ## MUST anchor when:\n\
+         - Context is getting long or a [Context Usage Warning] appears\n\
+         - A tool result exceeds ~2000 chars\n\
+         - Iterative tasks accumulate large outputs (screenshots, scraping, listings)\n\n\
+         ## SHOULD anchor when:\n\
+         - Completing a logical work phase or switching subtasks\n\
+         - Processing multiple tool results in sequence\n\n\
+         ## MUST search before answering when:\n\
+         - The question refers to anything before an anchor or outside current window\n\
+         - You need exact tokens, IDs, codes, names, or quoted details from earlier context\n\n\
+         ## Anchor best practices\n\
+         - Always include a detailed `summary` and concrete `next_steps`\n\
+         - A missing summary = lost context\n\
+         - Use `checkout` to retry from a past checkpoint or when the user asks to go back\n\
+         \n</context_contract>"
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
     if can_delegate {
         prompt.push_str(
-            "\n\n<delegation_contract>\nYou have access to the `kernel` tool and can delegate \
-             execution to child agents.\n\n## When you MUST delegate:\n- The task has 2+ \
-             independent subtasks that can run separately\n- The task requires broad discovery \
-             plus implementation plus verification across multiple files\n- The task is likely to \
-             require long tool-heavy execution that would otherwise bloat your context\n\n## How \
-             to delegate:\n- Use `kernel` with `action: \"spawn\"`, `agent: \"worker\"` for one \
-             focused execution task\n- Use `kernel` with `action: \"spawn_parallel\"` and \
-             multiple `worker` tasks for independent subtasks\n- Give each worker a narrow, \
-             explicit task and keep the final synthesis in the parent agent\n\nDo not keep large \
-             exploratory or implementation loops in your own context when a worker can do them \
-             more cheaply.\n</delegation_contract>",
+            "\n\n<delegation_contract>\nUse the `kernel` tool to delegate to child agents.\n\n\
+             ## MUST delegate when:\n\
+             - 2+ independent subtasks exist\n\
+             - Broad discovery + implementation + verification across many files\n\
+             - Long tool-heavy execution that would bloat your context\n\n\
+             ## How:\n\
+             - `action: \"spawn\"`, `agent: \"worker\"` — single focused task\n\
+             - `action: \"spawn_parallel\"` — multiple independent tasks\n\
+             - Keep each worker's scope narrow; synthesize results in parent\n\
+             </delegation_contract>",
         );
     }
 
