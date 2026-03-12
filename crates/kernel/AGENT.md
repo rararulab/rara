@@ -49,10 +49,10 @@ Rate limiting MUST happen in `IOSubsystem::resolve()` **before** identity resolu
 
 ### What NOT To Do
 
-- Do NOT move the `check_rate()` call after identity resolution — it must stay first in `resolve()`
-- Do NOT hardcode the rate limit value — it comes from `AppConfig`, not a const
-- Do NOT remove the `gc()` method — without it, keys from inactive users accumulate forever
-- Do NOT apply rate limiting to `ChannelType::Internal` or `ChannelType::Proactive` messages — these bypass `IOSubsystem::resolve()` entirely (they use `InboundMessage::synthetic()`)
+- Do NOT move the `check_rate()` call after identity resolution — identity resolution hits the database. If a malicious user floods messages, every message would trigger a DB query before being rejected. Rate limiting first means we reject spam with zero DB cost.
+- Do NOT hardcode the rate limit value — the project principle is "no config defaults in Rust code" (see CLAUDE.md). The value lives in `AppConfig` so operators can tune it per deployment without recompiling.
+- Do NOT remove the `gc()` method — `DashMap` never auto-evicts keys. Without `gc()`, every unique `{channel}:{user}` that ever sent a message stays in memory forever as an empty `Vec`. In group chats with many participants, this is unbounded growth.
+- Do NOT apply rate limiting to `ChannelType::Internal` or `ChannelType::Proactive` messages — these are kernel-generated (scheduled jobs, Mita directives, agent-to-agent calls). They bypass `IOSubsystem::resolve()` entirely via `InboundMessage::synthetic()`. Rate limiting them would break internal orchestration.
 
 ---
 
@@ -83,6 +83,6 @@ GroupPolicy::All                 → respond to everything
 
 ### What NOT To Do
 
-- Do NOT change the `#[default]` attribute away from `MentionOrSmallGroup` — backward-compatible default
-- Do NOT add manual string parsing for GroupPolicy — use serde (`#[serde(rename_all = "snake_case")]`)
-- Do NOT put group policy logic in the kernel — it belongs in the channel adapter because `get_chat_member_count()` is a Telegram-specific API call
+- Do NOT change the `#[default]` attribute away from `MentionOrSmallGroup` — existing deployments have no `group_policy` in their config. Changing the default silently changes their bot behavior (e.g. switching to `All` would make the bot reply to every group message, spamming the chat).
+- Do NOT add manual string parsing for GroupPolicy — the enum already has `#[serde(rename_all = "snake_case")]`. Manual match-arms duplicate the variant list and will silently ignore new variants when someone adds one to the enum. Serde handles both directions automatically.
+- Do NOT put group policy logic in the kernel — the `MentionOrSmallGroup` variant calls `bot.get_chat_member_count()`, which is a Telegram Bot API call. The kernel has no Telegram dependency and must not acquire one. Policy evaluation requires platform-specific context that only the adapter has.
