@@ -654,7 +654,6 @@ fn build_runtime_contract_prompt(
 #[tracing::instrument(
     skip(
         handle,
-        history,
         stream_handle,
         turn_cancel,
         tape,
@@ -671,7 +670,6 @@ pub(crate) async fn run_agent_loop(
     handle: &KernelHandle,
     session_key: SessionKey,
     user_text: String,
-    history: Option<Vec<llm::Message>>,
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
     tape: crate::memory::TapeService,
@@ -750,23 +748,6 @@ pub(crate) async fn run_agent_loop(
     let input_text = user_text.clone();
     let tool_execution_timeout = handle.config().tool_execution_timeout;
 
-    // Build initial messages: system + optional history + user
-    let mut messages: Vec<llm::Message> = {
-        let mut msgs = vec![llm::Message::system(&effective_prompt)];
-        if let Some(hist) = history {
-            msgs.extend(hist);
-        }
-        msgs.push(llm::Message::user(user_text));
-        if should_remind_tape_search(&input_text) {
-            msgs.push(llm::Message::user(
-                "[Recall Verification] \
-                 用户在问一个可能来自更早上下文的精确事实。如果当前上下文里没有明确证据，\
-                 你必须先用 tape.search 验证，再回答。",
-            ));
-        }
-        msgs
-    };
-
     // Check model tool support
     let mut tool_defs = if tools.is_empty() {
         vec![]
@@ -789,8 +770,44 @@ pub(crate) async fn run_agent_loop(
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
     let mut consecutive_silent_iters: usize = 0;
+    let mut needs_anchor_reminder = false;
+    let mut llm_error_recovery_message: Option<String> = None;
+    let user_id = tool_context.user_id.as_deref();
 
     for iteration in 0..max_iterations {
+        // ── Rebuild messages from tape each iteration (single source of truth) ──
+        let mut messages = tape
+            .rebuild_messages_for_llm(tape_name, user_id, &effective_prompt)
+            .await
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to rebuild messages from tape: {e}"),
+            })?;
+
+        // Conditional injections (tape search reminder only on first iteration)
+        if iteration == 0 && should_remind_tape_search(&input_text) {
+            messages.push(llm::Message::user(
+                "[Recall Verification] \
+                 用户在问一个可能来自更早上下文的精确事实。如果当前上下文里没有明确证据，\
+                 你必须先用 tape.search 验证，再回答。",
+            ));
+        }
+
+        // Inject anchor reminder from previous iteration's large tool output
+        if needs_anchor_reminder {
+            messages.push(llm::Message::user(
+                "[Large Tool Output] \
+                 你刚刚处理了会明显膨胀上下文的大工具结果。在继续回答前，优先使用 tape 的 \
+                 action:\"anchor\" 创建 handoff，写出 summary 和 \
+                 next_steps；后面需要旧细节时再用 tape.search。",
+            ));
+            needs_anchor_reminder = false;
+        }
+
+        // Inject LLM error recovery message from previous iteration
+        if let Some(recovery_msg) = llm_error_recovery_message.take() {
+            messages.push(llm::Message::user(recovery_msg));
+        }
+
         messages = sanitize_messages_for_llm(&messages);
 
         let iter_span = info_span!(
@@ -977,10 +994,10 @@ pub(crate) async fn run_agent_loop(
                     "LLM stream error, attempting recovery without tools"
                 );
                 llm_error_recovery_used = true;
-                messages.push(llm::Message::user(format!(
+                llm_error_recovery_message = Some(format!(
                     "[系统提示] 上一次请求遇到了服务端错误（{e}），请直接回复用户的问题，\
                      不要使用工具。"
-                )));
+                ));
                 tool_defs = vec![];
                 continue;
             }
@@ -1118,10 +1135,20 @@ pub(crate) async fn run_agent_loop(
                 Ok(args) => args,
                 Err(error_message) => {
                     warn!(tool = %tool_call.name, %error_message, "tool argument parsing failed");
-                    messages.push(llm::Message::tool_result(
-                        &tool_call.id,
-                        serde_json::json!({ "error": error_message }).to_string(),
-                    ));
+                    // Persist parse-error tool result to tape so the next
+                    // iteration rebuild includes it.
+                    let _ = tape
+                        .append_tool_result(
+                            tape_name,
+                            serde_json::json!({
+                                "results": [{
+                                    "tool_call_id": &tool_call.id,
+                                    "error": &error_message,
+                                }]
+                            }),
+                            None,
+                        )
+                        .await;
                     let raw_args: String = tool_call.arguments_buf.chars().take(100).collect();
                     stream_handle.emit(StreamEvent::ToolCallEnd {
                         id:             tool_call.id,
@@ -1147,15 +1174,6 @@ pub(crate) async fn run_agent_loop(
                     .await;
             }
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
-        }
-
-        if assistant_tool_calls.is_empty() {
-            messages.push(llm::Message::assistant(accumulated_text.clone()));
-        } else {
-            messages.push(llm::Message::assistant_with_tool_calls(
-                accumulated_text.clone(),
-                assistant_tool_calls.clone(),
-            ));
         }
 
         // Persist assistant message with tool calls to tape.
@@ -1408,12 +1426,7 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await;
             if should_remind_tape_anchor(&tool_names, &results_json) {
-                messages.push(llm::Message::user(
-                    "[Large Tool Output] \
-                     你刚刚处理了会明显膨胀上下文的大工具结果。在继续回答前，优先使用 tape 的 \
-                     action:\"anchor\" 创建 handoff，写出 summary 和 \
-                     next_steps；后面需要旧细节时再用 tape.search。",
-                ));
+                needs_anchor_reminder = true;
             }
         }
 
@@ -1456,7 +1469,6 @@ pub(crate) async fn run_agent_loop(
                 error: err.clone(),
             });
 
-            messages.push(llm::Message::tool_result(id, result_str));
         }
 
         // Collect iteration trace (with tool calls)
@@ -1543,8 +1555,13 @@ pub(crate) async fn run_agent_loop(
     // Best-effort mood update — failure is silently logged, never blocks the
     // response.
     if has_soul {
-        if let Some(inf) = crate::mood::infer_mood(&messages) {
-            crate::mood::update_soul_mood(&manifest.name, &inf);
+        if let Ok(msgs) = tape
+            .rebuild_messages_for_llm(tape_name, user_id, &effective_prompt)
+            .await
+        {
+            if let Some(inf) = crate::mood::infer_mood(&msgs) {
+                crate::mood::update_soul_mood(&manifest.name, &inf);
+            }
         }
     }
 
