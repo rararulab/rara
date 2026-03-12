@@ -88,6 +88,8 @@ pub struct TelegramConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_group_chat_id:   Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_policy:            Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_channel_id: Option<String>,
 }
 
@@ -191,6 +193,9 @@ fn flatten_telegram(tg: &TelegramConfig, out: &mut Vec<(String, String)>) {
     if let Some(ref v) = tg.allowed_group_chat_id {
         out.push(("telegram.allowed_group_chat_id".into(), v.clone()));
     }
+    if let Some(ref v) = tg.group_policy {
+        out.push(("telegram.group_policy".into(), v.clone()));
+    }
     if let Some(ref v) = tg.notification_channel_id {
         out.push(("telegram.notification_channel_id".into(), v.clone()));
     }
@@ -289,11 +294,13 @@ fn unflatten_telegram(pairs: &HashMap<String, String>) -> Option<TelegramConfig>
     let bot_token = pairs.get("telegram.bot_token").cloned();
     let chat_id = pairs.get("telegram.chat_id").cloned();
     let allowed_group_chat_id = pairs.get("telegram.allowed_group_chat_id").cloned();
+    let group_policy = pairs.get("telegram.group_policy").cloned();
     let notification_channel_id = pairs.get("telegram.notification_channel_id").cloned();
 
     if bot_token.is_none()
         && chat_id.is_none()
         && allowed_group_chat_id.is_none()
+        && group_policy.is_none()
         && notification_channel_id.is_none()
     {
         return None;
@@ -303,6 +310,7 @@ fn unflatten_telegram(pairs: &HashMap<String, String>) -> Option<TelegramConfig>
         bot_token,
         chat_id,
         allowed_group_chat_id,
+        group_policy,
         notification_channel_id,
     })
 }
@@ -379,6 +387,7 @@ mod tests {
             bot_token:               Some("123:ABC".into()),
             chat_id:                 Some("456".into()),
             allowed_group_chat_id:   Some("-789".into()),
+            group_policy:            Some("mention_or_small_group".into()),
             notification_channel_id: Some("-100".into()),
         };
 
@@ -421,6 +430,7 @@ mod tests {
         assert_eq!(got_tg.bot_token, telegram.bot_token);
         assert_eq!(got_tg.chat_id, telegram.chat_id);
         assert_eq!(got_tg.allowed_group_chat_id, telegram.allowed_group_chat_id);
+        assert_eq!(got_tg.group_policy, telegram.group_policy);
         assert_eq!(
             got_tg.notification_channel_id,
             telegram.notification_channel_id

@@ -498,6 +498,9 @@ pub enum IOError {
     /// Failed to resolve platform identity to a unified user ID.
     #[snafu(display("identity resolution failed: {message}"))]
     IdentityResolutionFailed { message: String },
+    /// Ingress rate limit exceeded for this user/channel.
+    #[snafu(display("Rate limited: {message}"))]
+    RateLimited { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,6 +1147,82 @@ pub type ChannelAdapterRef = crate::channel::adapter::ChannelAdapterRef;
 pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 
 // ---------------------------------------------------------------------------
+// IngressRateLimiter
+// ---------------------------------------------------------------------------
+
+/// Per-key sliding-window rate limiter for ingress messages.
+///
+/// Uses a 60-second window with a configurable max count per key.
+/// Keys are formatted as `"{channel_type}:{platform_user_id}"`.
+///
+/// Ref: OpenFang `openfang-channels/src/bridge.rs` — `ChannelRateLimiter`.
+pub struct IngressRateLimiter {
+    /// Per-key timestamps of accepted messages within the current window.
+    buckets: DashMap<String, Vec<std::time::Instant>>,
+    /// Maximum messages per key per 60-second window.
+    max_per_minute: u32,
+    /// Clock function for obtaining the current instant (test-injectable).
+    now_fn: fn() -> std::time::Instant,
+}
+
+impl IngressRateLimiter {
+    /// Create a new rate limiter with the given per-key limit.
+    pub fn new(max_per_minute: u32) -> Self {
+        Self {
+            buckets: DashMap::new(),
+            max_per_minute,
+            now_fn: std::time::Instant::now,
+        }
+    }
+
+    /// Create a rate limiter with a custom clock (for testing).
+    #[cfg(test)]
+    fn with_clock(max_per_minute: u32, now_fn: fn() -> std::time::Instant) -> Self {
+        Self {
+            buckets: DashMap::new(),
+            max_per_minute,
+            now_fn,
+        }
+    }
+
+    /// Check whether a key is within its rate limit.
+    ///
+    /// Returns `Ok(())` if allowed, `Err(IOError::RateLimited)` if exceeded.
+    pub fn check_rate(&self, key: &str) -> Result<(), IOError> {
+        let now = (self.now_fn)();
+        let window = std::time::Duration::from_secs(60);
+
+        let mut entry = self.buckets.entry(key.to_string()).or_default();
+        entry.retain(|ts| now.duration_since(*ts) < window);
+
+        if entry.len() >= self.max_per_minute as usize {
+            return Err(IOError::RateLimited {
+                message: format!(
+                    "Rate limit exceeded ({} messages/minute). Please wait.",
+                    self.max_per_minute
+                ),
+            });
+        }
+
+        entry.push(now);
+        Ok(())
+    }
+
+    /// Remove keys whose window has fully expired.
+    ///
+    /// Called by the kernel's unified scheduler (processor 0) on every tick
+    /// to reclaim memory from users who have gone idle.
+    pub fn gc(&self) {
+        let now = (self.now_fn)();
+        let window = std::time::Duration::from_secs(60);
+        self.buckets.retain(|_, v| {
+            v.retain(|ts| now.duration_since(*ts) < window);
+            !v.is_empty()
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IOSubsystem
 // ---------------------------------------------------------------------------
 
@@ -1159,8 +1238,9 @@ pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 ///
 /// ```text
 /// RawPlatformMessage
-///   → IdentityResolver:  (channel_type, platform_user_id) → UserId
-///   → SessionIndex:      (channel_type, chat_id)          → Option<SessionKey>
+///   → IngressRateLimiter: per-user sliding-window check (rejects spam before DB)
+///   → IdentityResolver:   (channel_type, platform_user_id) → UserId
+///   → SessionIndex:       (channel_type, chat_id)          → Option<SessionKey>
 ///   → InboundMessage { session_key: Option<SessionKey> }
 /// ```
 ///
@@ -1179,6 +1259,7 @@ pub struct IOSubsystem {
     endpoint_registry:       EndpointRegistryRef,
     /// Telegram channel ID for agent-initiated notifications.
     notification_channel_id: Option<i64>,
+    rate_limiter:            IngressRateLimiter,
 }
 
 impl IOSubsystem {
@@ -1191,6 +1272,7 @@ impl IOSubsystem {
         identity_resolver: IdentityResolverRef,
         session_index: Arc<dyn SessionIndex>,
         notification_channel_id: Option<i64>,
+        max_ingress_per_minute: u32,
     ) -> Self {
         Self {
             identity_resolver,
@@ -1199,7 +1281,16 @@ impl IOSubsystem {
             adapters: HashMap::new(),
             endpoint_registry: Arc::new(EndpointRegistry::new()),
             notification_channel_id,
+            rate_limiter: IngressRateLimiter::new(max_ingress_per_minute),
         }
+    }
+
+    // -- Maintenance ----------------------------------------------------------
+
+    /// Run garbage collection on the ingress rate limiter, evicting expired
+    /// keys to prevent unbounded memory growth.
+    pub fn gc_rate_limiter(&self) {
+        self.rate_limiter.gc();
     }
 
     // -- Ingress --------------------------------------------------------------
@@ -1231,7 +1322,11 @@ impl IOSubsystem {
     pub async fn resolve(&self, raw: RawPlatformMessage) -> Result<InboundMessage, IOError> {
         let span = tracing::Span::current();
 
-        // 1. Resolve identity
+        // 1. Rate-limit ingress before any expensive operations.
+        let rate_key = format!("{}:{}", raw.channel_type, raw.platform_user_id);
+        self.rate_limiter.check_rate(&rate_key)?;
+
+        // 2. Resolve identity
         let user_id = self
             .identity_resolver
             .resolve(
@@ -1242,7 +1337,7 @@ impl IOSubsystem {
             .await?;
         span.record("user_id", tracing::field::display(&user_id.0));
 
-        // 2. Look up channel binding (pure lookup, no creation)
+        // 3. Look up channel binding (pure lookup, no creation)
         let session_key = match raw.platform_chat_id.as_deref() {
             Some(chat_id) => {
                 match self
@@ -1264,7 +1359,7 @@ impl IOSubsystem {
             None => None,
         };
 
-        // 3. Build InboundMessage
+        // 4. Build InboundMessage
         let msg = InboundMessage {
             id: MessageId::new(),
             source: ChannelSource {
@@ -1490,5 +1585,84 @@ mod agent_event_tests {
             AgentEvent::Done(r) => assert_eq!(r.output, "done"),
             _ => panic!("expected Done"),
         }
+    }
+}
+
+#[cfg(test)]
+mod ingress_rate_limiter_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// Fake clock that advances by a controllable offset from a fixed base.
+    static FAKE_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
+
+    fn fake_now() -> Instant {
+        // SAFETY: Instant::now() is called once as a base; offset simulates time passing.
+        static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let base = *BASE.get_or_init(Instant::now);
+        base + Duration::from_millis(FAKE_OFFSET_MS.load(Ordering::Relaxed))
+    }
+
+    fn set_fake_offset(ms: u64) {
+        FAKE_OFFSET_MS.store(ms, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn rate_limiter_allows_within_limit() {
+        let limiter = IngressRateLimiter::new(3);
+        let key = "telegram:user123";
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_err());
+    }
+
+    #[test]
+    fn rate_limiter_independent_keys() {
+        let limiter = IngressRateLimiter::new(1);
+        assert!(limiter.check_rate("user_a").is_ok());
+        assert!(limiter.check_rate("user_b").is_ok());
+        assert!(limiter.check_rate("user_a").is_err());
+    }
+
+    #[test]
+    fn rate_limiter_zero_limit_blocks_all() {
+        let limiter = IngressRateLimiter::new(0);
+        assert!(limiter.check_rate("user").is_err());
+    }
+
+    #[test]
+    fn rate_limiter_window_expires_via_clock() {
+        set_fake_offset(0);
+        let limiter = IngressRateLimiter::with_clock(1, fake_now);
+        let key = "test:user";
+
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_err());
+
+        // Advance clock past the 60s window.
+        set_fake_offset(61_000);
+        assert!(limiter.check_rate(key).is_ok(), "should allow after window expires");
+    }
+
+    #[test]
+    fn rate_limiter_gc_removes_expired_keys() {
+        set_fake_offset(100_000); // reset to a fresh base offset
+        let limiter = IngressRateLimiter::with_clock(10, fake_now);
+        assert!(limiter.check_rate("active").is_ok());
+        assert!(limiter.check_rate("stale").is_ok());
+        assert_eq!(limiter.buckets.len(), 2);
+
+        // Advance clock past window so "stale" and "active" entries expire.
+        set_fake_offset(200_000);
+        // Re-record "active" so it has a fresh timestamp.
+        assert!(limiter.check_rate("active").is_ok());
+
+        limiter.gc();
+
+        assert!(limiter.buckets.contains_key("active"));
+        assert!(!limiter.buckets.contains_key("stale"));
     }
 }

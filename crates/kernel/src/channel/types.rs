@@ -70,6 +70,32 @@ impl ChannelType {
     pub fn label(self) -> &'static str { self.into() }
 }
 
+/// Policy for handling messages in group chats.
+///
+/// Controls when the bot responds in group conversations.
+/// Ref: OpenFang `openfang-types/src/config.rs` — `GroupPolicy`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default,
+    strum::EnumString,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum GroupPolicy {
+    /// Ignore all group messages.
+    Ignore,
+    /// Only respond when @mentioned or rara keyword is detected.
+    MentionOnly,
+    /// Respond in small groups (<= threshold) automatically; require mention
+    /// in larger groups. This is the legacy default behavior.
+    #[default]
+    MentionOrSmallGroup,
+    /// Not mentioned -> route as GroupMessage for proactive LLM judgment.
+    /// Mentioned -> respond directly.
+    ProactiveJudgment,
+    /// Respond to all group messages.
+    All,
+}
+
 // ---------------------------------------------------------------------------
 // MessageRole
 // ---------------------------------------------------------------------------

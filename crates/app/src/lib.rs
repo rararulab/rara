@@ -28,7 +28,10 @@ use std::{
     time::Duration,
 };
 
-use rara_kernel::channel::{adapter::ChannelAdapter, types::ChannelType};
+use rara_kernel::channel::{
+    adapter::ChannelAdapter,
+    types::{ChannelType, GroupPolicy},
+};
 use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
@@ -79,6 +82,9 @@ pub struct AppConfig {
     pub composio:    Option<flatten::ComposioConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:       Vec<crate::boot::UserConfig>,
+    /// Maximum ingress messages per user per minute (rate limiting).
+    #[serde(default = "default_max_ingress_per_minute")]
+    pub max_ingress_per_minute: u32,
     /// Mita proactive agent configuration (required).
     pub mita:        MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
@@ -162,6 +168,7 @@ pub struct TelemetryConfig {
 }
 
 fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
+fn default_max_ingress_per_minute() -> u32 { 30 }
 
 // ---------------------------------------------------------------------------
 // StartOptions
@@ -312,6 +319,7 @@ pub async fn start_with_options(
         rara.identity_resolver.clone(),
         rara.session_index.clone(),
         notification_channel_id,
+        config.max_ingress_per_minute,
     );
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
@@ -582,6 +590,16 @@ async fn try_build_telegram(
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
 
+    fn parse_group_policy(raw: Option<String>) -> GroupPolicy {
+        raw.and_then(|s| {
+            s.trim()
+                .parse::<GroupPolicy>()
+                .map_err(|e| warn!(error = %e, "invalid telegram.group_policy, using default"))
+                .ok()
+        })
+        .unwrap_or_default()
+    }
+
     let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
     let token = match settings.get(keys::TELEGRAM_BOT_TOKEN).await {
         Some(t) if !t.is_empty() => t,
@@ -604,10 +622,12 @@ async fn try_build_telegram(
         .get(keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID)
         .await
         .and_then(|v| v.parse().ok());
+    let group_policy = parse_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
 
     let mut tg_config = rara_channels::telegram::TelegramConfig::default();
     tg_config.primary_chat_id = chat_id;
     tg_config.allowed_group_chat_id = group_id;
+    tg_config.group_policy = group_policy;
 
     let adapter = Arc::new(
         rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
@@ -627,9 +647,11 @@ async fn try_build_telegram(
                 .get(keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID)
                 .await
                 .and_then(|v| v.parse().ok());
+            let new_group_policy = parse_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
             let mut cfg = config_handle.write().unwrap_or_else(|e| e.into_inner());
             cfg.primary_chat_id = new_chat_id;
             cfg.allowed_group_chat_id = new_group_id;
+            cfg.group_policy = new_group_policy;
         }
     });
 
