@@ -66,8 +66,8 @@ const NON_INTERCEPTABLE_TOOLS: &[&str] = &[
     "distill_user_notes",
 ];
 
-/// Default output size threshold in bytes (32 KB).
-const DEFAULT_THRESHOLD: usize = 32 * 1024;
+/// Default output size threshold in bytes (8 KB).
+const DEFAULT_THRESHOLD: usize = 8 * 1024;
 
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
