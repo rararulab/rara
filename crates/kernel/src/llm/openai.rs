@@ -331,7 +331,7 @@ impl LlmDriver for OpenAiDriver {
                         timeout_secs = SSE_IDLE_TIMEOUT.as_secs(),
                         "SSE stream idle timeout — no event received, aborting stream"
                     );
-                    return Err(KernelError::RetryableServer);
+                    return Err(KernelError::RetryableServer { message: "SSE stream idle timeout".into() });
                 }
             }
         }
