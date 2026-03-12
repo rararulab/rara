@@ -847,9 +847,19 @@ impl Kernel {
         );
 
         // Persist child result to parent's conversation history.
+        const CHILD_RESULT_MAX_CHARS: usize = 2000;
+        let output = &result.output;
+        let truncated_output = if output.len() > CHILD_RESULT_MAX_CHARS {
+            format!(
+                "{}...(truncated, full result in child tape {child_id})",
+                &output[..CHILD_RESULT_MAX_CHARS],
+            )
+        } else {
+            output.clone()
+        };
         let child_result_text = format!(
-            "[child_agent_result] child_id={child_id} iterations={} tool_calls={}\n\n{}",
-            result.iterations, result.tool_calls, result.output,
+            "[child_agent_result] child_id={child_id} iterations={} tool_calls={}\n\n{truncated_output}",
+            result.iterations, result.tool_calls,
         );
         let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
             error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
@@ -862,7 +872,7 @@ impl Kernel {
             .append_message(
                 &tape_name,
                 serde_json::json!({
-                    "role": "user",
+                    "role": "system",
                     "content": &child_result_text,
                 }),
                 None,
