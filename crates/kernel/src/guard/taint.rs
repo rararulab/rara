@@ -8,6 +8,7 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use tracing::instrument;
 
 use crate::session::SessionKey;
 
@@ -56,6 +57,12 @@ impl TaintTracker {
     }
 
     /// Record taint labels from a tool's output into the session.
+    ///
+    /// Called after every successful tool execution. If the tool produces
+    /// tainted data (e.g. external network content), the corresponding labels
+    /// are added to the session's context — all subsequent tool calls in this
+    /// session will be checked against these labels.
+    #[instrument(skip(self), fields(%session, tool_name))]
     pub fn record_tool_output(&self, session: &SessionKey, tool_name: &str) {
         let labels = Self::labels_for_tool_output(tool_name);
         if labels.is_empty() {
@@ -69,6 +76,11 @@ impl TaintTracker {
     }
 
     /// Check whether the session's taint state allows calling this tool.
+    ///
+    /// Returns `Err(TaintViolation)` if any label in the session context is
+    /// blocked by the target tool's sink policy. Tools without a sink policy
+    /// (e.g. `file_read`) are always allowed.
+    #[instrument(skip(self), fields(%session, tool_name))]
     pub fn check_tool_input(
         &self,
         session: &SessionKey,
@@ -103,6 +115,10 @@ impl TaintTracker {
     }
 
     /// Fork taint state from parent to child session.
+    ///
+    /// The child inherits the full set of parent labels so that sub-agent
+    /// sessions cannot bypass taint restrictions established earlier.
+    #[instrument(skip(self), fields(parent = %parent, child = %child))]
     pub fn fork_session(&self, parent: &SessionKey, child: &SessionKey) {
         if let Some(parent_labels) = self
             .sessions
@@ -119,11 +135,13 @@ impl TaintTracker {
     }
 
     /// Remove taint state for a completed session.
+    #[instrument(skip(self), fields(%session))]
     pub fn clear_session(&self, session: &SessionKey) {
         self.sessions.remove(session);
     }
 
     /// Manually inject a Secret label (for env/secret sources).
+    #[instrument(skip(self), fields(%session))]
     pub fn record_secret(&self, session: &SessionKey) {
         self.sessions
             .entry(*session)
@@ -133,18 +151,33 @@ impl TaintTracker {
     }
 
     /// Tool output → taint label mapping.
+    ///
+    /// Determines which labels a tool's output introduces into the session
+    /// context. Only tools that bring external/untrusted data need labels;
+    /// internal tools (file_read, search, etc.) produce no taint.
     fn labels_for_tool_output(tool_name: &str) -> HashSet<TaintLabel> {
         match tool_name {
+            // Network tools fetch content from untrusted external sources.
             "web_fetch" | "browser_navigate" | "browser_snapshot" | "browser_click"
             | "browser_fill_form" | "browser_evaluate" => {
                 HashSet::from([TaintLabel::ExternalNetwork])
             }
+            // Sub-agent output is untrusted because we don't control its prompt.
             "agent_send" | "agent_spawn" => HashSet::from([TaintLabel::UntrustedAgent]),
             _ => HashSet::new(),
         }
     }
 
-    /// Tool → sink mapping. Returns None for tools with no restrictions.
+    /// Tool → sink policy mapping.
+    ///
+    /// Returns the set of taint labels that are **forbidden** from flowing
+    /// into this tool. `None` means the tool has no restrictions.
+    ///
+    /// Policy rationale:
+    /// - Shell: blocks external/untrusted/user data → prevents RCE via injection.
+    /// - File write: blocks external/untrusted data → prevents disk poisoning.
+    /// - Network out: blocks secrets/PII → prevents data exfiltration.
+    /// - Agent messaging: blocks secrets → prevents leaks to sub-agents.
     fn sink_for_tool(tool_name: &str) -> Option<HashSet<TaintLabel>> {
         match tool_name {
             "bash" | "shell_exec" => Some(HashSet::from([

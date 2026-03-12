@@ -1,6 +1,10 @@
 //! Guard pipeline — combines taint tracking + pattern scanning.
 //!
 //! Sits between permission checks and tool execution in `agent.rs`.
+//! Taint is checked first (cheaper, session-level) and short-circuits
+//! before the more expensive argument-level pattern scan.
+
+use tracing::instrument;
 
 use crate::session::SessionKey;
 
@@ -36,13 +40,18 @@ impl GuardPipeline {
         }
     }
 
-    /// Check before tool execution. Returns `Pass` or `Blocked`.
+    /// Run taint + pattern checks before tool execution.
+    ///
+    /// Order matters: taint is checked first (cheaper, session-level) and
+    /// short-circuits before the more expensive pattern scan.
+    #[instrument(skip(self, args), fields(%session, tool_name))]
     pub fn pre_execute(
         &self,
         session: &SessionKey,
         tool_name: &str,
         args: &serde_json::Value,
     ) -> GuardVerdict {
+        // Layer 1: taint-flow check (session-level, O(1) per label).
         if let Err(violation) = self.taint.check_tool_input(session, tool_name) {
             return GuardVerdict::Blocked {
                 layer: "taint",
@@ -51,6 +60,7 @@ impl GuardPipeline {
             };
         }
 
+        // Layer 2: pattern scan (argument-level, O(rules × args)).
         let matches = self.pattern.scan(tool_name, args);
         if let Some(critical) = matches.iter().find(|m| {
             matches!(
@@ -72,6 +82,7 @@ impl GuardPipeline {
     }
 
     /// Record taint labels after successful tool execution.
+    #[instrument(skip(self), fields(%session, tool_name))]
     pub fn post_execute(&self, session: &SessionKey, tool_name: &str) {
         self.taint.record_tool_output(session, tool_name);
     }
