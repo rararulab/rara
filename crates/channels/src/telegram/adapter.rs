@@ -149,6 +149,55 @@ impl ProgressMessage {
     }
 }
 
+/// Plan progress state for tracking plan execution in Telegram.
+struct PlanProgress {
+    message_id: Option<MessageId>,
+    goal:       String,
+    steps:      Vec<String>,
+    /// Status per step: None = pending, Some(true) = success, Some(false) = failed.
+    status:     Vec<Option<bool>>,
+    current:    Option<usize>,
+    completed:  bool,
+    last_edit:  Instant,
+}
+
+impl PlanProgress {
+    fn new(goal: String, steps: Vec<String>) -> Self {
+        let count = steps.len();
+        Self {
+            message_id: None,
+            goal,
+            steps,
+            status:     vec![None; count],
+            current:    None,
+            completed:  false,
+            last_edit:  Instant::now()
+                .checked_sub(MIN_EDIT_INTERVAL)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+}
+
+/// Render plan progress as a Telegram message.
+fn render_plan_progress(plan: &PlanProgress) -> String {
+    let done_count = plan.status.iter().filter(|s| s.is_some()).count();
+    let total = plan.steps.len();
+    let mut lines = vec![format!("\u{1f4cb} Plan: {} ({}/{})", plan.goal, done_count, total)];
+    lines.push(String::new());
+
+    for (i, step) in plan.steps.iter().enumerate() {
+        let icon = match plan.status.get(i).copied().flatten() {
+            Some(true) => "\u{2705}",   // ✅
+            Some(false) => "\u{274c}",  // ❌
+            None if plan.current == Some(i) => "\u{1f527}", // 🔧
+            None => "\u{2b1c}",         // ⬜
+        };
+        lines.push(format!("{icon} {}. {step}", i + 1));
+    }
+
+    lines.join("\n")
+}
+
 /// Format a single tool-progress line.
 /// Format a duration as a compact human-readable string.
 fn format_duration_compact(d: std::time::Duration) -> String {
@@ -1499,6 +1548,7 @@ fn spawn_stream_forwarder(
 
         let mut progress = ProgressMessage::new();
         let mut progress_dirty = false;
+        let mut plan: Option<PlanProgress> = None;
 
         loop {
             tokio::select! {
@@ -1648,6 +1698,71 @@ fn spawn_stream_forwarder(
                                     }
                                 });
                             }
+                        }
+                        Ok(StreamEvent::PlanCreated { goal, steps }) => {
+                            let mut p = PlanProgress::new(goal, steps);
+                            let text = render_plan_progress(&p);
+                            match bot.send_message(ChatId(chat_id), &text).await {
+                                Ok(msg) => { p.message_id = Some(msg.id); }
+                                Err(e) => { warn!(chat_id, error = %e, "failed to send plan message"); }
+                            }
+                            p.last_edit = Instant::now();
+                            plan = Some(p);
+                        }
+                        Ok(StreamEvent::PlanStepStart { index, .. }) => {
+                            if let Some(ref mut p) = plan {
+                                p.current = Some(index);
+                                let text = render_plan_progress(p);
+                                if p.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                    if let Some(mid) = p.message_id {
+                                        let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                    }
+                                    p.last_edit = Instant::now();
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::PlanStepEnd { index, outcome, .. }) => {
+                            if let Some(ref mut p) = plan {
+                                let success = outcome != "failed";
+                                if let Some(s) = p.status.get_mut(index) {
+                                    *s = Some(success);
+                                }
+                                if p.current == Some(index) {
+                                    p.current = None;
+                                }
+                                let text = render_plan_progress(p);
+                                if p.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                    if let Some(mid) = p.message_id {
+                                        let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                    }
+                                    p.last_edit = Instant::now();
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::PlanReplan { new_steps, .. }) => {
+                            if let Some(ref mut p) = plan {
+                                let count = new_steps.len();
+                                p.steps = new_steps;
+                                p.status = vec![None; count];
+                                p.current = None;
+                                let text = render_plan_progress(p);
+                                if let Some(mid) = p.message_id {
+                                    let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                }
+                                p.last_edit = Instant::now();
+                            }
+                        }
+                        Ok(StreamEvent::PlanCompleted { summary }) => {
+                            if let Some(ref mut p) = plan {
+                                p.completed = true;
+                                p.current = None;
+                                let mut text = render_plan_progress(p);
+                                text.push_str(&format!("\n\n\u{2705} {summary}"));
+                                if let Some(mid) = p.message_id {
+                                    let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                }
+                            }
+                            plan = None;
                         }
                         Ok(_) => {} // Ignore: ReasoningDelta, Progress, TurnMetrics
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

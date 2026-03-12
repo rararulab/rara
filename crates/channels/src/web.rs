@@ -117,6 +117,30 @@ pub enum WebEvent {
         tool_calls:  usize,
         model:       String,
     },
+    /// A plan has been created with a goal and steps.
+    PlanCreated {
+        goal:  String,
+        steps: Vec<String>,
+    },
+    /// A plan step has started executing.
+    PlanStepStart {
+        index: usize,
+        task:  String,
+        mode:  String,
+    },
+    /// A plan step has finished.
+    PlanStepEnd {
+        index:   usize,
+        outcome: String,
+        summary: String,
+    },
+    /// The plan has been revised.
+    PlanReplan {
+        reason:    String,
+        new_steps: Vec<String>,
+    },
+    /// The plan has completed.
+    PlanCompleted { summary: String },
     /// Stream completed (no more deltas).
     Done,
 }
@@ -175,6 +199,25 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
             tool_calls,
             model,
         }),
+        StreamEvent::PlanCreated { goal, steps } => {
+            Some(WebEvent::PlanCreated { goal, steps })
+        }
+        StreamEvent::PlanStepStart { index, task, mode } => {
+            Some(WebEvent::PlanStepStart { index, task, mode })
+        }
+        StreamEvent::PlanStepEnd {
+            index,
+            outcome,
+            summary,
+        } => Some(WebEvent::PlanStepEnd {
+            index,
+            outcome,
+            summary,
+        }),
+        StreamEvent::PlanReplan { reason, new_steps } => {
+            Some(WebEvent::PlanReplan { reason, new_steps })
+        }
+        StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
     }
 }
 
