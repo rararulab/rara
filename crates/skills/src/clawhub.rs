@@ -26,7 +26,10 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt;
 use tracing::{debug, info, warn};
+
+use crate::error::{ArchiveSnafu, InstallSnafu, IoSnafu, RequestSnafu};
 
 /// Maximum retry attempts for API calls (including the first try).
 const MAX_RETRIES: u32 = 3;
@@ -59,7 +62,10 @@ impl ClawhubClient {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .unwrap_or_default(),
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "failed to build ClawHub HTTP client with timeout, falling back to default");
+                    reqwest::Client::default()
+                }),
         }
     }
 
@@ -104,21 +110,24 @@ impl ClawhubClient {
                             }
                             continue;
                         }
-                        return Err(crate::error::SkillError::InvalidInput {
+                        return InstallSnafu {
                             message: format!(
                                 "{context} returned {status} after {MAX_RETRIES} attempts"
                             ),
-                        });
+                        }
+                        .fail();
                     }
-                    return Err(crate::error::SkillError::InvalidInput {
+                    return InstallSnafu {
                         message: format!("{context} returned {status}"),
-                    });
+                    }
+                    .fail();
                 }
                 Err(e) => {
                     if attempt + 1 >= MAX_RETRIES {
-                        return Err(crate::error::SkillError::InvalidInput {
+                        return InstallSnafu {
                             message: format!("{context} failed after {MAX_RETRIES} attempts: {e}"),
-                        });
+                        }
+                        .fail();
                     }
                     warn!(attempt, context, error = %e, "ClawHub request failed, will retry");
                 }
@@ -135,18 +144,17 @@ impl ClawhubClient {
         query: &str,
         limit: u32,
     ) -> Result<ClawhubSearchResponse, crate::error::SkillError> {
-        let url = format!(
-            "{}/search?q={}&limit={}",
-            self.base_url,
-            urlencoded(query),
-            limit.min(50)
-        );
-        let resp = self.get_with_retry(&url, "ClawHub search").await?;
-        resp.json::<ClawhubSearchResponse>().await.map_err(|e| {
-            crate::error::SkillError::InvalidInput {
-                message: format!("failed to parse ClawHub search response: {e}"),
-            }
-        })
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/search", self.base_url),
+            &[("q", query), ("limit", &limit.min(50).to_string())],
+        )
+        .map_err(|e| crate::error::SkillError::InvalidInput {
+            message: format!("invalid ClawHub search URL: {e}"),
+        })?;
+        let resp = self.get_with_retry(url.as_str(), "ClawHub search").await?;
+        resp.json::<ClawhubSearchResponse>()
+            .await
+            .context(RequestSnafu)
     }
 
     /// Browse skills by sort order.
@@ -157,18 +165,20 @@ impl ClawhubClient {
         sort: ClawhubSort,
         limit: u32,
     ) -> Result<ClawhubBrowseResponse, crate::error::SkillError> {
-        let url = format!(
-            "{}/skills?limit={}&sort={}",
-            self.base_url,
-            limit.min(50),
-            sort.as_str()
-        );
-        let resp = self.get_with_retry(&url, "ClawHub browse").await?;
-        resp.json::<ClawhubBrowseResponse>().await.map_err(|e| {
-            crate::error::SkillError::InvalidInput {
-                message: format!("failed to parse ClawHub browse response: {e}"),
-            }
-        })
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/skills", self.base_url),
+            &[
+                ("limit", limit.min(50).to_string()),
+                ("sort", sort.as_str().to_string()),
+            ],
+        )
+        .map_err(|e| crate::error::SkillError::InvalidInput {
+            message: format!("invalid ClawHub browse URL: {e}"),
+        })?;
+        let resp = self.get_with_retry(url.as_str(), "ClawHub browse").await?;
+        resp.json::<ClawhubBrowseResponse>()
+            .await
+            .context(RequestSnafu)
     }
 
     /// Get detailed info about a specific skill.
@@ -178,13 +188,15 @@ impl ClawhubClient {
         &self,
         slug: &str,
     ) -> Result<ClawhubSkillDetail, crate::error::SkillError> {
-        let url = format!("{}/skills/{}", self.base_url, urlencoded(slug));
+        let url = format!(
+            "{}/skills/{}",
+            self.base_url,
+            percent_encode_path(slug)
+        );
         let resp = self.get_with_retry(&url, "ClawHub skill detail").await?;
-        resp.json::<ClawhubSkillDetail>().await.map_err(|e| {
-            crate::error::SkillError::InvalidInput {
-                message: format!("failed to parse ClawHub detail response: {e}"),
-            }
-        })
+        resp.json::<ClawhubSkillDetail>()
+            .await
+            .context(RequestSnafu)
     }
 
     /// Download and install a skill from ClawHub into the target directory.
@@ -196,86 +208,40 @@ impl ClawhubClient {
         slug: &str,
         install_dir: &Path,
     ) -> Result<ClawhubInstallResult, crate::error::SkillError> {
-        let url = format!("{}/download?slug={}", self.base_url, urlencoded(slug));
+        // Fetch detail first to validate slug exists and get version before downloading.
+        let detail = self.get_skill(slug).await?;
+        let version = detail
+            .latest_version
+            .map(|v| v.version)
+            .unwrap_or_default();
+
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/download", self.base_url),
+            &[("slug", slug)],
+        )
+        .map_err(|e| crate::error::SkillError::InvalidInput {
+            message: format!("invalid ClawHub download URL: {e}"),
+        })?;
         info!(slug, "downloading skill from ClawHub");
 
-        let resp = self.get_with_retry(&url, "ClawHub download").await?;
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| crate::error::SkillError::InvalidInput {
-                message: format!("failed to read download body: {e}"),
-            })?;
+        let resp = self.get_with_retry(url.as_str(), "ClawHub download").await?;
+        let bytes = resp.bytes().await.context(RequestSnafu)?;
 
         let skill_dir = install_dir.join(slug);
-        std::fs::create_dir_all(&skill_dir).map_err(|e| {
-            crate::error::SkillError::InvalidInput {
-                message: format!("failed to create skill dir: {e}"),
-            }
-        })?;
+        std::fs::create_dir_all(&skill_dir).context(IoSnafu)?;
 
         let is_zip = bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b;
         let content_str = String::from_utf8_lossy(&bytes);
         let is_skillmd = content_str.trim_start().starts_with("---");
 
         if is_skillmd {
-            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).map_err(|e| {
-                crate::error::SkillError::InvalidInput {
-                    message: format!("failed to write SKILL.md: {e}"),
-                }
-            })?;
+            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).context(IoSnafu)?;
         } else if is_zip {
-            let cursor = std::io::Cursor::new(&*bytes);
-            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
-                crate::error::SkillError::InvalidInput {
-                    message: format!("failed to read zip: {e}"),
-                }
-            })?;
-
-            for i in 0..archive.len() {
-                let mut file = match archive.by_index(i) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        warn!(index = i, error = %e, "skipping zip entry");
-                        continue;
-                    }
-                };
-                let Some(enclosed_name) = file.enclosed_name() else {
-                    warn!("skipping zip entry with unsafe path");
-                    continue;
-                };
-                let out_path = skill_dir.join(enclosed_name);
-                if file.is_dir() {
-                    std::fs::create_dir_all(&out_path).ok();
-                    continue;
-                }
-                if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                let mut out_file = std::fs::File::create(&out_path).map_err(|e| {
-                    crate::error::SkillError::InvalidInput {
-                        message: format!("failed to create file: {e}"),
-                    }
-                })?;
-                std::io::copy(&mut file, &mut out_file).map_err(|e| {
-                    crate::error::SkillError::InvalidInput {
-                        message: format!("failed to extract file: {e}"),
-                    }
-                })?;
-            }
-            info!(slug, entries = archive.len(), "extracted ClawHub skill zip");
+            extract_zip(&bytes, &skill_dir)?;
+            info!(slug, "extracted ClawHub skill zip");
         } else {
-            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).map_err(|e| {
-                crate::error::SkillError::InvalidInput {
-                    message: format!("failed to write raw content: {e}"),
-                }
-            })?;
+            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).context(IoSnafu)?;
         }
-
-        let version = match self.get_skill(slug).await {
-            Ok(detail) => detail.latest_version.map(|v| v.version).unwrap_or_default(),
-            Err(_) => String::new(),
-        };
 
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
@@ -283,9 +249,10 @@ impl ClawhubClient {
 
         let skills = scan_skill_files(install_dir, &skill_dir, slug);
         if skills.is_empty() {
-            return Err(crate::error::SkillError::InvalidInput {
+            return InstallSnafu {
                 message: format!("installed ClawHub package '{slug}' contains no SKILL.md"),
-            });
+            }
+            .fail();
         }
 
         let source = format!("clawhub:{slug}");
@@ -315,23 +282,86 @@ impl ClawhubClient {
     }
 }
 
-/// RFC 3986 percent-encoding for query parameters.
-fn urlencoded(s: &str) -> String {
-    let mut result = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                result.push(b as char);
+/// Extract a zip archive into `dest_dir` with path traversal protection.
+///
+/// Mirrors the security checks in `install.rs`: canonicalize + starts_with
+/// to prevent symlink attacks and directory escape.
+fn extract_zip(bytes: &[u8], dest_dir: &Path) -> crate::error::Result<()> {
+    let canonical_dest = std::fs::canonicalize(dest_dir).context(IoSnafu)?;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
+        crate::error::SkillError::Archive {
+            message: format!("failed to read zip: {e}"),
+        }
+    })?;
+
+    for i in 0..archive.len() {
+        let mut file = match archive.by_index(i) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(index = i, error = %e, "skipping zip entry");
+                continue;
             }
-            b' ' => result.push('+'),
-            _ => {
-                result.push('%');
-                result.push(char::from(b"0123456789ABCDEF"[(b >> 4) as usize]));
-                result.push(char::from(b"0123456789ABCDEF"[(b & 0xf) as usize]));
+        };
+
+        // enclosed_name() filters out `..` components.
+        let Some(enclosed_name) = file.enclosed_name() else {
+            warn!("skipping zip entry with unsafe path");
+            continue;
+        };
+
+        // Skip symlinks — same policy as tarball extraction in install.rs.
+        if file.is_symlink() {
+            warn!(name = %enclosed_name.display(), "skipping symlink in zip");
+            continue;
+        }
+
+        let out_path = dest_dir.join(enclosed_name);
+
+        if file.is_dir() {
+            std::fs::create_dir_all(&out_path).context(IoSnafu)?;
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).context(IoSnafu)?;
+            // Verify the resolved parent hasn't escaped the destination.
+            let canonical_parent = std::fs::canonicalize(parent).context(IoSnafu)?;
+            if !canonical_parent.starts_with(&canonical_dest) {
+                return ArchiveSnafu {
+                    message: "zip entry escaped install directory",
+                }
+                .fail();
             }
         }
+
+        // Refuse to overwrite symlinks — prevents symlink-following attacks.
+        if out_path.exists() {
+            let meta = std::fs::symlink_metadata(&out_path).context(IoSnafu)?;
+            if meta.file_type().is_symlink() {
+                return ArchiveSnafu {
+                    message: "zip entry resolves to symlink destination",
+                }
+                .fail();
+            }
+        }
+
+        let mut out_file = std::fs::File::create(&out_path).context(IoSnafu)?;
+        std::io::copy(&mut file, &mut out_file).context(IoSnafu)?;
     }
-    result
+
+    Ok(())
+}
+
+/// Percent-encode a slug for use in URL path segments.
+fn percent_encode_path(s: &str) -> String {
+    use reqwest::Url;
+    // Build a dummy URL, extract the encoded path segment.
+    let dummy = format!("http://x/{s}");
+    match Url::parse(&dummy) {
+        Ok(u) => u.path().trim_start_matches('/').to_string(),
+        Err(_) => s.to_string(),
+    }
 }
 
 /// Scan a directory for SKILL.md files and return SkillState entries.
@@ -347,8 +377,8 @@ fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::ty
         skills.push(crate::types::SkillState {
             name: slug.to_string(),
             relative_path: relative,
-            trusted: true,
-            enabled: true,
+            trusted: false,
+            enabled: false,
         });
     }
 
@@ -613,9 +643,9 @@ mod tests {
     }
 
     #[test]
-    fn urlencoded_handles_special_chars() {
-        assert_eq!(urlencoded("hello world"), "hello+world");
-        assert_eq!(urlencoded("foo/bar"), "foo%2Fbar");
-        assert_eq!(urlencoded("a-b_c.d~e"), "a-b_c.d~e");
+    fn percent_encode_path_handles_special_chars() {
+        assert_eq!(percent_encode_path("hello-world"), "hello-world");
+        assert_eq!(percent_encode_path("foo/bar"), "foo/bar"); // slashes preserved in path
+        assert_eq!(percent_encode_path("a b"), "a%20b");
     }
 }

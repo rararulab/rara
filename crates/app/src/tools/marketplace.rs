@@ -111,7 +111,7 @@ impl AgentTool for MarketplaceTool {
                     .service
                     .browse(marketplace)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 let count = plugins.len();
                 Ok(json!({
                     "plugins": plugins,
@@ -128,7 +128,7 @@ impl AgentTool for MarketplaceTool {
                     .service
                     .search(query)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 let count = plugins.len();
                 Ok(json!({
                     "query": query,
@@ -146,7 +146,7 @@ impl AgentTool for MarketplaceTool {
                     .service
                     .install_plugin(name, marketplace)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 Ok(json!(result).into())
             }
             "enable" => {
@@ -156,7 +156,7 @@ impl AgentTool for MarketplaceTool {
                     .ok_or_else(|| anyhow::anyhow!("'enable' requires 'plugin_name' parameter"))?;
                 self.service
                     .enable_plugin(name)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 Ok(json!({ "enabled": name }).into())
             }
             "disable" => {
@@ -168,7 +168,7 @@ impl AgentTool for MarketplaceTool {
                     })?;
                 self.service
                     .disable_plugin(name)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 Ok(json!({ "disabled": name }).into())
             }
             "add_source" => {
@@ -180,7 +180,7 @@ impl AgentTool for MarketplaceTool {
                     })?;
                 self.service
                     .add_source(source)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 Ok(json!({ "added": source }).into())
             }
             "refresh" => {
@@ -195,7 +195,7 @@ impl AgentTool for MarketplaceTool {
                                 .service
                                 .fetch_index(&src.repo)
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                                .map_err(anyhow::Error::from)?;
                         }
                     }
                     None => {
@@ -220,7 +220,7 @@ impl AgentTool for MarketplaceTool {
                     .clawhub
                     .search(query, limit)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 let count = resp.results.len();
                 Ok(json!({
                     "source": "clawhub",
@@ -242,7 +242,7 @@ impl AgentTool for MarketplaceTool {
                     .clawhub
                     .browse(sort, limit)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 let count = resp.items.len();
                 Ok(json!({
                     "source": "clawhub",
@@ -257,12 +257,12 @@ impl AgentTool for MarketplaceTool {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("'clawhub_install' requires 'slug' parameter"))?;
                 let install_dir =
-                    rara_skills::install::default_install_dir().map_err(|e| anyhow::anyhow!("{e}"))?;
+                    rara_skills::install::default_install_dir().map_err(anyhow::Error::from)?;
                 let result = self
                     .clawhub
                     .install(slug, &install_dir)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    .map_err(anyhow::Error::from)?;
                 Ok(json!(result).into())
             }
             other => Err(anyhow::anyhow!("unknown action: {other}")),
