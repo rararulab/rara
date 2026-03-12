@@ -592,7 +592,8 @@ async fn try_build_telegram(
 
     fn parse_group_policy(raw: Option<String>) -> GroupPolicy {
         raw.and_then(|s| {
-            serde_json::from_value::<GroupPolicy>(serde_json::Value::String(s.trim().to_string()))
+            s.trim()
+                .parse::<GroupPolicy>()
                 .map_err(|e| warn!(error = %e, "invalid telegram.group_policy, using default"))
                 .ok()
         })

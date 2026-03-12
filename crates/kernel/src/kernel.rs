@@ -452,6 +452,9 @@ impl Kernel {
                         }
                     }
 
+                    // Evict expired rate-limiter entries.
+                    self.io.gc_rate_limiter();
+
                     // Drain any expired scheduled jobs.
                     self.drain_scheduled_jobs().await;
                 }

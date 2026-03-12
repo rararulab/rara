@@ -1161,6 +1161,8 @@ pub struct IngressRateLimiter {
     buckets: DashMap<String, Vec<std::time::Instant>>,
     /// Maximum messages per key per 60-second window.
     max_per_minute: u32,
+    /// Clock function for obtaining the current instant (test-injectable).
+    now_fn: fn() -> std::time::Instant,
 }
 
 impl IngressRateLimiter {
@@ -1169,6 +1171,17 @@ impl IngressRateLimiter {
         Self {
             buckets: DashMap::new(),
             max_per_minute,
+            now_fn: std::time::Instant::now,
+        }
+    }
+
+    /// Create a rate limiter with a custom clock (for testing).
+    #[cfg(test)]
+    fn with_clock(max_per_minute: u32, now_fn: fn() -> std::time::Instant) -> Self {
+        Self {
+            buckets: DashMap::new(),
+            max_per_minute,
+            now_fn,
         }
     }
 
@@ -1176,7 +1189,7 @@ impl IngressRateLimiter {
     ///
     /// Returns `Ok(())` if allowed, `Err(IOError::RateLimited)` if exceeded.
     pub fn check_rate(&self, key: &str) -> Result<(), IOError> {
-        let now = std::time::Instant::now();
+        let now = (self.now_fn)();
         let window = std::time::Duration::from_secs(60);
 
         let mut entry = self.buckets.entry(key.to_string()).or_default();
@@ -1197,10 +1210,10 @@ impl IngressRateLimiter {
 
     /// Remove keys whose window has fully expired.
     ///
-    /// Call periodically (e.g. from a background timer) to reclaim memory
-    /// from users who have gone idle.
+    /// Called by the kernel's unified scheduler (processor 0) on every tick
+    /// to reclaim memory from users who have gone idle.
     pub fn gc(&self) {
-        let now = std::time::Instant::now();
+        let now = (self.now_fn)();
         let window = std::time::Duration::from_secs(60);
         self.buckets.retain(|_, v| {
             v.retain(|ts| now.duration_since(*ts) < window);
@@ -1225,8 +1238,9 @@ impl IngressRateLimiter {
 ///
 /// ```text
 /// RawPlatformMessage
-///   → IdentityResolver:  (channel_type, platform_user_id) → UserId
-///   → SessionIndex:      (channel_type, chat_id)          → Option<SessionKey>
+///   → IngressRateLimiter: per-user sliding-window check (rejects spam before DB)
+///   → IdentityResolver:   (channel_type, platform_user_id) → UserId
+///   → SessionIndex:       (channel_type, chat_id)          → Option<SessionKey>
 ///   → InboundMessage { session_key: Option<SessionKey> }
 /// ```
 ///
@@ -1269,6 +1283,14 @@ impl IOSubsystem {
             notification_channel_id,
             rate_limiter: IngressRateLimiter::new(max_ingress_per_minute),
         }
+    }
+
+    // -- Maintenance ----------------------------------------------------------
+
+    /// Run garbage collection on the ingress rate limiter, evicting expired
+    /// keys to prevent unbounded memory growth.
+    pub fn gc_rate_limiter(&self) {
+        self.rate_limiter.gc();
     }
 
     // -- Ingress --------------------------------------------------------------
@@ -1568,16 +1590,33 @@ mod agent_event_tests {
 
 #[cfg(test)]
 mod ingress_rate_limiter_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
     use super::*;
+
+    /// Fake clock that advances by a controllable offset from a fixed base.
+    static FAKE_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
+
+    fn fake_now() -> Instant {
+        // SAFETY: Instant::now() is called once as a base; offset simulates time passing.
+        static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let base = *BASE.get_or_init(Instant::now);
+        base + Duration::from_millis(FAKE_OFFSET_MS.load(Ordering::Relaxed))
+    }
+
+    fn set_fake_offset(ms: u64) {
+        FAKE_OFFSET_MS.store(ms, Ordering::Relaxed);
+    }
 
     #[test]
     fn rate_limiter_allows_within_limit() {
         let limiter = IngressRateLimiter::new(3);
-        let key = "telegram:user123".to_string();
-        assert!(limiter.check_rate(&key).is_ok());
-        assert!(limiter.check_rate(&key).is_ok());
-        assert!(limiter.check_rate(&key).is_ok());
-        assert!(limiter.check_rate(&key).is_err());
+        let key = "telegram:user123";
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_err());
     }
 
     #[test]
@@ -1594,31 +1633,35 @@ mod ingress_rate_limiter_tests {
         assert!(limiter.check_rate("user").is_err());
     }
 
-    #[tokio::test]
-    async fn rate_limiter_window_expires() {
-        let limiter = IngressRateLimiter::new(1);
-        let key = "test:user".to_string();
-        assert!(limiter.check_rate(&key).is_ok());
-        assert!(limiter.check_rate(&key).is_err());
+    #[test]
+    fn rate_limiter_window_expires_via_clock() {
+        set_fake_offset(0);
+        let limiter = IngressRateLimiter::with_clock(1, fake_now);
+        let key = "test:user";
 
-        // Simulate window expiry without sleeping 60s.
-        limiter.buckets.entry(key.clone()).and_modify(|v| v.clear());
-        assert!(limiter.check_rate(&key).is_ok());
+        assert!(limiter.check_rate(key).is_ok());
+        assert!(limiter.check_rate(key).is_err());
+
+        // Advance clock past the 60s window.
+        set_fake_offset(61_000);
+        assert!(limiter.check_rate(key).is_ok(), "should allow after window expires");
     }
 
     #[test]
     fn rate_limiter_gc_removes_expired_keys() {
-        let limiter = IngressRateLimiter::new(10);
+        set_fake_offset(100_000); // reset to a fresh base offset
+        let limiter = IngressRateLimiter::with_clock(10, fake_now);
         assert!(limiter.check_rate("active").is_ok());
         assert!(limiter.check_rate("stale").is_ok());
         assert_eq!(limiter.buckets.len(), 2);
 
-        // Simulate "stale" key having only expired timestamps.
-        limiter.buckets.entry("stale".to_string()).and_modify(|v| v.clear());
+        // Advance clock past window so "stale" and "active" entries expire.
+        set_fake_offset(200_000);
+        // Re-record "active" so it has a fresh timestamp.
+        assert!(limiter.check_rate("active").is_ok());
 
         limiter.gc();
 
-        // "stale" should be evicted, "active" should remain.
         assert!(limiter.buckets.contains_key("active"));
         assert!(!limiter.buckets.contains_key("stale"));
     }

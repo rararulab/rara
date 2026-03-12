@@ -79,10 +79,10 @@ GroupPolicy::All                 → respond to everything
 - YAML: `telegram.group_policy: mention_or_small_group`
 - Settings key: `telegram.group_policy`
 - Hot-reloadable via settings watcher in `try_build_telegram()`
-- Parsing uses serde deserialization — adding a new variant to the enum automatically works in config
+- Parsing uses `strum::EnumString` (`str::parse::<GroupPolicy>()`) — adding a new variant to the enum automatically works in config
 
 ### What NOT To Do
 
 - Do NOT change the `#[default]` attribute away from `MentionOrSmallGroup` — existing deployments have no `group_policy` in their config. Changing the default silently changes their bot behavior (e.g. switching to `All` would make the bot reply to every group message, spamming the chat).
-- Do NOT add manual string parsing for GroupPolicy — the enum already has `#[serde(rename_all = "snake_case")]`. Manual match-arms duplicate the variant list and will silently ignore new variants when someone adds one to the enum. Serde handles both directions automatically.
+- Do NOT add manual string parsing for GroupPolicy — the enum derives `strum::EnumString` with `#[strum(serialize_all = "snake_case")]`. Manual match-arms duplicate the variant list and will silently ignore new variants when someone adds one to the enum. `str::parse()` handles it automatically.
 - Do NOT put group policy logic in the kernel — the `MentionOrSmallGroup` variant calls `bot.get_chat_member_count()`, which is a Telegram Bot API call. The kernel has no Telegram dependency and must not acquire one. Policy evaluation requires platform-specific context that only the adapter has.
