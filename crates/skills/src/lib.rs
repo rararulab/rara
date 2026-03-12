@@ -21,6 +21,7 @@
 //! XML prompt blocks for LLM system prompt injection.
 
 pub mod cache;
+pub mod clawhub;
 pub mod discover;
 pub mod error;
 pub mod formats;
