@@ -119,16 +119,27 @@ struct PendingRequest {
 /// blocks on a oneshot channel until a human resolves it (via `resolve()`)
 /// or the request times out.
 pub struct ApprovalManager {
-    pending: DashMap<Uuid, PendingRequest>,
-    policy:  RwLock<ApprovalPolicy>,
+    pending:    DashMap<Uuid, PendingRequest>,
+    policy:     RwLock<ApprovalPolicy>,
+    /// Broadcast channel for notifying external listeners (e.g. Telegram adapter)
+    /// when a new approval request is submitted.
+    request_tx: tokio::sync::broadcast::Sender<ApprovalRequest>,
 }
 
 impl ApprovalManager {
     pub fn new(policy: ApprovalPolicy) -> Self {
+        let (request_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             pending: DashMap::new(),
             policy:  RwLock::new(policy),
+            request_tx,
         }
+    }
+
+    /// Subscribe to new approval requests. Channel adapters (e.g. Telegram)
+    /// use this to send interactive approval prompts to users.
+    pub fn subscribe_requests(&self) -> tokio::sync::broadcast::Receiver<ApprovalRequest> {
+        self.request_tx.subscribe()
     }
 
     /// Check if a tool requires approval based on current policy.
@@ -170,6 +181,10 @@ impl ApprovalManager {
         let id = req.id;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
+
+        // Notify external listeners (TG, web UI) before blocking.
+        let _ = self.request_tx.send(req.clone());
+
         self.pending.insert(
             id,
             PendingRequest {

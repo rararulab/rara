@@ -32,6 +32,7 @@ pub mod agent;
 pub mod channel;
 pub mod error;
 pub mod event;
+pub mod guard;
 pub mod handle;
 pub mod identity;
 pub mod io;
