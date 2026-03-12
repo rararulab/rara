@@ -27,6 +27,7 @@ pub mod formats;
 pub mod hash;
 pub mod install;
 pub mod manifest;
+pub mod marketplace;
 pub mod parse;
 pub mod prompt_gen;
 pub mod registry;
