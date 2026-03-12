@@ -32,7 +32,7 @@ impl GuardPipeline {
     pub fn new() -> Self {
         Self {
             taint: TaintTracker::new(),
-            pattern: PatternGuard::new(),
+            pattern: PatternGuard,
         }
     }
 

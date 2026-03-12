@@ -1254,8 +1254,7 @@ pub(crate) async fn run_agent_loop(
                             "tool call blocked by guard"
                         );
 
-                        let agent_id = uuid::Uuid::parse_str(&session_key_for_guard.to_string())
-                            .unwrap_or_else(|_| uuid::Uuid::nil());
+                        let agent_id = session_key_for_guard.into_inner();
                         notification_bus
                             .publish(KernelNotification::GuardDenied {
                                 agent_id,
