@@ -1042,16 +1042,25 @@ async fn approval_listener(
                     continue;
                 };
 
-                let text = format!(
+                let (_display, args_summary) = tool_display_info(&req.tool_name, &req.tool_args);
+                let mut text = format!(
                     "<b>🛡 Guard Blocked Tool Call</b>\n\n\
-                     <b>Tool:</b> <code>{tool}</code>\n\
-                     <b>Reason:</b> {summary}\n\
+                     <b>Tool:</b> <code>{tool}</code>\n",
+                    tool = guard_html_escape(&req.tool_name),
+                );
+                if !args_summary.is_empty() {
+                    text.push_str(&format!(
+                        "<b>Action:</b> <code>{}</code>\n",
+                        guard_html_escape(&args_summary),
+                    ));
+                }
+                text.push_str(&format!(
+                    "<b>Reason:</b> {summary}\n\
                      <b>Risk:</b> {risk:?}\n\n\
                      Approve or deny this action:",
-                    tool = guard_html_escape(&req.tool_name),
                     summary = guard_html_escape(&req.summary),
                     risk = req.risk_level,
-                );
+                ));
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![
                     InlineKeyboardButton::callback("✅ Approve", format!("guard:approve:{}", req.id)),
