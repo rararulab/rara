@@ -1209,6 +1209,7 @@ pub(crate) async fn run_agent_loop(
                 let output_interceptor = output_interceptor.clone();
                 let guard_pipeline = guard_pipeline.clone();
                 let notification_bus = notification_bus.clone();
+                let approval_manager = Arc::clone(handle.security().approval());
                 let session_key_for_guard = session_key;
                 let tool_span = info_span!(
                     "tool_exec",
@@ -1240,38 +1241,68 @@ pub(crate) async fn run_agent_loop(
                     }
 
                     // Security guard check — taint + pattern.
+                    // If blocked, request user approval before denying.
                     if let GuardVerdict::Blocked {
                         layer,
                         reason,
                         tool_name: blocked_tool,
                     } = guard_pipeline.pre_execute(&session_key_for_guard, &name, &args)
                     {
-                        tool_span.record("success", false);
                         warn!(
                             tool = %blocked_tool,
                             %layer,
                             %reason,
-                            "tool call blocked by guard"
+                            "tool call blocked by guard, requesting user approval"
                         );
 
-                        let agent_id = session_key_for_guard.into_inner();
-                        notification_bus
-                            .publish(KernelNotification::GuardDenied {
-                                agent_id,
-                                tool_name: blocked_tool.clone(),
-                                reason: reason.clone(),
-                                timestamp: jiff::Timestamp::now(),
-                            })
-                            .await;
+                        let risk_level = crate::security::ApprovalManager::classify_risk(&blocked_tool);
+                        let approval_req = crate::security::ApprovalRequest {
+                            id:           uuid::Uuid::new_v4(),
+                            session_key:  session_key_for_guard,
+                            tool_name:    blocked_tool.clone(),
+                            tool_args:    args.clone(),
+                            summary:      format!("Guard blocked ({layer}): {reason}"),
+                            risk_level,
+                            requested_at: jiff::Timestamp::now(),
+                            timeout_secs: 120,
+                        };
 
-                        let err = format!("security guard ({layer}): {reason}");
-                        let dur = tool_start.elapsed().as_millis() as u64;
-                        return (
-                            false,
-                            crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
-                            Some(err),
-                            dur,
-                        );
+                        let decision = approval_manager.request_approval(approval_req).await;
+
+                        match decision {
+                            crate::security::ApprovalDecision::Approved => {
+                                info!(
+                                    tool = %blocked_tool,
+                                    %layer,
+                                    %reason,
+                                    "guard block overridden by user approval"
+                                );
+                                // Fall through to normal tool execution.
+                            }
+                            _ => {
+                                // Denied or timed out — block the tool call.
+                                tool_span.record("success", false);
+
+                                let agent_id = session_key_for_guard.into_inner();
+                                notification_bus
+                                    .publish(KernelNotification::GuardDenied {
+                                        agent_id,
+                                        tool_name: blocked_tool.clone(),
+                                        reason: reason.clone(),
+                                        timestamp: jiff::Timestamp::now(),
+                                    })
+                                    .await;
+
+                                let err = format!("security guard ({layer}): {reason}");
+                                let dur = tool_start.elapsed().as_millis() as u64;
+                                return (
+                                    false,
+                                    crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+                                    Some(err),
+                                    dur,
+                                );
+                            }
+                        }
                     }
 
                     if let Some(tool) = tool {

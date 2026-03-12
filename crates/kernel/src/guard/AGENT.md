@@ -100,6 +100,26 @@ This ordering is intentional for performance. Do not reverse it.
 7. **Error type uses `snafu`** — project convention. Do not add manual `impl Display`
    or `impl Error`. Enum Display uses `strum::Display`.
 
+## User Approval Flow
+
+When a guard blocks a tool call, it does **not** silently reject. Instead it routes
+through the existing `ApprovalManager` so the user can override the decision:
+
+```
+GuardPipeline::pre_execute() → Blocked
+  → Build ApprovalRequest (with guard layer + reason as summary)
+  → ApprovalManager::request_approval() — blocks until user responds or timeout
+    → Approved  → fall through to normal tool execution
+    → Denied    → emit GuardDenied notification + return error to LLM
+    → TimedOut  → same as Denied
+```
+
+This means:
+- Users always see WHY a tool call was blocked (via the approval prompt)
+- Users can override guard decisions when they know it's safe
+- If `auto_approve` is enabled in `ApprovalPolicy`, guards are effectively bypassed
+- The 120s timeout prevents indefinite hangs if no user is present
+
 ## Adding a New Tool
 
 To integrate a new tool with the guard system:
