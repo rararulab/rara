@@ -1580,4 +1580,16 @@ mod ingress_rate_limiter_tests {
         let limiter = IngressRateLimiter::new(0);
         assert!(limiter.check_rate("user").is_err());
     }
+
+    #[tokio::test]
+    async fn rate_limiter_window_expires() {
+        let limiter = IngressRateLimiter::new(1);
+        let key = "test:user".to_string();
+        assert!(limiter.check_rate(&key).is_ok());
+        assert!(limiter.check_rate(&key).is_err());
+
+        // Simulate window expiry without sleeping 60s.
+        limiter.buckets.entry(key.clone()).and_modify(|v| v.clear());
+        assert!(limiter.check_rate(&key).is_ok());
+    }
 }
