@@ -1232,6 +1232,7 @@ pub struct IOSubsystem {
     endpoint_registry:       EndpointRegistryRef,
     /// Telegram channel ID for agent-initiated notifications.
     notification_channel_id: Option<i64>,
+    rate_limiter:            IngressRateLimiter,
 }
 
 impl IOSubsystem {
@@ -1244,6 +1245,7 @@ impl IOSubsystem {
         identity_resolver: IdentityResolverRef,
         session_index: Arc<dyn SessionIndex>,
         notification_channel_id: Option<i64>,
+        max_ingress_per_minute: u32,
     ) -> Self {
         Self {
             identity_resolver,
@@ -1252,6 +1254,7 @@ impl IOSubsystem {
             adapters: HashMap::new(),
             endpoint_registry: Arc::new(EndpointRegistry::new()),
             notification_channel_id,
+            rate_limiter: IngressRateLimiter::new(max_ingress_per_minute),
         }
     }
 
@@ -1284,7 +1287,11 @@ impl IOSubsystem {
     pub async fn resolve(&self, raw: RawPlatformMessage) -> Result<InboundMessage, IOError> {
         let span = tracing::Span::current();
 
-        // 1. Resolve identity
+        // 1. Rate-limit ingress before any expensive operations.
+        let rate_key = format!("{}:{}", raw.channel_type, raw.platform_user_id);
+        self.rate_limiter.check_rate(&rate_key)?;
+
+        // 2. Resolve identity
         let user_id = self
             .identity_resolver
             .resolve(
@@ -1295,7 +1302,7 @@ impl IOSubsystem {
             .await?;
         span.record("user_id", tracing::field::display(&user_id.0));
 
-        // 2. Look up channel binding (pure lookup, no creation)
+        // 3. Look up channel binding (pure lookup, no creation)
         let session_key = match raw.platform_chat_id.as_deref() {
             Some(chat_id) => {
                 match self
@@ -1317,7 +1324,7 @@ impl IOSubsystem {
             None => None,
         };
 
-        // 3. Build InboundMessage
+        // 4. Build InboundMessage
         let msg = InboundMessage {
             id: MessageId::new(),
             source: ChannelSource {

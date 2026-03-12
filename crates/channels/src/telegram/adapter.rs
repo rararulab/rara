@@ -1133,6 +1133,10 @@ async fn handle_update(
                 .await;
             return;
         }
+        Err(IOError::RateLimited { message }) => {
+            let _ = bot.send_message(ChatId(chat_id), format!("\u{26a0}\u{fe0f} {message}")).await;
+            return;
+        }
         Err(IOError::IdentityResolutionFailed { .. }) => {
             debug!("telegram adapter: unknown platform user, ignoring");
             return;
