@@ -1,0 +1,169 @@
+# Plan-Execute Architecture Design
+
+**Date**: 2026-03-13
+**Status**: Draft
+**Phase 1 Prerequisites**: #242, #243, #244, #245, #246 (all completed)
+
+## 背景
+
+rara 当前是纯 reactive 架构：每轮迭代从 tape 重建全部消息 → 调 LLM → 执行 tool → 结果写 tape → 下一轮。复杂任务中 tool 结果不断堆积，上下文快速膨胀。
+
+Plan-Execute 架构将复杂任务分解为：**Plan（规划）→ Execute（逐步执行）→ Replan（条件修正）**，每步执行有独立的精简上下文。
+
+## 设计决策
+
+| 决策点 | 选择 | 理由 |
+|--------|------|------|
+| Step 结构 | 顺序列表，无 DAG | 业界主流（LangGraph 等）；replan 比 DAG 更有价值 |
+| Replan 触发 | 条件触发（失败/意外） | 多数步骤按计划走，不需要每步消耗 planner call |
+| PlanState 存储 | Tape（TapEntryKind::Plan） | 复用现有基础设施，plan 本身是对话上下文一部分 |
+| 触发方式 | LLM 自主判断 + 用户 /plan | 零摩擦 + 显式控制两条路 |
+| Inline/Worker 判断 | Planner 决定 | Planner 有全局视角，实现简单 |
+
+## 核心数据结构
+
+```rust
+/// Plan 中间表示，存入 tape
+struct Plan {
+    goal: String,
+    steps: Vec<PlanStep>,
+    past_steps: Vec<PastStep>,
+    status: PlanStatus,  // Active | Completed | Failed | Replanned
+}
+
+struct PlanStep {
+    index: usize,
+    task: String,            // 自然语言描述
+    mode: ExecutionMode,     // Inline | Worker
+    acceptance: String,      // 完成条件
+}
+
+struct PastStep {
+    index: usize,
+    task: String,
+    summary: String,         // executor 摘要（不是完整输出）
+    outcome: StepOutcome,    // Success | Failed { reason } | NeedsReplan { reason }
+}
+
+enum ExecutionMode {
+    Inline,                  // 主 agent loop 中执行
+    Worker,                  // spawn 独立 session
+}
+```
+
+## 可观测性：新增 StreamEvent
+
+```rust
+enum StreamEvent {
+    // ... 现有的 TextDelta, ToolCallStart/End 等不变 ...
+
+    PlanCreated { goal: String, steps: Vec<String> },
+    PlanStepStart { index: usize, task: String, mode: String },
+    PlanStepEnd { index: usize, outcome: String, summary: String },
+    PlanReplan { reason: String, new_steps: Vec<String> },
+    PlanCompleted { summary: String },
+}
+```
+
+## Telegram 渲染
+
+复用现有 progress message 模式 — 一条独立的 Plan 进度消息持续 editMessageText：
+
+```
+📋 Plan: 帮用户重构 auth 模块 (3/5)
+
+✅ 1. 分析现有 auth 代码结构 (8.2s)
+✅ 2. 设计新的 middleware 接口 (12.1s)
+🔧 3. 实现 JWT 验证层... 23.4s
+⬚ 4. 迁移现有路由
+⬚ 5. 添加集成测试
+```
+
+与现有 tool progress 消息并行显示，遵循 1.5s 节流和 Telegram rate limit 规则。
+
+## 执行流程
+
+```
+用户消息到达
+    │
+    ├─ LLM 判断简单任务 → 原有 reactive loop（不变）
+    │
+    └─ LLM 调用 create_plan tool / 用户 /plan 指令
+         │
+         ▼
+    ┌─ Plan 阶段 ─────────────────────┐
+    │  LLM 输出结构化 Plan JSON        │
+    │  写入 tape (TapEntryKind::Plan)  │
+    │  emit PlanCreated event          │
+    └──────────┬───────────────────────┘
+               │
+               ▼
+    ┌─ Execute Loop ──────────────────────────────────┐
+    │  for step in plan.steps:                         │
+    │    emit PlanStepStart                            │
+    │                                                  │
+    │    if step.mode == Inline:                        │
+    │      主 agent 执行（普通 tool call 循环）          │
+    │      结果写入 tape，提取 summary                  │
+    │      上下文仅含: system prompt + plan概览          │
+    │               + 当前step goal + acceptance        │
+    │                                                  │
+    │    if step.mode == Worker:                        │
+    │      spawn worker (独立 tape)                     │
+    │      等待完成，收 summary（截断逻辑复用 #244）      │
+    │                                                  │
+    │    emit PlanStepEnd                               │
+    │    past_steps.push(summary)                       │
+    │                                                  │
+    │    ── Replan 检查 ──                              │
+    │    if outcome == Failed || NeedsReplan:           │
+    │      用 past_steps + 剩余 steps 调 LLM replan    │
+    │      emit PlanReplan                              │
+    │      替换 plan.steps，继续循环                     │
+    └──────────┬──────────────────────────────────────┘
+               │
+               ▼
+    emit PlanCompleted
+    LLM 生成最终总结回复用户
+```
+
+## Tool 接口
+
+新增 2 个 tool 注册到 ToolRegistry：
+
+### create_plan
+
+- **触发**: LLM 自主调用或 `/plan` 指令转换
+- **输入**: `{ goal: String, steps: Vec<{ task: String, mode: "inline" | "worker", acceptance: String }> }` — LLM 在 tool arguments 中提供完整 plan 结构，tool 只做验证和存储
+- **输出**: Plan JSON（含自动分配的 index）
+- **副作用**: 写入 tape, emit PlanCreated, agent loop 进入 plan-execute 子循环
+
+### replan
+
+- **触发**: 仅在 plan-execute 流程内部，条件触发
+- **输入**: `{ past_steps, failure_reason, remaining_steps }`
+- **输出**: 新的 steps 列表
+- **副作用**: 更新 tape 中的 Plan, emit PlanReplan
+
+不需要 `execute_step` tool — step 执行由 kernel 驱动，LLM 只负责 plan 和 replan。
+
+## 改动点清单
+
+| 文件 | 改动 |
+|------|------|
+| `kernel/src/memory/mod.rs` | 新增 `TapEntryKind::Plan` |
+| `kernel/src/io.rs` | 新增 5 个 PlanXxx StreamEvent |
+| `kernel/src/agent.rs` | `run_agent_loop` 识别 create_plan 返回值后进入 plan-execute 子循环 |
+| `kernel/src/plan.rs` | **新文件** — `PlanExecutor`：驱动 step 执行、replan 判断、event emit |
+| `kernel/src/tool.rs` | 注册 `create_plan` tool |
+| `channels/src/telegram/adapter.rs` | 渲染 PlanXxx 事件为进度消息 |
+| `channels/src/web.rs` | 转发 PlanXxx 事件到前端 |
+| `agents/src/lib.rs` | rara manifest tools 加入 `create_plan` |
+
+## 不动的部分
+
+- Reactive loop 本身不变 — plan-execute 是 agent loop 内的一个分支
+- TapeService / TapeStore — 只加新 entry kind
+- Worker spawn 机制 — 直接复用 `KernelHandle::spawn_child`
+- Guard pipeline — plan tool 走正常 guard 流程
+- 简单任务路径完全不受影响
