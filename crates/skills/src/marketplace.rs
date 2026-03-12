@@ -86,6 +86,14 @@ pub struct PluginInfo {
     pub enabled:     bool,
 }
 
+/// Result of a plugin installation.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginInstallResult {
+    pub plugin:       String,
+    pub skills_count: usize,
+    pub skills:       Vec<String>,
+}
+
 /// Default marketplace sources baked into the binary.
 const DEFAULT_SOURCES: &[(&str, &str)] = &[
     ("anthropics/claude-plugins-official", "claude-plugins-official"),
@@ -205,6 +213,181 @@ impl MarketplaceService {
     pub fn clear_cache_for(&self, repo: &str) {
         self.cache.write().unwrap().remove(repo);
     }
+
+    /// Browse all plugins across all (or one) marketplace.
+    pub async fn browse(&self, marketplace: Option<&str>) -> Result<Vec<PluginInfo>> {
+        let sources = self.list_sources();
+        let targets: Vec<&MarketplaceSource> = match marketplace {
+            Some(name) => sources
+                .iter()
+                .filter(|s| s.name == name || s.repo == name)
+                .collect(),
+            None => sources.iter().collect(),
+        };
+
+        let manifest = self.load_install_manifest();
+        let mut results = Vec::new();
+
+        for src in targets {
+            let index = match self.fetch_index(&src.repo).await {
+                Ok(idx) => idx,
+                Err(e) => {
+                    tracing::warn!(repo = %src.repo, %e, "failed to fetch marketplace index");
+                    continue;
+                }
+            };
+            for plugin in &index.plugins {
+                let (installed, enabled) =
+                    self.plugin_local_status(&manifest, &src.repo, &plugin.name);
+                results.push(PluginInfo {
+                    name:        plugin.name.clone(),
+                    description: plugin.description.clone().unwrap_or_default(),
+                    version:     plugin.version.clone(),
+                    category:    plugin.category.clone(),
+                    marketplace: src.name.clone(),
+                    installed,
+                    enabled,
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    /// Search plugins by matching query against name, description, category.
+    pub async fn search(&self, query: &str) -> Result<Vec<PluginInfo>> {
+        let all = self.browse(None).await?;
+        let q = query.to_lowercase();
+        Ok(all
+            .into_iter()
+            .filter(|p| {
+                p.name.to_lowercase().contains(&q)
+                    || p.description.to_lowercase().contains(&q)
+                    || p.category
+                        .as_ref()
+                        .is_some_and(|c| c.to_lowercase().contains(&q))
+            })
+            .collect())
+    }
+
+    /// Install a plugin from a marketplace.
+    pub async fn install_plugin(
+        &self,
+        plugin_name: &str,
+        marketplace: Option<&str>,
+    ) -> Result<PluginInstallResult> {
+        // Find which marketplace has this plugin.
+        let all = self.browse(marketplace).await?;
+        let info = all
+            .iter()
+            .find(|p| p.name == plugin_name)
+            .ok_or_else(|| crate::error::SkillError::NotFound {
+                name: format!("plugin '{plugin_name}' not found in any marketplace"),
+            })?;
+
+        let source_repo = self
+            .list_sources()
+            .iter()
+            .find(|s| s.name == info.marketplace)
+            .map(|s| s.repo.clone())
+            .ok_or_else(|| crate::error::SkillError::NotFound {
+                name: format!("marketplace '{}' not found", info.marketplace),
+            })?;
+
+        let install_dir = crate::install::default_install_dir()?;
+
+        let manifest_path = crate::manifest::ManifestStore::default_path()?;
+        let store = crate::manifest::ManifestStore::new(manifest_path);
+        let mut manifest = store.load()?;
+
+        if manifest.find_repo(&source_repo).is_none() {
+            crate::install::install_skill(&source_repo, &install_dir).await?;
+            manifest = store.load()?;
+        }
+
+        let mut enabled_skills = Vec::new();
+        if let Some(repo_entry) = manifest.find_repo_mut(&source_repo) {
+            for skill in &mut repo_entry.skills {
+                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
+                    skill.enabled = true;
+                    skill.trusted = true;
+                    enabled_skills.push(skill.name.clone());
+                }
+            }
+        }
+        store.save(&manifest)?;
+
+        Ok(PluginInstallResult {
+            plugin:       plugin_name.to_string(),
+            skills_count: enabled_skills.len(),
+            skills:       enabled_skills,
+        })
+    }
+
+    /// Enable a previously installed plugin.
+    pub fn enable_plugin(&self, plugin_name: &str) -> Result<()> {
+        self.set_plugin_state(plugin_name, true)
+    }
+
+    /// Disable a plugin without uninstalling.
+    pub fn disable_plugin(&self, plugin_name: &str) -> Result<()> {
+        self.set_plugin_state(plugin_name, false)
+    }
+
+    fn set_plugin_state(&self, plugin_name: &str, enabled: bool) -> Result<()> {
+        let manifest_path = crate::manifest::ManifestStore::default_path()?;
+        let store = crate::manifest::ManifestStore::new(manifest_path);
+        let mut manifest = store.load()?;
+
+        let mut found = false;
+        for repo in &mut manifest.repos {
+            for skill in &mut repo.skills {
+                if skill.name.starts_with(&format!("{plugin_name}:"))
+                    || skill.name == plugin_name
+                {
+                    skill.enabled = enabled;
+                    if enabled {
+                        skill.trusted = true;
+                    }
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            return Err(crate::error::SkillError::NotFound {
+                name: format!("plugin '{plugin_name}' is not installed"),
+            });
+        }
+        store.save(&manifest)
+    }
+}
+
+// Private helpers.
+impl MarketplaceService {
+    fn load_install_manifest(&self) -> crate::types::SkillsManifest {
+        crate::manifest::ManifestStore::default_path()
+            .ok()
+            .map(crate::manifest::ManifestStore::new)
+            .and_then(|s| s.load().ok())
+            .unwrap_or_default()
+    }
+
+    fn plugin_local_status(
+        &self,
+        manifest: &crate::types::SkillsManifest,
+        _repo: &str,
+        plugin_name: &str,
+    ) -> (bool, bool) {
+        for repo in &manifest.repos {
+            for skill in &repo.skills {
+                if skill.name.starts_with(&format!("{plugin_name}:"))
+                    || skill.name == plugin_name
+                {
+                    return (true, skill.enabled);
+                }
+            }
+        }
+        (false, false)
+    }
 }
 
 /// Load sources from JSON file, seeding defaults if missing.
@@ -250,6 +433,30 @@ mod tests {
         assert_eq!(sources.len(), 2);
         assert!(sources.iter().any(|s| s.repo == "anthropics/claude-plugins-official"));
         assert!(sources.iter().any(|s| s.repo == "anthropics/skills"));
+    }
+
+    #[test]
+    fn marketplace_index_deserializes_from_official_format() {
+        let json = r#"{
+            "name": "test-marketplace",
+            "description": "Test",
+            "owner": { "name": "Test", "email": "test@test.com" },
+            "plugins": [
+                {
+                    "name": "code-review",
+                    "description": "Code review tools",
+                    "version": "1.0.0",
+                    "category": "development",
+                    "source": "./plugins/code-review",
+                    "strict": false,
+                    "skills": ["./skills/reviewer"]
+                }
+            ]
+        }"#;
+        let index: MarketplaceIndex = serde_json::from_str(json).unwrap();
+        assert_eq!(index.plugins.len(), 1);
+        assert_eq!(index.plugins[0].name, "code-review");
+        assert_eq!(index.plugins[0].category.as_deref(), Some("development"));
     }
 
     #[test]
