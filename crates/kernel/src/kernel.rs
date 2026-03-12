@@ -162,6 +162,8 @@ pub struct Kernel {
     knowledge:        crate::memory::knowledge::KnowledgeServiceRef,
     /// Optional hook to transform tool outputs before sending to the LLM.
     output_interceptor: crate::tool::DynamicOutputInterceptor,
+    /// Security guard pipeline (taint tracking + pattern scanning).
+    guard_pipeline: Arc<crate::guard::pipeline::GuardPipeline>,
 }
 
 impl Kernel {
@@ -197,6 +199,7 @@ impl Kernel {
         let event_queue: EventQueueRef = sharded_queue.clone();
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
+        let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new());
 
         let syscall = SyscallDispatcher::new(
             SharedKv::new(
@@ -229,6 +232,7 @@ impl Kernel {
             started_at: Timestamp::now(),
             knowledge,
             output_interceptor,
+            guard_pipeline,
         }
     }
 
@@ -282,6 +286,11 @@ impl Kernel {
             Arc::clone(&self.global_semaphore),
             self.started_at,
         )
+    }
+
+    /// Access the security guard pipeline.
+    pub fn guard_pipeline(&self) -> &Arc<crate::guard::pipeline::GuardPipeline> {
+        &self.guard_pipeline
     }
 
     /// Start the unified event loop as a background task.
@@ -698,6 +707,13 @@ impl Kernel {
         };
         self.process_table.insert(process);
 
+        // Child session inherits parent's taint context.
+        if let Some(parent_key) = parent_id {
+            self.guard_pipeline
+                .taint_tracker()
+                .fork_session(&parent_key, &session_key);
+        }
+
         crate::metrics::SESSION_CREATED
             .with_label_values(&[&manifest.name])
             .inc();
@@ -859,6 +875,9 @@ impl Kernel {
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
     async fn cleanup_process(&self, session_key: SessionKey) {
+        self.guard_pipeline
+            .taint_tracker()
+            .clear_session(&session_key);
         if let Some(rt) = self.process_table.remove(session_key) {
             let manifest_name = rt.manifest.name.clone();
             let state = rt.state;
@@ -1770,6 +1789,8 @@ impl Kernel {
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(&self.io.stream_hub());
         let output_interceptor = self.output_interceptor.clone();
+        let guard_pipeline = self.guard_pipeline.clone();
+        let notification_bus = self.syscall.event_bus().clone();
 
         let milestone_tx = self
             .process_table
@@ -1894,6 +1915,8 @@ impl Kernel {
                     tool_context,
                     milestone_tx,
                     output_interceptor,
+                    guard_pipeline,
+                    notification_bus,
                 )
                 .await;
 

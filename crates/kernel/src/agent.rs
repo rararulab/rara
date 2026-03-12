@@ -28,11 +28,13 @@ use tracing::{error, info, info_span, warn};
 
 use crate::{
     error::{IoSnafu, KernelError, Result},
+    guard::pipeline::{GuardPipeline, GuardVerdict},
     handle::KernelHandle,
     identity::Role,
     io::{StreamEvent, StreamHandle},
     llm,
     llm::ModelCapabilities,
+    notification::{KernelNotification, NotificationBusRef},
     session::SessionKey,
 };
 
@@ -657,7 +659,9 @@ fn build_runtime_contract_prompt(
         turn_cancel,
         tape,
         tape_name,
-        output_interceptor
+        output_interceptor,
+        guard_pipeline,
+        notification_bus
     ),
     fields(
         session_key = %session_key,
@@ -675,6 +679,8 @@ pub(crate) async fn run_agent_loop(
     tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     output_interceptor: crate::tool::DynamicOutputInterceptor,
+    guard_pipeline: Arc<GuardPipeline>,
+    notification_bus: NotificationBusRef,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1201,6 +1207,9 @@ pub(crate) async fn run_agent_loop(
                 let user_ref = runtime_user.clone();
                 let tool_cancel = turn_cancel.clone();
                 let output_interceptor = output_interceptor.clone();
+                let guard_pipeline = guard_pipeline.clone();
+                let notification_bus = notification_bus.clone();
+                let session_key_for_guard = session_key;
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -1228,6 +1237,42 @@ pub(crate) async fn run_agent_loop(
                                 dur,
                             );
                         }
+                    }
+
+                    // Security guard check — taint + pattern.
+                    if let GuardVerdict::Blocked {
+                        layer,
+                        reason,
+                        tool_name: blocked_tool,
+                    } = guard_pipeline.pre_execute(&session_key_for_guard, &name, &args)
+                    {
+                        tool_span.record("success", false);
+                        warn!(
+                            tool = %blocked_tool,
+                            %layer,
+                            %reason,
+                            "tool call blocked by guard"
+                        );
+
+                        let agent_id = uuid::Uuid::parse_str(&session_key_for_guard.to_string())
+                            .unwrap_or_else(|_| uuid::Uuid::nil());
+                        notification_bus
+                            .publish(KernelNotification::GuardDenied {
+                                agent_id,
+                                tool_name: blocked_tool.clone(),
+                                reason: reason.clone(),
+                                timestamp: jiff::Timestamp::now(),
+                            })
+                            .await;
+
+                        let err = format!("security guard ({layer}): {reason}");
+                        let dur = tool_start.elapsed().as_millis() as u64;
+                        return (
+                            false,
+                            crate::tool::ToolOutput::from(serde_json::json!({ "error": &err })),
+                            Some(err),
+                            dur,
+                        );
                     }
 
                     if let Some(tool) = tool {
@@ -1261,6 +1306,7 @@ pub(crate) async fn run_agent_loop(
                                         result
                                     }
                                 };
+                                guard_pipeline.post_execute(&session_key_for_guard, &name);
                                 (true, result, None::<String>, dur)
                             }
                             Err(e) => {
