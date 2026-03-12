@@ -481,15 +481,13 @@ fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
 }
 
 fn classify_context_pressure(
-    messages: &[llm::Message],
+    estimated_tokens: usize,
     context_window_tokens: usize,
 ) -> ContextPressure {
     if context_window_tokens == 0 {
         return ContextPressure::Normal;
     }
 
-    let estimated_chars: usize = messages.iter().map(|m| m.estimated_char_len()).sum();
-    let estimated_tokens = estimated_chars / CHARS_PER_TOKEN;
     let usage_ratio = estimated_tokens as f64 / context_window_tokens as f64;
 
     if usage_ratio >= CONTEXT_CRITICAL_THRESHOLD {
@@ -1493,34 +1491,38 @@ pub(crate) async fn run_agent_loop(
         }
 
         // ── Runtime context guard ──────────────────────────────────────
-        let pressure = classify_context_pressure(&messages, capabilities.context_window_tokens);
-        if !matches!(pressure, ContextPressure::Normal) {
-            if let Ok(tape_info) = tape.info(tape_name).await {
-                match pressure {
-                    ContextPressure::Critical { usage_ratio, .. } => {
-                        let warning = format!(
-                            "[Context Usage Critical] Current context ~{} tokens ({:.0}%), \
-                             context window capacity {} tokens. You MUST immediately create \
-                             a tape anchor with summary and next_steps.",
-                            tape_info.estimated_context_tokens,
-                            usage_ratio * 100.0,
-                            capabilities.context_window_tokens,
-                        );
-                        messages.push(llm::Message::user(warning));
-                    }
-                    ContextPressure::Warning { usage_ratio, .. } => {
-                        let warning = format!(
-                            "[Context Usage Warning] Current context ~{} tokens ({:.0}%), \
-                             context window capacity {} tokens. You SHOULD consider creating \
-                             a tape anchor.",
-                            tape_info.estimated_context_tokens,
-                            usage_ratio * 100.0,
-                            capabilities.context_window_tokens,
-                        );
-                        messages.push(llm::Message::user(warning));
-                    }
-                    ContextPressure::Normal => {}
+        // Evaluate context pressure from the tape's estimated token count
+        // (which reflects actual usage metadata) rather than from the
+        // post-trim rebuilt messages, to avoid underestimating pressure.
+        if let Ok(tape_info) = tape.info(tape_name).await {
+            let pressure = classify_context_pressure(
+                tape_info.estimated_context_tokens as usize,
+                capabilities.context_window_tokens,
+            );
+            match pressure {
+                ContextPressure::Critical { usage_ratio, .. } => {
+                    let warning = format!(
+                        "[Context Usage Critical] Current context ~{} tokens ({:.0}%), \
+                         context window capacity {} tokens. You MUST immediately create \
+                         a tape anchor with summary and next_steps.",
+                        tape_info.estimated_context_tokens,
+                        usage_ratio * 100.0,
+                        capabilities.context_window_tokens,
+                    );
+                    messages.push(llm::Message::user(warning));
                 }
+                ContextPressure::Warning { usage_ratio, .. } => {
+                    let warning = format!(
+                        "[Context Usage Warning] Current context ~{} tokens ({:.0}%), \
+                         context window capacity {} tokens. You SHOULD consider creating \
+                         a tape anchor.",
+                        tape_info.estimated_context_tokens,
+                        usage_ratio * 100.0,
+                        capabilities.context_window_tokens,
+                    );
+                    messages.push(llm::Message::user(warning));
+                }
+                ContextPressure::Normal => {}
             }
         }
 
@@ -1584,31 +1586,29 @@ mod tests {
         ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
         resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
     };
-    use crate::llm::Message;
 
     #[test]
     fn classify_context_pressure_returns_normal_below_threshold() {
-        let messages = vec![Message::user("short")];
         assert_eq!(
-            classify_context_pressure(&messages, 1_000),
+            classify_context_pressure(500, 1_000),
             ContextPressure::Normal
         );
     }
 
     #[test]
     fn classify_context_pressure_returns_warning_at_warn_threshold() {
-        let messages = vec![Message::user("x".repeat(3_000))];
+        // 750 / 1000 = 0.75, above CONTEXT_WARN_THRESHOLD (0.70)
         assert!(matches!(
-            classify_context_pressure(&messages, 1_000),
+            classify_context_pressure(750, 1_000),
             ContextPressure::Warning { .. }
         ));
     }
 
     #[test]
     fn classify_context_pressure_returns_critical_at_critical_threshold() {
-        let messages = vec![Message::user("x".repeat(4_000))];
+        // 900 / 1000 = 0.90, above CONTEXT_CRITICAL_THRESHOLD (0.85)
         assert!(matches!(
-            classify_context_pressure(&messages, 1_000),
+            classify_context_pressure(900, 1_000),
             ContextPressure::Critical { .. }
         ));
     }
