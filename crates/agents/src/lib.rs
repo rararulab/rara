@@ -72,6 +72,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "install-mcp-server".to_string(),
         "list-mcp-servers".to_string(),
         "remove-mcp-server".to_string(),
+        "create_plan".to_string(),
     ],
     max_children:       None,
     max_context_tokens: None,
