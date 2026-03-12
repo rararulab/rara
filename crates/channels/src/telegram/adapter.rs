@@ -932,18 +932,41 @@ async fn handle_update(
         let username_guard = bot_username.read().await;
         let username_ref = username_guard.as_deref();
 
-        let is_small = matches!(
-            bot.get_chat_member_count(msg.chat.id).await,
-            Ok(n) if n <= SMALL_GROUP_THRESHOLD
-        );
+        let is_mentioned =
+            is_group_mention(msg, trigger_text, username_ref) || contains_rara_keyword(trigger_text);
 
-        let directly_addressed = is_small
-            || is_group_mention(msg, trigger_text, username_ref)
-            || contains_rara_keyword(trigger_text);
-
-        if !directly_addressed {
-            // Not mentioned — route as GroupMessage for proactive judgment.
-            is_group_proactive = true;
+        match cfg.group_policy {
+            GroupPolicy::Ignore => {
+                debug!(chat_id, "group message ignored (group_policy=ignore)");
+                return;
+            }
+            GroupPolicy::MentionOnly => {
+                if !is_mentioned {
+                    debug!(
+                        chat_id,
+                        "group message ignored (not mentioned, group_policy=mention_only)"
+                    );
+                    return;
+                }
+            }
+            GroupPolicy::MentionOrSmallGroup => {
+                let is_small = matches!(
+                    bot.get_chat_member_count(msg.chat.id).await,
+                    Ok(n) if n <= SMALL_GROUP_THRESHOLD
+                );
+                let directly_addressed = is_small || is_mentioned;
+                if !directly_addressed {
+                    is_group_proactive = true;
+                }
+            }
+            GroupPolicy::ProactiveJudgment => {
+                if !is_mentioned {
+                    is_group_proactive = true;
+                }
+            }
+            GroupPolicy::All => {
+                // Respond to everything.
+            }
         }
 
         // Check allowed group chat authorization.
