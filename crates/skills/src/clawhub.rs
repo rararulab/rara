@@ -23,8 +23,10 @@
 //! - Detail:   `GET /api/v1/skills/{slug}`
 //! - Download: `GET /api/v1/download?slug=...`
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Maximum retry attempts for API calls (including the first try).
 const MAX_RETRIES: u32 = 3;
@@ -41,7 +43,7 @@ const DEFAULT_BASE_URL: &str = "https://clawhub.ai/api/v1";
 /// Client for the ClawHub marketplace (clawhub.ai).
 pub struct ClawhubClient {
     base_url: String,
-    client:   reqwest::Client,
+    client: reqwest::Client,
 }
 
 impl ClawhubClient {
@@ -98,8 +100,7 @@ impl ClawhubClient {
                                 .and_then(|v| v.parse::<u64>().ok())
                             {
                                 let capped = (ra * 1000).min(MAX_DELAY_MS);
-                                tokio::time::sleep(std::time::Duration::from_millis(capped))
-                                    .await;
+                                tokio::time::sleep(std::time::Duration::from_millis(capped)).await;
                             }
                             continue;
                         }
@@ -116,9 +117,7 @@ impl ClawhubClient {
                 Err(e) => {
                     if attempt + 1 >= MAX_RETRIES {
                         return Err(crate::error::SkillError::InvalidInput {
-                            message: format!(
-                                "{context} failed after {MAX_RETRIES} attempts: {e}"
-                            ),
+                            message: format!("{context} failed after {MAX_RETRIES} attempts: {e}"),
                         });
                     }
                     warn!(attempt, context, error = %e, "ClawHub request failed, will retry");
@@ -143,11 +142,11 @@ impl ClawhubClient {
             limit.min(50)
         );
         let resp = self.get_with_retry(&url, "ClawHub search").await?;
-        resp.json::<ClawhubSearchResponse>()
-            .await
-            .map_err(|e| crate::error::SkillError::InvalidInput {
+        resp.json::<ClawhubSearchResponse>().await.map_err(|e| {
+            crate::error::SkillError::InvalidInput {
                 message: format!("failed to parse ClawHub search response: {e}"),
-            })
+            }
+        })
     }
 
     /// Browse skills by sort order.
@@ -165,11 +164,11 @@ impl ClawhubClient {
             sort.as_str()
         );
         let resp = self.get_with_retry(&url, "ClawHub browse").await?;
-        resp.json::<ClawhubBrowseResponse>()
-            .await
-            .map_err(|e| crate::error::SkillError::InvalidInput {
+        resp.json::<ClawhubBrowseResponse>().await.map_err(|e| {
+            crate::error::SkillError::InvalidInput {
                 message: format!("failed to parse ClawHub browse response: {e}"),
-            })
+            }
+        })
     }
 
     /// Get detailed info about a specific skill.
@@ -181,11 +180,138 @@ impl ClawhubClient {
     ) -> Result<ClawhubSkillDetail, crate::error::SkillError> {
         let url = format!("{}/skills/{}", self.base_url, urlencoded(slug));
         let resp = self.get_with_retry(&url, "ClawHub skill detail").await?;
-        resp.json::<ClawhubSkillDetail>()
+        resp.json::<ClawhubSkillDetail>().await.map_err(|e| {
+            crate::error::SkillError::InvalidInput {
+                message: format!("failed to parse ClawHub detail response: {e}"),
+            }
+        })
+    }
+
+    /// Download and install a skill from ClawHub into the target directory.
+    ///
+    /// Uses `GET /api/v1/download?slug=...` to download a zip, extracts it
+    /// into `{install_dir}/{slug}/`, then registers in the skills manifest.
+    pub async fn install(
+        &self,
+        slug: &str,
+        install_dir: &Path,
+    ) -> Result<ClawhubInstallResult, crate::error::SkillError> {
+        let url = format!("{}/download?slug={}", self.base_url, urlencoded(slug));
+        info!(slug, "downloading skill from ClawHub");
+
+        let resp = self.get_with_retry(&url, "ClawHub download").await?;
+        let bytes = resp
+            .bytes()
             .await
             .map_err(|e| crate::error::SkillError::InvalidInput {
-                message: format!("failed to parse ClawHub detail response: {e}"),
-            })
+                message: format!("failed to read download body: {e}"),
+            })?;
+
+        let skill_dir = install_dir.join(slug);
+        std::fs::create_dir_all(&skill_dir).map_err(|e| {
+            crate::error::SkillError::InvalidInput {
+                message: format!("failed to create skill dir: {e}"),
+            }
+        })?;
+
+        let is_zip = bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b;
+        let content_str = String::from_utf8_lossy(&bytes);
+        let is_skillmd = content_str.trim_start().starts_with("---");
+
+        if is_skillmd {
+            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).map_err(|e| {
+                crate::error::SkillError::InvalidInput {
+                    message: format!("failed to write SKILL.md: {e}"),
+                }
+            })?;
+        } else if is_zip {
+            let cursor = std::io::Cursor::new(&*bytes);
+            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
+                crate::error::SkillError::InvalidInput {
+                    message: format!("failed to read zip: {e}"),
+                }
+            })?;
+
+            for i in 0..archive.len() {
+                let mut file = match archive.by_index(i) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        warn!(index = i, error = %e, "skipping zip entry");
+                        continue;
+                    }
+                };
+                let Some(enclosed_name) = file.enclosed_name() else {
+                    warn!("skipping zip entry with unsafe path");
+                    continue;
+                };
+                let out_path = skill_dir.join(enclosed_name);
+                if file.is_dir() {
+                    std::fs::create_dir_all(&out_path).ok();
+                    continue;
+                }
+                if let Some(parent) = out_path.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                let mut out_file = std::fs::File::create(&out_path).map_err(|e| {
+                    crate::error::SkillError::InvalidInput {
+                        message: format!("failed to create file: {e}"),
+                    }
+                })?;
+                std::io::copy(&mut file, &mut out_file).map_err(|e| {
+                    crate::error::SkillError::InvalidInput {
+                        message: format!("failed to extract file: {e}"),
+                    }
+                })?;
+            }
+            info!(slug, entries = archive.len(), "extracted ClawHub skill zip");
+        } else {
+            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).map_err(|e| {
+                crate::error::SkillError::InvalidInput {
+                    message: format!("failed to write raw content: {e}"),
+                }
+            })?;
+        }
+
+        let version = match self.get_skill(slug).await {
+            Ok(detail) => detail.latest_version.map(|v| v.version).unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+
+        let manifest_path = crate::manifest::ManifestStore::default_path()?;
+        let store = crate::manifest::ManifestStore::new(manifest_path);
+        let mut manifest = store.load()?;
+
+        let skills = scan_skill_files(install_dir, &skill_dir, slug);
+        if skills.is_empty() {
+            return Err(crate::error::SkillError::InvalidInput {
+                message: format!("installed ClawHub package '{slug}' contains no SKILL.md"),
+            });
+        }
+
+        let source = format!("clawhub:{slug}");
+        manifest.remove_repo(&source);
+        manifest.add_repo(crate::types::RepoEntry {
+            source: source.clone(),
+            repo_name: slug.to_string(),
+            installed_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            commit_sha: None,
+            format: crate::formats::PluginFormat::Skill,
+            skills: skills.clone(),
+        });
+        store.save(&manifest)?;
+
+        let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+        info!(slug, skills = skill_names.len(), "installed ClawHub skill");
+
+        Ok(ClawhubInstallResult {
+            slug: slug.to_string(),
+            version,
+            skills_count: skill_names.len(),
+            skills: skill_names,
+        })
     }
 }
 
@@ -208,6 +334,56 @@ fn urlencoded(s: &str) -> String {
     result
 }
 
+/// Scan a directory for SKILL.md files and return SkillState entries.
+fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::types::SkillState> {
+    let mut skills = Vec::new();
+
+    if dir.join("SKILL.md").exists() || dir.join("skill.md").exists() {
+        let relative = dir
+            .strip_prefix(install_dir)
+            .unwrap_or(dir)
+            .to_string_lossy()
+            .to_string();
+        skills.push(crate::types::SkillState {
+            name: slug.to_string(),
+            relative_path: relative,
+            trusted: true,
+            enabled: true,
+        });
+    }
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let sub_skill = path.join("SKILL.md");
+            let sub_skill_lower = path.join("skill.md");
+            if !(sub_skill.exists() || sub_skill_lower.exists()) {
+                continue;
+            }
+            let sub_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            let relative = path
+                .strip_prefix(install_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            skills.push(crate::types::SkillState {
+                name: format!("{slug}:{sub_name}"),
+                relative_path: relative,
+                trusted: true,
+                enabled: true,
+            });
+        }
+    }
+
+    skills
+}
+
 // -- Search: GET /api/v1/search?q=...&limit=N --------------------------------
 
 /// A skill entry from the search endpoint.
@@ -216,18 +392,18 @@ fn urlencoded(s: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubSearchEntry {
-    pub slug:         String,
+    pub slug: String,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
-    pub summary:      String,
+    pub summary: String,
     #[serde(default)]
-    pub version:      Option<String>,
+    pub version: Option<String>,
     #[serde(default)]
-    pub score:        f64,
+    pub score: f64,
     /// Unix ms timestamp.
     #[serde(default)]
-    pub updated_at:   Option<i64>,
+    pub updated_at: Option<i64>,
 }
 
 /// Response from `GET /api/v1/search`.
@@ -243,13 +419,13 @@ pub struct ClawhubSearchResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubStats {
     #[serde(default)]
-    pub downloads:         u64,
+    pub downloads: u64,
     #[serde(default)]
     pub installs_all_time: u64,
     #[serde(default)]
-    pub installs_current:  u64,
+    pub installs_current: u64,
     #[serde(default)]
-    pub stars:             u64,
+    pub stars: u64,
 }
 
 /// Version info nested inside browse entries.
@@ -257,30 +433,30 @@ pub struct ClawhubStats {
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubVersionInfo {
     #[serde(default)]
-    pub version:    String,
+    pub version: String,
     #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
-    pub changelog:  String,
+    pub changelog: String,
 }
 
 /// A skill entry from the browse endpoint (`GET /api/v1/skills`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubBrowseEntry {
-    pub slug:           String,
+    pub slug: String,
     #[serde(default)]
-    pub display_name:   String,
+    pub display_name: String,
     #[serde(default)]
-    pub summary:        String,
+    pub summary: String,
     #[serde(default)]
-    pub tags:           std::collections::HashMap<String, String>,
+    pub tags: std::collections::HashMap<String, String>,
     #[serde(default)]
-    pub stats:          ClawhubStats,
+    pub stats: ClawhubStats,
     #[serde(default)]
-    pub created_at:     i64,
+    pub created_at: i64,
     #[serde(default)]
-    pub updated_at:     i64,
+    pub updated_at: i64,
     #[serde(default)]
     pub latest_version: Option<ClawhubVersionInfo>,
 }
@@ -289,7 +465,7 @@ pub struct ClawhubBrowseEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubBrowseResponse {
-    pub items:       Vec<ClawhubBrowseEntry>,
+    pub items: Vec<ClawhubBrowseEntry>,
     #[serde(default)]
     pub next_cursor: Option<String>,
 }
@@ -301,7 +477,7 @@ pub struct ClawhubBrowseResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubOwner {
     #[serde(default)]
-    pub handle:       Option<String>,
+    pub handle: Option<String>,
     #[serde(default)]
     pub display_name: Option<String>,
 }
@@ -310,26 +486,26 @@ pub struct ClawhubOwner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubSkillInfo {
-    pub slug:         String,
+    pub slug: String,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
-    pub summary:      String,
+    pub summary: String,
     #[serde(default)]
-    pub stats:        ClawhubStats,
+    pub stats: ClawhubStats,
     #[serde(default)]
-    pub updated_at:   i64,
+    pub updated_at: i64,
 }
 
 /// Full detail response from `GET /api/v1/skills/{slug}`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubSkillDetail {
-    pub skill:          ClawhubSkillInfo,
+    pub skill: ClawhubSkillInfo,
     #[serde(default)]
     pub latest_version: Option<ClawhubVersionInfo>,
     #[serde(default)]
-    pub owner:          Option<ClawhubOwner>,
+    pub owner: Option<ClawhubOwner>,
 }
 
 // -- Sort enum ----------------------------------------------------------------
@@ -352,6 +528,15 @@ impl ClawhubSort {
             Self::Stars => "stars",
         }
     }
+}
+
+/// Result of installing a skill from ClawHub.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClawhubInstallResult {
+    pub slug: String,
+    pub version: String,
+    pub skills_count: usize,
+    pub skills: Vec<String>,
 }
 
 #[cfg(test)]
