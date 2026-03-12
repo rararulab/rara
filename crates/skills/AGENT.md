@@ -42,14 +42,18 @@ Do NOT:
 - Set `trusted: true` or `enabled: true` for ClawHub-sourced skills
 - Add an "auto-trust" flag that bypasses this without explicit user confirmation
 
-#### 3. Install Order: Validate Before Download
+#### 3. Install Order: Conflict Check → Validate → Download → Cleanup on Failure
 
-`install()` calls `get_skill(slug)` **before** downloading. This:
-- Validates the slug exists on ClawHub
-- Retrieves the version number
-- Fails fast on invalid slugs without downloading anything
+`install()` follows this strict sequence:
+1. **Conflict check**: If `skill_dir` exists AND is in manifest → reject. If stale (not in manifest) → remove.
+2. `get_skill(slug)` validates the slug exists and gets the version.
+3. Download and extract.
+4. **Cleanup on failure**: If extraction or scan fails, `skill_dir` is removed via `remove_dir_all`.
 
-Do NOT reorder to download-first-then-query-detail.
+Do NOT:
+- Reorder to download-first-then-query-detail
+- Skip the conflict check (prevents silent overwrites of user-modified skills)
+- Remove the cleanup-on-failure guard (prevents stale directories on error)
 
 ### Error Handling Convention
 
@@ -69,9 +73,9 @@ In `marketplace.rs`, errors are converted with `.map_err(anyhow::Error::from)` t
 
 ### URL Construction
 
-Query parameters use `reqwest::Url::parse_with_params()`. Path segments use `percent_encode_path()`.
+Query parameters use `reqwest::Url::parse_with_params()`. Path segments use `percent_encode_path()` which delegates to `percent_encoding::utf8_percent_encode` with `NON_ALPHANUMERIC`.
 
-Do NOT hand-write percent-encoding functions. The `reqwest` / `url` crate handles edge cases (multibyte UTF-8, reserved characters) correctly.
+Do NOT hand-write percent-encoding functions or use dummy-URL parsing hacks. The `percent-encoding` crate handles edge cases (multibyte UTF-8, reserved characters) correctly.
 
 ### Retry Logic
 
@@ -82,7 +86,7 @@ Do NOT hand-write percent-encoding functions. The `reqwest` / `url` crate handle
 
 Constants: `MAX_RETRIES = 3`, `BASE_DELAY_MS = 1500`, `MAX_DELAY_MS = 15000`.
 
-Backoff is exponential (`1500 * 2^attempt`), capped at 15s. The `Retry-After` header overrides the calculated delay when present.
+Backoff is exponential (`1500 * 2^attempt`), capped at 15s. When a `Retry-After` header is present, it **replaces** (not adds to) the exponential backoff delay. The delay is computed once per failed attempt via `next_delay_ms` and applied at the top of the next iteration to prevent double-sleeping.
 
 ### Serde Models
 

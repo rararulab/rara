@@ -25,6 +25,7 @@
 
 use std::path::Path;
 
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use tracing::{debug, info, warn};
@@ -47,6 +48,12 @@ const DEFAULT_BASE_URL: &str = "https://clawhub.ai/api/v1";
 pub struct ClawhubClient {
     base_url: String,
     client: reqwest::Client,
+}
+
+impl Default for ClawhubClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClawhubClient {
@@ -75,10 +82,10 @@ impl ClawhubClient {
         url: &str,
         context: &str,
     ) -> Result<reqwest::Response, crate::error::SkillError> {
+        let mut next_delay_ms: Option<u64> = None;
+
         for attempt in 0..MAX_RETRIES {
-            if attempt > 0 {
-                let base = BASE_DELAY_MS.saturating_mul(1u64 << attempt.min(5));
-                let delay_ms = base.min(MAX_DELAY_MS);
+            if let Some(delay_ms) = next_delay_ms.take() {
                 debug!(attempt, delay_ms, context, "retrying ClawHub request");
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
@@ -98,16 +105,18 @@ impl ClawhubClient {
                     }
                     if status.as_u16() == 429 || status.is_server_error() {
                         if attempt + 1 < MAX_RETRIES {
-                            // Respect Retry-After header when present.
-                            if let Some(ra) = resp
+                            // Prefer Retry-After header, fall back to exponential backoff.
+                            let backoff = BASE_DELAY_MS
+                                .saturating_mul(1u64 << (attempt + 1).min(5))
+                                .min(MAX_DELAY_MS);
+                            let delay = resp
                                 .headers()
                                 .get("retry-after")
                                 .and_then(|v| v.to_str().ok())
                                 .and_then(|v| v.parse::<u64>().ok())
-                            {
-                                let capped = (ra * 1000).min(MAX_DELAY_MS);
-                                tokio::time::sleep(std::time::Duration::from_millis(capped)).await;
-                            }
+                                .map(|secs| (secs * 1000).min(MAX_DELAY_MS))
+                                .unwrap_or(backoff);
+                            next_delay_ms = Some(delay);
                             continue;
                         }
                         return InstallSnafu {
@@ -129,6 +138,10 @@ impl ClawhubClient {
                         }
                         .fail();
                     }
+                    let backoff = BASE_DELAY_MS
+                        .saturating_mul(1u64 << (attempt + 1).min(5))
+                        .min(MAX_DELAY_MS);
+                    next_delay_ms = Some(backoff);
                     warn!(attempt, context, error = %e, "ClawHub request failed, will retry");
                 }
             }
@@ -208,6 +221,26 @@ impl ClawhubClient {
         slug: &str,
         install_dir: &Path,
     ) -> Result<ClawhubInstallResult, crate::error::SkillError> {
+        let skill_dir = install_dir.join(slug);
+        let manifest_path = crate::manifest::ManifestStore::default_path()?;
+        let store = crate::manifest::ManifestStore::new(manifest_path);
+        let source = format!("clawhub:{slug}");
+
+        // Conflict check: if directory exists and is tracked in manifest, reject.
+        // If directory exists but is NOT in manifest (stale), remove it first.
+        if skill_dir.exists() {
+            let manifest = store.load()?;
+            if manifest.find_repo(&source).is_some() {
+                return InstallSnafu {
+                    message: format!(
+                        "ClawHub skill '{slug}' is already installed. Remove it first with `skills remove`."
+                    ),
+                }
+                .fail();
+            }
+            std::fs::remove_dir_all(&skill_dir).context(IoSnafu)?;
+        }
+
         // Fetch detail first to validate slug exists and get version before downloading.
         let detail = self.get_skill(slug).await?;
         let version = detail
@@ -227,27 +260,43 @@ impl ClawhubClient {
         let resp = self.get_with_retry(url.as_str(), "ClawHub download").await?;
         let bytes = resp.bytes().await.context(RequestSnafu)?;
 
-        let skill_dir = install_dir.join(slug);
         std::fs::create_dir_all(&skill_dir).context(IoSnafu)?;
 
-        let is_zip = bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b;
-        let content_str = String::from_utf8_lossy(&bytes);
-        let is_skillmd = content_str.trim_start().starts_with("---");
+        // Use a helper closure to ensure cleanup on failure.
+        let result = self
+            .install_inner(slug, install_dir, &skill_dir, &store, &source, &bytes, &version)
+            .await;
 
-        if is_skillmd {
-            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).context(IoSnafu)?;
-        } else if is_zip {
-            extract_zip(&bytes, &skill_dir)?;
-            info!(slug, "extracted ClawHub skill zip");
-        } else {
-            std::fs::write(skill_dir.join("SKILL.md"), &*bytes).context(IoSnafu)?;
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(&skill_dir);
         }
 
-        let manifest_path = crate::manifest::ManifestStore::default_path()?;
-        let store = crate::manifest::ManifestStore::new(manifest_path);
+        result
+    }
+
+    async fn install_inner(
+        &self,
+        slug: &str,
+        install_dir: &Path,
+        skill_dir: &Path,
+        store: &crate::manifest::ManifestStore,
+        source: &str,
+        bytes: &[u8],
+        version: &str,
+    ) -> Result<ClawhubInstallResult, crate::error::SkillError> {
+        let is_zip = bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b;
+
+        if is_zip {
+            extract_zip(bytes, skill_dir)?;
+            info!(slug, "extracted ClawHub skill zip");
+        } else {
+            // Non-zip content: write directly as SKILL.md.
+            std::fs::write(skill_dir.join("SKILL.md"), bytes).context(IoSnafu)?;
+        }
+
         let mut manifest = store.load()?;
 
-        let skills = scan_skill_files(install_dir, &skill_dir, slug);
+        let skills = scan_skill_files(install_dir, skill_dir, slug);
         if skills.is_empty() {
             return InstallSnafu {
                 message: format!("installed ClawHub package '{slug}' contains no SKILL.md"),
@@ -255,10 +304,9 @@ impl ClawhubClient {
             .fail();
         }
 
-        let source = format!("clawhub:{slug}");
-        manifest.remove_repo(&source);
+        manifest.remove_repo(source);
         manifest.add_repo(crate::types::RepoEntry {
-            source: source.clone(),
+            source: source.to_string(),
             repo_name: slug.to_string(),
             installed_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -275,7 +323,7 @@ impl ClawhubClient {
 
         Ok(ClawhubInstallResult {
             slug: slug.to_string(),
-            version,
+            version: version.to_string(),
             skills_count: skill_names.len(),
             skills: skill_names,
         })
@@ -353,22 +401,25 @@ fn extract_zip(bytes: &[u8], dest_dir: &Path) -> crate::error::Result<()> {
     Ok(())
 }
 
-/// Percent-encode a slug for use in URL path segments.
+/// Percent-encode a slug for use in a single URL path segment.
+///
+/// Uses the `PATH_SEGMENT` encode set which encodes everything except
+/// unreserved characters and sub-delimiters (but encodes `/`, `?`, `#`).
 fn percent_encode_path(s: &str) -> String {
-    use reqwest::Url;
-    // Build a dummy URL, extract the encoded path segment.
-    let dummy = format!("http://x/{s}");
-    match Url::parse(&dummy) {
-        Ok(u) => u.path().trim_start_matches('/').to_string(),
-        Err(_) => s.to_string(),
-    }
+    // NON_ALPHANUMERIC encodes everything except [A-Za-z0-9], which is safe
+    // for path segments (over-encodes but never under-encodes).
+    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
-/// Scan a directory for SKILL.md files and return SkillState entries.
+/// Recursively scan a directory for SKILL.md files and return SkillState entries.
+///
+/// Mirrors the recursive walk in `install.rs::scan_repo_skills`: if a directory
+/// contains SKILL.md it is registered; otherwise its children are scanned.
 fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::types::SkillState> {
     let mut skills = Vec::new();
 
-    if dir.join("SKILL.md").exists() || dir.join("skill.md").exists() {
+    // Check root-level SKILL.md first.
+    if has_skill_md(dir) {
         let relative = dir
             .strip_prefix(install_dir)
             .unwrap_or(dir)
@@ -382,36 +433,46 @@ fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::ty
         });
     }
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    // Recursively scan subdirectories.
+    let mut dirs_to_scan = vec![dir.to_path_buf()];
+    while let Some(current) = dirs_to_scan.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
             }
-            let sub_skill = path.join("SKILL.md");
-            let sub_skill_lower = path.join("skill.md");
-            if !(sub_skill.exists() || sub_skill_lower.exists()) {
-                continue;
+            if has_skill_md(&path) {
+                let sub_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                let relative = path
+                    .strip_prefix(install_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                skills.push(crate::types::SkillState {
+                    name: format!("{slug}:{sub_name}"),
+                    relative_path: relative,
+                    trusted: false,
+                    enabled: false,
+                });
+            } else {
+                // No SKILL.md here, keep scanning deeper.
+                dirs_to_scan.push(path);
             }
-            let sub_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
-            let relative = path
-                .strip_prefix(install_dir)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
-            skills.push(crate::types::SkillState {
-                name: format!("{slug}:{sub_name}"),
-                relative_path: relative,
-                trusted: false,
-                enabled: false,
-            });
         }
     }
 
     skills
+}
+
+fn has_skill_md(dir: &Path) -> bool {
+    dir.join("SKILL.md").exists() || dir.join("skill.md").exists()
 }
 
 // -- Search: GET /api/v1/search?q=...&limit=N --------------------------------
@@ -644,8 +705,9 @@ mod tests {
 
     #[test]
     fn percent_encode_path_handles_special_chars() {
-        assert_eq!(percent_encode_path("hello-world"), "hello-world");
-        assert_eq!(percent_encode_path("foo/bar"), "foo/bar"); // slashes preserved in path
+        assert_eq!(percent_encode_path("hello-world"), "hello%2Dworld");
+        assert_eq!(percent_encode_path("foo/bar"), "foo%2Fbar"); // slashes encoded for path segment
         assert_eq!(percent_encode_path("a b"), "a%20b");
+        assert_eq!(percent_encode_path("simple"), "simple");
     }
 }

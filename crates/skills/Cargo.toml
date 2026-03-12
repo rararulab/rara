@@ -21,6 +21,7 @@ chrono.workspace = true
 dirs.workspace = true
 flate2 = "1"
 notify-debouncer-full = "0.5"
+percent-encoding = "2"
 rara-paths.workspace = true
 regex = "1"
 reqwest = { workspace = true, features = ["json"] }
