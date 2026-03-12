@@ -41,6 +41,7 @@ mod send_image;
 mod session_info;
 mod set_avatar;
 mod settings;
+mod marketplace;
 mod skill_tools;
 mod tape_handoff;
 mod tape_info;
@@ -73,6 +74,7 @@ use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use tape_handoff::TapeHandoffTool;
 use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
+use marketplace::MarketplaceTool;
 use write_file::WriteFileTool;
 
 /// Dependencies required to construct all tools.
@@ -83,6 +85,7 @@ pub struct ToolDeps {
     pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
     pub tape_service:           rara_kernel::memory::TapeService,
     pub session_index:          rara_kernel::session::SessionIndexRef,
+    pub marketplace_service:    std::sync::Arc<rara_skills::marketplace::MarketplaceService>,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -134,6 +137,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ListSkillsTool::new(deps.skill_registry.clone())),
         Arc::new(CreateSkillTool::new(deps.skill_registry.clone())),
         Arc::new(DeleteSkillTool::new(deps.skill_registry)),
+        // Marketplace
+        Arc::new(MarketplaceTool::new(deps.marketplace_service)),
         // MCP management tools
         Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
         Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
