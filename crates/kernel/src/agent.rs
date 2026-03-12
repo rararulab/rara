@@ -771,6 +771,7 @@ pub(crate) async fn run_agent_loop(
     let mut context_window_recovery_used = false;
     let mut consecutive_silent_iters: usize = 0;
     let mut needs_anchor_reminder = false;
+    let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
     let user_id = tool_context.user_id.as_deref();
 
@@ -802,6 +803,11 @@ pub(crate) async fn run_agent_loop(
                  with summary and next_steps. Use tape.search later for older details.",
             ));
             needs_anchor_reminder = false;
+        }
+
+        // Inject context pressure warning from previous iteration
+        if let Some(warning) = context_pressure_warning.take() {
+            messages.push(llm::Message::user(warning));
         }
 
         // Inject LLM error recovery message from previous iteration
@@ -1493,31 +1499,32 @@ pub(crate) async fn run_agent_loop(
         }
 
         // ── Runtime context guard ──────────────────────────────────────
+        // Set flag so the warning is injected at the start of the NEXT
+        // iteration (after rebuild_messages_for_llm), matching the same
+        // pattern used by needs_anchor_reminder.
         let pressure = classify_context_pressure(&messages, capabilities.context_window_tokens);
         if !matches!(pressure, ContextPressure::Normal) {
             if let Ok(tape_info) = tape.info(tape_name).await {
                 match pressure {
                     ContextPressure::Critical { usage_ratio, .. } => {
-                        let warning = format!(
+                        context_pressure_warning = Some(format!(
                             "[Context Usage Critical] Current context ~{} tokens ({:.0}%), \
                              context window capacity {} tokens. You MUST immediately create \
                              a tape anchor with summary and next_steps.",
                             tape_info.estimated_context_tokens,
                             usage_ratio * 100.0,
                             capabilities.context_window_tokens,
-                        );
-                        messages.push(llm::Message::user(warning));
+                        ));
                     }
                     ContextPressure::Warning { usage_ratio, .. } => {
-                        let warning = format!(
+                        context_pressure_warning = Some(format!(
                             "[Context Usage Warning] Current context ~{} tokens ({:.0}%), \
                              context window capacity {} tokens. You SHOULD consider creating \
                              a tape anchor.",
                             tape_info.estimated_context_tokens,
                             usage_ratio * 100.0,
                             capabilities.context_window_tokens,
-                        );
-                        messages.push(llm::Message::user(warning));
+                        ));
                     }
                     ContextPressure::Normal => {}
                 }
