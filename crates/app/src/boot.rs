@@ -148,6 +148,11 @@ pub(crate) async fn boot(
     rara_skills::cache::spawn_background_sync(pool.clone(), skill_registry.clone());
     info!("skill registry initialized with background sync");
 
+    // -- marketplace service -----------------------------------------------
+
+    let marketplace_service = Arc::new(rara_skills::marketplace::MarketplaceService::new());
+    info!("marketplace service initialized");
+
     // -- MCP manager -------------------------------------------------------
 
     let mcp_manager = init_mcp_manager(credential_store.clone())
@@ -181,6 +186,7 @@ pub(crate) async fn boot(
             mcp_manager: mcp_manager.clone(),
             tape_service: tape_service.clone(),
             session_index: session_index.clone(),
+            marketplace_service: marketplace_service.clone(),
         },
     );
 
