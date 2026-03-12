@@ -405,8 +405,8 @@ fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::ty
             skills.push(crate::types::SkillState {
                 name: format!("{slug}:{sub_name}"),
                 relative_path: relative,
-                trusted: true,
-                enabled: true,
+                trusted: false,
+                enabled: false,
             });
         }
     }
