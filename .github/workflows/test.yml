@@ -25,7 +25,7 @@ permissions:
 jobs:
   rust-version:
     name: Get Rust Version
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       version: ${{ steps.rust-version.outputs.version }}
     steps:
@@ -42,13 +42,9 @@ jobs:
           echo "Rust version: $RUST_VERSION"
 
   rust-test:
-    name: Rust Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Rust Test
+    runs-on: self-hosted
     needs: rust-version
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -74,7 +70,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
         with:
-          shared-key: "test-${{ matrix.os }}"
+          shared-key: "test-linux"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
@@ -82,7 +78,7 @@ jobs:
 
   test-success:
     name: Test Success
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [rust-test]
     if: always()
     steps:
@@ -92,6 +88,6 @@ jobs:
         run: |
           if [[ "$RUST_TEST_RESULT" != "success" ]]; then
             echo "One or more test jobs failed"
-            exit true
+            exit 1
           fi
           echo "All test jobs passed successfully"

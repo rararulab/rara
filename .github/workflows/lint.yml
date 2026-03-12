@@ -25,7 +25,7 @@ permissions:
 jobs:
   rust-format:
     name: Rust Format
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       rust-version: ${{ steps.rust-version.outputs.version }}
     steps:
@@ -72,7 +72,7 @@ jobs:
 
   proto-lint:
     name: Protocol Buffer Lint
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -92,7 +92,7 @@ jobs:
 
   cargo-deny:
     name: Cargo Deny
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -104,7 +104,7 @@ jobs:
 
   lint-success:
     name: Lint Success
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [rust-format, proto-lint, cargo-deny]
     if: always()
     steps:
@@ -118,6 +118,6 @@ jobs:
                 "$PROTO_LINT_RESULT" != "success" || \
                 "$CARGO_DENY_RESULT" != "success" ]]; then
             echo "One or more lint jobs failed"
-            exit true
+            exit 1
           fi
           echo "All lint jobs passed successfully"

@@ -31,7 +31,7 @@ jobs:
   build-base:
     name: Build Base Image
     needs: [ci]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +56,7 @@ jobs:
   build-backend:
     name: Build Backend Image
     needs: [build-base]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +84,7 @@ jobs:
   build-frontend:
     name: Build Frontend Image
     needs: [ci]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 

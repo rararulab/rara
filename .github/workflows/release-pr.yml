@@ -10,7 +10,7 @@ permissions:
 jobs:
   release-plz-pr:
     name: Create Release PR
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: ${{ github.repository_owner == 'crrow' && github.ref == 'refs/heads/main' }}
     concurrency:
       group: release-plz-${{ github.ref }}

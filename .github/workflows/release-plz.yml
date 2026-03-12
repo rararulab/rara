@@ -11,7 +11,7 @@ jobs:
   # Release unpublished packages (only when release PR is merged).
   release-plz-release:
     name: Release-plz release
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: ${{ github.repository_owner == 'crrow' && github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release') }}
     outputs:
       version: ${{ steps.get-version.outputs.version }}
