@@ -119,26 +119,19 @@ pub enum WebEvent {
     },
     /// A plan has been created with a goal and steps.
     PlanCreated {
-        goal:  String,
-        steps: Vec<String>,
+        goal:                    String,
+        total_steps:             usize,
+        compact_summary:         String,
+        estimated_duration_secs: Option<u32>,
     },
-    /// A plan step has started executing.
-    PlanStepStart {
-        index: usize,
-        task:  String,
-        mode:  String,
-    },
-    /// A plan step has finished.
-    PlanStepEnd {
-        index:   usize,
-        outcome: String,
-        summary: String,
+    /// Incremental plan progress update.
+    PlanProgress {
+        current_step: usize,
+        total_steps:  usize,
+        status_text:  String,
     },
     /// The plan has been revised.
-    PlanReplan {
-        reason:    String,
-        new_steps: Vec<String>,
-    },
+    PlanReplan { reason: String },
     /// The plan has completed.
     PlanCompleted { summary: String },
     /// Stream completed (no more deltas).
@@ -199,24 +192,27 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
             tool_calls,
             model,
         }),
-        StreamEvent::PlanCreated { goal, steps } => {
-            Some(WebEvent::PlanCreated { goal, steps })
-        }
-        StreamEvent::PlanStepStart { index, task, mode } => {
-            Some(WebEvent::PlanStepStart { index, task, mode })
-        }
-        StreamEvent::PlanStepEnd {
-            index,
-            outcome,
-            summary,
-        } => Some(WebEvent::PlanStepEnd {
-            index,
-            outcome,
-            summary,
+        StreamEvent::PlanCreated {
+            goal,
+            total_steps,
+            compact_summary,
+            estimated_duration_secs,
+        } => Some(WebEvent::PlanCreated {
+            goal,
+            total_steps,
+            compact_summary,
+            estimated_duration_secs,
         }),
-        StreamEvent::PlanReplan { reason, new_steps } => {
-            Some(WebEvent::PlanReplan { reason, new_steps })
-        }
+        StreamEvent::PlanProgress {
+            current_step,
+            total_steps,
+            status_text,
+        } => Some(WebEvent::PlanProgress {
+            current_step,
+            total_steps,
+            status_text,
+        }),
+        StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
     }
 }
