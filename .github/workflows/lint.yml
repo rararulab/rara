@@ -20,7 +20,7 @@ permissions:
 jobs:
   rust-format:
     name: Rust Format
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -38,7 +38,7 @@ jobs:
 
   proto-lint:
     name: Protocol Buffer Lint
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -58,7 +58,7 @@ jobs:
 
   lint-success:
     name: Lint Success
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     needs: [rust-format, proto-lint]
     if: always()
     steps:
