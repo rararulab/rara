@@ -79,7 +79,7 @@ jobs:
           shared-key: rust-test
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@cd06cfcb315894ee98ffbc4582bcafbcbc260bdb # v2
+        uses: taiki-e/install-action@5ab5d1729c22acd8f798b267eadcfe5e5be6f5c2 # v2
         with:
           tool: cargo-nextest
 
@@ -102,7 +102,7 @@ jobs:
           shared-key: rust-coverage
 
       - name: Install cargo-tarpaulin
-        uses: taiki-e/install-action@cd06cfcb315894ee98ffbc4582bcafbcbc260bdb # v2
+        uses: taiki-e/install-action@5ab5d1729c22acd8f798b267eadcfe5e5be6f5c2 # v2
         with:
           tool: cargo-tarpaulin
 
