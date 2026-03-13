@@ -131,6 +131,7 @@ members = [
     "crates/extensions/rara-git",
     "crates/soul",
     "crates/symphony",
+    "crates/rara-vault",
 ]
 
 [workspace.dependencies]
@@ -257,6 +258,7 @@ rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
 rara-soul = { path = "crates/soul" }
 rara-symphony = { path = "crates/symphony" }
+rara-vault = { path = "crates/rara-vault" }
 
 yunara-store = { path = "crates/common/yunara-store" }
 
