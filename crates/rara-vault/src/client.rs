@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -21,8 +20,10 @@ use snafu::ResultExt;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
-use crate::config::VaultConfig;
-use crate::error::{self, VaultError};
+use crate::{
+    config::VaultConfig,
+    error::{self, VaultError},
+};
 
 // ---------------------------------------------------------------------------
 // Vault API response types
@@ -37,17 +38,17 @@ pub struct KvV2ReadResponse {
 /// Inner data envelope of a KV v2 read response.
 #[derive(Debug, Deserialize)]
 pub struct KvV2Data {
-    pub data: HashMap<String, serde_json::Value>,
+    pub data:     HashMap<String, serde_json::Value>,
     pub metadata: KvV2Metadata,
 }
 
 /// Metadata attached to a KV v2 secret version.
 #[derive(Debug, Deserialize)]
 pub struct KvV2Metadata {
-    pub version: u64,
+    pub version:      u64,
     pub created_time: String,
     #[serde(default)]
-    pub destroyed: bool,
+    pub destroyed:    bool,
 }
 
 /// Response from `LIST` on the metadata endpoint.
@@ -70,7 +71,7 @@ struct AuthResponse {
 
 #[derive(Debug, Deserialize)]
 struct AuthData {
-    client_token: String,
+    client_token:   String,
     lease_duration: u64,
 }
 
@@ -93,17 +94,17 @@ struct KvV2WriteBody {
 
 /// Internal token state.
 struct TokenState {
-    token: String,
+    token:          String,
     /// Seconds remaining when the token was acquired.
     lease_duration: u64,
     /// When the token was acquired (monotonic).
-    acquired_at: tokio::time::Instant,
+    acquired_at:    tokio::time::Instant,
 }
 
 /// HTTP client for HashiCorp Vault KV v2 with AppRole authentication.
 pub struct VaultClient {
-    config: VaultConfig,
-    http: Client,
+    config:      VaultConfig,
+    http:        Client,
     token_state: Arc<RwLock<Option<TokenState>>>,
 }
 
@@ -159,7 +160,7 @@ impl VaultClient {
         if !status.is_success() {
             let msg = extract_error_message(resp).await;
             return Err(VaultError::Api {
-                status: status.as_u16(),
+                status:  status.as_u16(),
                 message: msg,
             });
         }
@@ -172,9 +173,9 @@ impl VaultClient {
 
         let mut state = self.token_state.write().await;
         *state = Some(TokenState {
-            token: auth_resp.auth.client_token,
+            token:          auth_resp.auth.client_token,
             lease_duration: auth_resp.auth.lease_duration,
-            acquired_at: tokio::time::Instant::now(),
+            acquired_at:    tokio::time::Instant::now(),
         });
         Ok(())
     }
@@ -197,7 +198,7 @@ impl VaultClient {
             let msg = extract_error_message(resp).await;
             warn!(status = status.as_u16(), msg, "Token renewal failed");
             return Err(VaultError::Api {
-                status: status.as_u16(),
+                status:  status.as_u16(),
                 message: msg,
             });
         }
@@ -205,9 +206,9 @@ impl VaultClient {
         let auth_resp: AuthResponse = resp.json().await.context(error::ConnectionSnafu)?;
         let mut state = self.token_state.write().await;
         *state = Some(TokenState {
-            token: auth_resp.auth.client_token,
+            token:          auth_resp.auth.client_token,
             lease_duration: auth_resp.auth.lease_duration,
-            acquired_at: tokio::time::Instant::now(),
+            acquired_at:    tokio::time::Instant::now(),
         });
         debug!("Vault token renewed");
         Ok(())
@@ -254,7 +255,7 @@ impl VaultClient {
         if !status.is_success() {
             let msg = extract_error_message(resp).await;
             return Err(VaultError::Api {
-                status: status.as_u16(),
+                status:  status.as_u16(),
                 message: msg,
             });
         }
@@ -273,7 +274,10 @@ impl VaultClient {
 
         let resp = self
             .http
-            .request(reqwest::Method::from_bytes(b"LIST").expect("valid method"), &url)
+            .request(
+                reqwest::Method::from_bytes(b"LIST").expect("valid method"),
+                &url,
+            )
             .header("X-Vault-Token", &token)
             .send()
             .await
@@ -286,7 +290,7 @@ impl VaultClient {
         if !status.is_success() {
             let msg = extract_error_message(resp).await;
             return Err(VaultError::Api {
-                status: status.as_u16(),
+                status:  status.as_u16(),
                 message: msg,
             });
         }
@@ -319,12 +323,17 @@ impl VaultClient {
                 match self.read_secret(&vault_path).await {
                     Ok(resp) => {
                         let settings_prefix = vault_key_to_settings_prefix(key);
-                        flatten_value(&settings_prefix, &serde_json::Value::Object(
-                            resp.data.data.into_iter().collect(),
-                        ), &mut pairs);
+                        flatten_value(
+                            &settings_prefix,
+                            &serde_json::Value::Object(resp.data.data.into_iter().collect()),
+                            &mut pairs,
+                        );
                     }
                     Err(VaultError::NotFound { .. }) => {
-                        debug!(path = vault_path, "secret not found during pull_all, skipping");
+                        debug!(
+                            path = vault_path,
+                            "secret not found during pull_all, skipping"
+                        );
                     }
                     Err(e) => return Err(e),
                 }
@@ -364,7 +373,7 @@ impl VaultClient {
         if !status.is_success() {
             let msg = extract_error_message(resp).await;
             return Err(VaultError::Api {
-                status: status.as_u16(),
+                status:  status.as_u16(),
                 message: msg,
             });
         }
@@ -414,7 +423,7 @@ impl VaultClient {
         if !status.is_success() {
             let msg = extract_error_message(resp).await;
             return Err(VaultError::Api {
-                status: status.as_u16(),
+                status:  status.as_u16(),
                 message: msg,
             });
         }
@@ -426,16 +435,15 @@ impl VaultClient {
         #[derive(Deserialize)]
         struct MetadataInner {
             current_version: u64,
-            created_time: String,
+            created_time:    String,
         }
 
         let body = resp.text().await.context(error::ConnectionSnafu)?;
-        let meta: MetadataResp =
-            serde_json::from_str(&body).context(error::DeserializeSnafu)?;
+        let meta: MetadataResp = serde_json::from_str(&body).context(error::DeserializeSnafu)?;
         Ok(KvV2Metadata {
-            version: meta.data.current_version,
+            version:      meta.data.current_version,
             created_time: meta.data.created_time,
-            destroyed: false,
+            destroyed:    false,
         })
     }
 
@@ -537,9 +545,9 @@ pub(crate) fn flatten_value(
         serde_json::Value::Array(arr) => {
             let joined: Vec<String> = arr
                 .iter()
-                .filter_map(|v| match v {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    other => Some(other.to_string()),
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 })
                 .collect();
             out.push((prefix.to_string(), joined.join(",")));
@@ -574,7 +582,7 @@ const SECRET_KEY_PREFIXES: &[&str] = &[
 /// be stored under `secrets/` rather than `config/`.
 fn is_secret_key(key: &str) -> bool {
     // Exact match on known secret keys
-    if SECRET_KEY_PREFIXES.iter().any(|&prefix| key == prefix) {
+    if SECRET_KEY_PREFIXES.contains(&key) {
         return true;
     }
     // LLM provider api_key fields: "llm.providers.{name}.api_key"
@@ -601,7 +609,11 @@ pub(crate) fn unflatten_to_vault_paths(
     for (key, value) in pairs {
         if let Some(dot_pos) = key.find('.') {
             let vault_key = settings_prefix_to_vault_key(&key);
-            let vault_prefix = if is_secret_key(&key) { "secrets" } else { "config" };
+            let vault_prefix = if is_secret_key(&key) {
+                "secrets"
+            } else {
+                "config"
+            };
             let path = format!("{vault_prefix}/{vault_key}");
 
             // Strip the settings prefix to get the field path within
@@ -609,7 +621,9 @@ pub(crate) fn unflatten_to_vault_paths(
             // vault_key is "knowledge", so we need the part after
             // "memory.knowledge." → "embedding_model".
             let settings_prefix = vault_key_to_settings_prefix(vault_key);
-            let rest = key.strip_prefix(&format!("{settings_prefix}.")).unwrap_or(&key[dot_pos + 1..]);
+            let rest = key
+                .strip_prefix(&format!("{settings_prefix}."))
+                .unwrap_or(&key[dot_pos + 1..]);
 
             let entry = grouped.entry(path).or_default();
             set_nested_value(entry, rest, serde_json::Value::String(value));
@@ -636,10 +650,8 @@ fn set_nested_value(
             .entry(parts[0].to_string())
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
         if let serde_json::Value::Object(inner) = entry {
-            let mut inner_map: HashMap<String, serde_json::Value> = inner
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            let mut inner_map: HashMap<String, serde_json::Value> =
+                inner.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             set_nested_value(&mut inner_map, parts[1], value);
             *entry = serde_json::Value::Object(inner_map.into_iter().collect());
         }
@@ -676,9 +688,7 @@ impl VaultClient {
 
     /// Build the URL for the AppRole login endpoint (exposed for unit tests).
     #[cfg(test)]
-    fn login_url(&self) -> String {
-        format!("{}/v1/auth/approle/login", self.config.address)
-    }
+    fn login_url(&self) -> String { format!("{}/v1/auth/approle/login", self.config.address) }
 }
 
 // ---------------------------------------------------------------------------
@@ -687,21 +697,22 @@ impl VaultClient {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::config::{VaultAuthConfig, VaultConfig};
-    use std::time::Duration;
 
     fn test_config() -> VaultConfig {
         VaultConfig {
-            address: "http://10.0.0.5:30820".into(),
-            mount_path: "secret/rara".into(),
-            auth: VaultAuthConfig {
-                method: "approle".into(),
-                role_id_file: "/etc/rara/vault-role-id".into(),
+            address:           "http://10.0.0.5:30820".into(),
+            mount_path:        "secret/rara".into(),
+            auth:              VaultAuthConfig {
+                method:         "approle".into(),
+                role_id_file:   "/etc/rara/vault-role-id".into(),
                 secret_id_file: "/etc/rara/vault-secret-id".into(),
             },
-            watch_interval: Duration::from_secs(30),
-            timeout: Duration::from_secs(5),
+            watch_interval:    Duration::from_secs(30),
+            timeout:           Duration::from_secs(5),
             fallback_to_local: true,
         }
     }
@@ -754,10 +765,7 @@ mod tests {
         pairs.sort();
 
         assert_eq!(pairs.len(), 2);
-        assert!(pairs.contains(&(
-            "llm.providers.openrouter.api_key".into(),
-            "sk-xxx".into()
-        )));
+        assert!(pairs.contains(&("llm.providers.openrouter.api_key".into(), "sk-xxx".into())));
         assert!(pairs.contains(&(
             "llm.providers.openrouter.base_url".into(),
             "https://openrouter.ai/api/v1".into()
@@ -788,10 +796,7 @@ mod tests {
             ("http.bind_address".into(), "127.0.0.1:25555".into()),
             ("http.port".into(), "8080".into()),
             // api_key should go to secrets/, not config/
-            (
-                "llm.providers.openrouter.api_key".into(),
-                "sk-xxx".into(),
-            ),
+            ("llm.providers.openrouter.api_key".into(), "sk-xxx".into()),
             // base_url is not a secret, goes to config/
             (
                 "llm.providers.openrouter.base_url".into(),
@@ -827,7 +832,9 @@ mod tests {
         let openrouter = providers.get("openrouter").expect("openrouter");
         assert_eq!(
             openrouter.get("base_url"),
-            Some(&serde_json::Value::String("https://openrouter.ai/api/v1".into()))
+            Some(&serde_json::Value::String(
+                "https://openrouter.ai/api/v1".into()
+            ))
         );
 
         // telegram.bot_token → secrets/telegram
@@ -876,8 +883,14 @@ mod tests {
     #[test]
     fn vault_key_mapping_roundtrip() {
         // knowledge ↔ memory.knowledge
-        assert_eq!(vault_key_to_settings_prefix("knowledge"), "memory.knowledge");
-        assert_eq!(settings_prefix_to_vault_key("memory.knowledge.embedding_model"), "knowledge");
+        assert_eq!(
+            vault_key_to_settings_prefix("knowledge"),
+            "memory.knowledge"
+        );
+        assert_eq!(
+            settings_prefix_to_vault_key("memory.knowledge.embedding_model"),
+            "knowledge"
+        );
 
         // Most keys are identity mappings
         assert_eq!(vault_key_to_settings_prefix("http"), "http");
@@ -889,11 +902,7 @@ mod tests {
     #[test]
     fn set_nested_creates_structure() {
         let mut map = HashMap::new();
-        set_nested_value(
-            &mut map,
-            "a.b.c",
-            serde_json::Value::String("deep".into()),
-        );
+        set_nested_value(&mut map, "a.b.c", serde_json::Value::String("deep".into()));
 
         let a = map.get("a").expect("a");
         let b = a.get("b").expect("b");

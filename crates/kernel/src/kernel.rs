@@ -1901,7 +1901,7 @@ impl Kernel {
         let event_queue = self.event_queue.clone();
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
-        let stream_hub_ref = Arc::clone(&self.io.stream_hub());
+        let stream_hub_ref = Arc::clone(self.io.stream_hub());
         let output_interceptor = self.output_interceptor.clone();
         let guard_pipeline = self.guard_pipeline.clone();
         let notification_bus = self.syscall.event_bus().clone();
@@ -2083,10 +2083,8 @@ impl Kernel {
                         if let Err(e) = tape_service.store().merge(fork, &tape_name).await {
                             tracing::warn!(fork = %fork, tape = %tape_name, error = %e, "tape merge failed, fork entries may be lost");
                         }
-                    } else {
-                        if let Err(e) = tape_service.store().discard(fork).await {
-                            tracing::warn!(fork = %fork, error = %e, "tape discard failed, fork file may leak");
-                        }
+                    } else if let Err(e) = tape_service.store().discard(fork).await {
+                        tracing::warn!(fork = %fork, error = %e, "tape discard failed, fork file may leak");
                     }
                 }
 

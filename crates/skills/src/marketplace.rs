@@ -133,7 +133,7 @@ impl MarketplaceService {
         if sources.iter().any(|s| s.repo == repo) {
             return Ok(()); // idempotent
         }
-        let name = repo.split('/').last().unwrap_or(repo).to_string();
+        let name = repo.split('/').next_back().unwrap_or(repo).to_string();
         sources.push(MarketplaceSource {
             repo: repo.to_string(),
             name,

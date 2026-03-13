@@ -397,8 +397,6 @@ fn estimate_context_window(canonical: &str) -> usize {
         1_000_000
     } else if canonical.contains("claude") {
         200_000
-    } else if canonical.contains("gpt-4o") {
-        128_000
     } else {
         128_000
     }

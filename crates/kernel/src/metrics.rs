@@ -15,10 +15,11 @@
 //! Prometheus metrics for the kernel.
 //!
 //! Organized by domain: process lifecycle, LLM turns, event processing, I/O
-//! pipeline. All metrics use `lazy_static` for static registration with the
+//! pipeline. All metrics use `LazyLock` for static registration with the
 //! global prometheus registry.
 
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
+
 use prometheus::*;
 
 /// Agent name label.
@@ -38,116 +39,132 @@ pub const EXIT_STATE_LABEL: &str = "exit_state";
 
 // -- Session lifecycle -------------------------------------------------------
 
-lazy_static! {
-    /// Total agent sessions created.
-    pub static ref SESSION_CREATED: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_session_created_total",
-            "Total agent sessions created",
-            &[AGENT_NAME_LABEL]
-        ).unwrap();
+/// Total agent sessions created.
+pub static SESSION_CREATED: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_session_created_total",
+        "Total agent sessions created",
+        &[AGENT_NAME_LABEL]
+    )
+    .unwrap()
+});
 
-    /// Total agent sessions suspended (idle timeout / done).
-    pub static ref SESSION_SUSPENDED: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_session_suspended_total",
-            "Total agent sessions suspended",
-            &[AGENT_NAME_LABEL, EXIT_STATE_LABEL]
-        ).unwrap();
+/// Total agent sessions suspended (idle timeout / done).
+pub static SESSION_SUSPENDED: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_session_suspended_total",
+        "Total agent sessions suspended",
+        &[AGENT_NAME_LABEL, EXIT_STATE_LABEL]
+    )
+    .unwrap()
+});
 
-    /// Currently active agent sessions.
-    pub static ref SESSION_ACTIVE: IntGaugeVec =
-        register_int_gauge_vec!(
-            "kernel_session_active",
-            "Currently active agent sessions",
-            &[AGENT_NAME_LABEL]
-        ).unwrap();
-}
+/// Currently active agent sessions.
+pub static SESSION_ACTIVE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register_int_gauge_vec!(
+        "kernel_session_active",
+        "Currently active agent sessions",
+        &[AGENT_NAME_LABEL]
+    )
+    .unwrap()
+});
 
 // -- LLM turn metrics --------------------------------------------------------
 
-lazy_static! {
-    /// Total LLM turns executed.
-    pub static ref TURN_TOTAL: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_turn_total",
-            "Total LLM turns executed",
-            &[AGENT_NAME_LABEL, MODEL_LABEL]
-        ).unwrap();
+/// Total LLM turns executed.
+pub static TURN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_turn_total",
+        "Total LLM turns executed",
+        &[AGENT_NAME_LABEL, MODEL_LABEL]
+    )
+    .unwrap()
+});
 
-    /// LLM turn execution duration in seconds.
-    pub static ref TURN_DURATION_SECONDS: HistogramVec =
-        register_histogram_vec!(
-            "kernel_turn_duration_seconds",
-            "LLM turn execution duration in seconds",
-            &[AGENT_NAME_LABEL, MODEL_LABEL],
-            vec![0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0]
-        ).unwrap();
+/// LLM turn execution duration in seconds.
+pub static TURN_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "kernel_turn_duration_seconds",
+        "LLM turn execution duration in seconds",
+        &[AGENT_NAME_LABEL, MODEL_LABEL],
+        vec![0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0]
+    )
+    .unwrap()
+});
 
-    /// Total tool calls made during turns.
-    pub static ref TURN_TOOL_CALLS: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_turn_tool_calls_total",
-            "Total tool calls made during turns",
-            &[AGENT_NAME_LABEL, TOOL_NAME_LABEL]
-        ).unwrap();
+/// Total tool calls made during turns.
+pub static TURN_TOOL_CALLS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_turn_tool_calls_total",
+        "Total tool calls made during turns",
+        &[AGENT_NAME_LABEL, TOOL_NAME_LABEL]
+    )
+    .unwrap()
+});
 
-    /// Total input tokens consumed.
-    pub static ref TURN_TOKENS_INPUT: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_turn_tokens_input_total",
-            "Total input tokens consumed",
-            &[MODEL_LABEL]
-        ).unwrap();
+/// Total input tokens consumed.
+pub static TURN_TOKENS_INPUT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_turn_tokens_input_total",
+        "Total input tokens consumed",
+        &[MODEL_LABEL]
+    )
+    .unwrap()
+});
 
-    /// Total output tokens produced.
-    pub static ref TURN_TOKENS_OUTPUT: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_turn_tokens_output_total",
-            "Total output tokens produced",
-            &[MODEL_LABEL]
-        ).unwrap();
-}
+/// Total output tokens produced.
+pub static TURN_TOKENS_OUTPUT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_turn_tokens_output_total",
+        "Total output tokens produced",
+        &[MODEL_LABEL]
+    )
+    .unwrap()
+});
 
 // -- Event processing --------------------------------------------------------
 
-lazy_static! {
-    /// Total events processed by the event loop.
-    pub static ref EVENT_PROCESSED: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_event_processed_total",
-            "Total events processed",
-            &[EVENT_TYPE_LABEL]
-        ).unwrap();
+/// Total events processed by the event loop.
+pub static EVENT_PROCESSED: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_event_processed_total",
+        "Total events processed",
+        &[EVENT_TYPE_LABEL]
+    )
+    .unwrap()
+});
 
-    /// Total syscalls processed.
-    pub static ref SYSCALL_TOTAL: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_syscall_total",
-            "Total syscalls processed",
-            &[SYSCALL_TYPE_LABEL]
-        ).unwrap();
-}
+/// Total syscalls processed.
+pub static SYSCALL_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_syscall_total",
+        "Total syscalls processed",
+        &[SYSCALL_TYPE_LABEL]
+    )
+    .unwrap()
+});
 
 // -- I/O pipeline ------------------------------------------------------------
 
-lazy_static! {
-    /// Total inbound messages received.
-    pub static ref MESSAGE_INBOUND: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_message_inbound_total",
-            "Total inbound messages received",
-            &[CHANNEL_TYPE_LABEL]
-        ).unwrap();
+/// Total inbound messages received.
+pub static MESSAGE_INBOUND: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_message_inbound_total",
+        "Total inbound messages received",
+        &[CHANNEL_TYPE_LABEL]
+    )
+    .unwrap()
+});
 
-    /// Total outbound messages delivered.
-    pub static ref MESSAGE_OUTBOUND: IntCounterVec =
-        register_int_counter_vec!(
-            "kernel_message_outbound_total",
-            "Total outbound messages delivered",
-            &[CHANNEL_TYPE_LABEL]
-        ).unwrap();
-}
+/// Total outbound messages delivered.
+pub static MESSAGE_OUTBOUND: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_message_outbound_total",
+        "Total outbound messages delivered",
+        &[CHANNEL_TYPE_LABEL]
+    )
+    .unwrap()
+});
 
 /// Record aggregate metrics for a completed LLM turn.
 pub fn record_turn_metrics(

@@ -263,7 +263,7 @@ impl App {
             if timeline.events.len() >= MAX_EVENTS_PER_AGENT {
                 timeline
                     .events
-                    .drain(..timeline.events.len() - MAX_EVENTS_PER_AGENT + 1);
+                    .drain(..=(timeline.events.len() - MAX_EVENTS_PER_AGENT));
             }
             timeline.events.push(event);
         }
@@ -350,7 +350,7 @@ impl App {
             let ss = &mut self.session_state;
 
             // Use uptime_ms to compute the actual start time of this process.
-            let agent_start = now - Duration::from_millis(p.uptime_ms);
+            let agent_start = now.checked_sub(Duration::from_millis(p.uptime_ms)).unwrap();
 
             let session_view =
                 ss.sessions
@@ -438,16 +438,14 @@ impl App {
                     }
                 }
                 maybe_event = poll_crossterm_event() => {
-                    if let Some(ev) = maybe_event {
-                        if let Event::Key(key) = ev {
-                            if key.kind == KeyEventKind::Press {
-                                // 'r' triggers immediate refresh
-                                if key.code == KeyCode::Char('r') || key.code == KeyCode::Char('R')
-                                {
-                                    self.refresh(client).await;
-                                }
-                                self.handle_key(key.code);
+                    if let Some(Event::Key(key)) = maybe_event {
+                        if key.kind == KeyEventKind::Press {
+                            // 'r' triggers immediate refresh
+                            if key.code == KeyCode::Char('r') || key.code == KeyCode::Char('R')
+                            {
+                                self.refresh(client).await;
                             }
+                            self.handle_key(key.code);
                         }
                     }
                 }

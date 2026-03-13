@@ -238,8 +238,8 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
 ///
 /// This is the inverse of [`flatten_config_sections()`]. Keys without
 /// a recognised prefix are ignored.
-pub fn unflatten_from_settings(
-    pairs: &HashMap<String, String>,
+pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
+    pairs: &HashMap<String, String, S>,
 ) -> (
     Option<LlmConfig>,
     Option<TelegramConfig>,
@@ -254,7 +254,9 @@ pub fn unflatten_from_settings(
     )
 }
 
-fn unflatten_llm(pairs: &HashMap<String, String>) -> Option<LlmConfig> {
+fn unflatten_llm(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<LlmConfig> {
     let mut found = false;
     let mut config = LlmConfig::default();
 
@@ -290,7 +292,9 @@ fn unflatten_llm(pairs: &HashMap<String, String>) -> Option<LlmConfig> {
     found.then_some(config)
 }
 
-fn unflatten_telegram(pairs: &HashMap<String, String>) -> Option<TelegramConfig> {
+fn unflatten_telegram(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<TelegramConfig> {
     let bot_token = pairs.get("telegram.bot_token").cloned();
     let chat_id = pairs.get("telegram.chat_id").cloned();
     let allowed_group_chat_id = pairs.get("telegram.allowed_group_chat_id").cloned();
@@ -315,7 +319,9 @@ fn unflatten_telegram(pairs: &HashMap<String, String>) -> Option<TelegramConfig>
     })
 }
 
-fn unflatten_composio(pairs: &HashMap<String, String>) -> Option<ComposioConfig> {
+fn unflatten_composio(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<ComposioConfig> {
     use rara_domain_shared::settings::keys;
     let api_key = pairs.get(keys::COMPOSIO_API_KEY).cloned();
     let entity_id = pairs.get(keys::COMPOSIO_ENTITY_ID).cloned();
@@ -327,7 +333,9 @@ fn unflatten_composio(pairs: &HashMap<String, String>) -> Option<ComposioConfig>
     Some(ComposioConfig { api_key, entity_id })
 }
 
-fn unflatten_knowledge(pairs: &HashMap<String, String>) -> Option<KnowledgeConfig> {
+fn unflatten_knowledge(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<KnowledgeConfig> {
     use rara_domain_shared::settings::keys;
 
     let embedding_model = pairs.get(keys::KNOWLEDGE_EMBEDDING_MODEL).cloned();

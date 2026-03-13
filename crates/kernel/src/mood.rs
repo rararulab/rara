@@ -137,7 +137,7 @@ pub fn infer_mood(messages: &[llm::Message]) -> Option<MoodInference> {
 
     // Confidence scales with hit count: 1 hit → 0.4, 2 → 0.55, 3 → 0.7, 4+ → 0.85,
     // cap 0.9.
-    let confidence = (0.25 + max_hits as f32 * 0.15).min(0.9);
+    let confidence = (max_hits as f32).mul_add(0.15, 0.25).min(0.9);
 
     let label = if cheerful_hits >= playful_hits && cheerful_hits >= focused_hits {
         MoodLabel::Cheerful

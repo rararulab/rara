@@ -539,54 +539,6 @@ pub async fn start_with_options(
     Ok(app_handle)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::AppConfig;
-
-    const BASE_YAML: &str = r#"
-http:
-  bind_address: "127.0.0.1:25555"
-grpc:
-  bind_address: "127.0.0.1:50051"
-  server_address: "127.0.0.1:50051"
-users:
-  - name: test
-    role: root
-    platforms: []
-mita:
-  heartbeat_interval: "30m"
-"#;
-
-    #[test]
-    fn app_config_loads_from_global_fallback_when_local_is_missing() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let global = tmp.path().join("global-config.yaml");
-        let local = tmp.path().join("config.yaml");
-        fs::write(&global, BASE_YAML).expect("write global config");
-
-        let config = AppConfig::load_from_paths(&global, &local).expect("load config");
-        assert_eq!(config.http.bind_address, "127.0.0.1:25555");
-    }
-
-    #[test]
-    fn app_config_prefers_local_override_over_global() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let global = tmp.path().join("global-config.yaml");
-        let local = tmp.path().join("config.yaml");
-        fs::write(&global, BASE_YAML).expect("write global config");
-        fs::write(
-            &local,
-            BASE_YAML.replace("127.0.0.1:25555", "127.0.0.1:35555"),
-        )
-        .expect("write local config");
-
-        let config = AppConfig::load_from_paths(&global, &local).expect("load config");
-        assert_eq!(config.http.bind_address, "127.0.0.1:35555");
-    }
-}
-
 async fn try_build_telegram(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
@@ -738,5 +690,53 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = ctrl_c => { info!("Received Ctrl+C signal"); },
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::AppConfig;
+
+    const BASE_YAML: &str = r#"
+http:
+  bind_address: "127.0.0.1:25555"
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+users:
+  - name: test
+    role: root
+    platforms: []
+mita:
+  heartbeat_interval: "30m"
+"#;
+
+    #[test]
+    fn app_config_loads_from_global_fallback_when_local_is_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("global-config.yaml");
+        let local = tmp.path().join("config.yaml");
+        fs::write(&global, BASE_YAML).expect("write global config");
+
+        let config = AppConfig::load_from_paths(&global, &local).expect("load config");
+        assert_eq!(config.http.bind_address, "127.0.0.1:25555");
+    }
+
+    #[test]
+    fn app_config_prefers_local_override_over_global() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("global-config.yaml");
+        let local = tmp.path().join("config.yaml");
+        fs::write(&global, BASE_YAML).expect("write global config");
+        fs::write(
+            &local,
+            BASE_YAML.replace("127.0.0.1:25555", "127.0.0.1:35555"),
+        )
+        .expect("write local config");
+
+        let config = AppConfig::load_from_paths(&global, &local).expect("load config");
+        assert_eq!(config.http.bind_address, "127.0.0.1:35555");
     }
 }

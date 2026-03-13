@@ -31,7 +31,6 @@ eventsource-stream.workspace = true
 futures.workspace = true
 image.workspace = true
 jiff.workspace = true
-lazy_static.workspace = true
 md5.workspace = true
 opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }

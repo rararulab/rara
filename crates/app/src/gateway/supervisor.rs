@@ -285,54 +285,49 @@ impl SupervisorService {
         self.notifier.agent_healthy().await;
 
         // Wait for the child to exit, a shutdown signal, or a command.
-        let reason = loop {
-            tokio::select! {
-                status = self.child.as_mut().unwrap().wait() => {
-                    match status {
-                        Ok(s) if s.success() => {
-                            info!("Agent process exited with status 0");
-                            self.child = None;
-                            break Ok(ExitReason::CleanExit);
-                        }
-                        Ok(s) => {
-                            self.child = None;
-                            warn!(status = %s, "Agent process exited with non-zero status");
-                            break Err(SupervisorError::Spawn {
-                                source: std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    format!("child exited with {s}"),
-                                ),
-                            });
-                        }
-                        Err(e) => {
-                            self.child = None;
-                            break Err(SupervisorError::Spawn { source: e });
-                        }
+        tokio::select! {
+            status = self.child.as_mut().unwrap().wait() => {
+                match status {
+                    Ok(s) if s.success() => {
+                        info!("Agent process exited with status 0");
+                        self.child = None;
+                        Ok(ExitReason::CleanExit)
                     }
-                }
-                () = self.shutdown.cancelled() => {
-                    info!("Shutdown signal received — stopping agent");
-                    self.graceful_shutdown().await;
-                    break Ok(ExitReason::ShutdownRequested);
-                }
-                Some(cmd) = self.cmd_rx.recv() => {
-                    match cmd {
-                        SupervisorCommand::Restart => {
-                            info!("Restart command received — restarting agent");
-                            self.graceful_shutdown().await;
-                            break Ok(ExitReason::ManualRestart);
-                        }
-                        SupervisorCommand::Shutdown => {
-                            info!("Shutdown command received — stopping agent");
-                            self.graceful_shutdown().await;
-                            break Ok(ExitReason::ShutdownRequested);
-                        }
+                    Ok(s) => {
+                        self.child = None;
+                        warn!(status = %s, "Agent process exited with non-zero status");
+                        Err(SupervisorError::Spawn {
+                            source: std::io::Error::other(
+                                format!("child exited with {s}"),
+                            ),
+                        })
+                    }
+                    Err(e) => {
+                        self.child = None;
+                        Err(SupervisorError::Spawn { source: e })
                     }
                 }
             }
-        };
-
-        reason
+            () = self.shutdown.cancelled() => {
+                info!("Shutdown signal received — stopping agent");
+                self.graceful_shutdown().await;
+                Ok(ExitReason::ShutdownRequested)
+            }
+            Some(cmd) = self.cmd_rx.recv() => {
+                match cmd {
+                    SupervisorCommand::Restart => {
+                        info!("Restart command received — restarting agent");
+                        self.graceful_shutdown().await;
+                        Ok(ExitReason::ManualRestart)
+                    }
+                    SupervisorCommand::Shutdown => {
+                        info!("Shutdown command received — stopping agent");
+                        self.graceful_shutdown().await;
+                        Ok(ExitReason::ShutdownRequested)
+                    }
+                }
+            }
+        }
     }
 
     /// Spawn `rara server` as a child process.
