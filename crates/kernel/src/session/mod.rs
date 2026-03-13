@@ -282,7 +282,7 @@ pub struct Session {
     pub finished_at: Option<Timestamp>,
     /// Result of last execution (set on turn completion).
     pub result: Option<AgentRunLoopResult>,
-    /// Channel sender for streaming [`AgentEvent`]s (milestones + final result)
+    /// Channel sender for streaming `AgentEvent`s (milestones + final result)
     /// to the parent. Only set for child agents spawned via `spawn_child`.
     pub result_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     /// Files created or modified by this agent (for resource tracking).

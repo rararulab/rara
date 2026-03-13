@@ -16,13 +16,12 @@
 //!
 //! This module implements the kernel's I/O transport layer:
 //!
-//! - **Ingress**: channel adapters publish messages through
-//!   [`IngressPipeline`](ingress::IngressPipeline) into the unified
-//!   [`EventQueue`](crate::queue::EventQueue).
+//! - **Ingress**: channel adapters publish messages through `IngressPipeline`
+//!   into the unified [`EventQueue`](crate::queue::EventQueue).
 //! - **Egress**: the kernel event loop delivers outbound envelopes via
 //!   [`IOSubsystem::deliver`] to registered adapters.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)
-//!   flow through the [`StreamHub`](stream::StreamHub) for connected frontends.
+//!   flow through the `StreamHub` for connected frontends.
 //!
 //! ## Architecture
 //!
@@ -137,7 +136,7 @@ pub enum InteractionType {
 /// - **`Some(key)`** — a channel binding already maps this chat to a session.
 /// - **`None`** — first message from a new chat; no binding exists yet.
 ///
-/// Before routing, [`Kernel::handle_user_message()`] resolves `None` by
+/// Before routing, `Kernel::handle_user_message()` resolves `None` by
 /// creating a new session + writing a channel binding, then patches
 /// `session_key` to `Some`. All downstream code (routing, LLM turn,
 /// stream forwarder) therefore always sees `Some`.
@@ -679,7 +678,7 @@ pub struct PipeRegistry {
     pipes:          DashMap<PipeId, PipeEntry>,
     /// Named pipe index: name -> PipeId.
     named:          DashMap<String, PipeId>,
-    /// Parked readers for named pipes (take-once via Mutex<Option>).
+    /// Parked readers for named pipes (take-once via `Mutex<Option>`).
     parked_readers: DashMap<PipeId, Mutex<Option<PipeReader>>>,
 }
 
@@ -1024,7 +1023,7 @@ pub type IdentityResolverRef = Arc<dyn IdentityResolver>;
 /// Raw message from a channel adapter before identity/session resolution.
 ///
 /// Adapters construct this from platform-specific events and hand it to
-/// [`IngressPipeline::ingest`]. The ingress pipeline then resolves identity
+/// `IngressPipeline::ingest`. The ingress pipeline then resolves identity
 /// and session before publishing to the bus.
 #[derive(Debug)]
 pub struct RawPlatformMessage {
@@ -1342,7 +1341,7 @@ impl IngressRateLimiter {
 /// When no channel binding exists (first message from a new chat),
 /// `session_key` is `None`. The kernel — not the I/O layer — is responsible for
 /// creating the session and writing the binding. See
-/// [`Kernel::handle_user_message()`].
+/// `Kernel::handle_user_message()`.
 ///
 /// Constructed at the app/boot layer and injected into
 /// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
@@ -1402,7 +1401,7 @@ impl IOSubsystem {
     /// - **Not found / no chat_id** → `session_key = None`
     ///
     /// The kernel handles the `None` case by creating a session on demand.
-    /// See [`Kernel::handle_user_message()`].
+    /// See `Kernel::handle_user_message()`.
     #[tracing::instrument(
         skip(self, raw),
         fields(

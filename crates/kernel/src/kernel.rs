@@ -17,7 +17,7 @@
 //! The [`Kernel`] is the single entry point for all agent operations.
 //! It manages a [`SessionTable`] of running sessions, enforces concurrency
 //! limits via dual semaphores (global + per-session), and provides
-//! [`spawn`](Kernel::spawn) as the primary API for creating sessions.
+//! `spawn` as the primary API for creating sessions.
 //!
 //! # Architecture
 //!
@@ -36,8 +36,8 @@
 //!   └── ShardedEventQueue (single-queue or multi-shard mode)
 //! ```
 //!
-//! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
-//! sends [`Syscall`] variants through the unified event queue.
+//! Each spawned agent receives a `ProcessHandle` — a thin event pusher that
+//! sends `Syscall` variants through the unified event queue.
 
 use std::{sync::Arc, time::Duration};
 
@@ -272,7 +272,7 @@ impl Kernel {
         }
     }
 
-    /// Create a [`KernelHandle`] for external callers.
+    /// Create a `KernelHandle` for external callers.
     ///
     /// The handle is cheap to clone (all `Arc`s) and routes all mutations
     /// through the event queue, while exposing read-only accessors for
@@ -1062,8 +1062,8 @@ impl Kernel {
     ///
     /// `msg.session_key` arrives as `Option<SessionKey>` from the I/O layer:
     /// - `Some` — channel binding already exists, reuse the session.
-    /// - `None` — first message from this chat. Creates a new [`SessionEntry`]
-    ///   + [`ChannelBinding`] so future messages are routed automatically, then
+    /// - `None` — first message from this chat. Creates a new `SessionEntry`
+    ///   + `ChannelBinding` so future messages are routed automatically, then
     ///   patches `msg.session_key = Some(new_key)`.
     ///
     /// After resolution, `session_id` is always a valid key and all

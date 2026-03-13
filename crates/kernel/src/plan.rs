@@ -20,8 +20,8 @@
 //!    inline steps (or `KernelHandle::spawn_child` for worker steps).
 //! 3. Supports replanning when a step fails or requests revision.
 //!
-//! The entry point is [`run_plan_loop`], which has the same signature as
-//! [`crate::agent::run_agent_loop`] so the kernel can route to either.
+//! The entry point is `run_plan_loop`, which has the same signature as
+//! `run_agent_loop` so the kernel can route to either.
 
 use std::{sync::Arc, time::Instant};
 

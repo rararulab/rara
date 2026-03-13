@@ -35,7 +35,7 @@ pub struct EmbeddingService {
     index_path:      PathBuf,
     api_key:         String,
     embedding_model: String,
-    /// Base URL of the OpenAI-compatible provider (e.g. "https://openrouter.ai/api/v1").
+    /// Base URL of the OpenAI-compatible provider (e.g. `https://openrouter.ai/api/v1`).
     base_url:        String,
 }
 

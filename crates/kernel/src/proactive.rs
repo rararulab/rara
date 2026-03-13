@@ -87,7 +87,7 @@ pub enum ProactiveJudgment {
 /// Run the lightweight LLM judgment to decide whether Rara should
 /// proactively reply to a group-chat message.
 ///
-/// Loads the last [`JUDGMENT_CONTEXT_MESSAGES`] from the session tape,
+/// Loads the last `JUDGMENT_CONTEXT_MESSAGES` from the session tape,
 /// appends the new user message, and asks a small LLM call whether Rara
 /// should respond.
 ///

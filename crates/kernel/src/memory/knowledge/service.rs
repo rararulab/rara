@@ -35,7 +35,7 @@ impl KnowledgeService {
     /// references.
     ///
     /// Groups lookups by `source_tape` to minimise tape reads, then fetches
-    /// the referenced entries via [`TapeService::entries_by_ids`].
+    /// the referenced entries via `TapeService::entries_by_ids`.
     pub async fn resolve_sources(
         tape_service: &crate::memory::TapeService,
         items: &[super::items::MemoryItem],

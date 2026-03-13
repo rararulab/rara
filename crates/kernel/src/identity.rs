@@ -107,7 +107,7 @@ impl Principal {
     ///
     /// The returned `Principal` only carries the user id — role and
     /// permissions are placeholders. Call
-    /// [`SecuritySubsystem::resolve_principal`] to obtain a fully-populated
+    /// `SecuritySubsystem::resolve_principal` to obtain a fully-populated
     /// principal before storing it in a session.
     pub fn lookup(user_id: impl Into<String>) -> Self {
         Self {

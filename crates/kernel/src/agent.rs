@@ -678,8 +678,8 @@ fn build_runtime_contract_prompt(
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
-/// Uses the new [`LlmDriver`] abstraction with first-class `reasoning_content`
-/// (thinking tokens) support. The driver sends [`StreamDelta`] events through
+/// Uses the new `LlmDriver` abstraction with first-class `reasoning_content`
+/// (thinking tokens) support. The driver sends `StreamDelta` events through
 /// an `mpsc` channel, which this function consumes.
 ///
 /// # Cancellation

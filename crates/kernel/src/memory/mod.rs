@@ -61,11 +61,11 @@
 //!
 //! | File           | Type                | Role |
 //! |----------------|---------------------|------|
-//! | [`store`]      | [`FileTapeStore`]   | Low-level JSONL I/O.  A dedicated `rara-tape-io` worker thread receives [`Job`] closures via `mpsc`.  [`TapeFile`] keeps an in-memory entry cache plus a byte-offset cursor for incremental reads, so repeated reads only parse newly appended bytes. |
-//! | [`service`]    | [`TapeService`]     | High-level async API.  Not bound to a single tape -- every method takes `tape_name`.  Provides: append helpers, anchor queries, fork/merge, ranked Unicode-aware search over message payload + metadata, LLM context building (`build_llm_context`), tape info, and reset/archive. |
-//! | [`context`]    | [`default_tape_context()`] | Stateless conversion of `&[TapEntry]` into `Vec<llm::Message>`.  `Message` entries are deserialized directly.  `ToolCall` becomes an assistant message with a `tool_calls` array.  `ToolResult` becomes one or more tool-role messages.  `Event` / `System` / `Anchor` are skipped (they carry metadata, not LLM-visible content). |
-//! | [`anchors`]    | [`AnchorSummary`]   | Lightweight data type pairing an anchor `name` with its captured `state`. |
-//! | [`error`]      | [`TapError`]        | `snafu`-based error enum scoped to the tape subsystem (I/O, JSON encode/decode, internal state). |
+//! | `store`      | `FileTapeStore`   | Low-level JSONL I/O.  A dedicated `rara-tape-io` worker thread receives `Job` closures via `mpsc`.  `TapeFile` keeps an in-memory entry cache plus a byte-offset cursor for incremental reads, so repeated reads only parse newly appended bytes. |
+//! | `service`    | `TapeService`     | High-level async API.  Not bound to a single tape -- every method takes `tape_name`.  Provides: append helpers, anchor queries, fork/merge, ranked Unicode-aware search over message payload + metadata, LLM context building (`build_llm_context`), tape info, and reset/archive. |
+//! | `context`    | `default_tape_context()` | Stateless conversion of `&[TapEntry]` into `Vec<llm::Message>`.  `Message` entries are deserialized directly.  `ToolCall` becomes an assistant message with a `tool_calls` array.  `ToolResult` becomes one or more tool-role messages.  `Event` / `System` / `Anchor` are skipped (they carry metadata, not LLM-visible content). |
+//! | `anchors`    | `AnchorSummary`   | Lightweight data type pairing an anchor `name` with its captured `state`. |
+//! | `error`      | `TapError`        | `snafu`-based error enum scoped to the tape subsystem (I/O, JSON encode/decode, internal state). |
 //!
 //! ## Key mechanisms
 //!
