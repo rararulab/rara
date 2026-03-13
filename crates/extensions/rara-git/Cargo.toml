@@ -10,10 +10,11 @@ workspace = true
 
 [dependencies]
 git2 = { workspace = true }
-rand_core = { version = "0.6", features = ["getrandom"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+rand_core = "0.10"
 rara-paths = { workspace = true }
 snafu.workspace = true
-ssh-key = { version = "0.6", features = ["ed25519", "rand_core"] }
+ssh-key = { version = "0.7.0-rc.9", features = ["ed25519", "rand_core"] }
 tokio = { workspace = true }
 tracing.workspace = true
 
