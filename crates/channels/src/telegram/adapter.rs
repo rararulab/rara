@@ -149,21 +149,27 @@ struct ToolProgress {
 
 /// Progress message state for tool execution feedback.
 struct ProgressMessage {
-    message_id:   Option<MessageId>,
-    tools:        Vec<ToolProgress>,
-    last_edit:    Instant,
-    turn_started: Instant,
+    message_id:    Option<MessageId>,
+    tools:         Vec<ToolProgress>,
+    last_edit:     Instant,
+    turn_started:  Instant,
+    input_tokens:  u32,
+    output_tokens: u32,
+    thinking_ms:   u64,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id:   None,
-            tools:        Vec::new(),
-            last_edit:    Instant::now()
+            message_id:    None,
+            tools:         Vec::new(),
+            last_edit:     Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
-            turn_started: Instant::now(),
+            turn_started:  Instant::now(),
+            input_tokens:  0,
+            output_tokens: 0,
+            thinking_ms:   0,
         }
     }
 }
@@ -351,7 +357,7 @@ fn format_phase_line(phase: &Phase) -> String {
 ///
 /// Consecutive tools with the same activity label are aggregated into a single
 /// line to avoid noisy repetition (e.g. 3x "检查 MCP" becomes one line).
-fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) -> String {
+fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration, progress: &ProgressMessage) -> String {
     if tools.is_empty() {
         return String::new();
     }
@@ -402,15 +408,37 @@ fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) ->
         }
     }
 
-    // Footer: total elapsed time (only while tools are still running).
-    if phases.iter().any(|p| !p.all_finished) {
-        lines.push(format!(
-            "\u{23f1}\u{fe0f} {}",
-            format_duration_compact(turn_elapsed)
-        ));
+    // Footer: elapsed + tokens + thinking
+    if phases.iter().any(|p| !p.all_finished) || progress.input_tokens > 0 {
+        let mut parts = vec![format_duration_compact(turn_elapsed)];
+
+        if progress.input_tokens > 0 || progress.output_tokens > 0 {
+            let in_str = format_token_count(progress.input_tokens);
+            let out_str = format_token_count(progress.output_tokens);
+            parts.push(format!("↑{in_str} ↓{out_str}"));
+        }
+
+        if progress.thinking_ms > 0 {
+            let secs = progress.thinking_ms / 1000;
+            if secs > 0 {
+                parts.push(format!("thought {secs}s"));
+            }
+        }
+
+        lines.push(format!("✳ {}", parts.join(" · ")));
     }
 
     lines.join("\n")
+}
+
+fn format_token_count(tokens: u32) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        format!("{tokens}")
+    }
 }
 
 use crate::tool_display::{tool_activity_label, tool_display_info};
@@ -1727,7 +1755,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1758,7 +1786,7 @@ fn spawn_stream_forwarder(
                                 tp.error = error;
                             }
 
-                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1874,6 +1902,25 @@ fn spawn_stream_forwarder(
                             }
                             plan = None;
                         }
+                        Ok(StreamEvent::UsageUpdate { input_tokens, output_tokens, thinking_ms }) => {
+                            progress.input_tokens = input_tokens;
+                            progress.output_tokens = output_tokens;
+                            progress.thinking_ms = thinking_ms;
+                            // Trigger a progress re-render if we have a message
+                            if progress.message_id.is_some() || !progress.tools.is_empty() {
+                                let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
+                                if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                    if let Some(mid) = progress.message_id {
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &text)
+                                            .await;
+                                    }
+                                    progress.last_edit = Instant::now();
+                                } else {
+                                    progress_dirty = true;
+                                }
+                            }
+                        }
                         Ok(_) => {} // Ignore: ReasoningDelta, Progress, TurnMetrics
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
@@ -1935,7 +1982,7 @@ fn spawn_stream_forwarder(
                     // timer keeps ticking even without new stream events.
                     let has_running = progress.tools.iter().any(|t| !t.finished);
                     if (progress_dirty || has_running) && !progress.tools.is_empty() {
-                        let text = render_progress(&progress.tools, progress.turn_started.elapsed());
+                        let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot

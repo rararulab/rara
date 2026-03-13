@@ -818,6 +818,12 @@ pub enum StreamEvent {
     },
     /// Progress stage update.
     Progress { stage: String },
+    /// Cumulative token usage update (emitted after each LLM iteration).
+    UsageUpdate {
+        input_tokens:  u32,
+        output_tokens: u32,
+        thinking_ms:   u64,
+    },
     /// Turn metrics summary (emitted before stream close).
     TurnMetrics {
         duration_ms: u64,

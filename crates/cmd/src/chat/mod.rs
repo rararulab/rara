@@ -494,6 +494,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::PlanCompleted { summary } => CliEvent::Progress {
             text: format!("Plan completed: {summary}"),
         },
+        StreamEvent::UsageUpdate { .. } => CliEvent::Progress {
+            text: String::new(),
+        },
     }
 }
 

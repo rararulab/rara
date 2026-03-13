@@ -812,6 +812,8 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    let mut cumulative_output_tokens: u32 = 0;
+    let mut cumulative_thinking_ms: u64 = 0;
     let user_id = tool_context.user_id.as_deref();
 
     for iteration in 0..max_iterations {
@@ -917,6 +919,7 @@ pub(crate) async fn run_agent_loop(
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
         let mut last_usage: Option<llm::Usage> = None;
+        let mut reasoning_start: Option<Instant> = None;
 
         loop {
             let delta = tokio::select! {
@@ -948,6 +951,12 @@ pub(crate) async fn run_agent_loop(
                                     .as_millis() as u64,
                             );
                         }
+                        // First text after reasoning — thinking phase ended
+                        if accumulated_text.is_empty() {
+                            if let Some(rs) = reasoning_start.take() {
+                                cumulative_thinking_ms += rs.elapsed().as_millis() as u64;
+                            }
+                        }
                         accumulated_text.push_str(&text);
                         stream_handle.emit(StreamEvent::TextDelta { text });
                     }
@@ -956,6 +965,9 @@ pub(crate) async fn run_agent_loop(
                     if !text.is_empty() {
                         if first_token_at.is_none() {
                             first_token_at = Some(Instant::now());
+                        }
+                        if reasoning_start.is_none() {
+                            reasoning_start = Some(Instant::now());
                         }
                         accumulated_reasoning.push_str(&text);
                         // KEY: emit ReasoningDelta to the stream!
@@ -997,6 +1009,18 @@ pub(crate) async fn run_agent_loop(
                         }
                     }
                     last_usage = usage;
+                    // Settle any un-settled reasoning time
+                    if let Some(rs) = reasoning_start.take() {
+                        cumulative_thinking_ms += rs.elapsed().as_millis() as u64;
+                    }
+                    if let Some(ref u) = last_usage {
+                        cumulative_output_tokens = cumulative_output_tokens.saturating_add(u.completion_tokens);
+                        stream_handle.emit(StreamEvent::UsageUpdate {
+                            input_tokens: u.prompt_tokens,
+                            output_tokens: cumulative_output_tokens,
+                            thinking_ms: cumulative_thinking_ms,
+                        });
+                    }
                     break;
                 }
             }
