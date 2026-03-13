@@ -22,7 +22,6 @@ regex = { workspace = true }
 # match, so we keep a renamed 0.12 dep for the telegram proxy builder.
 # Upgrade to workspace reqwest (0.13) once teloxide supports it.
 reqwest012 = { package = "reqwest", version = "0.12", features = ["socks"] }
-url = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
@@ -32,6 +31,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
+url = "2"
 uuid = { workspace = true }
 
 [dev-dependencies]

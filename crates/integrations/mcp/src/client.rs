@@ -487,8 +487,7 @@ impl RmcpClient {
             params = params.with_arguments(args);
         }
 
-        let result =
-            run_with_timeout(service.call_tool(params), timeout, "tools/call").await?;
+        let result = run_with_timeout(service.call_tool(params), timeout, "tools/call").await?;
 
         self.persist_oauth_tokens().await;
         Ok(result)

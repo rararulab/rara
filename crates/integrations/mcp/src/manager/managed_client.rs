@@ -64,7 +64,9 @@ use futures::{
     future::{BoxFuture, Shared},
 };
 use rara_keyring_store::KeyringStoreRef;
-use rmcp::model::{ClientCapabilities, Implementation, InitializeRequestParams, ProtocolVersion, Tool};
+use rmcp::model::{
+    ClientCapabilities, Implementation, InitializeRequestParams, ProtocolVersion, Tool,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -445,12 +447,10 @@ impl ManagedClient {
         // https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
         // Elicitation: server can ask the user for input via forms.
         // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation
-        let capabilities = ClientCapabilities::builder()
-            .enable_elicitation()
-            .build();
+        let capabilities = ClientCapabilities::builder().enable_elicitation().build();
 
-        let client_info = Implementation::new("rara-mcp-client", env!("CARGO_PKG_VERSION"))
-            .with_title("rara");
+        let client_info =
+            Implementation::new("rara-mcp-client", env!("CARGO_PKG_VERSION")).with_title("rara");
 
         let params = InitializeRequestParams::new(capabilities, client_info)
             .with_protocol_version(ProtocolVersion::LATEST);

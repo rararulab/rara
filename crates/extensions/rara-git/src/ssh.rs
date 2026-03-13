@@ -49,12 +49,13 @@ pub fn get_or_create_keypair(ssh_dir: &Path) -> Result<SshKeyPair, GitError> {
         message: format!("failed to create SSH directory: {e}"),
     })?;
 
-    let private_key =
-        ssh_key::PrivateKey::random(&mut rand_core::UnwrapErr(getrandom::SysRng), ssh_key::Algorithm::Ed25519).map_err(
-            |e| GitError::SshKey {
-                message: format!("failed to generate key: {e}"),
-            },
-        )?;
+    let private_key = ssh_key::PrivateKey::random(
+        &mut rand_core::UnwrapErr(getrandom::SysRng),
+        ssh_key::Algorithm::Ed25519,
+    )
+    .map_err(|e| GitError::SshKey {
+        message: format!("failed to generate key: {e}"),
+    })?;
 
     // Write private key (OpenSSH format, no passphrase)
     let private_pem = private_key
