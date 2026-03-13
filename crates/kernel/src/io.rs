@@ -818,6 +818,21 @@ pub enum StreamEvent {
     },
     /// Progress stage update.
     Progress { stage: String },
+    /// Cumulative token usage update (emitted after each LLM iteration).
+    ///
+    /// - `input_tokens`: the *latest* iteration's prompt_tokens (= current
+    ///   context size), NOT cumulative — each iteration re-sends full context.
+    /// - `output_tokens`: cumulative sum of completion_tokens across all
+    ///   iterations in this turn.
+    /// - `thinking_ms`: cumulative extended-thinking duration (reasoning phase
+    ///   before content generation), 0 if model doesn't support it.
+    ///
+    /// Consumed by: Telegram progress footer, collapsible trace (#303/#305).
+    UsageUpdate {
+        input_tokens:  u32,
+        output_tokens: u32,
+        thinking_ms:   u64,
+    },
     /// Turn metrics summary (emitted before stream close).
     TurnMetrics {
         duration_ms: u64,

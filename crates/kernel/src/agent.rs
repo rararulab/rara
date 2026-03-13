@@ -812,6 +812,14 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
+    // These are *cumulative* across all iterations within the turn.
+    // `cumulative_output_tokens` sums completion_tokens from every iteration;
+    // `input_tokens` in the emitted event is always the *latest* iteration's
+    // prompt_tokens (= current context size), NOT a cumulative sum — because
+    // each iteration re-sends the full context.
+    let mut cumulative_output_tokens: u32 = 0;
+    let mut cumulative_thinking_ms: u64 = 0;
     let user_id = tool_context.user_id.as_deref();
 
     for iteration in 0..max_iterations {
@@ -917,6 +925,12 @@ pub(crate) async fn run_agent_loop(
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
         let mut last_usage: Option<llm::Usage> = None;
+        // Per-iteration reasoning timer — set on the first ReasoningDelta,
+        // settled (added to cumulative_thinking_ms) on either:
+        //   a) the first TextDelta (reasoning → content transition), or
+        //   b) the Done delta (model finished without content, e.g. tool-only).
+        // Must be `take()`-d exactly once per iteration to avoid double-counting.
+        let mut reasoning_start: Option<Instant> = None;
 
         loop {
             let delta = tokio::select! {
@@ -948,6 +962,14 @@ pub(crate) async fn run_agent_loop(
                                     .as_millis() as u64,
                             );
                         }
+                        // Settle reasoning timer on the FIRST TextDelta only
+                        // (accumulated_text is still empty → this is the transition
+                        // from reasoning to content). Uses take() so it fires once.
+                        if accumulated_text.is_empty() {
+                            if let Some(rs) = reasoning_start.take() {
+                                cumulative_thinking_ms += rs.elapsed().as_millis() as u64;
+                            }
+                        }
                         accumulated_text.push_str(&text);
                         stream_handle.emit(StreamEvent::TextDelta { text });
                     }
@@ -956,6 +978,9 @@ pub(crate) async fn run_agent_loop(
                     if !text.is_empty() {
                         if first_token_at.is_none() {
                             first_token_at = Some(Instant::now());
+                        }
+                        if reasoning_start.is_none() {
+                            reasoning_start = Some(Instant::now());
                         }
                         accumulated_reasoning.push_str(&text);
                         // KEY: emit ReasoningDelta to the stream!
@@ -997,6 +1022,22 @@ pub(crate) async fn run_agent_loop(
                         }
                     }
                     last_usage = usage;
+                    // Fallback: settle reasoning if no TextDelta arrived
+                    // (e.g. tool-only iteration with extended thinking).
+                    if let Some(rs) = reasoning_start.take() {
+                        cumulative_thinking_ms += rs.elapsed().as_millis() as u64;
+                    }
+                    // Emit cumulative usage to stream consumers (Telegram progress UX).
+                    // input_tokens = latest iteration's prompt_tokens (current context size);
+                    // output_tokens = sum of all iterations' completion_tokens.
+                    if let Some(ref u) = last_usage {
+                        cumulative_output_tokens = cumulative_output_tokens.saturating_add(u.completion_tokens);
+                        stream_handle.emit(StreamEvent::UsageUpdate {
+                            input_tokens: u.prompt_tokens,
+                            output_tokens: cumulative_output_tokens,
+                            thinking_ms: cumulative_thinking_ms,
+                        });
+                    }
                     break;
                 }
             }

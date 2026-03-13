@@ -148,25 +148,92 @@ struct ToolProgress {
 }
 
 /// Progress message state for tool execution feedback.
+///
+/// During streaming: renders live progress with tool activity + token footer.
+/// On stream close: converted into an [`ExecutionTrace`], and the Telegram
+/// message is edited to a compact summary with an inline "📊 详情" button
+/// that toggles the full trace view.
+///
+/// ## Token semantics (from kernel `UsageUpdate`)
+/// - `input_tokens` = latest iteration's prompt tokens (current context size)
+/// - `output_tokens` = cumulative completion tokens across all iterations
+/// - `thinking_ms` = cumulative extended-thinking duration
 struct ProgressMessage {
-    message_id:   Option<MessageId>,
-    tools:        Vec<ToolProgress>,
-    last_edit:    Instant,
-    turn_started: Instant,
+    message_id:         Option<MessageId>,
+    tools:              Vec<ToolProgress>,
+    last_edit:          Instant,
+    turn_started:       Instant,
+    input_tokens:       u32,
+    output_tokens:      u32,
+    thinking_ms:        u64,
+    /// Accumulated reasoning text for trace (truncated to ~500 chars).
+    /// Collected from `StreamEvent::ReasoningDelta`; shown in expanded trace.
+    reasoning_preview:  String,
+    /// Model name, populated from `StreamEvent::TurnMetrics` (arrives before stream close).
+    model:              String,
+    /// Iteration count, populated from `StreamEvent::TurnMetrics`.
+    iterations:         usize,
+    /// Plan steps must be saved here because `PlanCompleted` sets `plan = None`.
+    /// If we don't save them before that, the trace loses all plan information.
+    saved_plan_steps:   Vec<String>,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id:   None,
-            tools:        Vec::new(),
-            last_edit:    Instant::now()
+            message_id:         None,
+            tools:              Vec::new(),
+            last_edit:          Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
-            turn_started: Instant::now(),
+            turn_started:       Instant::now(),
+            input_tokens:       0,
+            output_tokens:      0,
+            thinking_ms:        0,
+            reasoning_preview:  String::new(),
+            model:              String::new(),
+            iterations:         0,
+            saved_plan_steps:   Vec::new(),
         }
     }
 }
+
+/// Snapshot of a completed agent turn, persisted to tape for the inline
+/// "📊 详情" toggle.
+///
+/// Built from `ProgressMessage` fields when the stream closes. Written as a
+/// `turn.execution_trace` tape event keyed by session. The lightweight
+/// [`TraceIndex`] maps `"{chat_id}:{msg_id}"` to tape coordinates so the
+/// callback handler can read it back on demand.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct ExecutionTrace {
+    duration_secs:    u64,
+    iterations:       usize,
+    model:            String,
+    input_tokens:     u32,
+    output_tokens:    u32,
+    thinking_ms:      u64,
+    /// Truncated reasoning text (first ~500 chars).
+    thinking_preview: String,
+    /// Plan steps with status.
+    plan_steps:       Vec<String>,
+    /// Tool execution records.
+    tools:            Vec<ToolTraceEntry>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct ToolTraceEntry {
+    name:        String,
+    /// Duration in milliseconds (serializable replacement for `std::time::Duration`).
+    duration_ms: Option<u64>,
+    success:     bool,
+    summary:     String,
+    error:       Option<String>,
+}
+
+/// Lightweight index mapping `"{chat_id}:{msg_id}"` → `(tape_name, trace_id)`
+/// for tape lookup. Replaces the former in-memory `TraceStore`.
+type TraceIndex = Arc<DashMap<String, (String, String)>>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,7 +418,7 @@ fn format_phase_line(phase: &Phase) -> String {
 ///
 /// Consecutive tools with the same activity label are aggregated into a single
 /// line to avoid noisy repetition (e.g. 3x "检查 MCP" becomes one line).
-fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) -> String {
+fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration, progress: &ProgressMessage) -> String {
     if tools.is_empty() {
         return String::new();
     }
@@ -402,15 +469,155 @@ fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) ->
         }
     }
 
-    // Footer: total elapsed time (only while tools are still running).
-    if phases.iter().any(|p| !p.all_finished) {
-        lines.push(format!(
-            "\u{23f1}\u{fe0f} {}",
-            format_duration_compact(turn_elapsed)
-        ));
+    // Footer: elapsed + tokens + thinking
+    if phases.iter().any(|p| !p.all_finished) || progress.input_tokens > 0 {
+        let mut parts = vec![format_duration_compact(turn_elapsed)];
+
+        if progress.input_tokens > 0 || progress.output_tokens > 0 {
+            let in_str = format_token_count(progress.input_tokens);
+            let out_str = format_token_count(progress.output_tokens);
+            parts.push(format!("↑{in_str} ↓{out_str}"));
+        }
+
+        if progress.thinking_ms > 0 {
+            let secs = progress.thinking_ms / 1000;
+            if secs > 0 {
+                parts.push(format!("thought {secs}s"));
+            }
+        }
+
+        lines.push(format!("✳ {}", parts.join(" · ")));
     }
 
     lines.join("\n")
+}
+
+fn format_token_count(tokens: u32) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        format!("{tokens}")
+    }
+}
+
+/// Render a compact one-line summary for a completed execution trace.
+/// Example: `✅ 45s · ↑12.5k ↓1.2k · thought 9s`
+/// This is the collapsed state shown with the inline "详情" button.
+fn render_compact_summary(trace: &ExecutionTrace) -> String {
+    let mut parts = Vec::new();
+    parts.push(format_duration_compact(std::time::Duration::from_secs(
+        trace.duration_secs,
+    )));
+
+    if trace.input_tokens > 0 || trace.output_tokens > 0 {
+        parts.push(format!(
+            "\u{2191}{} \u{2193}{}",
+            format_token_count(trace.input_tokens),
+            format_token_count(trace.output_tokens),
+        ));
+    }
+
+    if trace.thinking_ms > 0 {
+        let secs = trace.thinking_ms / 1000;
+        if secs > 0 {
+            parts.push(format!("thought {secs}s"));
+        }
+    }
+
+    format!("\u{2705} {}", parts.join(" \u{00b7} "))
+}
+
+/// Render full execution trace detail for the expanded view.
+/// Sections: 🧠 Thinking → 📋 Plan → 🔧 Tools → 📊 Usage
+/// Hard-truncated to 4000 chars (Telegram limit is 4096).
+/// Uses HTML formatting: `<b>`, `<blockquote>`, entity escaping.
+fn render_trace_detail(trace: &ExecutionTrace) -> String {
+    let mut text = render_compact_summary(trace);
+    text.push_str("\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
+
+    // Thinking section
+    if !trace.thinking_preview.is_empty() {
+        text.push_str(&format!(
+            "\n\u{1f9e0} <b>Thinking</b> ({}s)\n<blockquote>{}</blockquote>\n",
+            trace.thinking_ms / 1000,
+            trace_html_escape(&trace.thinking_preview),
+        ));
+    }
+
+    // Plan section
+    if !trace.plan_steps.is_empty() {
+        text.push_str("\n\u{1f4cb} <b>Plan</b>\n");
+        for step in &trace.plan_steps {
+            text.push_str(&format!("  {}\n", trace_html_escape(step)));
+        }
+    }
+
+    // Tools section
+    if !trace.tools.is_empty() {
+        text.push_str("\n\u{1f527} <b>Tools</b>\n");
+        for (i, tool) in trace.tools.iter().enumerate() {
+            let connector = if i == trace.tools.len() - 1 {
+                "\u{2514}"
+            } else {
+                "\u{251c}"
+            };
+            let icon = if tool.success { "\u{2713}" } else { "\u{2717}" };
+            let dur = tool
+                .duration_ms
+                .map(|ms| format!(" ({})", format_duration_compact(std::time::Duration::from_millis(ms))))
+                .unwrap_or_default();
+            let summary = if tool.summary.is_empty() {
+                String::new()
+            } else {
+                format!(" \u{2014} {}", trace_html_escape(&tool.summary))
+            };
+            let err = tool
+                .error
+                .as_ref()
+                .map(|e| format!("\n    \u{26a0} {}", trace_html_escape(e)))
+                .unwrap_or_default();
+            text.push_str(&format!(
+                "  {connector} {}{dur} {icon}{summary}{err}\n",
+                trace_html_escape(&tool.name)
+            ));
+        }
+    }
+
+    // Usage section
+    text.push_str(&format!(
+        "\n\u{1f4ca} <b>Usage</b>\n  {} iterations \u{00b7} \u{2191}{} \u{2193}{} tokens",
+        trace.iterations,
+        format_token_count(trace.input_tokens),
+        format_token_count(trace.output_tokens),
+    ));
+
+    if !trace.model.is_empty() {
+        text.push_str(&format!(" \u{00b7} {}", trace_html_escape(&trace.model)));
+    }
+
+    // Telegram message limit is 4096 chars.
+    // Must truncate on a char boundary to avoid panic on multi-byte UTF-8.
+    if text.len() > 4000 {
+        let truncate_at = text
+            .char_indices()
+            .take_while(|(i, _)| *i <= 3990)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(3990.min(text.len()));
+        text.truncate(truncate_at);
+        text.push_str("\n\u{2026}(truncated)");
+    }
+
+    text
+}
+
+/// Minimal HTML escaping for text embedded in trace display.
+fn trace_html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 use crate::tool_display::{tool_activity_label, tool_display_info};
@@ -510,6 +717,9 @@ pub struct TelegramAdapter {
     stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
     active_streams:    Arc<DashMap<i64, StreamingMessage>>,
+    /// Lightweight index for tape-persisted execution traces, keyed by
+    /// "{chat_id}:{msg_id}" → (tape_name, trace_id).
+    trace_index:       TraceIndex,
 }
 
 impl TelegramAdapter {
@@ -534,6 +744,7 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
+            trace_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -858,6 +1069,8 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
+        let trace_index = Arc::clone(&self.trace_index);
+        let tape = handle.tape().clone();
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -894,6 +1107,8 @@ impl ChannelAdapter for TelegramAdapter {
                 stream_hub,
                 active_streams,
                 command_handlers,
+                trace_index,
+                tape,
             )
             .await;
         });
@@ -945,6 +1160,8 @@ async fn polling_loop(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
+    trace_index: TraceIndex,
+    tape: rara_kernel::memory::TapeService,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1000,6 +1217,8 @@ async fn polling_loop(
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
+                    let trace_index = Arc::clone(&trace_index);
+                    let tape = tape.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1011,6 +1230,8 @@ async fn polling_loop(
                             &stream_hub,
                             &active_streams,
                             &command_handlers,
+                            &trace_index,
+                            &tape,
                         )
                         .await;
                     });
@@ -1160,6 +1381,98 @@ async fn handle_guard_callback(
     }
 }
 
+/// Handle a trace show/hide callback query from an inline keyboard button.
+///
+/// Callback data format: `"trace:{action}:{chat_id}:{msg_id}"`
+/// - `action` = "show" → expand to full trace, button becomes "收起"
+/// - `action` = "hide" → collapse back to compact summary, button becomes "详情"
+///
+/// The trace is read from tape via [`TraceIndex`] coordinates. If the index
+/// entry is missing (process restarted) or the tape entry is gone, the button
+/// silently does nothing.
+async fn handle_trace_callback(
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    trace_index: &TraceIndex,
+    tape: &rara_kernel::memory::TapeService,
+) {
+    // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
+    let parts: Vec<&str> = data.splitn(3, ':').collect();
+    if parts.len() == 3 {
+        let action = parts[1];
+        let trace_key = parts[2];
+
+        // Look up tape coordinates from index
+        let coords = trace_index.get(trace_key).map(|r| r.value().clone());
+
+        if let Some((tape_name, trace_id)) = coords {
+            // Read trace from tape
+            if let Some(trace) = read_trace_from_tape(tape, &tape_name, &trace_id).await {
+                let (text, button_text, next_action) = match action {
+                    "show" => (
+                        render_trace_detail(&trace),
+                        "\u{1f4ca} \u{6536}\u{8d77}",
+                        format!("trace:hide:{trace_key}"),
+                    ),
+                    _ => (
+                        render_compact_summary(&trace),
+                        "\u{1f4ca} \u{8be6}\u{60c5}",
+                        format!("trace:show:{trace_key}"),
+                    ),
+                };
+
+                // Parse chat_id and msg_id from trace_key
+                if let Some((chat_id_str, msg_id_str)) = trace_key.split_once(':') {
+                    if let (Ok(cid), Ok(mid)) =
+                        (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
+                    {
+                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                            InlineKeyboardButton::callback(button_text, next_action),
+                        ]]);
+                        let _ = bot
+                            .edit_message_text(ChatId(cid), MessageId(mid), &text)
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(keyboard)
+                            .await;
+                    }
+                }
+            }
+        }
+
+        let _ = bot.answer_callback_query(callback.id.clone()).await;
+    }
+}
+
+/// Read an execution trace from tape by scanning for a matching trace_id.
+async fn read_trace_from_tape(
+    tape: &rara_kernel::memory::TapeService,
+    tape_name: &str,
+    trace_id: &str,
+) -> Option<ExecutionTrace> {
+    let entries = tape.entries(tape_name).await.ok()?;
+
+    // Scan backwards (most recent first) for the matching trace event.
+    for entry in entries.iter().rev() {
+        if entry.kind == rara_kernel::memory::TapEntryKind::Event {
+            if let Some(name) = entry.payload.get("name").and_then(|v| v.as_str()) {
+                if name == "turn.execution_trace" {
+                    if let Some(data) = entry.payload.get("data") {
+                        if let Some(id) = data.get("trace_id").and_then(|v| v.as_str()) {
+                            if id == trace_id {
+                                let trace_data = data.get("data")?;
+                                return serde_json::from_value(trace_data.clone()).ok();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Listens for new approval requests and sends inline keyboard messages
 /// to the primary Telegram chat so the user can approve or deny.
 async fn approval_listener(
@@ -1242,6 +1555,8 @@ async fn handle_update(
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
+    trace_index: &TraceIndex,
+    tape: &rara_kernel::memory::TapeService,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1249,15 +1564,21 @@ async fn handle_update(
         Err(e) => e.into_inner().clone(),
     };
 
-    // Handle guard approval callback queries.
+    // Handle callback queries by prefix routing:
+    //   "guard:*"  → guard approval (approve/deny)
+    //   "trace:*"  → execution trace toggle (show/hide detail view)
+    //   other      → TODO: convert to RawPlatformMessage for kernel processing
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
             if data.starts_with("guard:") {
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
+            if data.starts_with("trace:") {
+                handle_trace_callback(bot, callback, data, trace_index, tape).await;
+                return;
+            }
         }
-        // Non-guard callbacks: TODO — convert to RawPlatformMessage.
         return;
     }
 
@@ -1530,6 +1851,8 @@ async fn handle_update(
                     bot.clone(),
                     chat_id,
                     sid,
+                    Arc::clone(trace_index),
+                    tape.clone(),
                 );
             }
         }
@@ -1611,6 +1934,8 @@ fn spawn_stream_forwarder(
     bot: teloxide::Bot,
     chat_id: i64,
     session_id: rara_kernel::session::SessionKey,
+    trace_index: TraceIndex,
+    tape: rara_kernel::memory::TapeService,
 ) {
     use rara_kernel::io::StreamEvent;
 
@@ -1727,7 +2052,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1758,7 +2083,7 @@ fn spawn_stream_forwarder(
                                 tp.error = error;
                             }
 
-                            let text = render_progress(&progress.tools, progress.turn_started.elapsed());
+                            let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -1871,10 +2196,58 @@ fn spawn_stream_forwarder(
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                     }
                                 }
+                                // IMPORTANT: save plan steps BEFORE `plan = None` below.
+                                // PlanCompleted clears the plan, but we need the steps
+                                // for the post-completion trace detail view.
+                                progress.saved_plan_steps = p.status_lines.clone();
                             }
                             plan = None;
                         }
-                        Ok(_) => {} // Ignore: ReasoningDelta, Progress, TurnMetrics
+                        Ok(StreamEvent::UsageUpdate { input_tokens, output_tokens, thinking_ms }) => {
+                            progress.input_tokens = input_tokens;
+                            progress.output_tokens = output_tokens;
+                            progress.thinking_ms = thinking_ms;
+                            // Trigger a progress re-render if we have a message
+                            if progress.message_id.is_some() || !progress.tools.is_empty() {
+                                let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
+                                if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                    if let Some(mid) = progress.message_id {
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &text)
+                                            .await;
+                                    }
+                                    progress.last_edit = Instant::now();
+                                } else {
+                                    progress_dirty = true;
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::ReasoningDelta { text }) => {
+                            // Collect reasoning preview for trace detail view.
+                            // Hard-truncated to ~500 chars to bound memory; the
+                            // full reasoning stays in the kernel's TurnTrace.
+                            // Uses .chars().count() for char-level limit to avoid
+                            // panic on slicing multi-byte UTF-8 (中文, emoji, etc).
+                            let current_chars = progress.reasoning_preview.chars().count();
+                            if current_chars < 500 {
+                                let remaining = 500 - current_chars;
+                                let text_chars = text.chars().count();
+                                if text_chars <= remaining {
+                                    progress.reasoning_preview.push_str(&text);
+                                } else {
+                                    let safe_end: String = text.chars().take(remaining).collect();
+                                    progress.reasoning_preview.push_str(&safe_end);
+                                    progress.reasoning_preview.push('\u{2026}');
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::TurnMetrics { model, iterations, .. }) => {
+                            // TurnMetrics arrives just before stream close —
+                            // stash for the ExecutionTrace built in RecvError::Closed.
+                            progress.model = model;
+                            progress.iterations = iterations;
+                        }
+                        Ok(_) => {} // Ignore: Progress (stage changes have no TG UX)
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }
@@ -1903,6 +2276,75 @@ fn spawn_stream_forwarder(
                                 let result = flush_edit(&bot, chat_id, &req).await;
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
+
+                            // ── Finalize: convert progress → compact summary + trace button ──
+                            // The progress message (which showed live tool activity) is
+                            // replaced with a one-line summary. An inline keyboard button
+                            // lets the user toggle the full execution trace on demand.
+                            // The trace is stored in TraceStore with 1-hour TTL.
+                            if let Some(mid) = progress.message_id {
+                                // Plan steps come from either:
+                                // 1. saved_plan_steps (if PlanCompleted fired), or
+                                // 2. the still-active plan (if stream closed mid-plan).
+                                let plan_steps = if !progress.saved_plan_steps.is_empty() {
+                                    std::mem::take(&mut progress.saved_plan_steps)
+                                } else {
+                                    plan.as_ref().map(|p| p.status_lines.clone()).unwrap_or_default()
+                                };
+
+                                let trace = ExecutionTrace {
+                                    duration_secs:    progress.turn_started.elapsed().as_secs(),
+                                    iterations:       progress.iterations,
+                                    model:            std::mem::take(&mut progress.model),
+                                    input_tokens:     progress.input_tokens,
+                                    output_tokens:    progress.output_tokens,
+                                    thinking_ms:      progress.thinking_ms,
+                                    thinking_preview: std::mem::take(&mut progress.reasoning_preview),
+                                    plan_steps,
+                                    tools:            progress.tools.iter().map(|t| ToolTraceEntry {
+                                        name:        t.name.clone(),
+                                        duration_ms: t.duration.map(|d| d.as_millis() as u64),
+                                        success:     t.success,
+                                        summary:     t.summary.clone(),
+                                        error:       t.error.clone(),
+                                    }).collect(),
+                                };
+
+                                let compact = render_compact_summary(&trace);
+                                let trace_key = format!("{}:{}", chat_id, mid.0);
+                                let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                    InlineKeyboardButton::callback(
+                                        "\u{1f4ca} \u{8be6}\u{60c5}",
+                                        format!("trace:show:{trace_key}"),
+                                    ),
+                                ]]);
+
+                                let _ = bot
+                                    .edit_message_text(ChatId(chat_id), mid, &compact)
+                                    .parse_mode(ParseMode::Html)
+                                    .reply_markup(keyboard)
+                                    .await;
+
+                                // Persist trace to tape
+                                let trace_id = format!("trace_{}", chrono::Utc::now().timestamp_millis());
+                                let tape_name = session_id.to_string();
+                                let trace_json = serde_json::to_value(&trace).unwrap_or_default();
+
+                                if let Err(e) = tape.append_event(
+                                    &tape_name,
+                                    "turn.execution_trace",
+                                    serde_json::json!({
+                                        "trace_id": trace_id,
+                                        "data": trace_json,
+                                    }),
+                                ).await {
+                                    warn!(error = %e, "failed to persist execution trace to tape");
+                                }
+
+                                // Store lightweight index for callback lookup
+                                trace_index.insert(trace_key, (tape_name, trace_id));
+                            }
+
                             break;
                         }
                     }
@@ -1935,7 +2377,7 @@ fn spawn_stream_forwarder(
                     // timer keeps ticking even without new stream events.
                     let has_running = progress.tools.iter().any(|t| !t.finished);
                     if (progress_dirty || has_running) && !progress.tools.is_empty() {
-                        let text = render_progress(&progress.tools, progress.turn_started.elapsed());
+                        let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot

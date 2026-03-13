@@ -214,6 +214,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         }),
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
+        StreamEvent::UsageUpdate { .. } => None,
     }
 }
 
