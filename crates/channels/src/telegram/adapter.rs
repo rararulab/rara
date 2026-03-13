@@ -149,30 +149,71 @@ struct ToolProgress {
 
 /// Progress message state for tool execution feedback.
 struct ProgressMessage {
-    message_id:    Option<MessageId>,
-    tools:         Vec<ToolProgress>,
-    last_edit:     Instant,
-    turn_started:  Instant,
-    input_tokens:  u32,
-    output_tokens: u32,
-    thinking_ms:   u64,
+    message_id:         Option<MessageId>,
+    tools:              Vec<ToolProgress>,
+    last_edit:          Instant,
+    turn_started:       Instant,
+    input_tokens:       u32,
+    output_tokens:      u32,
+    thinking_ms:        u64,
+    /// Accumulated reasoning text for trace (truncated to ~500 chars).
+    reasoning_preview:  String,
+    /// Model name from TurnMetrics.
+    model:              String,
+    /// Iteration count from TurnMetrics.
+    iterations:         usize,
+    /// Saved plan status lines (preserved before PlanCompleted clears plan).
+    saved_plan_steps:   Vec<String>,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id:    None,
-            tools:         Vec::new(),
-            last_edit:     Instant::now()
+            message_id:         None,
+            tools:              Vec::new(),
+            last_edit:          Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
-            turn_started:  Instant::now(),
-            input_tokens:  0,
-            output_tokens: 0,
-            thinking_ms:   0,
+            turn_started:       Instant::now(),
+            input_tokens:       0,
+            output_tokens:      0,
+            thinking_ms:        0,
+            reasoning_preview:  String::new(),
+            model:              String::new(),
+            iterations:         0,
+            saved_plan_steps:   Vec::new(),
         }
     }
 }
+
+/// Collected execution trace for post-completion detail view.
+struct ExecutionTrace {
+    duration_secs:    u64,
+    iterations:       usize,
+    model:            String,
+    input_tokens:     u32,
+    output_tokens:    u32,
+    thinking_ms:      u64,
+    /// Truncated reasoning text (first ~500 chars).
+    thinking_preview: String,
+    /// Plan steps with status.
+    plan_steps:       Vec<String>,
+    /// Tool execution records.
+    tools:            Vec<ToolTraceEntry>,
+    /// When this trace was created (for TTL cleanup).
+    created_at:       Instant,
+}
+
+struct ToolTraceEntry {
+    name:     String,
+    duration: Option<std::time::Duration>,
+    success:  bool,
+    summary:  String,
+    error:    Option<String>,
+}
+
+/// Store for completed execution traces, keyed by "{chat_id}:{msg_id}".
+type TraceStore = Arc<DashMap<String, ExecutionTrace>>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -441,6 +482,112 @@ fn format_token_count(tokens: u32) -> String {
     }
 }
 
+/// Render a compact one-line summary for a completed execution trace.
+fn render_compact_summary(trace: &ExecutionTrace) -> String {
+    let mut parts = Vec::new();
+    parts.push(format_duration_compact(std::time::Duration::from_secs(
+        trace.duration_secs,
+    )));
+
+    if trace.input_tokens > 0 || trace.output_tokens > 0 {
+        parts.push(format!(
+            "\u{2191}{} \u{2193}{}",
+            format_token_count(trace.input_tokens),
+            format_token_count(trace.output_tokens),
+        ));
+    }
+
+    if trace.thinking_ms > 0 {
+        let secs = trace.thinking_ms / 1000;
+        if secs > 0 {
+            parts.push(format!("thought {secs}s"));
+        }
+    }
+
+    format!("\u{2705} {}", parts.join(" \u{00b7} "))
+}
+
+/// Render full execution trace detail for the expanded view.
+fn render_trace_detail(trace: &ExecutionTrace) -> String {
+    let mut text = render_compact_summary(trace);
+    text.push_str("\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
+
+    // Thinking section
+    if !trace.thinking_preview.is_empty() {
+        text.push_str(&format!(
+            "\n\u{1f9e0} <b>Thinking</b> ({}s)\n<blockquote>{}</blockquote>\n",
+            trace.thinking_ms / 1000,
+            trace_html_escape(&trace.thinking_preview),
+        ));
+    }
+
+    // Plan section
+    if !trace.plan_steps.is_empty() {
+        text.push_str("\n\u{1f4cb} <b>Plan</b>\n");
+        for step in &trace.plan_steps {
+            text.push_str(&format!("  {}\n", trace_html_escape(step)));
+        }
+    }
+
+    // Tools section
+    if !trace.tools.is_empty() {
+        text.push_str("\n\u{1f527} <b>Tools</b>\n");
+        for (i, tool) in trace.tools.iter().enumerate() {
+            let connector = if i == trace.tools.len() - 1 {
+                "\u{2514}"
+            } else {
+                "\u{251c}"
+            };
+            let icon = if tool.success { "\u{2713}" } else { "\u{2717}" };
+            let dur = tool
+                .duration
+                .map(|d| format!(" ({})", format_duration_compact(d)))
+                .unwrap_or_default();
+            let summary = if tool.summary.is_empty() {
+                String::new()
+            } else {
+                format!(" \u{2014} {}", trace_html_escape(&tool.summary))
+            };
+            let err = tool
+                .error
+                .as_ref()
+                .map(|e| format!("\n    \u{26a0} {}", trace_html_escape(e)))
+                .unwrap_or_default();
+            text.push_str(&format!(
+                "  {connector} {}{dur} {icon}{summary}{err}\n",
+                trace_html_escape(&tool.name)
+            ));
+        }
+    }
+
+    // Usage section
+    text.push_str(&format!(
+        "\n\u{1f4ca} <b>Usage</b>\n  {} iterations \u{00b7} \u{2191}{} \u{2193}{} tokens",
+        trace.iterations,
+        format_token_count(trace.input_tokens),
+        format_token_count(trace.output_tokens),
+    ));
+
+    if !trace.model.is_empty() {
+        text.push_str(&format!(" \u{00b7} {}", trace_html_escape(&trace.model)));
+    }
+
+    // Telegram message limit is 4096 chars
+    if text.len() > 4000 {
+        text.truncate(3990);
+        text.push_str("\n\u{2026}(truncated)");
+    }
+
+    text
+}
+
+/// Minimal HTML escaping for text embedded in trace display.
+fn trace_html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 use crate::tool_display::{tool_activity_label, tool_display_info};
 
 /// Per-chat streaming state for progressive `editMessageText` updates.
@@ -538,6 +685,9 @@ pub struct TelegramAdapter {
     stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
     active_streams:    Arc<DashMap<i64, StreamingMessage>>,
+    /// Completed execution traces for inline toggle, keyed by
+    /// "{chat_id}:{msg_id}".
+    trace_store:       TraceStore,
 }
 
 impl TelegramAdapter {
@@ -562,6 +712,7 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
+            trace_store: Arc::new(DashMap::new()),
         }
     }
 
@@ -886,6 +1037,7 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
+        let trace_store = Arc::clone(&self.trace_store);
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -922,6 +1074,7 @@ impl ChannelAdapter for TelegramAdapter {
                 stream_hub,
                 active_streams,
                 command_handlers,
+                trace_store,
             )
             .await;
         });
@@ -973,6 +1126,7 @@ async fn polling_loop(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
+    trace_store: TraceStore,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1028,6 +1182,7 @@ async fn polling_loop(
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
+                    let trace_store = Arc::clone(&trace_store);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1039,6 +1194,7 @@ async fn polling_loop(
                             &stream_hub,
                             &active_streams,
                             &command_handlers,
+                            &trace_store,
                         )
                         .await;
                     });
@@ -1188,6 +1344,54 @@ async fn handle_guard_callback(
     }
 }
 
+/// Handle a trace show/hide callback query from an inline keyboard button.
+async fn handle_trace_callback(
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    trace_store: &TraceStore,
+) {
+    // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
+    let parts: Vec<&str> = data.splitn(3, ':').collect();
+    if parts.len() == 3 {
+        let action = parts[1];
+        let trace_key = parts[2];
+
+        if let Some(trace) = trace_store.get(trace_key) {
+            let (text, button_text, next_action) = match action {
+                "show" => (
+                    render_trace_detail(&trace),
+                    "\u{1f4ca} \u{6536}\u{8d77}",
+                    format!("trace:hide:{trace_key}"),
+                ),
+                _ => (
+                    render_compact_summary(&trace),
+                    "\u{1f4ca} \u{8be6}\u{60c5}",
+                    format!("trace:show:{trace_key}"),
+                ),
+            };
+
+            // Parse chat_id and msg_id from trace_key
+            if let Some((chat_id_str, msg_id_str)) = trace_key.split_once(':') {
+                if let (Ok(cid), Ok(mid)) =
+                    (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
+                {
+                    let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                        InlineKeyboardButton::callback(button_text, next_action),
+                    ]]);
+                    let _ = bot
+                        .edit_message_text(ChatId(cid), MessageId(mid), &text)
+                        .parse_mode(ParseMode::Html)
+                        .reply_markup(keyboard)
+                        .await;
+                }
+            }
+        }
+
+        let _ = bot.answer_callback_query(callback.id.clone()).await;
+    }
+}
+
 /// Listens for new approval requests and sends inline keyboard messages
 /// to the primary Telegram chat so the user can approve or deny.
 async fn approval_listener(
@@ -1270,6 +1474,7 @@ async fn handle_update(
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
+    trace_store: &TraceStore,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1277,15 +1482,19 @@ async fn handle_update(
         Err(e) => e.into_inner().clone(),
     };
 
-    // Handle guard approval callback queries.
+    // Handle callback queries (guard approval, trace toggle).
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
             if data.starts_with("guard:") {
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
+            if data.starts_with("trace:") {
+                handle_trace_callback(bot, callback, data, trace_store).await;
+                return;
+            }
         }
-        // Non-guard callbacks: TODO — convert to RawPlatformMessage.
+        // Non-guard/non-trace callbacks: TODO — convert to RawPlatformMessage.
         return;
     }
 
@@ -1558,6 +1767,7 @@ async fn handle_update(
                     bot.clone(),
                     chat_id,
                     sid,
+                    Arc::clone(trace_store),
                 );
             }
         }
@@ -1639,6 +1849,7 @@ fn spawn_stream_forwarder(
     bot: teloxide::Bot,
     chat_id: i64,
     session_id: rara_kernel::session::SessionKey,
+    trace_store: TraceStore,
 ) {
     use rara_kernel::io::StreamEvent;
 
@@ -1899,6 +2110,8 @@ fn spawn_stream_forwarder(
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                     }
                                 }
+                                // Save plan steps for trace before clearing
+                                progress.saved_plan_steps = p.status_lines.clone();
                             }
                             plan = None;
                         }
@@ -1921,7 +2134,23 @@ fn spawn_stream_forwarder(
                                 }
                             }
                         }
-                        Ok(_) => {} // Ignore: ReasoningDelta, Progress, TurnMetrics
+                        Ok(StreamEvent::ReasoningDelta { text }) => {
+                            // Collect reasoning preview (truncate to ~500 chars)
+                            if progress.reasoning_preview.len() < 500 {
+                                let remaining = 500 - progress.reasoning_preview.len();
+                                if text.len() <= remaining {
+                                    progress.reasoning_preview.push_str(&text);
+                                } else {
+                                    progress.reasoning_preview.push_str(&text[..remaining]);
+                                    progress.reasoning_preview.push_str("\u{2026}");
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::TurnMetrics { model, iterations, .. }) => {
+                            progress.model = model;
+                            progress.iterations = iterations;
+                        }
+                        Ok(_) => {} // Ignore: Progress
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }
@@ -1950,6 +2179,57 @@ fn spawn_stream_forwarder(
                                 let result = flush_edit(&bot, chat_id, &req).await;
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
+
+                            // Finalize progress message with compact summary + trace button
+                            if let Some(mid) = progress.message_id {
+                                // Also capture plan steps from any still-active plan
+                                let plan_steps = if !progress.saved_plan_steps.is_empty() {
+                                    std::mem::take(&mut progress.saved_plan_steps)
+                                } else {
+                                    plan.as_ref().map(|p| p.status_lines.clone()).unwrap_or_default()
+                                };
+
+                                let trace = ExecutionTrace {
+                                    duration_secs:    progress.turn_started.elapsed().as_secs(),
+                                    iterations:       progress.iterations,
+                                    model:            std::mem::take(&mut progress.model),
+                                    input_tokens:     progress.input_tokens,
+                                    output_tokens:    progress.output_tokens,
+                                    thinking_ms:      progress.thinking_ms,
+                                    thinking_preview: std::mem::take(&mut progress.reasoning_preview),
+                                    plan_steps,
+                                    tools:            progress.tools.iter().map(|t| ToolTraceEntry {
+                                        name:     t.name.clone(),
+                                        duration: t.duration,
+                                        success:  t.success,
+                                        summary:  t.summary.clone(),
+                                        error:    t.error.clone(),
+                                    }).collect(),
+                                    created_at:       Instant::now(),
+                                };
+
+                                let compact = render_compact_summary(&trace);
+                                let trace_key = format!("{}:{}", chat_id, mid.0);
+                                let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                    InlineKeyboardButton::callback(
+                                        "\u{1f4ca} \u{8be6}\u{60c5}",
+                                        format!("trace:show:{trace_key}"),
+                                    ),
+                                ]]);
+
+                                let _ = bot
+                                    .edit_message_text(ChatId(chat_id), mid, &compact)
+                                    .parse_mode(ParseMode::Html)
+                                    .reply_markup(keyboard)
+                                    .await;
+
+                                // TTL cleanup: remove traces older than 1 hour
+                                trace_store.retain(|_, v| {
+                                    v.created_at.elapsed() < std::time::Duration::from_secs(3600)
+                                });
+                                trace_store.insert(trace_key, trace);
+                            }
+
                             break;
                         }
                     }
