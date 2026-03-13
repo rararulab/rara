@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -78,25 +77,15 @@ pub struct VaultAuthConfig {
     pub secret_id_file: PathBuf,
 }
 
-fn default_mount_path() -> String {
-    "secret/rara".into()
-}
+fn default_mount_path() -> String { "secret/rara".into() }
 
-fn default_watch_interval() -> Duration {
-    Duration::from_secs(30)
-}
+fn default_watch_interval() -> Duration { Duration::from_secs(30) }
 
-fn default_timeout() -> Duration {
-    Duration::from_secs(5)
-}
+fn default_timeout() -> Duration { Duration::from_secs(5) }
 
-fn default_fallback() -> bool {
-    true
-}
+fn default_fallback() -> bool { true }
 
-fn default_auth_method() -> String {
-    "approle".into()
-}
+fn default_auth_method() -> String { "approle".into() }
 
 #[cfg(test)]
 mod tests {
@@ -105,15 +94,15 @@ mod tests {
     #[test]
     fn serde_roundtrip() {
         let config = VaultConfig {
-            address: "http://10.0.0.5:30820".into(),
-            mount_path: "secret/rara".into(),
-            auth: VaultAuthConfig {
-                method: "approle".into(),
-                role_id_file: "/etc/rara/vault-role-id".into(),
+            address:           "http://10.0.0.5:30820".into(),
+            mount_path:        "secret/rara".into(),
+            auth:              VaultAuthConfig {
+                method:         "approle".into(),
+                role_id_file:   "/etc/rara/vault-role-id".into(),
                 secret_id_file: "/etc/rara/vault-secret-id".into(),
             },
-            watch_interval: Duration::from_secs(30),
-            timeout: Duration::from_secs(5),
+            watch_interval:    Duration::from_secs(30),
+            timeout:           Duration::from_secs(5),
             fallback_to_local: true,
         };
 
