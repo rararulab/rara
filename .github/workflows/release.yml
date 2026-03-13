@@ -163,9 +163,6 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
       - name: Upload artifacts to MinIO
         shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           for f in ${{ steps.cargo-dist.outputs.paths }}; do
             aws s3 cp "$f" "s3://artifacts/releases/${{ needs.plan.outputs.tag }}/" \
