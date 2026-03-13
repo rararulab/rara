@@ -126,10 +126,10 @@ impl super::AgentTool for CreatePlanTool {
             .collect();
 
         let plan = Plan {
-            goal:       input.goal,
+            goal: input.goal,
             steps,
             past_steps: vec![],
-            status:     PlanStatus::Active,
+            status: PlanStatus::Active,
         };
 
         let json = serde_json::to_value(&plan)

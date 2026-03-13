@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Pattern-based rule engine for scanning tool arguments.
 //!
 //! Detects known dangerous patterns in tool call arguments.
@@ -22,28 +36,28 @@ pub enum ThreatCategory {
 /// A matched pattern from the rule engine.
 #[derive(Debug, Clone)]
 pub struct PatternMatch {
-    pub rule_name: &'static str,
-    pub category: ThreatCategory,
-    pub severity: RiskLevel,
+    pub rule_name:       &'static str,
+    pub category:        ThreatCategory,
+    pub severity:        RiskLevel,
     pub matched_pattern: &'static str,
 }
 
 struct PatternRule {
-    name: &'static str,
-    category: ThreatCategory,
-    severity: RiskLevel,
+    name:       &'static str,
+    category:   ThreatCategory,
+    severity:   RiskLevel,
     /// Simple substring patterns (matched against lowercased text).
-    patterns: &'static [&'static str],
+    patterns:   &'static [&'static str],
     /// If true, only applies to shell tools (bash, shell_exec).
     shell_only: bool,
 }
 
 const RULES: &[PatternRule] = &[
     PatternRule {
-        name: "prompt_override",
-        category: ThreatCategory::InjectionMarker,
-        severity: RiskLevel::Critical,
-        patterns: &[
+        name:       "prompt_override",
+        category:   ThreatCategory::InjectionMarker,
+        severity:   RiskLevel::Critical,
+        patterns:   &[
             "ignore previous instructions",
             "ignore all previous",
             "disregard previous",
@@ -58,10 +72,10 @@ const RULES: &[PatternRule] = &[
         shell_only: false,
     },
     PatternRule {
-        name: "shell_destructive",
-        category: ThreatCategory::Destructive,
-        severity: RiskLevel::Critical,
-        patterns: &[
+        name:       "shell_destructive",
+        category:   ThreatCategory::Destructive,
+        severity:   RiskLevel::Critical,
+        patterns:   &[
             "rm -rf",
             "rm -fr",
             "mkfs",
@@ -74,10 +88,10 @@ const RULES: &[PatternRule] = &[
         shell_only: true,
     },
     PatternRule {
-        name: "data_exfiltration",
-        category: ThreatCategory::Exfiltration,
-        severity: RiskLevel::High,
-        patterns: &[
+        name:       "data_exfiltration",
+        category:   ThreatCategory::Exfiltration,
+        severity:   RiskLevel::High,
+        patterns:   &[
             "send to http",
             "send to https",
             "post to http",
@@ -93,10 +107,10 @@ const RULES: &[PatternRule] = &[
         shell_only: false,
     },
     PatternRule {
-        name: "privilege_escalation",
-        category: ThreatCategory::PrivilegeEscalation,
-        severity: RiskLevel::High,
-        patterns: &["sudo ", "chmod 777", "chmod +s", "chown root", "setuid"],
+        name:       "privilege_escalation",
+        category:   ThreatCategory::PrivilegeEscalation,
+        severity:   RiskLevel::High,
+        patterns:   &["sudo ", "chmod 777", "chmod +s", "chown root", "setuid"],
         shell_only: true,
     },
 ];
@@ -127,9 +141,9 @@ impl PatternGuard {
                     let normalized = normalize_text(&text.to_lowercase());
                     if normalized.contains(pattern) {
                         matches.push(PatternMatch {
-                            rule_name: rule.name,
-                            category: rule.category,
-                            severity: rule.severity,
+                            rule_name:       rule.name,
+                            category:        rule.category,
+                            severity:        rule.severity,
                             matched_pattern: pattern,
                         });
                         break; // one match per pattern is enough
@@ -149,9 +163,9 @@ impl PatternGuard {
             for (pattern, _desc) in SHELL_METACHARS {
                 if command.contains(pattern) {
                     matches.push(PatternMatch {
-                        rule_name: "shell_metachar",
-                        category: ThreatCategory::ShellMetachar,
-                        severity: RiskLevel::Critical,
+                        rule_name:       "shell_metachar",
+                        category:        ThreatCategory::ShellMetachar,
+                        severity:        RiskLevel::Critical,
                         matched_pattern: pattern,
                     });
                 }
@@ -162,15 +176,18 @@ impl PatternGuard {
     }
 }
 
-fn is_shell_tool(name: &str) -> bool {
-    matches!(name, "bash" | "shell_exec")
-}
+fn is_shell_tool(name: &str) -> bool { matches!(name, "bash" | "shell_exec") }
 
 /// Strip zero-width characters and collapse whitespace.
 fn normalize_text(text: &str) -> String {
     let stripped: String = text
         .chars()
-        .filter(|c| !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{00AD}'))
+        .filter(|c| {
+            !matches!(
+                c,
+                '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{00AD}'
+            )
+        })
         .collect();
     let collapsed: String = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed

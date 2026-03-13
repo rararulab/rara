@@ -12,8 +12,8 @@ categories.workspace = true
 description = "Structured, evolvable persona system for rara agents"
 
 [dependencies]
-rara-paths.workspace = true
 jiff.workspace = true
+rara-paths.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 snafu.workspace = true

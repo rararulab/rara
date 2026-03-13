@@ -22,10 +22,9 @@
 
 use async_trait::async_trait;
 use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_soul::state::{EmergedTrait, HistoryEntry, RelationshipStage, StyleDrift};
 use serde_json::json;
 use tracing::info;
-
-use rara_soul::state::{EmergedTrait, HistoryEntry, RelationshipStage, StyleDrift};
 
 use super::notify::push_notification;
 
@@ -49,11 +48,11 @@ impl AgentTool for UpdateSoulStateTool {
     fn name(&self) -> &str { "update-soul-state" }
 
     fn description(&self) -> &str {
-        "Update a specific field in an agent's soul state. Fields:\n\
-         - relationship_stage: one of \"stranger\", \"acquaintance\", \"friend\", \"close_friend\"\n\
-         - emerged_traits: array of {\"trait\": \"...\", \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}\n\
-         - style_drift: {\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}\n\
-         - discovered_interests: array of strings"
+        "Update a specific field in an agent's soul state. Fields:\n- relationship_stage: one of \
+         \"stranger\", \"acquaintance\", \"friend\", \"close_friend\"\n- emerged_traits: array of \
+         {\"trait\": \"...\", \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}\n- style_drift: \
+         {\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}\n- \
+         discovered_interests: array of strings"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -109,11 +108,13 @@ impl AgentTool for UpdateSoulStateTool {
 
         match field {
             "relationship_stage" => {
-                let stage: RelationshipStage = serde_json::from_value(value.clone())
-                    .map_err(|e| anyhow::anyhow!(
-                        "invalid relationship_stage value: {e}. Expected one of: \
-                         stranger, acquaintance, friend, close_friend"
-                    ))?;
+                let stage: RelationshipStage =
+                    serde_json::from_value(value.clone()).map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid relationship_stage value: {e}. Expected one of: stranger, \
+                             acquaintance, friend, close_friend"
+                        )
+                    })?;
                 let old = state.relationship_stage;
                 state.relationship_stage = stage;
                 state.append_history(HistoryEntry {
@@ -121,14 +122,21 @@ impl AgentTool for UpdateSoulStateTool {
                     r#type:      "relationship_stage_change".to_string(),
                     description: format!("{old:?} -> {stage:?}"),
                 });
-                info!(agent, ?old, ?stage, "soul state: relationship stage updated");
+                info!(
+                    agent,
+                    ?old,
+                    ?stage,
+                    "soul state: relationship stage updated"
+                );
             }
             "emerged_traits" => {
-                let traits: Vec<EmergedTrait> = serde_json::from_value(value.clone())
-                    .map_err(|e| anyhow::anyhow!(
-                        "invalid emerged_traits value: {e}. Expected array of \
-                         {{\"trait\": \"...\", \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}}"
-                    ))?;
+                let traits: Vec<EmergedTrait> =
+                    serde_json::from_value(value.clone()).map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid emerged_traits value: {e}. Expected array of {{\"trait\": \
+                             \"...\", \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}}"
+                        )
+                    })?;
                 let count = traits.len();
                 // Merge: add new traits, update confidence for existing ones.
                 for new_trait in traits {
@@ -145,16 +153,25 @@ impl AgentTool for UpdateSoulStateTool {
                 state.append_history(HistoryEntry {
                     timestamp:   jiff::Timestamp::now(),
                     r#type:      "emerged_traits_update".to_string(),
-                    description: format!("merged {count} trait(s), total: {}", state.emerged_traits.len()),
+                    description: format!(
+                        "merged {count} trait(s), total: {}",
+                        state.emerged_traits.len()
+                    ),
                 });
-                info!(agent, count, total = state.emerged_traits.len(), "soul state: emerged traits updated");
+                info!(
+                    agent,
+                    count,
+                    total = state.emerged_traits.len(),
+                    "soul state: emerged traits updated"
+                );
             }
             "style_drift" => {
-                let drift: StyleDrift = serde_json::from_value(value.clone())
-                    .map_err(|e| anyhow::anyhow!(
-                        "invalid style_drift value: {e}. Expected \
-                         {{\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}}"
-                    ))?;
+                let drift: StyleDrift = serde_json::from_value(value.clone()).map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid style_drift value: {e}. Expected {{\"formality\": 1-10, \
+                         \"verbosity\": 1-10, \"humor_frequency\": 1-10}}"
+                    )
+                })?;
                 state.style_drift = drift;
                 state.append_history(HistoryEntry {
                     timestamp:   jiff::Timestamp::now(),
@@ -169,10 +186,12 @@ impl AgentTool for UpdateSoulStateTool {
                 info!(agent, ?state.style_drift, "soul state: style drift updated");
             }
             "discovered_interests" => {
-                let interests: Vec<String> = serde_json::from_value(value.clone())
-                    .map_err(|e| anyhow::anyhow!(
-                        "invalid discovered_interests value: {e}. Expected array of strings"
-                    ))?;
+                let interests: Vec<String> =
+                    serde_json::from_value(value.clone()).map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid discovered_interests value: {e}. Expected array of strings"
+                        )
+                    })?;
                 let count = interests.len();
                 // Merge: add new interests, skip duplicates.
                 for interest in interests {
@@ -188,7 +207,12 @@ impl AgentTool for UpdateSoulStateTool {
                         state.discovered_interests.len()
                     ),
                 });
-                info!(agent, count, total = state.discovered_interests.len(), "soul state: discovered interests updated");
+                info!(
+                    agent,
+                    count,
+                    total = state.discovered_interests.len(),
+                    "soul state: discovered interests updated"
+                );
             }
             _ => unreachable!(),
         }
@@ -197,10 +221,7 @@ impl AgentTool for UpdateSoulStateTool {
         rara_soul::loader::save_state(agent, &state)
             .map_err(|e| anyhow::anyhow!("failed to save soul state: {e}"))?;
 
-        push_notification(
-            context,
-            format!("⚙️ Soul state updated: {agent}.{field}"),
-        );
+        push_notification(context, format!("⚙️ Soul state updated: {agent}.{field}"));
 
         Ok(json!({
             "status": "ok",

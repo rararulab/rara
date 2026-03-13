@@ -33,7 +33,7 @@ pub struct SoulFrontmatter {
     #[serde(default = "default_version")]
     pub version:     u32,
     #[serde(default)]
-    pub personality:  Vec<String>,
+    pub personality: Vec<String>,
     #[serde(default)]
     pub boundaries:  Boundaries,
     #[serde(default)]
@@ -91,8 +91,7 @@ impl SoulFile {
 
     /// Serialize back to soul file format (frontmatter + body).
     pub fn to_string(&self) -> Result<String> {
-        let yaml = serde_yaml::to_string(&self.frontmatter)
-            .context(ParseFrontmatterSnafu)?;
+        let yaml = serde_yaml::to_string(&self.frontmatter).context(ParseFrontmatterSnafu)?;
         Ok(format!("---\n{yaml}---\n{}", self.body))
     }
 }
@@ -219,7 +218,9 @@ Natural and friendly.
 
     #[test]
     fn roundtrip_serialization() {
-        let content = "---\nname: rara\nversion: 1\npersonality:\n- warm\nboundaries:\n  immutable_traits:\n  - honest\nevolution:\n  enabled: true\n---\n## Body\n\nSome text.\n";
+        let content = "---\nname: rara\nversion: 1\npersonality:\n- warm\nboundaries:\n  \
+                       immutable_traits:\n  - honest\nevolution:\n  enabled: true\n---\n## \
+                       Body\n\nSome text.\n";
         let soul = SoulFile::parse(content).unwrap();
         let serialized = soul.to_string().unwrap();
         let reparsed = SoulFile::parse(&serialized).unwrap();

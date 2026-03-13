@@ -36,23 +36,23 @@ pub enum IssueState {
 #[derive(Debug, Clone)]
 pub struct TrackedIssue {
     /// Unique identifier (owner/repo#number).
-    pub id: String,
+    pub id:         String,
     /// Human-readable identifier. GitHub: "42", Linear: "RAR-42".
     pub identifier: String,
     /// Repository name (owner/repo).
-    pub repo: String,
+    pub repo:       String,
     /// Issue number.
-    pub number: u64,
+    pub number:     u64,
     /// Issue title.
-    pub title: String,
+    pub title:      String,
     /// Issue body/description.
-    pub body: Option<String>,
+    pub body:       Option<String>,
     /// Labels attached to the issue.
-    pub labels: Vec<String>,
+    pub labels:     Vec<String>,
     /// Priority (lower = higher priority).
-    pub priority: u32,
+    pub priority:   u32,
     /// Current lifecycle state.
-    pub state: IssueState,
+    pub state:      IssueState,
     /// When the issue was created.
     pub created_at: DateTime<Utc>,
 }
@@ -75,9 +75,9 @@ pub trait IssueTracker: Send + Sync {
 
 /// GitHub-backed issue tracker using the REST API.
 pub struct GitHubIssueTracker {
-    repos: Vec<RepoConfig>,
+    repos:  Vec<RepoConfig>,
     client: reqwest::Client,
-    token: Option<String>,
+    token:  Option<String>,
 }
 
 impl GitHubIssueTracker {
@@ -127,7 +127,7 @@ impl GitHubIssueTracker {
         ensure!(
             resp.status().is_success(),
             GitHubStatusSnafu {
-                repo: repo.name.clone(),
+                repo:   repo.name.clone(),
                 status: resp.status(),
             }
         );
@@ -198,7 +198,7 @@ impl IssueTracker for GitHubIssueTracker {
         ensure!(
             resp.status().is_success(),
             GitHubStatusSnafu {
-                repo: repo.clone(),
+                repo:   repo.clone(),
                 status: resp.status(),
             }
         );
@@ -229,9 +229,7 @@ impl IssueTracker for GitHubIssueTracker {
 /// Parse an `"owner/repo"` slug into `(owner, repo)`.
 ///
 /// If no slash is present, treats the whole string as repo with empty owner.
-fn parse_repo_slug(slug: &str) -> (&str, &str) {
-    slug.split_once('/').unwrap_or(("", slug))
-}
+fn parse_repo_slug(slug: &str) -> (&str, &str) { slug.split_once('/').unwrap_or(("", slug)) }
 
 /// Derive a numeric priority from issue labels.
 ///
@@ -276,12 +274,12 @@ fn sort_issues(issues: &mut [TrackedIssue]) {
 
 #[derive(Debug, Deserialize)]
 struct GitHubIssue {
-    number: u64,
-    title: String,
-    body: Option<String>,
-    state: String,
-    labels: Vec<GitHubLabel>,
-    created_at: DateTime<Utc>,
+    number:       u64,
+    title:        String,
+    body:         Option<String>,
+    state:        String,
+    labels:       Vec<GitHubLabel>,
+    created_at:   DateTime<Utc>,
     pull_request: Option<serde_json::Value>,
 }
 
@@ -294,11 +292,11 @@ struct GitHubLabel {
 
 /// Linear-backed issue tracker using the GraphQL API.
 pub struct LinearIssueTracker {
-    client: lineark_sdk::Client,
-    team_key: String,
-    project_slug: Option<String>,
-    active_states: Vec<String>,
-    terminal_states: Vec<String>,
+    client:            lineark_sdk::Client,
+    team_key:          String,
+    project_slug:      Option<String>,
+    active_states:     Vec<String>,
+    terminal_states:   Vec<String>,
     repo_label_prefix: String,
 }
 
@@ -747,13 +745,9 @@ mod tests {
         assert_eq!(ids, vec!["b", "a", "e", "c", "d"]);
     }
 
-    fn s(v: &str) -> String {
-        v.to_owned()
-    }
+    fn s(v: &str) -> String { v.to_owned() }
 
-    fn dt(rfc3339: &str) -> DateTime<Utc> {
-        rfc3339.parse().unwrap()
-    }
+    fn dt(rfc3339: &str) -> DateTime<Utc> { rfc3339.parse().unwrap() }
 
     fn issue(id: &str, number: u64, priority: u32, created_at: DateTime<Utc>) -> TrackedIssue {
         TrackedIssue {

@@ -18,8 +18,8 @@ impl AgentTool for ComposioConnectTool {
     fn name(&self) -> &str { "composio_connect" }
 
     fn description(&self) -> &str {
-        "Get an OAuth connection URL to authorize a third-party app via Composio. \
-         Returns a redirect URL the user should open in their browser to complete authorization."
+        "Get an OAuth connection URL to authorize a third-party app via Composio. Returns a \
+         redirect URL the user should open in their browser to complete authorization."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

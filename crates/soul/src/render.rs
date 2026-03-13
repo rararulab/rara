@@ -15,8 +15,7 @@
 //! Template rendering — combines frontmatter, state, and body into the final
 //! soul prompt string.
 
-use crate::file::SoulFile;
-use crate::state::SoulState;
+use crate::{file::SoulFile, state::SoulState};
 
 /// Minimum trait confidence to include in the rendered prompt.
 const TRAIT_CONFIDENCE_THRESHOLD: f32 = 0.6;
@@ -96,9 +95,7 @@ pub fn render(soul: &SoulFile, state: Option<&SoulState>) -> String {
     if let Some(st) = state {
         out.push_str(&format!(
             "\n## Runtime Style Parameters\nFormality: {}/10\nVerbosity: {}/10\nHumor: {}/10\n",
-            st.style_drift.formality,
-            st.style_drift.verbosity,
-            st.style_drift.humor_frequency,
+            st.style_drift.formality, st.style_drift.verbosity, st.style_drift.humor_frequency,
         ));
     }
 
@@ -108,12 +105,15 @@ pub fn render(soul: &SoulFile, state: Option<&SoulState>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::SoulFile;
-    use crate::state::{EmergedTrait, MoodLabel, SoulState};
+    use crate::{
+        file::SoulFile,
+        state::{EmergedTrait, MoodLabel, SoulState},
+    };
 
     #[test]
     fn render_without_state() {
-        let content = "---\nname: rara\npersonality:\n- warm\n- curious\n---\n## Background\n\nSome background.\n";
+        let content = "---\nname: rara\npersonality:\n- warm\n- curious\n---\n## \
+                       Background\n\nSome background.\n";
         let soul = SoulFile::parse(content).unwrap();
         let rendered = render(&soul, None);
 

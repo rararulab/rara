@@ -323,9 +323,7 @@ pub enum KernelEvent {
     /// Unlike `UserMessage`, this does NOT persist to the target session's
     /// tape. The instruction is injected as ephemeral context for one LLM
     /// turn only.
-    MitaDirective {
-        instruction: String,
-    },
+    MitaDirective { instruction: String },
 
     /// Periodic Mita heartbeat — ensures the Mita session exists and
     /// delivers a heartbeat message to it.
@@ -455,7 +453,14 @@ impl KernelEventEnvelope {
         desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
     ) -> Self {
-        Self::create_session(manifest, input, principal, parent_id, desired_session_key, reply_tx)
+        Self::create_session(
+            manifest,
+            input,
+            principal,
+            parent_id,
+            desired_session_key,
+            reply_tx,
+        )
     }
 
     /// Create a `SendSignal` event.

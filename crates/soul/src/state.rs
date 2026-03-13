@@ -164,9 +164,7 @@ impl SoulState {
             })?;
         }
         let yaml = serde_yaml::to_string(self).context(SerializeStateSnafu)?;
-        let content = format!(
-            "# Auto-generated soul state — do not edit manually\n\n{yaml}"
-        );
+        let content = format!("# Auto-generated soul state — do not edit manually\n\n{yaml}");
         std::fs::write(path, content).context(IoSnafu {
             path: path.to_path_buf(),
         })?;

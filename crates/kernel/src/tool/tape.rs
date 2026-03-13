@@ -25,8 +25,10 @@ use anyhow::Context;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::memory::{HandoffState, TapEntryKind, TapeService};
-use crate::session::{SessionEntry, SessionIndex, SessionKey};
+use crate::{
+    memory::{HandoffState, TapEntryKind, TapeService},
+    session::{SessionEntry, SessionIndex, SessionKey},
+};
 
 /// LLM-callable tool that exposes raw tape memory primitives.
 ///
@@ -171,8 +173,9 @@ impl TapeTool {
     }
 
     async fn exec_checkout(&self, anchor_name: &str) -> anyhow::Result<serde_json::Value> {
-        use crate::memory::set_fork_metadata;
         use chrono::Utc;
+
+        use crate::memory::set_fork_metadata;
 
         // 1. Create a new session with fork metadata.
         let new_key = SessionKey::new();
@@ -180,15 +183,15 @@ impl TapeTool {
         set_fork_metadata(&mut metadata, &self.tape_name, anchor_name);
         let now = Utc::now();
         let entry = SessionEntry {
-            key:           new_key.clone(),
-            title:         Some(format!("Fork from {anchor_name}")),
-            model:         None,
+            key: new_key.clone(),
+            title: Some(format!("Fork from {anchor_name}")),
+            model: None,
             system_prompt: None,
             message_count: 0,
-            preview:       None,
+            preview: None,
             metadata,
-            created_at:    now,
-            updated_at:    now,
+            created_at: now,
+            updated_at: now,
         };
 
         self.sessions
@@ -327,22 +330,22 @@ impl super::AgentTool for TapeTool {
          when transitioning topics\n- `anchors` — list checkpoints to find relevant past \
          context\n- `entries` — read raw tape entries in your current context window or after a \
          specific anchor\n- `between_anchors` — recall the full context of a specific past topic \
-         segment\n- `checkout` — fork from a named anchor, creating a new session with context \
-         up to that point\n- `checkout_root` — find and return to the root (original) session by \
+         segment\n- `checkout` — fork from a named anchor, creating a new session with context up \
+         to that point\n- `checkout_root` — find and return to the root (original) session by \
          walking the fork chain. Use this when you or the user want to go back to the main \
-         conversation after working in a forked session.\n\n### checkout in detail\n\n**When to use**: The user wants to return to \
-         a past topic's state and continue from there, or explore a different direction from a \
-         previous checkpoint. For example, the user says \"let's go back to where we were debugging \
-         that lifetime issue and try a different approach.\"\n\n**What happens**: A new session is \
-         created containing all tape entries up to and including the named anchor. The original \
-         session is untouched — nothing is lost or overwritten. Your context window in the new \
-         session starts from that anchor's state, so you can continue working as if you were back \
-         at that point in time.\n\n**checkout vs between_anchors**: `between_anchors` is read-only \
-         recall — you see past entries but stay in the current session and context. `checkout` forks \
-         a new session where you actually continue working from that earlier point. Use \
-         `between_anchors` when you just need to reference old information; use `checkout` when the \
-         user wants to resume or diverge from a past state. To return to the original session \
-         after checking out, use `checkout_root`."
+         conversation after working in a forked session.\n\n### checkout in detail\n\n**When to \
+         use**: The user wants to return to a past topic's state and continue from there, or \
+         explore a different direction from a previous checkpoint. For example, the user says \
+         \"let's go back to where we were debugging that lifetime issue and try a different \
+         approach.\"\n\n**What happens**: A new session is created containing all tape entries up \
+         to and including the named anchor. The original session is untouched — nothing is lost or \
+         overwritten. Your context window in the new session starts from that anchor's state, so \
+         you can continue working as if you were back at that point in time.\n\n**checkout vs \
+         between_anchors**: `between_anchors` is read-only recall — you see past entries but stay \
+         in the current session and context. `checkout` forks a new session where you actually \
+         continue working from that earlier point. Use `between_anchors` when you just need to \
+         reference old information; use `checkout` when the user wants to resume or diverge from a \
+         past state. To return to the original session after checking out, use `checkout_root`."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

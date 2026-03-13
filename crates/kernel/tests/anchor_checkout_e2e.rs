@@ -9,15 +9,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use dashmap::DashMap;
+use rara_kernel::{
+    memory::{
+        AnchorTree, FileTapeStore, HandoffState, TapEntryKind, TapeService, get_fork_metadata,
+        set_fork_metadata,
+    },
+    session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey},
+};
 use serde_json::json;
-
-use rara_kernel::memory::{
-    AnchorTree, FileTapeStore, HandoffState, TapEntryKind, TapeService, get_fork_metadata,
-    set_fork_metadata,
-};
-use rara_kernel::session::{
-    ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey,
-};
 
 // ---------------------------------------------------------------------------
 // Test SessionIndex (in-memory, for integration tests)
@@ -48,7 +47,8 @@ impl SessionIndex for TestSessionIndex {
         limit: i64,
         _offset: i64,
     ) -> Result<Vec<SessionEntry>, SessionError> {
-        let mut entries: Vec<SessionEntry> = self.sessions.iter().map(|r| r.value().clone()).collect();
+        let mut entries: Vec<SessionEntry> =
+            self.sessions.iter().map(|r| r.value().clone()).collect();
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         entries.truncate(limit as usize);
         Ok(entries)
@@ -71,7 +71,10 @@ impl SessionIndex for TestSessionIndex {
         Ok(())
     }
 
-    async fn bind_channel(&self, _binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
+    async fn bind_channel(
+        &self,
+        _binding: &ChannelBinding,
+    ) -> Result<ChannelBinding, SessionError> {
         unimplemented!("not needed for anchor tree tests")
     }
 
@@ -104,15 +107,15 @@ async fn create_session(
     let now = Utc::now();
     sessions
         .create_session(&SessionEntry {
-            key:           key.clone(),
-            title:         None,
-            model:         None,
+            key: key.clone(),
+            title: None,
+            model: None,
             system_prompt: None,
             message_count: 0,
-            preview:       None,
+            preview: None,
             metadata,
-            created_at:    now,
-            updated_at:    now,
+            created_at: now,
+            updated_at: now,
         })
         .await
         .unwrap();
@@ -139,9 +142,13 @@ async fn checkout_preserves_pre_anchor_excludes_post_anchor() {
     )
     .await
     .unwrap();
-    tape.append_message(source, json!({"role":"user","content":"post-anchor msg"}), None)
-        .await
-        .unwrap();
+    tape.append_message(
+        source,
+        json!({"role":"user","content":"post-anchor msg"}),
+        None,
+    )
+    .await
+    .unwrap();
 
     // Checkout at topic/a
     let target = "target-tape";
@@ -160,20 +167,16 @@ async fn checkout_preserves_pre_anchor_excludes_post_anchor() {
     );
     // Target does NOT have post-anchor message
     assert!(
-        !target_entries.iter().any(|e| e
-            .payload
-            .get("content")
-            .and_then(|v| v.as_str())
-            == Some("post-anchor msg")),
+        !target_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("post-anchor msg")),
         "target should not contain post-anchor messages"
     );
     // Source is unchanged (still has the post-anchor message)
     assert!(
-        source_entries.iter().any(|e| e
-            .payload
-            .get("content")
-            .and_then(|v| v.as_str())
-            == Some("post-anchor msg")),
+        source_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("post-anchor msg")),
         "source should still contain post-anchor messages"
     );
 }
@@ -215,7 +218,10 @@ async fn multi_level_fork_chain_builds_correct_tree() {
     tape.ensure_bootstrap_anchor(&fork2_raw).await.unwrap();
 
     // Build tree from deepest fork
-    let tree: AnchorTree = tape.build_anchor_tree(&fork2_raw, &*sessions).await.unwrap();
+    let tree: AnchorTree = tape
+        .build_anchor_tree(&fork2_raw, &*sessions)
+        .await
+        .unwrap();
 
     // Tree root should be the original root session
     assert_eq!(tree.root.session_key, root_raw);
@@ -281,11 +287,9 @@ async fn checkout_then_continue_does_not_pollute_parent() {
     // Child has extra messages
     let child_entries = tape.entries(child).await.unwrap();
     assert!(
-        child_entries.iter().any(|e| e
-            .payload
-            .get("content")
-            .and_then(|v| v.as_str())
-            == Some("child msg 1")),
+        child_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("child msg 1")),
         "child should contain its own messages"
     );
 }
@@ -303,7 +307,10 @@ async fn checkout_nonexistent_anchor_returns_error() {
     let result = tape
         .checkout_anchor(source, "does/not/exist", "target")
         .await;
-    assert!(result.is_err(), "checkout of nonexistent anchor should fail");
+    assert!(
+        result.is_err(),
+        "checkout of nonexistent anchor should fail"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("anchor not found"),
@@ -358,18 +365,26 @@ async fn multiple_checkouts_create_independent_forks() {
     let fork2_entries = tape.entries("fork-2").await.unwrap();
 
     // Each fork has only its own message
-    assert!(fork1_entries
-        .iter()
-        .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork1 msg")));
-    assert!(!fork1_entries
-        .iter()
-        .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork2 msg")));
-    assert!(fork2_entries
-        .iter()
-        .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork2 msg")));
-    assert!(!fork2_entries
-        .iter()
-        .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork1 msg")));
+    assert!(
+        fork1_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork1 msg"))
+    );
+    assert!(
+        !fork1_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork2 msg"))
+    );
+    assert!(
+        fork2_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork2 msg"))
+    );
+    assert!(
+        !fork2_entries
+            .iter()
+            .any(|e| e.payload.get("content").and_then(|v| v.as_str()) == Some("fork1 msg"))
+    );
 }
 
 // ---------------------------------------------------------------------------

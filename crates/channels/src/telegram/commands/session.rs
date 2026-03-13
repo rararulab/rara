@@ -110,7 +110,11 @@ impl SessionCommandHandler {
     async fn handle_clear(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let (channel_type, chat_id) = extract_channel_info(context);
 
-        match self.client.get_channel_session(channel_type, &chat_id).await {
+        match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => {
                 match self
                     .client
@@ -136,7 +140,11 @@ impl SessionCommandHandler {
         let (channel_type, chat_id) = extract_channel_info(context);
 
         // Find the currently active session key.
-        let active_key = match self.client.get_channel_session(channel_type, &chat_id).await {
+        let active_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => Some(binding.session_key),
             Ok(None) => None,
             Err(e) => {
@@ -201,7 +209,11 @@ impl SessionCommandHandler {
     async fn handle_usage(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let (channel_type, chat_id) = extract_channel_info(context);
 
-        let session_key = match self.client.get_channel_session(channel_type, &chat_id).await {
+        let session_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -259,7 +271,11 @@ impl SessionCommandHandler {
     ) -> Result<CommandResult, KernelError> {
         let (channel_type, chat_id) = extract_channel_info(context);
 
-        let session_key = match self.client.get_channel_session(channel_type, &chat_id).await {
+        let session_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -346,7 +362,11 @@ impl CommandHandler for StopCommandHandler {
     ) -> Result<CommandResult, KernelError> {
         let (channel_type, chat_id) = extract_channel_info(context);
 
-        let session_key = match self.client.get_channel_session(channel_type, &chat_id).await {
+        let session_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text("当前没有活跃的会话。".to_owned()));

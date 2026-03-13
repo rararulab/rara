@@ -17,8 +17,10 @@
 //! Indexes large tool outputs into the context-mode MCP server and replaces
 //! them with compact references.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use async_trait::async_trait;
 use rara_kernel::tool::{OutputInterceptor, ToolOutput};
@@ -77,20 +79,20 @@ pub struct InterceptorStats {
     /// Number of outputs successfully indexed.
     pub intercepted_count: AtomicU64,
     /// Number of index failures (fell back to original output).
-    pub fallback_count: AtomicU64,
+    pub fallback_count:    AtomicU64,
     /// Total original payload bytes before indexing.
-    pub bytes_before: AtomicU64,
+    pub bytes_before:      AtomicU64,
     /// Total compact reference bytes after indexing.
-    pub bytes_after: AtomicU64,
+    pub bytes_after:       AtomicU64,
 }
 
 impl InterceptorStats {
     fn new() -> Self {
         Self {
             intercepted_count: AtomicU64::new(0),
-            fallback_count: AtomicU64::new(0),
-            bytes_before: AtomicU64::new(0),
-            bytes_after: AtomicU64::new(0),
+            fallback_count:    AtomicU64::new(0),
+            bytes_before:      AtomicU64::new(0),
+            bytes_after:       AtomicU64::new(0),
         }
     }
 
@@ -98,9 +100,9 @@ impl InterceptorStats {
     pub fn stats(&self) -> InterceptorStatsSnapshot {
         InterceptorStatsSnapshot {
             intercepted_count: self.intercepted_count.load(Ordering::Relaxed),
-            fallback_count: self.fallback_count.load(Ordering::Relaxed),
-            bytes_before: self.bytes_before.load(Ordering::Relaxed),
-            bytes_after: self.bytes_after.load(Ordering::Relaxed),
+            fallback_count:    self.fallback_count.load(Ordering::Relaxed),
+            bytes_before:      self.bytes_before.load(Ordering::Relaxed),
+            bytes_after:       self.bytes_after.load(Ordering::Relaxed),
         }
     }
 }
@@ -109,9 +111,9 @@ impl InterceptorStats {
 #[derive(Debug, Clone, Serialize)]
 pub struct InterceptorStatsSnapshot {
     pub intercepted_count: u64,
-    pub fallback_count: u64,
-    pub bytes_before: u64,
-    pub bytes_after: u64,
+    pub fallback_count:    u64,
+    pub bytes_before:      u64,
+    pub bytes_after:       u64,
 }
 
 pub struct ContextModeInterceptor {
@@ -135,9 +137,7 @@ impl ContextModeInterceptor {
     }
 
     /// Returns a shared handle to the runtime statistics.
-    pub fn stats(&self) -> Arc<InterceptorStats> {
-        Arc::clone(&self.stats)
-    }
+    pub fn stats(&self) -> Arc<InterceptorStats> { Arc::clone(&self.stats) }
 }
 
 #[async_trait]
@@ -188,8 +188,12 @@ impl OutputInterceptor for ContextModeInterceptor {
                 let replacement_str = replacement.to_string();
 
                 self.stats.intercepted_count.fetch_add(1, Ordering::Relaxed);
-                self.stats.bytes_before.fetch_add(json_str.len() as u64, Ordering::Relaxed);
-                self.stats.bytes_after.fetch_add(replacement_str.len() as u64, Ordering::Relaxed);
+                self.stats
+                    .bytes_before
+                    .fetch_add(json_str.len() as u64, Ordering::Relaxed);
+                self.stats
+                    .bytes_after
+                    .fetch_add(replacement_str.len() as u64, Ordering::Relaxed);
 
                 ToolOutput::from(replacement)
             }
@@ -211,6 +215,7 @@ fn build_summary(tool_name: &str, json_str: &str) -> String {
     let bytes = json_str.len();
     let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
     format!(
-        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use context-mode search to retrieve specific content.",
+        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use context-mode search to retrieve \
+         specific content.",
     )
 }

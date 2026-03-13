@@ -24,11 +24,13 @@ use std::path::PathBuf;
 use snafu::ResultExt;
 use tracing::{debug, info};
 
-use crate::defaults;
-use crate::error::{IoSnafu, Result};
-use crate::file::SoulFile;
-use crate::render;
-use crate::state::SoulState;
+use crate::{
+    defaults,
+    error::{IoSnafu, Result},
+    file::SoulFile,
+    render,
+    state::SoulState,
+};
 
 /// Source of a loaded soul definition.
 #[derive(Debug, Clone, PartialEq, Eq)]

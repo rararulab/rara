@@ -243,10 +243,7 @@ pub fn anchor_summary_from_entries(entries: &[TapEntry]) -> Option<String> {
 /// Reads all `Note` entries from the user tape and formats them into a single
 /// system message.  Returns `None` when the user tape has no notes, so the
 /// caller can skip injection entirely.
-pub fn user_tape_context(
-    entries: &[TapEntry],
-    anchor_summary: Option<&str>,
-) -> Option<Message> {
+pub fn user_tape_context(entries: &[TapEntry], anchor_summary: Option<&str>) -> Option<Message> {
     let all_notes: Vec<&TapEntry> = entries
         .iter()
         .filter(|e| e.kind == TapEntryKind::Note)
@@ -265,7 +262,8 @@ pub fn user_tape_context(
 
     if total_notes > MAX_USER_NOTES {
         sections.push(format!(
-            "[Earlier notes omitted — {total_notes} total notes, showing most recent {MAX_USER_NOTES}]"
+            "[Earlier notes omitted — {total_notes} total notes, showing most recent \
+             {MAX_USER_NOTES}]"
         ));
     }
 

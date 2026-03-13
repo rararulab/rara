@@ -175,45 +175,45 @@ impl ExecutionMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentManifest {
     /// Unique name identifying this agent definition.
-    pub name:               String,
+    pub name:                   String,
     /// Agent's functional role (chat, scout, planner, worker).
     #[serde(default)]
-    pub role:               AgentRole,
+    pub role:                   AgentRole,
     /// Human-readable description.
-    pub description:        String,
+    pub description:            String,
     /// LLM model identifier.
     #[serde(default)]
-    pub model:              Option<String>,
+    pub model:                  Option<String>,
     /// System prompt defining agent behavior.
-    pub system_prompt:      String,
+    pub system_prompt:          String,
     /// Optional personality/mood/voice prompt.
     #[serde(default)]
-    pub soul_prompt:        Option<String>,
+    pub soul_prompt:            Option<String>,
     /// Optional hint for provider selection.
     #[serde(default)]
-    pub provider_hint:      Option<String>,
+    pub provider_hint:          Option<String>,
     /// Maximum LLM iterations before forced completion.
     #[serde(default)]
-    pub max_iterations:     Option<usize>,
+    pub max_iterations:         Option<usize>,
     /// Tool names this agent is allowed to use (empty = inherit parent's
     /// tools).
     #[serde(default)]
-    pub tools:              Vec<String>,
+    pub tools:                  Vec<String>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
-    pub max_children:       Option<usize>,
+    pub max_children:           Option<usize>,
     /// Maximum context window size in tokens.
     #[serde(default)]
-    pub max_context_tokens: Option<usize>,
+    pub max_context_tokens:     Option<usize>,
     /// Dispatch priority for scheduling.
     #[serde(default)]
-    pub priority:           Priority,
+    pub priority:               Priority,
     /// Arbitrary metadata for extension.
     #[serde(default)]
-    pub metadata:           serde_json::Value,
+    pub metadata:               serde_json::Value,
     /// Optional sandbox configuration for file access control.
     #[serde(default)]
-    pub sandbox:            Option<SandboxConfig>,
+    pub sandbox:                Option<SandboxConfig>,
     /// Default execution mode for this agent ("reactive" or "plan").
     /// When set, sessions using this manifest default to this mode
     /// unless overridden by session-level `/msg_version`.
@@ -615,7 +615,10 @@ fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::
 fn resolve_soul_prompt(agent_name: &str) -> Option<String> {
     match rara_soul::load_and_render(agent_name) {
         Ok(Some(rendered)) => {
-            info!(agent = agent_name, "soul prompt rendered with runtime state");
+            info!(
+                agent = agent_name,
+                "soul prompt rendered with runtime state"
+            );
             Some(rendered)
         }
         Ok(None) => None,
@@ -636,42 +639,31 @@ fn build_runtime_contract_prompt(
     max_children: Option<usize>,
 ) -> String {
     let mut prompt = format!(
-        "{base_prompt}\n\n<context_contract>\nThe `tape` tool is your persistent memory.\n\n\
-         ## Tape actions\n\
-         - `anchor`: checkpoint + trim context. Older entries stay searchable via `search`.\n\
-         - `search` / `entries`: recall details from before an anchor.\n\
-         - `anchors`: list all checkpoints.\n\
-         - `checkout`: fork a new session from a past anchor (original unchanged).\n\n\
-         ## MUST anchor when:\n\
-         - Context is getting long or a [Context Usage Warning] appears\n\
-         - A tool result exceeds ~2000 chars\n\
-         - Iterative tasks accumulate large outputs (screenshots, scraping, listings)\n\n\
-         ## SHOULD anchor when:\n\
-         - Completing a logical work phase or switching subtasks\n\
-         - Processing multiple tool results in sequence\n\n\
-         ## MUST search before answering when:\n\
-         - The question refers to anything before an anchor or outside current window\n\
-         - You need exact tokens, IDs, codes, names, or quoted details from earlier context\n\n\
-         ## Anchor best practices\n\
-         - Always include a detailed `summary` and concrete `next_steps`\n\
-         - A missing summary = lost context\n\
-         - Use `checkout` to retry from a past checkpoint or when the user asks to go back\n\
-         \n</context_contract>"
+        "{base_prompt}\n\n<context_contract>\nThe `tape` tool is your persistent memory.\n\n## \
+         Tape actions\n- `anchor`: checkpoint + trim context. Older entries stay searchable via \
+         `search`.\n- `search` / `entries`: recall details from before an anchor.\n- `anchors`: \
+         list all checkpoints.\n- `checkout`: fork a new session from a past anchor (original \
+         unchanged).\n\n## MUST anchor when:\n- Context is getting long or a [Context Usage \
+         Warning] appears\n- A tool result exceeds ~2000 chars\n- Iterative tasks accumulate \
+         large outputs (screenshots, scraping, listings)\n\n## SHOULD anchor when:\n- Completing \
+         a logical work phase or switching subtasks\n- Processing multiple tool results in \
+         sequence\n\n## MUST search before answering when:\n- The question refers to anything \
+         before an anchor or outside current window\n- You need exact tokens, IDs, codes, names, \
+         or quoted details from earlier context\n\n## Anchor best practices\n- Always include a \
+         detailed `summary` and concrete `next_steps`\n- A missing summary = lost context\n- Use \
+         `checkout` to retry from a past checkpoint or when the user asks to go \
+         back\n\n</context_contract>"
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
     if can_delegate {
         prompt.push_str(
-            "\n\n<delegation_contract>\nUse the `kernel` tool to delegate to child agents.\n\n\
-             ## MUST delegate when:\n\
-             - 2+ independent subtasks exist\n\
-             - Broad discovery + implementation + verification across many files\n\
-             - Long tool-heavy execution that would bloat your context\n\n\
-             ## How:\n\
-             - `action: \"spawn\"`, `agent: \"worker\"` — single focused task\n\
-             - `action: \"spawn_parallel\"` — multiple independent tasks\n\
-             - Keep each worker's scope narrow; synthesize results in parent\n\
-             </delegation_contract>",
+            "\n\n<delegation_contract>\nUse the `kernel` tool to delegate to child agents.\n\n## \
+             MUST delegate when:\n- 2+ independent subtasks exist\n- Broad discovery + \
+             implementation + verification across many files\n- Long tool-heavy execution that \
+             would bloat your context\n\n## How:\n- `action: \"spawn\"`, `agent: \"worker\"` — \
+             single focused task\n- `action: \"spawn_parallel\"` — multiple independent tasks\n- \
+             Keep each worker's scope narrow; synthesize results in parent\n</delegation_contract>",
         );
     }
 
@@ -834,20 +826,18 @@ pub(crate) async fn run_agent_loop(
         // Conditional injections (tape search reminder only on first iteration)
         if iteration == 0 && should_remind_tape_search(&input_text) {
             messages.push(llm::Message::user(
-                "[Recall Verification] \
-                 The user is asking about a precise fact that may come from earlier context. \
-                 If you don't have clear evidence in your current context, you MUST use \
-                 tape.search to verify before answering.",
+                "[Recall Verification] The user is asking about a precise fact that may come from \
+                 earlier context. If you don't have clear evidence in your current context, you \
+                 MUST use tape.search to verify before answering.",
             ));
         }
 
         // Inject anchor reminder from previous iteration's large tool output
         if needs_anchor_reminder {
             messages.push(llm::Message::user(
-                "[Large Tool Output] \
-                 You just processed a large tool result that significantly bloats context. \
-                 Before continuing, use tape with action:\"anchor\" to create a handoff \
-                 with summary and next_steps. Use tape.search later for older details.",
+                "[Large Tool Output] You just processed a large tool result that significantly \
+                 bloats context. Before continuing, use tape with action:\"anchor\" to create a \
+                 handoff with summary and next_steps. Use tape.search later for older details.",
             ));
             needs_anchor_reminder = false;
         }
@@ -1049,8 +1039,8 @@ pub(crate) async fn run_agent_loop(
                 );
                 llm_error_recovery_used = true;
                 llm_error_recovery_message = Some(format!(
-                    "[System] The previous request encountered a server error ({e}). \
-                     Please reply to the user's question directly without using tools."
+                    "[System] The previous request encountered a server error ({e}). Please reply \
+                     to the user's question directly without using tools."
                 ));
                 tool_defs = vec![];
                 continue;
@@ -1089,13 +1079,15 @@ pub(crate) async fn run_agent_loop(
         // Terminal response (no tool calls, or recovery iteration must exit)
         if !has_tool_calls || llm_error_recovery_used {
             // Persist final assistant message to tape.
-            let usage_meta = last_usage.as_ref().map(|u| serde_json::json!({
-                "usage": {
-                    "prompt_tokens": u.prompt_tokens,
-                    "completion_tokens": u.completion_tokens,
-                    "total_tokens": u.total_tokens
-                }
-            }));
+            let usage_meta = last_usage.as_ref().map(|u| {
+                serde_json::json!({
+                    "usage": {
+                        "prompt_tokens": u.prompt_tokens,
+                        "completion_tokens": u.completion_tokens,
+                        "total_tokens": u.total_tokens
+                    }
+                })
+            });
             let _ = tape
                 .append_message(
                     tape_name,
@@ -1241,15 +1233,21 @@ pub(crate) async fn run_agent_loop(
                     })
                 })
                 .collect();
-            let usage_meta = last_usage.as_ref().map(|u| serde_json::json!({
-                "usage": {
-                    "prompt_tokens": u.prompt_tokens,
-                    "completion_tokens": u.completion_tokens,
-                    "total_tokens": u.total_tokens
-                }
-            }));
+            let usage_meta = last_usage.as_ref().map(|u| {
+                serde_json::json!({
+                    "usage": {
+                        "prompt_tokens": u.prompt_tokens,
+                        "completion_tokens": u.completion_tokens,
+                        "total_tokens": u.total_tokens
+                    }
+                })
+            });
             let _ = tape
-                .append_tool_call(tape_name, serde_json::json!({ "calls": calls_json }), usage_meta)
+                .append_tool_call(
+                    tape_name,
+                    serde_json::json!({ "calls": calls_json }),
+                    usage_meta,
+                )
                 .await;
         }
 
@@ -1522,7 +1520,6 @@ pub(crate) async fn run_agent_loop(
                 result_preview,
                 error: err.clone(),
             });
-
         }
 
         // Collect iteration trace (with tool calls)
@@ -1557,9 +1554,9 @@ pub(crate) async fn run_agent_loop(
             match pressure {
                 ContextPressure::Critical { usage_ratio, .. } => {
                     context_pressure_warning = Some(format!(
-                        "[Context Usage Critical] Current context ~{} tokens ({:.0}%), \
-                         context window capacity {} tokens. You MUST immediately create \
-                         a tape anchor with summary and next_steps.",
+                        "[Context Usage Critical] Current context ~{} tokens ({:.0}%), context \
+                         window capacity {} tokens. You MUST immediately create a tape anchor \
+                         with summary and next_steps.",
                         tape_info.estimated_context_tokens,
                         usage_ratio * 100.0,
                         capabilities.context_window_tokens,
@@ -1567,9 +1564,8 @@ pub(crate) async fn run_agent_loop(
                 }
                 ContextPressure::Warning { usage_ratio, .. } => {
                     context_pressure_warning = Some(format!(
-                        "[Context Usage Warning] Current context ~{} tokens ({:.0}%), \
-                         context window capacity {} tokens. You SHOULD consider creating \
-                         a tape anchor.",
+                        "[Context Usage Warning] Current context ~{} tokens ({:.0}%), context \
+                         window capacity {} tokens. You SHOULD consider creating a tape anchor.",
                         tape_info.estimated_context_tokens,
                         usage_ratio * 100.0,
                         capabilities.context_window_tokens,

@@ -29,25 +29,62 @@ const TAIL_WINDOW: usize = 5;
 // ── Keyword sets ────────────────────────────────────────────────────────────
 
 const CHEERFUL_KEYWORDS: &[&str] = &[
-    "哈哈", "haha", "😄", "😊", "太好了", "great", "awesome", "wonderful",
-    "棒", "nice", "excited", "开心", "高兴", "耶", "🎉", "excellent",
+    "哈哈",
+    "haha",
+    "😄",
+    "😊",
+    "太好了",
+    "great",
+    "awesome",
+    "wonderful",
+    "棒",
+    "nice",
+    "excited",
+    "开心",
+    "高兴",
+    "耶",
+    "🎉",
+    "excellent",
 ];
 
 const PLAYFUL_KEYWORDS: &[&str] = &[
-    "哈", "lol", "😂", "🤣", "有趣", "funny", "joke", "玩笑",
-    "好玩", "逗", "嘻嘻", "quirky", "silly",
+    "哈", "lol", "😂", "🤣", "有趣", "funny", "joke", "玩笑", "好玩", "逗", "嘻嘻", "quirky",
+    "silly",
 ];
 
 const FOCUSED_KEYWORDS: &[&str] = &[
-    "```", "fn ", "struct ", "impl ", "error[", "warning[",
-    "SELECT ", "CREATE ", "ALTER ", "INSERT ",
-    "def ", "class ", "import ", "from ", "module",
-    "migration", "schema", "query", "debug", "trace",
+    "```",
+    "fn ",
+    "struct ",
+    "impl ",
+    "error[",
+    "warning[",
+    "SELECT ",
+    "CREATE ",
+    "ALTER ",
+    "INSERT ",
+    "def ",
+    "class ",
+    "import ",
+    "from ",
+    "module",
+    "migration",
+    "schema",
+    "query",
+    "debug",
+    "trace",
 ];
 
 const APOLOGY_KEYWORDS: &[&str] = &[
-    "抱歉", "sorry", "my mistake", "我的错", "修正", "correction",
-    "oops", "不好意思", "apologize",
+    "抱歉",
+    "sorry",
+    "my mistake",
+    "我的错",
+    "修正",
+    "correction",
+    "oops",
+    "不好意思",
+    "apologize",
 ];
 
 /// Result of mood inference: a label and a confidence score.
@@ -98,7 +135,8 @@ pub fn infer_mood(messages: &[llm::Message]) -> Option<MoodInference> {
         });
     }
 
-    // Confidence scales with hit count: 1 hit → 0.4, 2 → 0.55, 3 → 0.7, 4+ → 0.85, cap 0.9.
+    // Confidence scales with hit count: 1 hit → 0.4, 2 → 0.55, 3 → 0.7, 4+ → 0.85,
+    // cap 0.9.
     let confidence = (0.25 + max_hits as f32 * 0.15).min(0.9);
 
     let label = if cheerful_hits >= playful_hits && cheerful_hits >= focused_hits {
@@ -139,8 +177,7 @@ fn count_hits(lower: &str, original: &str, keywords: &[&str]) -> usize {
 /// must never block the agent response path.
 pub fn update_soul_mood(agent_name: &str, inference: &MoodInference) {
     let result = (|| -> Result<(), rara_soul::SoulError> {
-        let mut state = rara_soul::loader::load_state(agent_name)?
-            .unwrap_or_default();
+        let mut state = rara_soul::loader::load_state(agent_name)?.unwrap_or_default();
         state.update_mood(inference.label, inference.confidence);
         rara_soul::loader::save_state(agent_name, &state)?;
         Ok(())
@@ -160,13 +197,9 @@ mod tests {
     use super::*;
     use crate::llm::Message;
 
-    fn assistant_msg(text: &str) -> Message {
-        Message::assistant(text)
-    }
+    fn assistant_msg(text: &str) -> Message { Message::assistant(text) }
 
-    fn user_msg(text: &str) -> Message {
-        Message::user(text)
-    }
+    fn user_msg(text: &str) -> Message { Message::user(text) }
 
     #[test]
     fn empty_messages_returns_none() {
@@ -204,7 +237,9 @@ mod tests {
     fn focused_on_code() {
         let msgs = vec![
             user_msg("fix the bug"),
-            assistant_msg("我来看看这个 error:\n```rust\nfn main() {\n    let x = struct Foo;\n}\n```"),
+            assistant_msg(
+                "我来看看这个 error:\n```rust\nfn main() {\n    let x = struct Foo;\n}\n```",
+            ),
         ];
         let result = infer_mood(&msgs).unwrap();
         assert_eq!(result.label, MoodLabel::Focused);
@@ -261,9 +296,9 @@ mod tests {
 
     #[test]
     fn mixed_signals_picks_strongest() {
-        let msgs = vec![
-            assistant_msg("太好了！awesome! great! 来看看代码 ```rust\nfn foo() {}\n```"),
-        ];
+        let msgs = vec![assistant_msg(
+            "太好了！awesome! great! 来看看代码 ```rust\nfn foo() {}\n```",
+        )];
         let result = infer_mood(&msgs).unwrap();
         // 3 cheerful hits vs 2 focused hits → Cheerful wins.
         assert_eq!(result.label, MoodLabel::Cheerful);

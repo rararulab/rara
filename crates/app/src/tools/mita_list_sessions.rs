@@ -52,8 +52,9 @@ impl AgentTool for ListSessionsTool {
     fn name(&self) -> &str { "list-sessions" }
 
     fn description(&self) -> &str {
-        "List all live sessions currently running in the kernel process table. Returns session key, \
-         agent name, state, metrics, and timestamps. Use this to discover sessions worth inspecting."
+        "List all live sessions currently running in the kernel process table. Returns session \
+         key, agent name, state, metrics, and timestamps. Use this to discover sessions worth \
+         inspecting."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -90,9 +91,7 @@ impl AgentTool for ListSessionsTool {
 
         // Filter by last_activity if requested.
         if let Some(since) = updated_since {
-            sessions.retain(|s| {
-                s.last_activity.map_or(false, |ts| ts > since)
-            });
+            sessions.retain(|s| s.last_activity.map_or(false, |ts| ts > since));
         }
 
         // Truncate to limit.

@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use snafu::ResultExt;
 use rara_kernel::{
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
 };
+use snafu::ResultExt;
 
 use super::client::{
     BotServiceClient, BotServiceError, ChannelBinding, CheckoutResult, DiscoveryJob, McpServerInfo,
@@ -158,12 +158,7 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
-        match self
-            .sessions
-            .get_session(&sk)
-            .await
-            .context(SessionSnafu)?
-        {
+        match self.sessions.get_session(&sk).await.context(SessionSnafu)? {
             Some(entry) => Ok(entry_to_detail(&entry)),
             None => Err(BotServiceError::Service {
                 message: format!("session not found: {key}"),
@@ -232,7 +227,11 @@ impl BotServiceClient for KernelBotServiceClient {
             created_at: now,
             updated_at: now,
         };
-        let created = self.sessions.create_session(&entry).await.context(SessionSnafu)?;
+        let created = self
+            .sessions
+            .create_session(&entry)
+            .await
+            .context(SessionSnafu)?;
 
         if let Err(e) = self
             .tape
@@ -254,11 +253,7 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(session_key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
-        let entry = self
-            .sessions
-            .get_session(&sk)
-            .await
-            .context(SessionSnafu)?;
+        let entry = self.sessions.get_session(&sk).await.context(SessionSnafu)?;
         Ok(entry.and_then(|session| {
             get_fork_metadata(&session.metadata).map(|metadata| metadata.forked_from)
         }))

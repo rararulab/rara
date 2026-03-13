@@ -194,8 +194,7 @@ impl OpenAiDriver {
             let status = response.status();
 
             // Rate limited — retry with backoff
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                && attempt < RATE_LIMIT_MAX_RETRIES
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < RATE_LIMIT_MAX_RETRIES
             {
                 let retry_after = response
                     .headers()
@@ -204,11 +203,10 @@ impl OpenAiDriver {
                     .and_then(|v| v.parse::<u64>().ok())
                     .map(Duration::from_secs);
 
-                let backoff =
-                    retry_after.unwrap_or_else(|| {
-                        (RATE_LIMIT_INITIAL_DELAY * 2u32.saturating_pow(attempt))
-                            .min(RATE_LIMIT_MAX_DELAY)
-                    });
+                let backoff = retry_after.unwrap_or_else(|| {
+                    (RATE_LIMIT_INITIAL_DELAY * 2u32.saturating_pow(attempt))
+                        .min(RATE_LIMIT_MAX_DELAY)
+                });
 
                 tracing::warn!(
                     attempt = attempt + 1,
@@ -306,11 +304,7 @@ impl LlmDriver for OpenAiDriver {
         let mut acc = StreamAccumulator::new();
 
         loop {
-            let maybe_event = tokio::time::timeout(
-                SSE_IDLE_TIMEOUT,
-                event_stream.next(),
-            )
-            .await;
+            let maybe_event = tokio::time::timeout(SSE_IDLE_TIMEOUT, event_stream.next()).await;
 
             match maybe_event {
                 Ok(Some(event_result)) => {
@@ -331,7 +325,9 @@ impl LlmDriver for OpenAiDriver {
                         timeout_secs = SSE_IDLE_TIMEOUT.as_secs(),
                         "SSE stream idle timeout — no event received, aborting stream"
                     );
-                    return Err(KernelError::RetryableServer { message: "SSE stream idle timeout".into() });
+                    return Err(KernelError::RetryableServer {
+                        message: "SSE stream idle timeout".into(),
+                    });
                 }
             }
         }

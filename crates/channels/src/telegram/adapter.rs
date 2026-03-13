@@ -47,7 +47,8 @@ use std::{
 };
 
 /// 匹配 LLM 意外输出到 content 中的 tool call XML 标签。
-/// 覆盖 `<toolcall>`, `<tool_call>`, `<tool_use>`, `<function=...>` 及其自闭合变体。
+/// 覆盖 `<toolcall>`, `<tool_call>`, `<tool_use>`, `<function=...>`
+/// 及其自闭合变体。
 static TOOL_CALL_XML_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
         r"(?si)<(?:toolcall|tool_call|tool_use|function=[^>]*)(?:\s[^>]*)?>.*?</(?:toolcall|tool_call|tool_use|function)>|<(?:toolcall|tool_call|tool_use|function=[^>]*)(?:\s[^>]*)?/>"
@@ -72,7 +73,10 @@ use rara_kernel::{
     security::{ApprovalDecision, ApprovalRequest},
 };
 use teloxide::{
-    payloads::{AnswerCallbackQuerySetters, EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters},
+    payloads::{
+        AnswerCallbackQuerySetters, EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters,
+        SendPhotoSetters,
+    },
     requests::{Request, Requester},
     types::{
         AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId,
@@ -117,7 +121,9 @@ pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyh
         Some(url) => {
             let client = teloxide::net::default_reqwest_settings()
                 .proxy(reqwest::Proxy::all(url)?)
-                .timeout(std::time::Duration::from_secs(POLL_TIMEOUT_SECS as u64 + 30))
+                .timeout(std::time::Duration::from_secs(
+                    POLL_TIMEOUT_SECS as u64 + 30,
+                ))
                 .build()?;
             Ok(teloxide::Bot::with_client(token, client))
         }
@@ -140,21 +146,21 @@ struct ToolProgress {
 
 /// Progress message state for tool execution feedback.
 struct ProgressMessage {
-    message_id:     Option<MessageId>,
-    tools:          Vec<ToolProgress>,
-    last_edit:      Instant,
-    turn_started:   Instant,
+    message_id:   Option<MessageId>,
+    tools:        Vec<ToolProgress>,
+    last_edit:    Instant,
+    turn_started: Instant,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id:     None,
-            tools:          Vec::new(),
-            last_edit:      Instant::now()
+            message_id:   None,
+            tools:        Vec::new(),
+            last_edit:    Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
-            turn_started:   Instant::now(),
+            turn_started: Instant::now(),
         }
     }
 }
@@ -170,7 +176,8 @@ enum PlanTier {
     Heavy,
 }
 
-/// Plan display state for Telegram — three-tier strategy with single message edit.
+/// Plan display state for Telegram — three-tier strategy with single message
+/// edit.
 struct PlanDisplay {
     message_id:              Option<MessageId>,
     total_steps:             usize,
@@ -293,21 +300,20 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
             phase.all_finished = phase.all_finished && tool.finished;
             phase.all_success = phase.all_success && tool.success;
             if let Some(d) = tool.duration {
-                phase.total_duration = Some(
-                    phase.total_duration.unwrap_or(std::time::Duration::ZERO) + d,
-                );
+                phase.total_duration =
+                    Some(phase.total_duration.unwrap_or(std::time::Duration::ZERO) + d);
             }
             if phase.first_error.is_none() {
                 phase.first_error = tool.error.clone();
             }
         } else {
             phases.push(Phase {
-                activity: tool.activity.clone(),
-                count: 1,
-                all_finished: tool.finished,
-                all_success: tool.success,
+                activity:       tool.activity.clone(),
+                count:          1,
+                all_finished:   tool.finished,
+                all_success:    tool.success,
                 total_duration: tool.duration,
-                first_error: tool.error.clone(),
+                first_error:    tool.error.clone(),
             });
         }
     }
@@ -395,7 +401,10 @@ fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) ->
 
     // Footer: total elapsed time (only while tools are still running).
     if phases.iter().any(|p| !p.all_finished) {
-        lines.push(format!("\u{23f1}\u{fe0f} {}", format_duration_compact(turn_elapsed)));
+        lines.push(format!(
+            "\u{23f1}\u{fe0f} {}",
+            format_duration_compact(turn_elapsed)
+        ));
     }
 
     lines.join("\n")
@@ -860,7 +869,13 @@ impl ChannelAdapter for TelegramAdapter {
             let approval_config = Arc::clone(&self.config);
             let mut approval_shutdown = self.shutdown_rx.clone();
             tokio::spawn(async move {
-                approval_listener(approval_bot, approval_rx, approval_config, &mut approval_shutdown).await;
+                approval_listener(
+                    approval_bot,
+                    approval_rx,
+                    approval_config,
+                    &mut approval_shutdown,
+                )
+                .await;
             });
         }
 
@@ -1025,7 +1040,9 @@ async fn polling_loop(
 
 /// Minimal HTML escaping for text embedded in Telegram HTML messages.
 fn guard_html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Handle a guard approval/deny callback query from an inline keyboard button.
@@ -1081,10 +1098,11 @@ async fn handle_guard_callback(
         .unwrap_or("unknown")
         .to_string();
 
-    let result = handle
-        .security()
-        .approval()
-        .resolve(request_id, decision, Some(decided_by.clone()));
+    let result =
+        handle
+            .security()
+            .approval()
+            .resolve(request_id, decision, Some(decided_by.clone()));
 
     // Answer the callback query (removes the loading spinner on the button).
     let answer_text = match decision {
@@ -1092,7 +1110,10 @@ async fn handle_guard_callback(
         ApprovalDecision::Denied => "❌ Denied",
         _ => "Done",
     };
-    let _ = bot.answer_callback_query(callback.id.clone()).text(answer_text).await;
+    let _ = bot
+        .answer_callback_query(callback.id.clone())
+        .text(answer_text)
+        .await;
 
     // Edit the original message to show the decision (remove buttons).
     if let Some(msg) = &callback.message {
@@ -1266,8 +1287,8 @@ async fn handle_update(
         let username_guard = bot_username.read().await;
         let username_ref = username_guard.as_deref();
 
-        let is_mentioned =
-            is_group_mention(msg, trigger_text, username_ref) || contains_rara_keyword(trigger_text);
+        let is_mentioned = is_group_mention(msg, trigger_text, username_ref)
+            || contains_rara_keyword(trigger_text);
 
         match cfg.group_policy {
             GroupPolicy::Ignore => {
@@ -1468,7 +1489,9 @@ async fn handle_update(
             return;
         }
         Err(IOError::RateLimited { message }) => {
-            let _ = bot.send_message(ChatId(chat_id), format!("\u{26a0}\u{fe0f} {message}")).await;
+            let _ = bot
+                .send_message(ChatId(chat_id), format!("\u{26a0}\u{fe0f} {message}"))
+                .await;
             return;
         }
         Err(IOError::IdentityResolutionFailed { .. }) => {
@@ -1575,9 +1598,7 @@ async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: Comm
 
 /// 从累积文本中剥离 LLM 意外泄漏的 tool call XML，返回清理后的文本。
 /// 若文本未被修改则返回原始切片的克隆（零拷贝路径由 regex 保证）。
-fn strip_tool_call_xml(text: &str) -> String {
-    TOOL_CALL_XML_RE.replace_all(text, "").into_owned()
-}
+fn strip_tool_call_xml(text: &str) -> String { TOOL_CALL_XML_RE.replace_all(text, "").into_owned() }
 
 /// Spawn a background task that subscribes to [`StreamHub`] for the given
 /// session and progressively updates a Telegram message via `editMessageText`.

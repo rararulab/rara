@@ -27,7 +27,8 @@ use super::notify::push_notification;
 /// Mita-exclusive tool: evolve an agent's soul.md.
 ///
 /// Mita generates the new soul content and passes it as `proposed_soul`.
-/// The tool validates boundaries, snapshots the old soul, and writes the new one.
+/// The tool validates boundaries, snapshots the old soul, and writes the new
+/// one.
 pub struct EvolveSoulTool;
 
 impl EvolveSoulTool {
@@ -39,12 +40,12 @@ impl AgentTool for EvolveSoulTool {
     fn name(&self) -> &str { "evolve-soul" }
 
     fn description(&self) -> &str {
-        "Write an evolved soul.md for an agent. You (Mita) must generate the full \
-         proposed soul content (frontmatter + markdown body) based on the accumulated \
-         state signals (emerged traits, style drift, discovered interests, relationship \
-         stage). The tool validates boundaries, snapshots the current soul, and writes \
-         the new version. The proposed_soul must preserve all immutable_traits and \
-         respect formality bounds from the current soul's boundaries section."
+        "Write an evolved soul.md for an agent. You (Mita) must generate the full proposed soul \
+         content (frontmatter + markdown body) based on the accumulated state signals (emerged \
+         traits, style drift, discovered interests, relationship stage). The tool validates \
+         boundaries, snapshots the current soul, and writes the new version. The proposed_soul \
+         must preserve all immutable_traits and respect formality bounds from the current soul's \
+         boundaries section."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -99,10 +100,8 @@ impl AgentTool for EvolveSoulTool {
             .map_err(|e| anyhow::anyhow!("proposed soul is not valid: {e}"))?;
 
         // 3. Validate boundaries.
-        let violations = rara_soul::validate_boundaries(
-            &current_soul.frontmatter,
-            &proposed_soul.frontmatter,
-        );
+        let violations =
+            rara_soul::validate_boundaries(&current_soul.frontmatter, &proposed_soul.frontmatter);
         if !violations.is_empty() {
             return Ok(json!({
                 "status": "rejected",
@@ -135,11 +134,7 @@ impl AgentTool for EvolveSoulTool {
             state.append_history(rara_soul::state::HistoryEntry {
                 timestamp:   jiff::Timestamp::now(),
                 r#type:      "soul_evolved".to_string(),
-                description: format!(
-                    "v{} → v{}: {reason}",
-                    current_version,
-                    current_version + 1,
-                ),
+                description: format!("v{} → v{}: {reason}", current_version, current_version + 1,),
             });
             let _ = rara_soul::loader::save_state(agent, &state);
         }

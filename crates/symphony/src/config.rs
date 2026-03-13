@@ -17,41 +17,23 @@ use std::{path::PathBuf, time::Duration};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 
-pub(crate) fn default_active_labels() -> Vec<String> {
-    vec!["symphony:ready".to_owned()]
-}
+pub(crate) fn default_active_labels() -> Vec<String> { vec!["symphony:ready".to_owned()] }
 
-fn default_workflow_file() -> String {
-    "WORKFLOW.md".to_owned()
-}
+fn default_workflow_file() -> String { "WORKFLOW.md".to_owned() }
 
-fn default_command() -> String {
-    "ralph".to_owned()
-}
+fn default_command() -> String { "ralph".to_owned() }
 
-fn default_backend() -> String {
-    "codex".to_owned()
-}
+fn default_backend() -> String { "codex".to_owned() }
 
-fn default_core_config_file() -> PathBuf {
-    PathBuf::from("ralph.core.yml")
-}
+fn default_core_config_file() -> PathBuf { PathBuf::from("ralph.core.yml") }
 
-fn default_max_concurrent_agents() -> usize {
-    2
-}
+fn default_max_concurrent_agents() -> usize { 2 }
 
-fn default_stall_timeout() -> Duration {
-    Duration::from_secs(30 * 60)
-}
+fn default_stall_timeout() -> Duration { Duration::from_secs(30 * 60) }
 
-fn default_max_retry_backoff() -> Duration {
-    Duration::from_secs(60 * 60)
-}
+fn default_max_retry_backoff() -> Duration { Duration::from_secs(60 * 60) }
 
-fn default_active_states() -> Vec<String> {
-    vec!["Todo".to_owned()]
-}
+fn default_active_states() -> Vec<String> { vec!["Todo".to_owned()] }
 
 fn default_terminal_states() -> Vec<String> {
     vec![
@@ -63,21 +45,13 @@ fn default_terminal_states() -> Vec<String> {
     ]
 }
 
-fn default_repo_label_prefix() -> String {
-    "repo:".to_owned()
-}
+fn default_repo_label_prefix() -> String { "repo:".to_owned() }
 
-fn default_linear_endpoint() -> String {
-    "https://api.linear.app/graphql".to_owned()
-}
+fn default_linear_endpoint() -> String { "https://api.linear.app/graphql".to_owned() }
 
-fn default_started_issue_state() -> String {
-    "In Progress".to_owned()
-}
+fn default_started_issue_state() -> String { "In Progress".to_owned() }
 
-fn default_completed_issue_state() -> String {
-    "ToVerify".to_owned()
-}
+fn default_completed_issue_state() -> String { "ToVerify".to_owned() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -248,11 +222,11 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            command: default_command(),
-            backend: default_backend(),
+            command:          default_command(),
+            backend:          default_backend(),
             core_config_file: default_core_config_file(),
-            extra_args: Vec::new(),
-            run_timeout: None,
+            extra_args:       Vec::new(),
+            run_timeout:      None,
         }
     }
 }
@@ -285,9 +259,7 @@ impl AgentConfig {
     }
 
     #[must_use]
-    pub fn doctor_args(&self) -> Vec<String> {
-        vec!["doctor".to_owned()]
-    }
+    pub fn doctor_args(&self) -> Vec<String> { vec!["doctor".to_owned()] }
 }
 
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]

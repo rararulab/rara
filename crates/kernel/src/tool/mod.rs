@@ -338,7 +338,10 @@ mod tests {
     fn filtered_unknown_names_ignored() {
         let reg = build_registry();
         let filtered = reg.filtered(&["nonexistent".to_string()]);
-        assert!(filtered.is_empty(), "unknown tool names should result in empty registry");
+        assert!(
+            filtered.is_empty(),
+            "unknown tool names should result in empty registry"
+        );
     }
 
     struct TestInterceptor {

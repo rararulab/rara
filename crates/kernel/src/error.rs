@@ -181,15 +181,21 @@ pub enum KernelError {
 /// another model, or give up.
 pub fn classify_provider_error(msg: &str, status_code: Option<u16>) -> KernelError {
     if matches!(status_code, Some(429 | 500 | 502 | 503 | 529)) {
-        return KernelError::RetryableServer { message: SharedString::from(msg.to_owned()) };
+        return KernelError::RetryableServer {
+            message: SharedString::from(msg.to_owned()),
+        };
     }
 
     if is_context_window_error(msg) {
         KernelError::ContextWindow
     } else if is_retryable_server_error(msg) {
-        KernelError::RetryableServer { message: SharedString::from(msg.to_owned()) }
+        KernelError::RetryableServer {
+            message: SharedString::from(msg.to_owned()),
+        }
     } else {
-        KernelError::NonRetryable { message: SharedString::from(msg.to_owned()) }
+        KernelError::NonRetryable {
+            message: SharedString::from(msg.to_owned()),
+        }
     }
 }
 

@@ -27,8 +27,8 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceInfo {
-    pub path: PathBuf,
-    pub branch: String,
+    pub path:        PathBuf,
+    pub branch:      String,
     pub created_now: bool,
 }
 
@@ -165,7 +165,7 @@ impl WorkspaceManager {
                 })?,
             Err(err) => {
                 return Err(SymphonyError::Git {
-                    source: err,
+                    source:   err,
                     location: Location::new(file!(), line!(), column!()),
                 });
             }

@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Full data-flow taint tracking for agent sessions.
 //!
 //! Implements a lattice-based taint propagation model.
@@ -5,10 +19,11 @@
 //! boundaries. The LLM is treated as a mixer — its output inherits the union
 //! of all input labels in the session context.
 
+use std::collections::HashSet;
+
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use tracing::instrument;
 
 use crate::session::SessionKey;
@@ -30,12 +45,15 @@ pub enum TaintLabel {
 
 /// A taint policy violation.
 #[derive(Debug, Clone, snafu::Snafu)]
-#[snafu(display("taint violation: label '{label}' from source '{source}' is not allowed to reach sink '{sink_name}'"))]
+#[snafu(display(
+    "taint violation: label '{label}' from source '{source}' is not allowed to reach sink \
+     '{sink_name}'"
+))]
 pub struct TaintViolation {
-    pub label: TaintLabel,
+    pub label:     TaintLabel,
     pub sink_name: String,
     #[snafu(source(false))]
-    pub source: String,
+    pub source:    String,
 }
 
 /// Session-level taint state — tracks accumulated labels in LLM context.
@@ -45,14 +63,14 @@ struct SessionTaintState {
     context_labels: HashSet<TaintLabel>,
     /// When this entry was created, used by [`TaintTracker::sweep_stale`] to
     /// evict leaked entries from crashed sessions.
-    created_at: Timestamp,
+    created_at:     Timestamp,
 }
 
 impl Default for SessionTaintState {
     fn default() -> Self {
         Self {
             context_labels: HashSet::new(),
-            created_at: Timestamp::now(),
+            created_at:     Timestamp::now(),
         }
     }
 }
@@ -110,9 +128,9 @@ impl TaintTracker {
         for label in &state.context_labels {
             if blocked.contains(label) {
                 return Err(TaintViolation {
-                    label: label.clone(),
+                    label:     label.clone(),
                     sink_name: tool_name.to_string(),
-                    source: "session context".to_string(),
+                    source:    "session context".to_string(),
                 });
             }
         }
@@ -142,7 +160,7 @@ impl TaintTracker {
                 *child,
                 SessionTaintState {
                     context_labels: parent_labels,
-                    created_at: Timestamp::now(),
+                    created_at:     Timestamp::now(),
                 },
             );
         }
@@ -150,9 +168,7 @@ impl TaintTracker {
 
     /// Remove taint state for a completed session.
     #[instrument(skip(self), fields(%session))]
-    pub fn clear_session(&self, session: &SessionKey) {
-        self.sessions.remove(session);
-    }
+    pub fn clear_session(&self, session: &SessionKey) { self.sessions.remove(session); }
 
     /// Manually inject a Secret label (for env/secret sources).
     #[instrument(skip(self), fields(%session))]
@@ -237,7 +253,8 @@ impl TaintTracker {
     /// into this tool. `None` means the tool has no restrictions.
     ///
     /// Policy rationale:
-    /// - Shell: blocks external/untrusted/user data → prevents RCE via injection.
+    /// - Shell: blocks external/untrusted/user data → prevents RCE via
+    ///   injection.
     /// - File write: blocks external/untrusted data → prevents disk poisoning.
     /// - Network out: blocks secrets/PII → prevents data exfiltration.
     /// - Agent messaging: blocks secrets → prevents leaks to sub-agents.
@@ -269,13 +286,8 @@ impl TaintTracker {
                 TaintLabel::ExternalNetwork,
                 TaintLabel::UntrustedAgent,
             ])),
-            "web_fetch" => Some(HashSet::from([
-                TaintLabel::Secret,
-                TaintLabel::Pii,
-            ])),
-            "agent_send" | "agent_message" => Some(HashSet::from([
-                TaintLabel::Secret,
-            ])),
+            "web_fetch" => Some(HashSet::from([TaintLabel::Secret, TaintLabel::Pii])),
+            "agent_send" | "agent_message" => Some(HashSet::from([TaintLabel::Secret])),
             _ => None,
         }
     }
@@ -283,9 +295,8 @@ impl TaintTracker {
 
 #[cfg(test)]
 mod tests {
-    use crate::session::SessionKey;
-
     use super::*;
+    use crate::session::SessionKey;
 
     #[test]
     fn tracker_clean_session_passes() {

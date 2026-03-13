@@ -22,16 +22,15 @@ use std::path::Path;
 use snafu::ResultExt;
 use tracing::{info, warn};
 
-use crate::error::{IoSnafu, Result};
-use crate::file::{SoulFile, SoulFrontmatter};
+use crate::{
+    error::{IoSnafu, Result},
+    file::{SoulFile, SoulFrontmatter},
+};
 
 /// Create a snapshot of the current soul file.
 ///
 /// Saves to `{snapshots_dir}/v{version}.md`.
-pub fn create_snapshot(
-    soul: &SoulFile,
-    snapshots_dir: &Path,
-) -> Result<std::path::PathBuf> {
+pub fn create_snapshot(soul: &SoulFile, snapshots_dir: &Path) -> Result<std::path::PathBuf> {
     std::fs::create_dir_all(snapshots_dir).context(IoSnafu {
         path: snapshots_dir.to_path_buf(),
     })?;
@@ -40,9 +39,7 @@ pub fn create_snapshot(
     let path = snapshots_dir.join(&filename);
 
     let content = soul.to_string()?;
-    std::fs::write(&path, content).context(IoSnafu {
-        path: path.clone(),
-    })?;
+    std::fs::write(&path, content).context(IoSnafu { path: path.clone() })?;
 
     info!(
         version = soul.frontmatter.version,
@@ -89,9 +86,7 @@ pub fn load_snapshot(snapshots_dir: &Path, version: u32) -> Result<Option<SoulFi
     if !path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&path).context(IoSnafu {
-        path: path.clone(),
-    })?;
+    let content = std::fs::read_to_string(&path).context(IoSnafu { path: path.clone() })?;
     let soul = SoulFile::parse(&content)?;
     Ok(Some(soul))
 }
@@ -100,15 +95,16 @@ pub fn load_snapshot(snapshots_dir: &Path, version: u32) -> Result<Option<SoulFi
 /// frontmatter.
 ///
 /// Returns a list of violation descriptions. Empty list means valid.
-pub fn validate_boundaries(
-    original: &SoulFrontmatter,
-    proposed: &SoulFrontmatter,
-) -> Vec<String> {
+pub fn validate_boundaries(original: &SoulFrontmatter, proposed: &SoulFrontmatter) -> Vec<String> {
     let mut violations = Vec::new();
 
     // Check immutable traits are preserved
     for required_trait in &original.boundaries.immutable_traits {
-        let found = proposed.boundaries.immutable_traits.iter().any(|t| t == required_trait)
+        let found = proposed
+            .boundaries
+            .immutable_traits
+            .iter()
+            .any(|t| t == required_trait)
             || proposed.personality.iter().any(|t| t == required_trait);
         if !found {
             violations.push(format!(
@@ -157,7 +153,9 @@ mod tests {
 
     fn test_soul() -> SoulFile {
         SoulFile::parse(
-            "---\nname: rara\nversion: 3\npersonality:\n- warm\nboundaries:\n  immutable_traits:\n  - honest\n  min_formality: 2\n  max_formality: 8\n---\n## Body\n\nTest.\n",
+            "---\nname: rara\nversion: 3\npersonality:\n- warm\nboundaries:\n  \
+             immutable_traits:\n  - honest\n  min_formality: 2\n  max_formality: 8\n---\n## \
+             Body\n\nTest.\n",
         )
         .unwrap()
     }

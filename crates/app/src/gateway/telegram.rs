@@ -154,7 +154,6 @@ impl GatewayTelegramListener {
 
                 let reply = self.handle_command(command, args).await;
                 self.reply(&reply).await;
-
             }
         }
     }
@@ -170,7 +169,9 @@ impl GatewayTelegramListener {
             "/stats" => self.cmd_stats().await,
             "/threshold" => self.cmd_threshold(args).await,
             "/help" => self.cmd_help(),
-            _ => format!("Unknown command: <code>{command}</code>\nUse /help to see available commands."),
+            _ => format!(
+                "Unknown command: <code>{command}</code>\nUse /help to see available commands."
+            ),
         }
     }
 
@@ -192,17 +193,22 @@ impl GatewayTelegramListener {
         let update_available = if update.update_available { "yes" } else { "no" };
         let upstream = update.upstream_rev.as_deref().unwrap_or("unknown");
         let current = &update.current_rev;
-        let short_current = if current.len() >= 7 { &current[..7] } else { current };
-        let short_upstream = if upstream.len() >= 7 { &upstream[..7] } else { upstream };
+        let short_current = if current.len() >= 7 {
+            &current[..7]
+        } else {
+            current
+        };
+        let short_upstream = if upstream.len() >= 7 {
+            &upstream[..7]
+        } else {
+            upstream
+        };
 
         format!(
-            "<b>Gateway Status</b>\n\n\
-             agent: {running}\n\
-             pid: <code>{pid_str}</code>\n\
-             restart_count: {}\n\
-             local rev: <code>{short_current}</code>\n\
-             upstream rev: <code>{short_upstream}</code>\n\
-             update available: {update_available}",
+            "<b>Gateway Status</b>\n\nagent: {running}\npid: \
+             <code>{pid_str}</code>\nrestart_count: {}\nlocal rev: \
+             <code>{short_current}</code>\nupstream rev: <code>{short_upstream}</code>\nupdate \
+             available: {update_available}",
             sup.restart_count,
         )
     }
@@ -220,10 +226,15 @@ impl GatewayTelegramListener {
         match fetch {
             Ok(o) if !o.status.success() => {
                 let stderr = html_escape(&String::from_utf8_lossy(&o.stderr));
-                return format!("<b>Sync failed</b>\n<code>git fetch</code> failed:\n<pre>{stderr}</pre>");
+                return format!(
+                    "<b>Sync failed</b>\n<code>git fetch</code> failed:\n<pre>{stderr}</pre>"
+                );
             }
             Err(e) => {
-                return format!("<b>Sync failed</b>\n<pre>{}</pre>", html_escape(&e.to_string()));
+                return format!(
+                    "<b>Sync failed</b>\n<pre>{}</pre>",
+                    html_escape(&e.to_string())
+                );
             }
             _ => {}
         }
@@ -242,17 +253,26 @@ impl GatewayTelegramListener {
                 if do_restart {
                     match self.supervisor_handle.restart().await {
                         Ok(()) => reply.push_str("\nRestart initiated."),
-                        Err(e) => reply.push_str(&format!("\nRestart failed: <pre>{}</pre>", html_escape(&e.to_string()))),
+                        Err(e) => reply.push_str(&format!(
+                            "\nRestart failed: <pre>{}</pre>",
+                            html_escape(&e.to_string())
+                        )),
                     }
                 }
                 reply
             }
             Ok(o) => {
                 let stderr = html_escape(&String::from_utf8_lossy(&o.stderr));
-                format!("<b>Sync failed</b>\n<code>git merge --ff-only</code> failed:\n<pre>{stderr}</pre>")
+                format!(
+                    "<b>Sync failed</b>\n<code>git merge --ff-only</code> \
+                     failed:\n<pre>{stderr}</pre>"
+                )
             }
             Err(e) => {
-                format!("<b>Sync failed</b>\n<pre>{}</pre>", html_escape(&e.to_string()))
+                format!(
+                    "<b>Sync failed</b>\n<pre>{}</pre>",
+                    html_escape(&e.to_string())
+                )
             }
         }
     }
@@ -263,9 +283,15 @@ impl GatewayTelegramListener {
         // Find the most recent .log file.
         let mut entries: Vec<_> = match std::fs::read_dir(logs_dir) {
             Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
-            Err(e) => return format!("<b>Logs failed</b>\n<pre>{}</pre>", html_escape(&e.to_string())),
+            Err(e) => {
+                return format!(
+                    "<b>Logs failed</b>\n<pre>{}</pre>",
+                    html_escape(&e.to_string())
+                );
+            }
         };
-        entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+        entries
+            .sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
 
         let Some(latest) = entries.first() else {
             return "No log files found.".to_owned();
@@ -274,13 +300,29 @@ impl GatewayTelegramListener {
         // Read last ~4KB from the file to avoid loading huge logs into memory.
         let tail_text = match read_tail(&latest.path(), 4096).await {
             Ok(t) => t,
-            Err(e) => return format!("<b>Logs failed</b>\n<pre>{}</pre>", html_escape(&e.to_string())),
+            Err(e) => {
+                return format!(
+                    "<b>Logs failed</b>\n<pre>{}</pre>",
+                    html_escape(&e.to_string())
+                );
+            }
         };
 
         // Keep only complete lines (drop the first partial line after seek).
         let lines: Vec<&str> = tail_text.lines().collect();
-        let lines = if lines.len() > 1 { &lines[1..] } else { &lines[..] };
-        let tail = lines.iter().rev().take(50).rev().copied().collect::<Vec<_>>().join("\n");
+        let lines = if lines.len() > 1 {
+            &lines[1..]
+        } else {
+            &lines[..]
+        };
+        let tail = lines
+            .iter()
+            .rev()
+            .take(50)
+            .rev()
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
 
         // Telegram message limit is 4096 chars. Truncate if needed.
         let truncated = if tail.len() > 3800 {
@@ -319,7 +361,10 @@ impl GatewayTelegramListener {
 
     async fn cmd_stats(&self) -> String {
         let snap = self.process_snapshot.read().await.clone();
-        let pid_str = snap.pid.map(|p| p.to_string()).unwrap_or_else(|| "\u{2014}".into());
+        let pid_str = snap
+            .pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "\u{2014}".into());
         let rss_mb = snap.rss_bytes / (1024 * 1024);
         let virt_mb = snap.virt_bytes / (1024 * 1024);
         let disk_r_mb = snap.disk_read_bytes / (1024 * 1024);
@@ -328,18 +373,9 @@ impl GatewayTelegramListener {
         let thresholds = self.alert_thresholds.read().await;
 
         format!(
-            "<b>Process Stats</b>\n\n\
-             pid: <code>{pid_str}</code>\n\
-             cpu: {:.1}%\n\
-             rss: {} MB\n\
-             virt: {} MB\n\
-             threads: {}\n\
-             open fds: {}\n\
-             disk read: {} MB\n\
-             disk write: {} MB\n\
-             uptime: {}s\n\
-             sampled: {}\n\n\
-             <b>Thresholds</b>\n{}",
+            "<b>Process Stats</b>\n\npid: <code>{pid_str}</code>\ncpu: {:.1}%\nrss: {} MB\nvirt: \
+             {} MB\nthreads: {}\nopen fds: {}\ndisk read: {} MB\ndisk write: {} MB\nuptime: \
+             {}s\nsampled: {}\n\n<b>Thresholds</b>\n{}",
             snap.cpu_percent,
             rss_mb,
             virt_mb,
@@ -395,19 +431,13 @@ impl GatewayTelegramListener {
     }
 
     fn cmd_help(&self) -> String {
-        "<b>Gateway Commands</b>\n\n\
-         /restart — Restart the agent process\n\
-         /status — Show running status and update info\n\
-         /sync — Git pull latest code (ff-only)\n\
-         /sync --restart — Git pull + restart agent\n\
-         /logs — Show last 50 lines of agent logs\n\
-         /health — Check agent HTTP health endpoint\n\
-         /stats — Show process resource usage\n\
-         /threshold — View/set alert thresholds\n\
-         /threshold cpu &lt;N&gt; — Set CPU% alert threshold\n\
-         /threshold mem &lt;N&gt; — Set memory (MB) alert threshold\n\
-         /threshold clear — Disable all alerts\n\
-         /help — Show this message"
+        "<b>Gateway Commands</b>\n\n/restart — Restart the agent process\n/status — Show running \
+         status and update info\n/sync — Git pull latest code (ff-only)\n/sync --restart — Git \
+         pull + restart agent\n/logs — Show last 50 lines of agent logs\n/health — Check agent \
+         HTTP health endpoint\n/stats — Show process resource usage\n/threshold — View/set alert \
+         thresholds\n/threshold cpu &lt;N&gt; — Set CPU% alert threshold\n/threshold mem &lt;N&gt; \
+         — Set memory (MB) alert threshold\n/threshold clear — Disable all alerts\n/help — Show \
+         this message"
             .to_owned()
     }
 
@@ -429,7 +459,9 @@ impl GatewayTelegramListener {
 
 /// Minimal HTML escaping for output embedded in `<pre>` tags.
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Read the last `max_bytes` from a file without loading it entirely.
@@ -441,7 +473,8 @@ async fn read_tail(path: &std::path::Path, max_bytes: u64) -> Result<String, std
     let len = metadata.len();
 
     if len > max_bytes {
-        file.seek(std::io::SeekFrom::End(-(max_bytes as i64))).await?;
+        file.seek(std::io::SeekFrom::End(-(max_bytes as i64)))
+            .await?;
     }
 
     let mut buf = String::new();
@@ -449,7 +482,8 @@ async fn read_tail(path: &std::path::Path, max_bytes: u64) -> Result<String, std
     Ok(buf)
 }
 
-/// Best-effort repo root detection (directory containing the running executable).
+/// Best-effort repo root detection (directory containing the running
+/// executable).
 fn repo_dir() -> std::path::PathBuf {
     std::env::current_exe()
         .ok()

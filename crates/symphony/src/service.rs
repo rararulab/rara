@@ -41,24 +41,24 @@ use crate::{
 };
 
 struct RunningIssue {
-    issue: TrackedIssue,
-    workspace: WorkspaceInfo,
-    child: Child,
+    issue:      TrackedIssue,
+    workspace:  WorkspaceInfo,
+    child:      Child,
     started_at: Instant,
-    log_path: PathBuf,
-    output: ProcessOutputSummaryHandle,
+    log_path:   PathBuf,
+    output:     ProcessOutputSummaryHandle,
 }
 
 struct FinishedIssue {
-    issue: TrackedIssue,
+    issue:     TrackedIssue,
     workspace: WorkspaceInfo,
 }
 
 /// Top-level service that polls issue trackers, manages per-issue `ralph run`
 /// subprocesses, and advances issue state in the external tracker.
 pub struct SymphonyService {
-    config: SymphonyConfig,
-    shutdown: CancellationToken,
+    config:       SymphonyConfig,
+    shutdown:     CancellationToken,
     github_token: Option<String>,
 }
 
@@ -145,11 +145,11 @@ impl SymphonyService {
 }
 
 struct IssueRuntime {
-    config: SymphonyConfig,
+    config:            SymphonyConfig,
     workspace_manager: WorkspaceManager,
-    agent: RalphAgent,
-    running: HashMap<String, RunningIssue>,
-    failed: HashMap<String, FinishedIssue>,
+    agent:             RalphAgent,
+    running:           HashMap<String, RunningIssue>,
+    failed:            HashMap<String, FinishedIssue>,
 }
 
 impl IssueRuntime {
@@ -263,7 +263,7 @@ impl IssueRuntime {
                     self.failed.insert(
                         issue_id,
                         FinishedIssue {
-                            issue: run.issue,
+                            issue:     run.issue,
                             workspace: run.workspace,
                         },
                     );
@@ -284,7 +284,7 @@ impl IssueRuntime {
                 self.failed.insert(
                     issue_id,
                     FinishedIssue {
-                        issue: run.issue,
+                        issue:     run.issue,
                         workspace: run.workspace,
                     },
                 );
@@ -343,13 +343,13 @@ impl IssueRuntime {
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
     /// transition the issue to `In Progress` once the child is live.
     async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
-        let repo = self
-            .repo_config(&issue.repo)
-            .with_context(|_| crate::error::WorkspaceContextSnafu {
-            message: format!(
-                "failed to resolve repo config for issue {} ({}) in repo {}",
-                issue.identifier, issue.id, issue.repo
-            ),
+        let repo = self.repo_config(&issue.repo).with_context(|_| {
+            crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to resolve repo config for issue {} ({}) in repo {}",
+                    issue.identifier, issue.id, issue.repo
+                ),
+            }
         })?;
         let workspace = self
             .workspace_manager
@@ -567,7 +567,7 @@ impl IssueLogWriter {
             .send(entry)
             .await
             .map_err(|_| crate::error::SymphonyError::Workspace {
-                message: String::from("issue log writer closed unexpectedly"),
+                message:  String::from("issue log writer closed unexpectedly"),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })
     }
@@ -582,7 +582,7 @@ async fn spawn_issue_log_writer(
     let parent = log_path
         .parent()
         .ok_or_else(|| crate::error::SymphonyError::Workspace {
-            message: format!("issue log path has no parent: {}", log_path.display()),
+            message:  format!("issue log path has no parent: {}", log_path.display()),
             location: snafu::Location::new(file!(), line!(), column!()),
         })?;
     tokio::fs::create_dir_all(parent).await.map_err(|source| {
@@ -677,16 +677,14 @@ impl ProcessOutputSummaryHandle {
         self.0.lock().await.record(stream_name, line);
     }
 
-    async fn snapshot(&self) -> ProcessOutputSummary {
-        self.0.lock().await.clone()
-    }
+    async fn snapshot(&self) -> ProcessOutputSummary { self.0.lock().await.clone() }
 }
 
 #[derive(Debug, Clone, Default)]
 struct ProcessOutputSummary {
     stdout_line_count: usize,
     stderr_line_count: usize,
-    stderr_tail: VecDeque<String>,
+    stderr_tail:       VecDeque<String>,
 }
 
 impl ProcessOutputSummary {

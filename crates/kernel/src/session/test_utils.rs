@@ -44,10 +44,7 @@ impl SessionIndex for InMemorySessionIndex {
         Ok(entry.clone())
     }
 
-    async fn get_session(
-        &self,
-        key: &SessionKey,
-    ) -> Result<Option<SessionEntry>, SessionError> {
+    async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
         Ok(self
             .sessions
             .get(&key.to_string())
@@ -81,10 +78,7 @@ impl SessionIndex for InMemorySessionIndex {
         Ok(())
     }
 
-    async fn bind_channel(
-        &self,
-        binding: &ChannelBinding,
-    ) -> Result<ChannelBinding, SessionError> {
+    async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         self.bindings.insert(
             (binding.channel_type.clone(), binding.chat_id.clone()),
             binding.clone(),

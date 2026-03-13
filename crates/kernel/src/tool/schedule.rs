@@ -212,7 +212,8 @@ impl AgentTool for ScheduleCronTool {
     fn name(&self) -> &str { "schedule-cron" }
 
     fn description(&self) -> &str {
-        "Schedule a task using a 6-field cron expression: 'sec min hour day month weekday' (e.g. '0 0 9 * * *' for daily at 9am UTC)."
+        "Schedule a task using a 6-field cron expression: 'sec min hour day month weekday' (e.g. \
+         '0 0 9 * * *' for daily at 9am UTC)."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

@@ -322,8 +322,8 @@ async fn handle_slash_command(
 
             let ctx = CommandContext {
                 channel_type: ChannelType::Cli,
-                session_key:  session_key.to_owned(),
-                user:         ChannelUser {
+                session_key: session_key.to_owned(),
+                user: ChannelUser {
                     platform_id:  format!("cli:{user_id}"),
                     display_name: Some(user_id.to_owned()),
                 },
@@ -335,10 +335,7 @@ async fn handle_slash_command(
                     render_command_result(state, result);
                 }
                 Err(e) => {
-                    state.push_message(
-                        Role::System,
-                        format!("Command failed: {e}"),
-                    );
+                    state.push_message(Role::System, format!("Command failed: {e}"));
                 }
             }
             return false;
@@ -490,9 +487,7 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         } => CliEvent::Progress {
             text: format!("Plan ({total_steps} steps): {compact_summary}"),
         },
-        StreamEvent::PlanProgress { status_text, .. } => CliEvent::Progress {
-            text: status_text,
-        },
+        StreamEvent::PlanProgress { status_text, .. } => CliEvent::Progress { text: status_text },
         StreamEvent::PlanReplan { reason } => CliEvent::Progress {
             text: format!("Replanning: {reason}"),
         },
@@ -603,9 +598,7 @@ mod tests {
         let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> =
             vec![];
 
-        assert!(
-            handle_slash_command(&mut state, "/exit", &handlers, "default", "local").await
-        );
+        assert!(handle_slash_command(&mut state, "/exit", &handlers, "default", "local").await);
         assert_eq!(state.messages.len(), 1);
         assert_eq!(state.messages[0].text, CHAT_BANNER);
     }

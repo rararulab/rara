@@ -134,8 +134,14 @@ impl KernelHandle {
         desired_session_key: Option<SessionKey>,
     ) -> Result<SessionKey> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let event =
-            KernelEventEnvelope::spawn_agent(manifest, input, principal, parent_id, desired_session_key, reply_tx);
+        let event = KernelEventEnvelope::spawn_agent(
+            manifest,
+            input,
+            principal,
+            parent_id,
+            desired_session_key,
+            reply_tx,
+        );
         self.event_queue
             .push(event)
             .map_err(|_| KernelError::SpawnFailed {
@@ -380,15 +386,13 @@ impl KernelHandle {
             .with(session_key, |p| p.child_semaphore.clone())
             .ok_or_else(|| KernelError::SessionNotFound { key: *session_key })?;
 
-        let child_permit = child_sem
-            .acquire_owned()
-            .await
-            .map_err(|_| KernelError::SpawnFailed {
-                message: format!(
-                    "parent session {} child semaphore closed",
-                    session_key
-                ),
-            })?;
+        let child_permit =
+            child_sem
+                .acquire_owned()
+                .await
+                .map_err(|_| KernelError::SpawnFailed {
+                    message: format!("parent session {} child semaphore closed", session_key),
+                })?;
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let event = KernelEventEnvelope::spawn_agent(

@@ -127,9 +127,11 @@ impl AgentTool for DispatchRaraTool {
             .await
             .map_err(|e| anyhow::anyhow!("failed to record dispatch event: {e}"))?;
 
-        handle.dispatch_directive(session_key, instruction.to_string()).map_err(|e| {
-            anyhow::anyhow!("failed to dispatch directive to session '{session_id_str}': {e}")
-        })?;
+        handle
+            .dispatch_directive(session_key, instruction.to_string())
+            .map_err(|e| {
+                anyhow::anyhow!("failed to dispatch directive to session '{session_id_str}': {e}")
+            })?;
 
         push_notification(
             ctx,

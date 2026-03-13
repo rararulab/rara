@@ -25,7 +25,10 @@ pub mod telegram;
 
 pub use detector::{UpdateDetector, UpdateState};
 pub use executor::{ExecutorError, UpdateExecutor, UpdateResult};
-pub use monitor::{AlertThresholds, GatewayState, ProcessMonitor, ProcessSnapshot, SnapshotHandle, ThresholdsHandle, load_gateway_state, save_gateway_state};
+pub use monitor::{
+    AlertThresholds, GatewayState, ProcessMonitor, ProcessSnapshot, SnapshotHandle,
+    ThresholdsHandle, load_gateway_state, save_gateway_state,
+};
 pub use notifier::UpdateNotifier;
 pub use pipeline::run_update_pipeline;
 pub use supervisor::{SupervisorCommand, SupervisorHandle, SupervisorService, SupervisorStatus};

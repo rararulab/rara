@@ -43,10 +43,10 @@ impl AgentTool for DistillUserNotesTool {
     fn name(&self) -> &str { "distill-user-notes" }
 
     fn description(&self) -> &str {
-        "Distill accumulated user notes into a compact summary anchor. Use this when a user's \
-         tape has accumulated many notes that should be condensed. The summary should capture \
-         all important knowledge from previous notes plus the existing distilled summary. \
-         After distillation, only the summary and newer notes will appear in the user's context."
+        "Distill accumulated user notes into a compact summary anchor. Use this when a user's tape \
+         has accumulated many notes that should be condensed. The summary should capture all \
+         important knowledge from previous notes plus the existing distilled summary. After \
+         distillation, only the summary and newer notes will appear in the user's context."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -91,7 +91,7 @@ impl AgentTool for DistillUserNotesTool {
 
         let handoff_state = HandoffState {
             summary: Some(summary.to_string()),
-            owner:   Some("mita".into()),
+            owner: Some("mita".into()),
             ..Default::default()
         };
 
@@ -100,10 +100,7 @@ impl AgentTool for DistillUserNotesTool {
             .await
             .map_err(|e| anyhow::anyhow!("failed to write distillation anchor: {e}"))?;
 
-        push_notification(
-            context,
-            format!("🗜️ User notes distilled for {user_id}"),
-        );
+        push_notification(context, format!("🗜️ User notes distilled for {user_id}"));
 
         Ok(json!({
             "status": "ok",

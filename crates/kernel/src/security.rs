@@ -121,8 +121,8 @@ struct PendingRequest {
 pub struct ApprovalManager {
     pending:    DashMap<Uuid, PendingRequest>,
     policy:     RwLock<ApprovalPolicy>,
-    /// Broadcast channel for notifying external listeners (e.g. Telegram adapter)
-    /// when a new approval request is submitted.
+    /// Broadcast channel for notifying external listeners (e.g. Telegram
+    /// adapter) when a new approval request is submitted.
     request_tx: tokio::sync::broadcast::Sender<ApprovalRequest>,
 }
 
@@ -131,7 +131,7 @@ impl ApprovalManager {
         let (request_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             pending: DashMap::new(),
-            policy:  RwLock::new(policy),
+            policy: RwLock::new(policy),
             request_tx,
         }
     }

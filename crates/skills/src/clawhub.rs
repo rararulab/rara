@@ -47,20 +47,16 @@ const DEFAULT_BASE_URL: &str = "https://clawhub.ai/api/v1";
 /// Client for the ClawHub marketplace (clawhub.ai).
 pub struct ClawhubClient {
     base_url: String,
-    client: reqwest::Client,
+    client:   reqwest::Client,
 }
 
 impl Default for ClawhubClient {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl ClawhubClient {
     /// Create a new ClawHub client with default settings.
-    pub fn new() -> Self {
-        Self::with_url(DEFAULT_BASE_URL)
-    }
+    pub fn new() -> Self { Self::with_url(DEFAULT_BASE_URL) }
 
     /// Create a ClawHub client with a custom API URL.
     pub fn with_url(base_url: &str) -> Self {
@@ -201,11 +197,7 @@ impl ClawhubClient {
         &self,
         slug: &str,
     ) -> Result<ClawhubSkillDetail, crate::error::SkillError> {
-        let url = format!(
-            "{}/skills/{}",
-            self.base_url,
-            percent_encode_path(slug)
-        );
+        let url = format!("{}/skills/{}", self.base_url, percent_encode_path(slug));
         let resp = self.get_with_retry(&url, "ClawHub skill detail").await?;
         resp.json::<ClawhubSkillDetail>()
             .await
@@ -233,7 +225,8 @@ impl ClawhubClient {
             if manifest.find_repo(&source).is_some() {
                 return InstallSnafu {
                     message: format!(
-                        "ClawHub skill '{slug}' is already installed. Remove it first with `skills remove`."
+                        "ClawHub skill '{slug}' is already installed. Remove it first with \
+                         `skills remove`."
                     ),
                 }
                 .fail();
@@ -241,12 +234,10 @@ impl ClawhubClient {
             std::fs::remove_dir_all(&skill_dir).context(IoSnafu)?;
         }
 
-        // Fetch detail first to validate slug exists and get version before downloading.
+        // Fetch detail first to validate slug exists and get version before
+        // downloading.
         let detail = self.get_skill(slug).await?;
-        let version = detail
-            .latest_version
-            .map(|v| v.version)
-            .unwrap_or_default();
+        let version = detail.latest_version.map(|v| v.version).unwrap_or_default();
 
         let url = reqwest::Url::parse_with_params(
             &format!("{}/download", self.base_url),
@@ -257,14 +248,24 @@ impl ClawhubClient {
         })?;
         info!(slug, "downloading skill from ClawHub");
 
-        let resp = self.get_with_retry(url.as_str(), "ClawHub download").await?;
+        let resp = self
+            .get_with_retry(url.as_str(), "ClawHub download")
+            .await?;
         let bytes = resp.bytes().await.context(RequestSnafu)?;
 
         std::fs::create_dir_all(&skill_dir).context(IoSnafu)?;
 
         // Use a helper closure to ensure cleanup on failure.
         let result = self
-            .install_inner(slug, install_dir, &skill_dir, &store, &source, &bytes, &version)
+            .install_inner(
+                slug,
+                install_dir,
+                &skill_dir,
+                &store,
+                &source,
+                &bytes,
+                &version,
+            )
             .await;
 
         if result.is_err() {
@@ -306,15 +307,15 @@ impl ClawhubClient {
 
         manifest.remove_repo(source);
         manifest.add_repo(crate::types::RepoEntry {
-            source: source.to_string(),
-            repo_name: slug.to_string(),
+            source:          source.to_string(),
+            repo_name:       slug.to_string(),
             installed_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64,
-            commit_sha: None,
-            format: crate::formats::PluginFormat::Skill,
-            skills: skills.clone(),
+            commit_sha:      None,
+            format:          crate::formats::PluginFormat::Skill,
+            skills:          skills.clone(),
         });
         store.save(&manifest)?;
 
@@ -322,10 +323,10 @@ impl ClawhubClient {
         info!(slug, skills = skill_names.len(), "installed ClawHub skill");
 
         Ok(ClawhubInstallResult {
-            slug: slug.to_string(),
-            version: version.to_string(),
+            slug:         slug.to_string(),
+            version:      version.to_string(),
             skills_count: skill_names.len(),
-            skills: skill_names,
+            skills:       skill_names,
         })
     }
 }
@@ -337,11 +338,10 @@ impl ClawhubClient {
 fn extract_zip(bytes: &[u8], dest_dir: &Path) -> crate::error::Result<()> {
     let canonical_dest = std::fs::canonicalize(dest_dir).context(IoSnafu)?;
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
-        crate::error::SkillError::Archive {
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| crate::error::SkillError::Archive {
             message: format!("failed to read zip: {e}"),
-        }
-    })?;
+        })?;
 
     for i in 0..archive.len() {
         let mut file = match archive.by_index(i) {
@@ -411,7 +411,8 @@ fn percent_encode_path(s: &str) -> String {
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
-/// Recursively scan a directory for SKILL.md files and return SkillState entries.
+/// Recursively scan a directory for SKILL.md files and return SkillState
+/// entries.
 ///
 /// Mirrors the recursive walk in `install.rs::scan_repo_skills`: if a directory
 /// contains SKILL.md it is registered; otherwise its children are scanned.
@@ -426,10 +427,10 @@ fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::ty
             .to_string_lossy()
             .to_string();
         skills.push(crate::types::SkillState {
-            name: slug.to_string(),
+            name:          slug.to_string(),
             relative_path: relative,
-            trusted: false,
-            enabled: false,
+            trusted:       false,
+            enabled:       false,
         });
     }
 
@@ -456,10 +457,10 @@ fn scan_skill_files(install_dir: &Path, dir: &Path, slug: &str) -> Vec<crate::ty
                     .to_string_lossy()
                     .to_string();
                 skills.push(crate::types::SkillState {
-                    name: format!("{slug}:{sub_name}"),
+                    name:          format!("{slug}:{sub_name}"),
                     relative_path: relative,
-                    trusted: false,
-                    enabled: false,
+                    trusted:       false,
+                    enabled:       false,
                 });
             } else {
                 // No SKILL.md here, keep scanning deeper.
@@ -483,18 +484,18 @@ fn has_skill_md(dir: &Path) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubSearchEntry {
-    pub slug: String,
+    pub slug:         String,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
-    pub summary: String,
+    pub summary:      String,
     #[serde(default)]
-    pub version: Option<String>,
+    pub version:      Option<String>,
     #[serde(default)]
-    pub score: f64,
+    pub score:        f64,
     /// Unix ms timestamp.
     #[serde(default)]
-    pub updated_at: Option<i64>,
+    pub updated_at:   Option<i64>,
 }
 
 /// Response from `GET /api/v1/search`.
@@ -510,13 +511,13 @@ pub struct ClawhubSearchResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubStats {
     #[serde(default)]
-    pub downloads: u64,
+    pub downloads:         u64,
     #[serde(default)]
     pub installs_all_time: u64,
     #[serde(default)]
-    pub installs_current: u64,
+    pub installs_current:  u64,
     #[serde(default)]
-    pub stars: u64,
+    pub stars:             u64,
 }
 
 /// Version info nested inside browse entries.
@@ -524,30 +525,30 @@ pub struct ClawhubStats {
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubVersionInfo {
     #[serde(default)]
-    pub version: String,
+    pub version:    String,
     #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
-    pub changelog: String,
+    pub changelog:  String,
 }
 
 /// A skill entry from the browse endpoint (`GET /api/v1/skills`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubBrowseEntry {
-    pub slug: String,
+    pub slug:           String,
     #[serde(default)]
-    pub display_name: String,
+    pub display_name:   String,
     #[serde(default)]
-    pub summary: String,
+    pub summary:        String,
     #[serde(default)]
-    pub tags: std::collections::HashMap<String, String>,
+    pub tags:           std::collections::HashMap<String, String>,
     #[serde(default)]
-    pub stats: ClawhubStats,
+    pub stats:          ClawhubStats,
     #[serde(default)]
-    pub created_at: i64,
+    pub created_at:     i64,
     #[serde(default)]
-    pub updated_at: i64,
+    pub updated_at:     i64,
     #[serde(default)]
     pub latest_version: Option<ClawhubVersionInfo>,
 }
@@ -556,7 +557,7 @@ pub struct ClawhubBrowseEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubBrowseResponse {
-    pub items: Vec<ClawhubBrowseEntry>,
+    pub items:       Vec<ClawhubBrowseEntry>,
     #[serde(default)]
     pub next_cursor: Option<String>,
 }
@@ -568,7 +569,7 @@ pub struct ClawhubBrowseResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubOwner {
     #[serde(default)]
-    pub handle: Option<String>,
+    pub handle:       Option<String>,
     #[serde(default)]
     pub display_name: Option<String>,
 }
@@ -577,26 +578,26 @@ pub struct ClawhubOwner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubSkillInfo {
-    pub slug: String,
+    pub slug:         String,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
-    pub summary: String,
+    pub summary:      String,
     #[serde(default)]
-    pub stats: ClawhubStats,
+    pub stats:        ClawhubStats,
     #[serde(default)]
-    pub updated_at: i64,
+    pub updated_at:   i64,
 }
 
 /// Full detail response from `GET /api/v1/skills/{slug}`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClawhubSkillDetail {
-    pub skill: ClawhubSkillInfo,
+    pub skill:          ClawhubSkillInfo,
     #[serde(default)]
     pub latest_version: Option<ClawhubVersionInfo>,
     #[serde(default)]
-    pub owner: Option<ClawhubOwner>,
+    pub owner:          Option<ClawhubOwner>,
 }
 
 // -- Sort enum ----------------------------------------------------------------
@@ -624,10 +625,10 @@ impl ClawhubSort {
 /// Result of installing a skill from ClawHub.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClawhubInstallResult {
-    pub slug: String,
-    pub version: String,
+    pub slug:         String,
+    pub version:      String,
     pub skills_count: usize,
-    pub skills: Vec<String>,
+    pub skills:       Vec<String>,
 }
 
 #[cfg(test)]

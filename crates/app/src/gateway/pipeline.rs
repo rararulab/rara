@@ -153,7 +153,9 @@ async fn execute_and_handle(
         }
         UpdateResult::BuildFailed { reason } => {
             warn!(reason = %reason, ?build_duration, "Auto-update: build failed for {}: {}", upstream_rev, reason);
-            notifier.build_failed(upstream_rev, &reason, build_duration).await;
+            notifier
+                .build_failed(upstream_rev, &reason, build_duration)
+                .await;
         }
         UpdateResult::ActivationFailed {
             reason,

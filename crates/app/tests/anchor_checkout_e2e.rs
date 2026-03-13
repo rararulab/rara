@@ -58,7 +58,8 @@ async fn wait_for_turn_count(
 }
 
 #[tokio::test]
-#[ignore = "uses the real LLM provider — run with: cargo test -p rara-app --test anchor_checkout_e2e -- --ignored --nocapture"]
+#[ignore = "uses the real LLM provider — run with: cargo test -p rara-app --test \
+            anchor_checkout_e2e -- --ignored --nocapture"]
 async fn anchor_checkout_roundtrip() {
     // 1. Setup — same pattern as real_tape_flow.rs
     common_telemetry::logging::init_default_ut_logging();

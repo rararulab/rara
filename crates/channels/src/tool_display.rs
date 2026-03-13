@@ -21,10 +21,13 @@ use strum::EnumMessage;
 /// Known tool kinds with display name and activity label.
 ///
 /// - `serialize` = raw tool name from the LLM
-/// - `detailed_message` = short English display name (used by web adapter, logs)
-/// - `message` = Chinese activity phrase (used by TG adapter for user-facing progress)
+/// - `detailed_message` = short English display name (used by web adapter,
+///   logs)
+/// - `message` = Chinese activity phrase (used by TG adapter for user-facing
+///   progress)
 ///
-/// Multiple raw names can map to the same variant via multiple `serialize` attrs.
+/// Multiple raw names can map to the same variant via multiple `serialize`
+/// attrs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::EnumMessage)]
 pub enum ToolKind {
     #[strum(serialize = "shell_execute")]
@@ -163,9 +166,7 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Parse a raw tool name, returning `None` for unknown tools.
-    pub fn parse(raw: &str) -> Option<Self> {
-        Self::from_str(raw).ok()
-    }
+    pub fn parse(raw: &str) -> Option<Self> { Self::from_str(raw).ok() }
 }
 
 /// Map raw tool names to shorter, human-friendly display names.
@@ -231,9 +232,7 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
         "bash" => arguments.get("command").and_then(|v| v.as_str()),
         "web_search" => arguments.get("query").and_then(|v| v.as_str()),
         "web_fetch" | "http-fetch" => arguments.get("url").and_then(|v| v.as_str()),
-        "read-file" | "write-file" | "edit-file" => {
-            arguments.get("path").and_then(|v| v.as_str())
-        }
+        "read-file" | "write-file" | "edit-file" => arguments.get("path").and_then(|v| v.as_str()),
         "find-files" | "list-directory" => arguments.get("path").and_then(|v| v.as_str()),
         "grep" => arguments.get("pattern").and_then(|v| v.as_str()),
         "memory_search" => arguments.get("query").and_then(|v| v.as_str()),
@@ -324,10 +323,16 @@ mod tests {
     #[test]
     fn tool_kind_from_str() {
         assert_eq!(ToolKind::parse("bash"), Some(ToolKind::Bash));
-        assert_eq!(ToolKind::parse("shell_execute"), Some(ToolKind::ShellExecute));
+        assert_eq!(
+            ToolKind::parse("shell_execute"),
+            Some(ToolKind::ShellExecute)
+        );
         assert_eq!(ToolKind::parse("http-fetch"), Some(ToolKind::WebFetch));
         assert_eq!(ToolKind::parse("composio_list"), Some(ToolKind::Composio));
-        assert_eq!(ToolKind::parse("composio_execute"), Some(ToolKind::Composio));
+        assert_eq!(
+            ToolKind::parse("composio_execute"),
+            Some(ToolKind::Composio)
+        );
         assert_eq!(ToolKind::parse("user-note"), Some(ToolKind::UserNote));
         assert_eq!(ToolKind::parse("write-user-note"), Some(ToolKind::UserNote));
         assert_eq!(ToolKind::parse("unknown_tool"), None);

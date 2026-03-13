@@ -17,11 +17,7 @@
 //! Fetches `marketplace.json` from GitHub repos, caches plugin indexes
 //! in memory, and delegates installation to [`crate::install`].
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::RwLock,
-};
+use std::{collections::HashMap, path::PathBuf, sync::RwLock};
 
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
@@ -96,7 +92,10 @@ pub struct PluginInstallResult {
 
 /// Default marketplace sources baked into the binary.
 const DEFAULT_SOURCES: &[(&str, &str)] = &[
-    ("anthropics/claude-plugins-official", "claude-plugins-official"),
+    (
+        "anthropics/claude-plugins-official",
+        "claude-plugins-official",
+    ),
     ("anthropics/skills", "anthropic-skills"),
 ];
 
@@ -105,31 +104,28 @@ pub struct MarketplaceService {
     /// Path to `marketplaces.json`.
     persist_path: PathBuf,
     /// Registered sources (persisted).
-    sources: RwLock<Vec<MarketplaceSource>>,
+    sources:      RwLock<Vec<MarketplaceSource>>,
     /// In-memory index cache, keyed by repo string.
-    cache: RwLock<HashMap<String, MarketplaceIndex>>,
+    cache:        RwLock<HashMap<String, MarketplaceIndex>>,
 }
 
 impl MarketplaceService {
-    /// Create with default persistence path (`~/.config/rara/marketplaces.json`).
-    pub fn new() -> Self {
-        Self::new_with_path(rara_paths::config_dir().join("marketplaces.json"))
-    }
+    /// Create with default persistence path
+    /// (`~/.config/rara/marketplaces.json`).
+    pub fn new() -> Self { Self::new_with_path(rara_paths::config_dir().join("marketplaces.json")) }
 
     /// Create with explicit persistence path (for testing).
     pub fn new_with_path(path: PathBuf) -> Self {
         let sources = load_sources(&path);
         Self {
             persist_path: path,
-            sources: RwLock::new(sources),
-            cache: RwLock::new(HashMap::new()),
+            sources:      RwLock::new(sources),
+            cache:        RwLock::new(HashMap::new()),
         }
     }
 
     /// List registered marketplace sources.
-    pub fn list_sources(&self) -> Vec<MarketplaceSource> {
-        self.sources.read().unwrap().clone()
-    }
+    pub fn list_sources(&self) -> Vec<MarketplaceSource> { self.sources.read().unwrap().clone() }
 
     /// Register a new marketplace source by `owner/repo`.
     pub fn add_source(&self, repo: &str) -> Result<()> {
@@ -153,7 +149,8 @@ impl MarketplaceService {
         save_sources(&self.persist_path, &sources)
     }
 
-    /// Fetch the marketplace index from GitHub API (single file, no full clone).
+    /// Fetch the marketplace index from GitHub API (single file, no full
+    /// clone).
     ///
     /// GET /repos/{owner}/{repo}/contents/.claude-plugin/marketplace.json
     /// → base64 decode → parse as MarketplaceIndex → cache.
@@ -163,9 +160,8 @@ impl MarketplaceService {
             return Ok(idx.clone());
         }
 
-        let url = format!(
-            "https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json"
-        );
+        let url =
+            format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json");
         let client = reqwest::Client::new();
         let resp: serde_json::Value = client
             .get(&url)
@@ -205,14 +201,10 @@ impl MarketplaceService {
     }
 
     /// Clear cached indexes. Next `fetch_index` will re-fetch from GitHub.
-    pub fn clear_cache(&self) {
-        self.cache.write().unwrap().clear();
-    }
+    pub fn clear_cache(&self) { self.cache.write().unwrap().clear(); }
 
     /// Clear cache for a specific marketplace.
-    pub fn clear_cache_for(&self, repo: &str) {
-        self.cache.write().unwrap().remove(repo);
-    }
+    pub fn clear_cache_for(&self, repo: &str) { self.cache.write().unwrap().remove(repo); }
 
     /// Browse all plugins across all (or one) marketplace.
     pub async fn browse(&self, marketplace: Option<&str>) -> Result<Vec<PluginInfo>> {
@@ -240,10 +232,10 @@ impl MarketplaceService {
                 let (installed, enabled) =
                     self.plugin_local_status(&manifest, &src.repo, &plugin.name);
                 results.push(PluginInfo {
-                    name:        plugin.name.clone(),
+                    name: plugin.name.clone(),
                     description: plugin.description.clone().unwrap_or_default(),
-                    version:     plugin.version.clone(),
-                    category:    plugin.category.clone(),
+                    version: plugin.version.clone(),
+                    category: plugin.category.clone(),
                     marketplace: src.name.clone(),
                     installed,
                     enabled,
@@ -277,12 +269,11 @@ impl MarketplaceService {
     ) -> Result<PluginInstallResult> {
         // Find which marketplace has this plugin.
         let all = self.browse(marketplace).await?;
-        let info = all
-            .iter()
-            .find(|p| p.name == plugin_name)
-            .ok_or_else(|| crate::error::SkillError::NotFound {
+        let info = all.iter().find(|p| p.name == plugin_name).ok_or_else(|| {
+            crate::error::SkillError::NotFound {
                 name: format!("plugin '{plugin_name}' not found in any marketplace"),
-            })?;
+            }
+        })?;
 
         let source_repo = self
             .list_sources()
@@ -341,9 +332,7 @@ impl MarketplaceService {
         let mut found = false;
         for repo in &mut manifest.repos {
             for skill in &mut repo.skills {
-                if skill.name.starts_with(&format!("{plugin_name}:"))
-                    || skill.name == plugin_name
-                {
+                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
                     skill.enabled = enabled;
                     if enabled {
                         skill.trusted = true;
@@ -379,9 +368,7 @@ impl MarketplaceService {
     ) -> (bool, bool) {
         for repo in &manifest.repos {
             for skill in &repo.skills {
-                if skill.name.starts_with(&format!("{plugin_name}:"))
-                    || skill.name == plugin_name
-                {
+                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
                     return (true, skill.enabled);
                 }
             }
@@ -431,7 +418,11 @@ mod tests {
         );
         let sources = svc.list_sources();
         assert_eq!(sources.len(), 2);
-        assert!(sources.iter().any(|s| s.repo == "anthropics/claude-plugins-official"));
+        assert!(
+            sources
+                .iter()
+                .any(|s| s.repo == "anthropics/claude-plugins-official")
+        );
         assert!(sources.iter().any(|s| s.repo == "anthropics/skills"));
     }
 

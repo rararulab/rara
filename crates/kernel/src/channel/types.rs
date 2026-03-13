@@ -75,8 +75,7 @@ impl ChannelType {
 /// Controls when the bot responds in group conversations.
 /// Ref: OpenFang `openfang-types/src/config.rs` — `GroupPolicy`.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default,
-    strum::EnumString,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, strum::EnumString,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]

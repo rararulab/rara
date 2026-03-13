@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Guard pipeline — combines taint tracking + pattern scanning.
 //!
 //! Sits between permission checks and tool execution in `agent.rs`.
@@ -6,9 +20,8 @@
 
 use tracing::instrument;
 
-use crate::session::SessionKey;
-
 use super::{pattern::PatternGuard, taint::TaintTracker};
+use crate::session::SessionKey;
 
 /// Verdict from the guard pipeline.
 #[derive(Debug)]
@@ -18,9 +31,9 @@ pub enum GuardVerdict {
     /// Tool call is blocked.
     Blocked {
         /// Which layer blocked it: "taint" or "pattern".
-        layer: &'static str,
+        layer:     &'static str,
         /// Human-readable reason.
-        reason: String,
+        reason:    String,
         /// The tool that was blocked.
         tool_name: String,
     },
@@ -28,14 +41,14 @@ pub enum GuardVerdict {
 
 /// Combines taint tracking + pattern scanning into a single guard.
 pub struct GuardPipeline {
-    taint: TaintTracker,
+    taint:   TaintTracker,
     pattern: PatternGuard,
 }
 
 impl GuardPipeline {
     pub fn new() -> Self {
         Self {
-            taint: TaintTracker::new(),
+            taint:   TaintTracker::new(),
             pattern: PatternGuard,
         }
     }
@@ -54,8 +67,8 @@ impl GuardPipeline {
         // Layer 1: taint-flow check (session-level, O(1) per label).
         if let Err(violation) = self.taint.check_tool_input(session, tool_name) {
             return GuardVerdict::Blocked {
-                layer: "taint",
-                reason: violation.to_string(),
+                layer:     "taint",
+                reason:    violation.to_string(),
                 tool_name: tool_name.to_string(),
             };
         }
@@ -69,8 +82,8 @@ impl GuardPipeline {
             )
         }) {
             return GuardVerdict::Blocked {
-                layer: "pattern",
-                reason: format!(
+                layer:     "pattern",
+                reason:    format!(
                     "{}: matched '{}'",
                     critical.rule_name, critical.matched_pattern
                 ),
@@ -87,18 +100,15 @@ impl GuardPipeline {
         self.taint.record_tool_output(session, tool_name);
     }
 
-    /// Access the taint tracker directly (for fork, clear, manual label injection).
-    pub fn taint_tracker(&self) -> &TaintTracker {
-        &self.taint
-    }
+    /// Access the taint tracker directly (for fork, clear, manual label
+    /// injection).
+    pub fn taint_tracker(&self) -> &TaintTracker { &self.taint }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::guard::taint::TaintLabel;
-    use crate::session::SessionKey;
-
     use super::*;
+    use crate::{guard::taint::TaintLabel, session::SessionKey};
 
     #[test]
     fn pass_when_clean() {

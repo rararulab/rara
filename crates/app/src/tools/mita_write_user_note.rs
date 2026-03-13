@@ -27,8 +27,7 @@ use rara_kernel::{
 };
 use serde_json::json;
 
-use super::notify::push_notification;
-use super::user_note::NOTE_CATEGORIES;
+use super::{notify::push_notification, user_note::NOTE_CATEGORIES};
 
 /// Mita-exclusive tool: write a structured note into any user's tape.
 ///

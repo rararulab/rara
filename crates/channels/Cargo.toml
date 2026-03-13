@@ -15,14 +15,14 @@ futures = { workspace = true }
 image = { workspace = true }
 jiff = { workspace = true }
 rand = { workspace = true }
-regex = { workspace = true }
 rara-kernel = { workspace = true }
 rara-paths = { workspace = true }
+regex = { workspace = true }
 reqwest = { version = "0.12", features = ["socks"] }
 serde = { workspace = true }
-strum = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 snafu = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

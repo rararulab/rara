@@ -18,8 +18,8 @@ impl AgentTool for ComposioAccountsTool {
     fn name(&self) -> &str { "composio_accounts" }
 
     fn description(&self) -> &str {
-        "List connected OAuth accounts on Composio. Shows which third-party apps \
-         (Gmail, Notion, GitHub, etc.) have been authorized and their connection status."
+        "List connected OAuth accounts on Composio. Shows which third-party apps (Gmail, Notion, \
+         GitHub, etc.) have been authorized and their connection status."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

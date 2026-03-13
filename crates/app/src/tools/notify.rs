@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Shared notification helper for pushing messages to the TG notification channel.
+//! Shared notification helper for pushing messages to the TG notification
+//! channel.
 
 use rara_kernel::{event::KernelEventEnvelope, tool::ToolContext};
 use tracing::warn;

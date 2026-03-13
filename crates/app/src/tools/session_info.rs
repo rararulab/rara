@@ -15,8 +15,10 @@
 //! Session info tool for querying current session metadata.
 
 use async_trait::async_trait;
-use rara_kernel::session::SessionIndexRef;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::{
+    session::SessionIndexRef,
+    tool::{AgentTool, ToolOutput},
+};
 use serde_json::json;
 
 /// Agent tool that retrieves metadata for the current session.
@@ -25,16 +27,12 @@ pub struct SessionInfoTool {
 }
 
 impl SessionInfoTool {
-    pub fn new(session_index: SessionIndexRef) -> Self {
-        Self { session_index }
-    }
+    pub fn new(session_index: SessionIndexRef) -> Self { Self { session_index } }
 }
 
 #[async_trait]
 impl AgentTool for SessionInfoTool {
-    fn name(&self) -> &str {
-        "get-session-info"
-    }
+    fn name(&self) -> &str { "get-session-info" }
 
     fn description(&self) -> &str {
         "Get metadata for the current session, including uploaded image paths and other \

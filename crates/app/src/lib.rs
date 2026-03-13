@@ -13,8 +13,8 @@
 // limitations under the License.
 
 mod boot;
-mod context_mode;
 pub mod config_sync;
+mod context_mode;
 pub mod flatten;
 pub mod gateway;
 mod tools;
@@ -60,42 +60,42 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
     #[serde(default = "default_database_config")]
-    pub database:    DatabaseConfig,
+    pub database:               DatabaseConfig,
     /// HTTP server bind / limits.
-    pub http:        RestServerConfig,
+    pub http:                   RestServerConfig,
     /// gRPC server bind / limits.
-    pub grpc:        GrpcServerConfig,
+    pub grpc:                   GrpcServerConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
-    pub telemetry:   TelemetryConfig,
+    pub telemetry:              TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_token: Option<String>,
+    pub owner_token:            Option<String>,
     /// LLM provider configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm:         Option<flatten::LlmConfig>,
+    pub llm:                    Option<flatten::LlmConfig>,
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub telegram:    Option<flatten::TelegramConfig>,
+    pub telegram:               Option<flatten::TelegramConfig>,
     /// Composio credentials (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub composio:    Option<flatten::ComposioConfig>,
+    pub composio:               Option<flatten::ComposioConfig>,
     /// Configured users with platform identity mappings (required).
-    pub users:       Vec<crate::boot::UserConfig>,
+    pub users:                  Vec<crate::boot::UserConfig>,
     /// Maximum ingress messages per user per minute (rate limiting).
     #[serde(default = "default_max_ingress_per_minute")]
     pub max_ingress_per_minute: u32,
     /// Mita proactive agent configuration (required).
-    pub mita:        MitaConfig,
+    pub mita:                   MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub knowledge:   Option<flatten::KnowledgeConfig>,
+    pub knowledge:              Option<flatten::KnowledgeConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gateway:     Option<GatewayConfig>,
+    pub gateway:                Option<GatewayConfig>,
     /// Symphony autonomous coding agent orchestrator (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symphony:    Option<rara_symphony::SymphonyConfig>,
+    pub symphony:               Option<rara_symphony::SymphonyConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -140,10 +140,12 @@ pub struct GatewayConfig {
     pub bind_address:         String,
     /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
     pub repo_url:             String,
-    /// Telegram bot token for the gateway management bot (separate from rara's bot).
+    /// Telegram bot token for the gateway management bot (separate from rara's
+    /// bot).
     pub bot_token:            String,
-    /// Telegram chat ID for the gateway bot (typically the admin's private chat).
-    pub chat_id: i64,
+    /// Telegram chat ID for the gateway bot (typically the admin's private
+    /// chat).
+    pub chat_id:              i64,
 }
 
 mod gateway_defaults {
@@ -373,7 +375,8 @@ pub async fn start_with_options(
 
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
-    // Wire DispatchRaraTool and ListSessionsTool with the now-available KernelHandle.
+    // Wire DispatchRaraTool and ListSessionsTool with the now-available
+    // KernelHandle.
     {
         let mut lock = rara.dispatch_rara_handle.write().await;
         *lock = Some(kernel_handle.clone());
@@ -452,12 +455,11 @@ pub async fn start_with_options(
         use rara_channels::telegram::commands::{
             KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
         };
-        let bot_client: std::sync::Arc<
-            dyn rara_channels::telegram::commands::BotServiceClient,
-        > = std::sync::Arc::new(KernelBotServiceClient::new(
-            rara.session_index.clone(),
-            rara.tape_service.clone(),
-        ));
+        let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
+            std::sync::Arc::new(KernelBotServiceClient::new(
+                rara.session_index.clone(),
+                rara.tape_service.clone(),
+            ));
         vec![
             std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
             std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
@@ -502,10 +504,10 @@ pub async fn start_with_options(
     info!("Application started successfully");
 
     let app_handle = AppHandle {
-        shutdown_tx:        Some(shutdown_tx),
-        running:            Arc::clone(&running),
+        shutdown_tx: Some(shutdown_tx),
+        running: Arc::clone(&running),
         cancellation_token: cancellation_token.clone(),
-        kernel_handle:      Some(kernel_handle),
+        kernel_handle: Some(kernel_handle),
         command_handlers,
     };
 
@@ -647,7 +649,8 @@ async fn try_build_telegram(
                 .get(keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID)
                 .await
                 .and_then(|v| v.parse().ok());
-            let new_group_policy = parse_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
+            let new_group_policy =
+                parse_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
             let mut cfg = config_handle.write().unwrap_or_else(|e| e.into_inner());
             cfg.primary_chat_id = new_chat_id;
             cfg.allowed_group_chat_id = new_group_id;
@@ -682,14 +685,14 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:           Option<oneshot::Sender<()>>,
-    running:               Arc<AtomicBool>,
-    cancellation_token:    CancellationToken,
+    shutdown_tx:          Option<oneshot::Sender<()>>,
+    running:              Arc<AtomicBool>,
+    cancellation_token:   CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:     Option<rara_kernel::handle::KernelHandle>,
+    pub kernel_handle:    Option<rara_kernel::handle::KernelHandle>,
     /// Command handlers shared across all channels (Telegram, CLI, etc.).
-    pub command_handlers:  Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
+    pub command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
 }
 
 #[allow(dead_code)]

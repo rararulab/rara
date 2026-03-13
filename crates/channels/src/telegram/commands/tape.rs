@@ -169,4 +169,3 @@ fn count_sessions(branch: &SessionBranch) -> usize {
         .map(|fork| count_sessions(&fork.branch))
         .sum::<usize>()
 }
-

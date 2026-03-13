@@ -4,7 +4,8 @@ use serde_json::json;
 
 use super::shared::ComposioShared;
 
-/// List available Composio actions, optionally filtered by app and search query.
+/// List available Composio actions, optionally filtered by app and search
+/// query.
 pub(super) struct ComposioListTool {
     shared: ComposioShared,
 }
@@ -66,9 +67,7 @@ impl AgentTool for ComposioListTool {
                 })
                 .into())
             }
-            Err(error) => {
-                Ok(json!({ "error": format!("failed to list actions: {error}") }).into())
-            }
+            Err(error) => Ok(json!({ "error": format!("failed to list actions: {error}") }).into()),
         }
     }
 }

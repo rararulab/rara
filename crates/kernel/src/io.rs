@@ -1175,11 +1175,11 @@ pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 /// Ref: OpenFang `openfang-channels/src/bridge.rs` — `ChannelRateLimiter`.
 pub struct IngressRateLimiter {
     /// Per-key timestamps of accepted messages within the current window.
-    buckets: DashMap<String, Vec<std::time::Instant>>,
+    buckets:        DashMap<String, Vec<std::time::Instant>>,
     /// Maximum messages per key per 60-second window.
     max_per_minute: u32,
     /// Clock function for obtaining the current instant (test-injectable).
-    now_fn: fn() -> std::time::Instant,
+    now_fn:         fn() -> std::time::Instant,
 }
 
 impl IngressRateLimiter {
@@ -1306,9 +1306,7 @@ impl IOSubsystem {
 
     /// Run garbage collection on the ingress rate limiter, evicting expired
     /// keys to prevent unbounded memory growth.
-    pub fn gc_rate_limiter(&self) {
-        self.rate_limiter.gc();
-    }
+    pub fn gc_rate_limiter(&self) { self.rate_limiter.gc(); }
 
     // -- Ingress --------------------------------------------------------------
 
@@ -1607,8 +1605,10 @@ mod agent_event_tests {
 
 #[cfg(test)]
 mod ingress_rate_limiter_tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, Instant},
+    };
 
     use super::*;
 
@@ -1616,15 +1616,14 @@ mod ingress_rate_limiter_tests {
     static FAKE_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
 
     fn fake_now() -> Instant {
-        // SAFETY: Instant::now() is called once as a base; offset simulates time passing.
+        // SAFETY: Instant::now() is called once as a base; offset simulates time
+        // passing.
         static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         let base = *BASE.get_or_init(Instant::now);
         base + Duration::from_millis(FAKE_OFFSET_MS.load(Ordering::Relaxed))
     }
 
-    fn set_fake_offset(ms: u64) {
-        FAKE_OFFSET_MS.store(ms, Ordering::Relaxed);
-    }
+    fn set_fake_offset(ms: u64) { FAKE_OFFSET_MS.store(ms, Ordering::Relaxed); }
 
     #[test]
     fn rate_limiter_allows_within_limit() {
@@ -1661,7 +1660,10 @@ mod ingress_rate_limiter_tests {
 
         // Advance clock past the 60s window.
         set_fake_offset(61_000);
-        assert!(limiter.check_rate(key).is_ok(), "should allow after window expires");
+        assert!(
+            limiter.check_rate(key).is_ok(),
+            "should allow after window expires"
+        );
     }
 
     #[test]

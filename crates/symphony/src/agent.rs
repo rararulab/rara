@@ -87,14 +87,15 @@ impl RalphAgent {
     async fn merge_core_config_if_present<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
         let generated_path = workspace.as_ref().join("ralph.yml");
         let core_path = workspace.as_ref().join(&self.config.core_config_file);
-        let generated = tokio::fs::read_to_string(&generated_path)
-            .await
-            .context(WorkspaceIoSnafu {
-                message: format!(
-                    "failed to read generated Ralph config {}",
-                    generated_path.display()
-                ),
-            })?;
+        let generated =
+            tokio::fs::read_to_string(&generated_path)
+                .await
+                .context(WorkspaceIoSnafu {
+                    message: format!(
+                        "failed to read generated Ralph config {}",
+                        generated_path.display()
+                    ),
+                })?;
 
         let core = match tokio::fs::read_to_string(&core_path).await {
             Ok(core) => core,
@@ -204,7 +205,8 @@ impl RalphAgent {
             // Materialize the repo root core config into the generated
             // worktree-local `ralph.yml` because the later `ralph run` step
             // intentionally executes without extra `-c` overlays.
-            self.merge_core_config_if_present(workspace.as_ref()).await?;
+            self.merge_core_config_if_present(workspace.as_ref())
+                .await?;
             self.doctor_workspace(workspace.as_ref()).await?;
             return Ok(());
         }

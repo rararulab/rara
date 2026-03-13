@@ -164,11 +164,8 @@ impl GatewayArgs {
         if let Some(ref p) = proxy {
             tracing::info!(proxy = %p, "gateway: using proxy for Telegram");
         }
-        let bot = rara_channels::telegram::build_bot(
-            &gateway_config.bot_token,
-            proxy.as_deref(),
-        )
-        .whatever_context("Failed to build gateway Telegram bot")?;
+        let bot = rara_channels::telegram::build_bot(&gateway_config.bot_token, proxy.as_deref())
+            .whatever_context("Failed to build gateway Telegram bot")?;
 
         let chat_id = gateway_config.chat_id;
         let notifier = std::sync::Arc::new(rara_app::gateway::UpdateNotifier::new(
@@ -204,8 +201,7 @@ impl GatewayArgs {
             let cancel = cancel.clone();
 
             tokio::spawn(async move {
-                let mut monitor =
-                    rara_app::gateway::ProcessMonitor::new(snapshot, thresholds);
+                let mut monitor = rara_app::gateway::ProcessMonitor::new(snapshot, thresholds);
                 let mut ticker = tokio::time::interval(poll_interval);
                 loop {
                     tokio::select! {
@@ -250,10 +246,10 @@ impl GatewayArgs {
         // 4. Build admin HTTP server state and spawn it.
         let admin_state = rara_app::gateway::server::GatewayAppState {
             supervisor_handle: supervisor_handle.clone(),
-            update_state_rx: update_rx.clone(),
-            shutdown: cancel.clone(),
-            process_snapshot: process_snapshot.clone(),
-            alert_thresholds: alert_thresholds.clone(),
+            update_state_rx:   update_rx.clone(),
+            shutdown:          cancel.clone(),
+            process_snapshot:  process_snapshot.clone(),
+            alert_thresholds:  alert_thresholds.clone(),
         };
         let admin_bind = gateway_config.bind_address.clone();
         let _admin_handle = rara_app::gateway::server::serve(&admin_bind, admin_state)

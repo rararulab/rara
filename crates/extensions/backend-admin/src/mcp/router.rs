@@ -50,10 +50,7 @@ pub fn mcp_router(manager: McpState) -> Router {
             get(list_server_resources),
         )
         .route("/api/v1/mcp/servers/{name}/logs", get(list_server_logs))
-        .route(
-            "/api/v1/mcp/context-mode/status",
-            get(context_mode_status),
-        )
+        .route("/api/v1/mcp/context-mode/status", get(context_mode_status))
         .with_state(manager)
 }
 
@@ -414,9 +411,7 @@ async fn list_server_logs(
     Ok(Json(entries))
 }
 
-async fn context_mode_status(
-    State(manager): State<McpState>,
-) -> Json<serde_json::Value> {
+async fn context_mode_status(State(manager): State<McpState>) -> Json<serde_json::Value> {
     let status = manager.server_connection_status("context-mode").await;
     let (status_str, interceptor_enabled) = match status {
         ConnectionStatus::Connected => ("connected", true),

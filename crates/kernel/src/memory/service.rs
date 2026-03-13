@@ -530,7 +530,12 @@ impl TapeService {
 
         for entry in entries.iter().filter(|e| e.id <= anchor_id) {
             self.store
-                .append(target, entry.kind, entry.payload.clone(), entry.metadata.clone())
+                .append(
+                    target,
+                    entry.kind,
+                    entry.payload.clone(),
+                    entry.metadata.clone(),
+                )
                 .await?;
         }
 
@@ -689,7 +694,8 @@ impl TapeService {
         // matter which forked session the user is currently in.
         let root_key = self.find_root_session(session_key, sessions).await?;
         // TODO(perf): walk only the fork chain instead of loading all sessions.
-        // This is O(all_sessions) but anchor trees are rarely deep, so acceptable for now.
+        // This is O(all_sessions) but anchor trees are rarely deep, so acceptable for
+        // now.
         let all_sessions = sessions
             .list_sessions(10_000, 0)
             .await
@@ -1336,18 +1342,28 @@ mod tests {
 
         let source = "test-checkout-source";
         svc.ensure_bootstrap_anchor(source).await.unwrap();
-        svc.handoff(source, "topic/a", HandoffState {
-            summary: Some("discussed A".into()),
-            ..Default::default()
-        }).await.unwrap();
+        svc.handoff(
+            source,
+            "topic/a",
+            HandoffState {
+                summary: Some("discussed A".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         svc.append_message(
             source,
             serde_json::json!({"role":"user","content":"after anchor"}),
             None,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         let target = "test-checkout-target";
-        svc.checkout_anchor(source, "topic/a", target).await.unwrap();
+        svc.checkout_anchor(source, "topic/a", target)
+            .await
+            .unwrap();
 
         let entries = svc.entries(target).await.unwrap();
         // Should have entries up to and including the "topic/a" anchor

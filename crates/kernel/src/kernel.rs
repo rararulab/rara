@@ -53,7 +53,6 @@ use crate::{
         AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, ExecutionMode,
         Priority, run_agent_loop,
     },
-    plan::run_plan_loop,
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -61,6 +60,7 @@ use crate::{
     llm::DriverRegistryRef,
     memory::TapeService,
     notification::{BroadcastNotificationBus, NotificationBusRef},
+    plan::run_plan_loop,
     queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::{
@@ -80,30 +80,30 @@ use crate::{
 pub struct KernelConfig {
     /// Maximum number of concurrent agent processes globally.
     #[default = 16]
-    pub max_concurrency:        usize,
+    pub max_concurrency:         usize,
     /// Default maximum number of children per agent.
     #[default = 8]
-    pub default_child_limit:    usize,
+    pub default_child_limit:     usize,
     /// Default max LLM iterations for spawned agents.
     #[default = 25]
-    pub default_max_iterations: usize,
+    pub default_max_iterations:  usize,
     /// Hard cap for one tool execution wave inside a turn.
     #[default(_code = "Duration::from_secs(180)")]
-    pub tool_execution_timeout: Duration,
+    pub tool_execution_timeout:  Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
-    pub memory_quota_per_agent:    usize,
+    pub memory_quota_per_agent:  usize,
     /// SSE idle timeout for LLM streaming responses. If no event is received
     /// within this duration, the stream is aborted and retried.
     #[default(_code = "Duration::from_secs(90)")]
-    pub streaming_idle_timeout:    Duration,
+    pub streaming_idle_timeout:  Duration,
     /// Mita heartbeat interval. `None` disables the heartbeat.
     #[default(_code = "None")]
-    pub mita_heartbeat_interval:   Option<Duration>,
+    pub mita_heartbeat_interval: Option<Duration>,
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
-    pub event_queue:               ShardedEventQueueConfig,
+    pub event_queue:             ShardedEventQueueConfig,
 }
 
 /// Shared reference to a
@@ -125,46 +125,46 @@ pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
 /// flattened directly into this struct.
 pub struct Kernel {
     /// Kernel configuration.
-    config:           KernelConfig,
+    config:             KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:    Arc<SessionTable>,
+    process_table:      Arc<SessionTable>,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore: Arc<Semaphore>,
+    global_semaphore:   Arc<Semaphore>,
     /// Unified security subsystem (auth + authz + approval).
-    security:         SecurityRef,
+    security:           SecurityRef,
     /// Agent registry for looking up named agent definitions.
-    agent_registry:   AgentRegistryRef,
+    agent_registry:     AgentRegistryRef,
     /// Tape service for session message persistence.
-    tape_service:     TapeService,
+    tape_service:       TapeService,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
-    session_index:    SessionIndexRef,
+    session_index:      SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
-    settings:         SettingsRef,
+    settings:           SettingsRef,
     /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
     /// tool_registry, event_bus).
-    syscall:          SyscallDispatcher,
+    syscall:            SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
     /// Bundled I/O subsystem (ingress, stream hub, delivery).
-    io:               Arc<IOSubsystem>,
+    io:                 Arc<IOSubsystem>,
     /// Unified event queue for all kernel interactions.
-    event_queue:      EventQueueRef,
+    event_queue:        EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
     ///
     /// Always present. When `num_shards == 0` (single-queue mode), all
     /// events are routed to the global queue and processed by a single
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
-    sharded_queue:    ShardedQueueRef,
+    sharded_queue:      ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
-    started_at:       Timestamp,
+    started_at:         Timestamp,
     /// Knowledge layer service for long-term memory extraction.
-    knowledge:        crate::memory::knowledge::KnowledgeServiceRef,
+    knowledge:          crate::memory::knowledge::KnowledgeServiceRef,
     /// Optional hook to transform tool outputs before sending to the LLM.
     output_interceptor: crate::tool::DynamicOutputInterceptor,
     /// Security guard pipeline (taint tracking + pattern scanning).
-    guard_pipeline: Arc<crate::guard::pipeline::GuardPipeline>,
+    guard_pipeline:     Arc<crate::guard::pipeline::GuardPipeline>,
 }
 
 impl Kernel {
@@ -557,7 +557,15 @@ impl Kernel {
             } => {
                 // CreateSession from SessionHandle::create_child() — subagent.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, parent_id, None, desired_session_key, None)
+                    .handle_spawn_agent(
+                        manifest,
+                        input,
+                        principal,
+                        parent_id,
+                        None,
+                        desired_session_key,
+                        None,
+                    )
                     .await;
                 let _ = reply_tx.send(result);
             }
@@ -605,7 +613,8 @@ impl Kernel {
                 self.handle_scheduled_task(job).await;
             }
             KernelEvent::MitaDirective { instruction } => {
-                self.handle_mita_directive(base.session_key, instruction).await;
+                self.handle_mita_directive(base.session_key, instruction)
+                    .await;
             }
             KernelEvent::MitaHeartbeat => {
                 self.handle_mita_heartbeat().await;
@@ -861,7 +870,8 @@ impl Kernel {
             output.clone()
         };
         let child_result_text = format!(
-            "[child_agent_result] child_id={child_id} iterations={} tool_calls={}\n\n{truncated_output}",
+            "[child_agent_result] child_id={child_id} iterations={} \
+             tool_calls={}\n\n{truncated_output}",
             result.iterations, result.tool_calls,
         );
         let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
@@ -1160,11 +1170,12 @@ impl Kernel {
         // Build a dedicated ScheduledJobAgent manifest with job context
         // baked into the system prompt.
         let manifest = AgentManifest {
-            name:               "scheduled_job".to_string(),
-            role:               AgentRole::Worker,
-            description:        "Executes a scheduled task and summarizes the result".to_string(),
-            model:              None,
-            system_prompt:      format!(
+            name:                   "scheduled_job".to_string(),
+            role:                   AgentRole::Worker,
+            description:            "Executes a scheduled task and summarizes the result"
+                .to_string(),
+            model:                  None,
+            system_prompt:          format!(
                 "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
                  {trigger_summary}\nTask: {message}\n\n## Instructions\n1. Execute the task \
                  described above using available tools.\n2. After completion, provide a brief \
@@ -1174,15 +1185,15 @@ impl Kernel {
                  done and the outcome>\" }}\n",
                 message = job.message,
             ),
-            soul_prompt:        None,
-            provider_hint:      None,
-            max_iterations:     Some(15),
-            tools:              vec![],
-            max_children:       Some(0),
-            max_context_tokens: None,
-            priority:           Priority::default(),
-            metadata:           serde_json::Value::Null,
-            sandbox:            None,
+            soul_prompt:            None,
+            provider_hint:          None,
+            max_iterations:         Some(15),
+            tools:                  vec![],
+            max_children:           Some(0),
+            max_context_tokens:     None,
+            priority:               Priority::default(),
+            metadata:               serde_json::Value::Null,
+            sandbox:                None,
             default_execution_mode: None,
         };
 
@@ -1369,18 +1380,18 @@ impl Kernel {
         // Construct a synthetic message with a directive prefix so Rara can
         // distinguish it from user messages.
         let directive_text = format!(
-            "[Proactive Instruction from Mita]\n\
-             The following is an internally-generated directive based on cross-session analysis. \
-             Act on it naturally as if you decided to reach out to the user yourself. \
-             Do NOT mention Mita or reveal that this is an automated instruction.\n\n\
-             Instruction: {instruction}"
+            "[Proactive Instruction from Mita]\nThe following is an internally-generated \
+             directive based on cross-session analysis. Act on it naturally as if you decided to \
+             reach out to the user yourself. Do NOT mention Mita or reveal that this is an \
+             automated instruction.\n\nInstruction: {instruction}"
         );
 
         let system_user = crate::identity::UserId("system".to_string());
         let mut msg = InboundMessage::synthetic(directive_text, system_user, session_key);
 
         // Set metadata flag so start_llm_turn persists as Event (not Message).
-        msg.metadata.insert("mita_directive".to_string(), serde_json::json!(true));
+        msg.metadata
+            .insert("mita_directive".to_string(), serde_json::json!(true));
 
         self.deliver_to_session(session_key, msg).await;
     }
@@ -1433,9 +1444,8 @@ impl Kernel {
 
         // Deliver heartbeat message to the existing Mita session.
         let msg = InboundMessage::synthetic(
-            "Heartbeat triggered. Analyze active sessions and determine if any proactive \
-             actions are needed. Review your previous tape entries to avoid repeating \
-             recent actions."
+            "Heartbeat triggered. Analyze active sessions and determine if any proactive actions \
+             are needed. Review your previous tape entries to avoid repeating recent actions."
                 .to_string(),
             crate::identity::UserId("system".to_string()),
             session_key,
@@ -1647,7 +1657,11 @@ impl Kernel {
             let response_text = if arg.is_empty() {
                 // Query current mode.
                 let current = self.resolve_execution_mode(&session_key);
-                format!("Current execution mode: {} (v{})", current, current.version())
+                format!(
+                    "Current execution mode: {} (v{})",
+                    current,
+                    current.version()
+                )
             } else if let Some(mode) = ExecutionMode::from_version_str(arg) {
                 // Set session execution mode.
                 self.process_table.with_mut(&session_key, |p| {
@@ -1655,7 +1669,10 @@ impl Kernel {
                 });
                 format!("Execution mode set to {} (v{})", mode, mode.version())
             } else {
-                format!("Invalid version: {arg}. Use /msg_version 1 (reactive) or /msg_version 2 (plan)")
+                format!(
+                    "Invalid version: {arg}. Use /msg_version 1 (reactive) or /msg_version 2 \
+                     (plan)"
+                )
             };
 
             // Deliver the response directly — no LLM turn needed.
@@ -1765,13 +1782,21 @@ impl Kernel {
         // Persist to tape: Mita directives go as Event entries (recorded but
         // excluded from LLM context by default_tape_context), regular messages
         // go as Message entries.
-        let is_mita_directive = msg.metadata.get("mita_directive").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_mita_directive = msg
+            .metadata
+            .get("mita_directive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if is_mita_directive {
             if let Err(e) = &self
                 .tape_service
-                .append_event(&tape_name, "mita-directive", serde_json::json!({
-                    "instruction": &user_text,
-                }))
+                .append_event(
+                    &tape_name,
+                    "mita-directive",
+                    serde_json::json!({
+                        "instruction": &user_text,
+                    }),
+                )
                 .await
             {
                 warn!(%e, "failed to persist Mita directive to tape");
@@ -1796,8 +1821,12 @@ impl Kernel {
         // extract the image ID from the filename and merge it into the
         // SessionEntry.metadata.images map so tools can discover uploaded images.
         if let (Some(original), Some(compressed)) = (
-            msg.metadata.get("image_original_path").and_then(|v| v.as_str()),
-            msg.metadata.get("image_compressed_path").and_then(|v| v.as_str()),
+            msg.metadata
+                .get("image_original_path")
+                .and_then(|v| v.as_str()),
+            msg.metadata
+                .get("image_compressed_path")
+                .and_then(|v| v.as_str()),
         ) {
             // Extract image ID from filename: "photo_{uuid}.jpg" → uuid part
             fn extract_image_id(path: &str) -> Option<String> {
@@ -1810,7 +1839,10 @@ impl Kernel {
             if let Some(image_id) = extract_image_id(original) {
                 match self.session_index.get_session(&session_key).await {
                     Ok(Some(mut entry)) => {
-                        let mut meta = entry.metadata.clone().unwrap_or_else(|| serde_json::json!({}));
+                        let mut meta = entry
+                            .metadata
+                            .clone()
+                            .unwrap_or_else(|| serde_json::json!({}));
                         let images = meta
                             .as_object_mut()
                             .unwrap()

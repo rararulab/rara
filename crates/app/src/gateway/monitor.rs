@@ -28,25 +28,25 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ProcessSnapshot {
     /// Process ID being monitored.
-    pub pid: Option<u32>,
+    pub pid:              Option<u32>,
     /// CPU usage percentage (0.0–100.0+, can exceed 100% on multi-core).
-    pub cpu_percent: f32,
+    pub cpu_percent:      f32,
     /// Resident set size in bytes.
-    pub rss_bytes: u64,
+    pub rss_bytes:        u64,
     /// Virtual memory size in bytes.
-    pub virt_bytes: u64,
+    pub virt_bytes:       u64,
     /// Number of threads (Linux only, 0 elsewhere).
-    pub thread_count: u64,
+    pub thread_count:     u64,
     /// Open file descriptors (Linux only via /proc, 0 elsewhere).
-    pub open_fds: u64,
+    pub open_fds:         u64,
     /// Total bytes read from disk since process start.
-    pub disk_read_bytes: u64,
+    pub disk_read_bytes:  u64,
     /// Total bytes written to disk since process start.
     pub disk_write_bytes: u64,
     /// Process uptime in seconds.
-    pub uptime_secs: u64,
+    pub uptime_secs:      u64,
     /// Timestamp of this snapshot (RFC 3339).
-    pub sampled_at: String,
+    pub sampled_at:       String,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ pub struct AlertThresholds {
     /// CPU usage percentage threshold.
     pub cpu_percent: Option<f32>,
     /// RSS memory threshold in megabytes.
-    pub mem_mb: Option<u64>,
+    pub mem_mb:      Option<u64>,
 }
 
 impl AlertThresholds {
@@ -95,11 +95,10 @@ pub struct GatewayState {
 }
 
 /// Path to the gateway runtime state file.
-fn state_file_path() -> std::path::PathBuf {
-    rara_paths::config_dir().join("gateway-state.yaml")
-}
+fn state_file_path() -> std::path::PathBuf { rara_paths::config_dir().join("gateway-state.yaml") }
 
-/// Load gateway state from disk. Returns default if file doesn't exist or is invalid.
+/// Load gateway state from disk. Returns default if file doesn't exist or is
+/// invalid.
 pub fn load_gateway_state() -> GatewayState {
     let path = state_file_path();
     match std::fs::read_to_string(&path) {
@@ -132,9 +131,9 @@ pub fn save_gateway_state(state: &GatewayState) {
 
 /// Collects per-PID process metrics using `sysinfo`.
 pub struct ProcessMonitor {
-    sys: System,
-    snapshot: SnapshotHandle,
-    thresholds: ThresholdsHandle,
+    sys:           System,
+    snapshot:      SnapshotHandle,
+    thresholds:    ThresholdsHandle,
     last_alert_at: Option<std::time::Instant>,
 }
 
@@ -191,10 +190,7 @@ impl ProcessMonitor {
         let disk = proc_info.disk_usage();
 
         // Thread count: tasks() only available on Linux.
-        let thread_count = proc_info
-            .tasks()
-            .map(|t| t.len() as u64)
-            .unwrap_or(0);
+        let thread_count = proc_info.tasks().map(|t| t.len() as u64).unwrap_or(0);
 
         // Open FDs: read from /proc on Linux, unavailable elsewhere.
         let open_fds = read_fd_count(raw_pid);

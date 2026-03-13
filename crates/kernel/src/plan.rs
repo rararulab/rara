@@ -23,8 +23,7 @@
 //! The entry point is [`run_plan_loop`], which has the same signature as
 //! [`crate::agent::run_agent_loop`] so the kernel can route to either.
 
-use std::sync::Arc;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -32,7 +31,6 @@ use tracing::{info, warn};
 
 use crate::{
     agent::{AgentManifest, AgentRole, AgentTurnResult},
-    tool::create_plan::CreatePlanTool,
     error::{KernelError, Result},
     guard::pipeline::GuardPipeline,
     handle::KernelHandle,
@@ -41,7 +39,7 @@ use crate::{
     memory::{TapEntryKind, TapeService},
     notification::NotificationBusRef,
     session::SessionKey,
-    tool::AgentTool,
+    tool::{AgentTool, create_plan::CreatePlanTool},
 };
 
 // ---------------------------------------------------------------------------
@@ -174,8 +172,8 @@ You MUST call the `create_plan` tool with the revised plan."#;
 ///
 /// 1. **Plan phase** — call the LLM to produce a `Plan` from the user message
 ///    via the `create_plan` tool.
-/// 2. **Execute loop** — for each step, run an inline agent sub-turn or spawn
-///    a worker child session.
+/// 2. **Execute loop** — for each step, run an inline agent sub-turn or spawn a
+///    worker child session.
 /// 3. **Replan** — if a step fails or requests replan, call the LLM to revise
 ///    the remaining steps.
 /// 4. **Completion** — emit `PlanCompleted` and produce a final summary.
@@ -223,8 +221,8 @@ pub(crate) async fn run_plan_loop(
     let estimated_duration_secs = Some((plan.steps.len() as u32) * 10);
 
     stream_handle.emit(StreamEvent::PlanCreated {
-        goal:                    plan.goal.clone(),
-        total_steps:             plan.steps.len(),
+        goal: plan.goal.clone(),
+        total_steps: plan.steps.len(),
         compact_summary,
         estimated_duration_secs,
     });
@@ -277,14 +275,7 @@ pub(crate) async fn run_plan_loop(
                 )
                 .await
             }
-            ExecutionMode::Worker => {
-                execute_worker_step(
-                    handle,
-                    session_key,
-                    &step,
-                )
-                .await
-            }
+            ExecutionMode::Worker => execute_worker_step(handle, session_key, &step).await,
         };
 
         let end_status = match &outcome {
@@ -342,8 +333,7 @@ pub(crate) async fn run_plan_loop(
             }
 
             // Collect remaining unexecuted steps.
-            let remaining_steps: Vec<&PlanStep> =
-                plan.steps.iter().skip(step_idx + 1).collect();
+            let remaining_steps: Vec<&PlanStep> = plan.steps.iter().skip(step_idx + 1).collect();
 
             match replan_via_llm(
                 handle,
@@ -445,14 +435,14 @@ pub(crate) async fn run_plan_loop(
         tool_calls: total_tool_calls,
         model:      last_model.clone(),
         trace:      crate::agent::TurnTrace {
-            duration_ms:      start.elapsed().as_millis() as u64,
-            model:            last_model,
-            input_text:       Some(user_text),
-            iterations:       vec![],
+            duration_ms: start.elapsed().as_millis() as u64,
+            model: last_model,
+            input_text: Some(user_text),
+            iterations: vec![],
             final_text_len,
             total_tool_calls,
-            success:          plan.status == PlanStatus::Completed,
-            error:            if plan.status == PlanStatus::Failed {
+            success: plan.status == PlanStatus::Completed,
+            error: if plan.status == PlanStatus::Failed {
                 Some(format!("plan failed: {}", plan.goal))
             } else {
                 None
@@ -493,23 +483,24 @@ async fn create_plan_via_llm(
     ];
 
     let request = llm::CompletionRequest {
-        model:               model.clone(),
+        model: model.clone(),
         messages,
-        tools:               vec![tool_def],
-        temperature:         Some(0.3),
-        max_tokens:          None,
-        thinking:            None,
-        tool_choice:         llm::ToolChoice::Required,
+        tools: vec![tool_def],
+        temperature: Some(0.3),
+        max_tokens: None,
+        thinking: None,
+        tool_choice: llm::ToolChoice::Required,
         parallel_tool_calls: false,
     };
 
     info!(session_key = %session_key, "plan executor: calling LLM for plan creation");
 
-    let response = driver.complete(request).await.map_err(|e| {
-        KernelError::AgentExecution {
+    let response = driver
+        .complete(request)
+        .await
+        .map_err(|e| KernelError::AgentExecution {
             message: format!("LLM plan creation call failed: {e}"),
-        }
-    })?;
+        })?;
 
     // Try to extract the create_plan tool call from the response.
     if let Some(tool_call) = response
@@ -598,11 +589,9 @@ async fn replan_via_llm(
         .collect();
 
     let replan_context = format!(
-        "Original goal: {goal}\n\n\
-         Completed steps:\n{past}\n\n\
-         Failure reason: {failure_reason}\n\n\
-         Remaining (unexecuted) steps:\n{remaining}\n\n\
-         Please create a revised plan that addresses the failure and completes the goal.",
+        "Original goal: {goal}\n\nCompleted steps:\n{past}\n\nFailure reason: \
+         {failure_reason}\n\nRemaining (unexecuted) steps:\n{remaining}\n\nPlease create a \
+         revised plan that addresses the failure and completes the goal.",
         past = if past_steps_desc.is_empty() {
             "(none)".to_string()
         } else {
@@ -621,23 +610,24 @@ async fn replan_via_llm(
     ];
 
     let request = llm::CompletionRequest {
-        model:               model.clone(),
+        model: model.clone(),
         messages,
-        tools:               vec![tool_def],
-        temperature:         Some(0.3),
-        max_tokens:          None,
-        thinking:            None,
-        tool_choice:         llm::ToolChoice::Required,
+        tools: vec![tool_def],
+        temperature: Some(0.3),
+        max_tokens: None,
+        thinking: None,
+        tool_choice: llm::ToolChoice::Required,
         parallel_tool_calls: false,
     };
 
     info!(session_key = %session_key, "plan executor: calling LLM for replan");
 
-    let response = driver.complete(request).await.map_err(|e| {
-        KernelError::AgentExecution {
+    let response = driver
+        .complete(request)
+        .await
+        .map_err(|e| KernelError::AgentExecution {
             message: format!("LLM replan call failed: {e}"),
-        }
-    })?;
+        })?;
 
     // Extract the create_plan tool call.
     if let Some(tool_call) = response
@@ -701,32 +691,36 @@ async fn execute_worker_step(
         Some(p) => p,
         None => {
             let reason = format!("session {} not found for worker spawn", session_key);
-            return (StepOutcome::Failed { reason: reason.clone() }, reason);
+            return (
+                StepOutcome::Failed {
+                    reason: reason.clone(),
+                },
+                reason,
+            );
         }
     };
 
     // Build a minimal worker manifest.
     let worker_manifest = AgentManifest {
-        name:               format!("plan-worker-{}", step.index),
-        role:               AgentRole::Worker,
-        description:        format!("Worker for plan step {}: {}", step.index, step.task),
-        model:              None, // inherit from parent via driver registry
-        system_prompt:      format!(
-            "You are a worker agent executing a specific task as part of a larger plan.\n\n\
-             Your task: {}\n\n\
-             Acceptance criteria: {}\n\n\
-             Focus exclusively on this task. Report your results clearly when done.",
+        name:                   format!("plan-worker-{}", step.index),
+        role:                   AgentRole::Worker,
+        description:            format!("Worker for plan step {}: {}", step.index, step.task),
+        model:                  None, // inherit from parent via driver registry
+        system_prompt:          format!(
+            "You are a worker agent executing a specific task as part of a larger plan.\n\nYour \
+             task: {}\n\nAcceptance criteria: {}\n\nFocus exclusively on this task. Report your \
+             results clearly when done.",
             step.task, step.acceptance
         ),
-        soul_prompt:        None,
-        provider_hint:      None,
-        max_iterations:     Some(20),
-        tools:              vec!["*".to_string()], // inherit all tools
-        max_children:       None,
-        max_context_tokens: None,
-        priority:           crate::agent::Priority::Normal,
-        metadata:           serde_json::Value::Null,
-        sandbox:            None,
+        soul_prompt:            None,
+        provider_hint:          None,
+        max_iterations:         Some(20),
+        tools:                  vec!["*".to_string()], // inherit all tools
+        max_children:           None,
+        max_context_tokens:     None,
+        priority:               crate::agent::Priority::Normal,
+        metadata:               serde_json::Value::Null,
+        sandbox:                None,
         default_execution_mode: None,
     };
 
@@ -746,7 +740,12 @@ async fn execute_worker_step(
         Err(e) => {
             let reason = format!("failed to spawn worker: {e}");
             warn!(session_key = %session_key, step = step.index, error = %e, "worker spawn failed");
-            return (StepOutcome::Failed { reason: reason.clone() }, reason);
+            return (
+                StepOutcome::Failed {
+                    reason: reason.clone(),
+                },
+                reason,
+            );
         }
     };
 
@@ -757,11 +756,7 @@ async fn execute_worker_step(
     while let Some(event) = rx.recv().await {
         match event {
             crate::io::AgentEvent::Milestone { stage, detail } => {
-                milestones.push(format!(
-                    "{}: {}",
-                    stage,
-                    detail.unwrap_or_default()
-                ));
+                milestones.push(format!("{}: {}", stage, detail.unwrap_or_default()));
             }
             crate::io::AgentEvent::Done(result) => {
                 let summary = if result.output.is_empty() {
@@ -798,7 +793,12 @@ async fn execute_worker_step(
         step.index
     );
     warn!(session_key = %session_key, step = step.index, "worker dropped without result");
-    (StepOutcome::Failed { reason: reason.clone() }, reason)
+    (
+        StepOutcome::Failed {
+            reason: reason.clone(),
+        },
+        reason,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -872,7 +872,12 @@ async fn execute_inline_step(
         }
         Err(e) => {
             let summary = e.to_string();
-            (StepOutcome::Failed { reason: summary.clone() }, summary)
+            (
+                StepOutcome::Failed {
+                    reason: summary.clone(),
+                },
+                summary,
+            )
         }
     }
 }
@@ -931,14 +936,14 @@ mod tests {
         assert_eq!(StepOutcome::Success.label(), "success");
         assert_eq!(
             StepOutcome::Failed {
-                reason: "boom".into()
+                reason: "boom".into(),
             }
             .label(),
             "failed"
         );
         assert_eq!(
             StepOutcome::NeedsReplan {
-                reason: "changed".into()
+                reason: "changed".into(),
             }
             .label(),
             "needs_replan"

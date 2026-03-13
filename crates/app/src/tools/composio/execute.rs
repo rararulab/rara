@@ -18,9 +18,9 @@ impl AgentTool for ComposioExecuteTool {
     fn name(&self) -> &str { "composio_execute" }
 
     fn description(&self) -> &str {
-        "Execute an action on a connected app via Composio. Requires the tool_slug \
-         (from composio_list) and action parameters. The connected_account_id is \
-         auto-resolved when omitted."
+        "Execute an action on a connected app via Composio. Requires the tool_slug (from \
+         composio_list) and action parameters. The connected_account_id is auto-resolved when \
+         omitted."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
