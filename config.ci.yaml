@@ -17,9 +17,9 @@ llm:
   default_provider: ollama
   providers:
     ollama:
-      base_url: http://10.0.0.167:11434/v1
+      base_url: ${OLLAMA_BASE_URL}
       api_key: ollama
-      default_model: qwen2.5:32b
+      default_model: ${OLLAMA_MODEL}
 users:
 - name: ryan
   role: root

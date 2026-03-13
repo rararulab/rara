@@ -9,6 +9,10 @@ on:
         required: false
       OLLAMA_EMBEDDING_MODEL:
         required: false
+      OLLAMA_BASE_URL:
+        required: false
+      OLLAMA_MODEL:
+        required: false
 
 concurrency:
   group: rust-${{ github.event.pull_request.number || github.sha }}
