@@ -55,6 +55,8 @@ jobs:
     uses: ./.github/workflows/rust.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+      OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
 
   release-pr:
     name: Release PR

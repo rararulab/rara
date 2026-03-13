@@ -5,6 +5,10 @@ on:
     secrets:
       CODECOV_TOKEN:
         required: false
+      OLLAMA_BASE_URL:
+        required: false
+      OLLAMA_MODEL:
+        required: false
 
 concurrency:
   group: rust-${{ github.event.pull_request.number || github.sha }}
@@ -107,10 +111,13 @@ jobs:
           tool: cargo-nextest
 
       - name: Verify Ollama connectivity
-        run: curl -sf http://10.0.0.167:11434/api/tags | head -c 200
+        run: curl -sf ${{ secrets.OLLAMA_BASE_URL }}/models | head -c 200
 
       - name: Prepare CI config
-        run: cp config.ci.yaml config.yaml
+        run: |
+          export OLLAMA_BASE_URL="${{ secrets.OLLAMA_BASE_URL }}"
+          export OLLAMA_MODEL="${{ secrets.OLLAMA_MODEL }}"
+          envsubst < config.ci.yaml > config.yaml
 
       - name: Run integration tests
         run: cargo nextest run --workspace --all-features --run-ignored ignored-only
