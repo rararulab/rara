@@ -810,7 +810,6 @@ impl TapeService {
     }
 }
 
-
 fn build_session_branch(
     session_key: &str,
     sessions_by_key: &std::collections::HashMap<String, crate::session::SessionEntry>,
