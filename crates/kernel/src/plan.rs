@@ -213,9 +213,20 @@ pub(crate) async fn run_plan_loop(
             message: format!("failed to persist plan to tape: {e}"),
         })?;
 
+    // Generate a compact natural-language summary from the steps.
+    let compact_summary = plan
+        .steps
+        .iter()
+        .map(|s| s.task.as_str())
+        .collect::<Vec<_>>()
+        .join("，");
+    let estimated_duration_secs = Some((plan.steps.len() as u32) * 10);
+
     stream_handle.emit(StreamEvent::PlanCreated {
-        goal:  plan.goal.clone(),
-        steps: plan.steps.iter().map(|s| s.task.clone()).collect(),
+        goal:                    plan.goal.clone(),
+        total_steps:             plan.steps.len(),
+        compact_summary,
+        estimated_duration_secs,
     });
 
     // -- Phase 2: Execute steps -----------------------------------------------
@@ -238,15 +249,10 @@ pub(crate) async fn run_plan_loop(
 
         let step = plan.steps[step_idx].clone();
 
-        let mode_label = match step.mode {
-            ExecutionMode::Inline => "inline",
-            ExecutionMode::Worker => "worker",
-        };
-
-        stream_handle.emit(StreamEvent::PlanStepStart {
-            index: step.index,
-            task:  step.task.clone(),
-            mode:  mode_label.to_owned(),
+        stream_handle.emit(StreamEvent::PlanProgress {
+            current_step: step.index,
+            total_steps:  plan.steps.len(),
+            status_text:  format!("正在执行第{}步：{}…", step.index + 1, step.task),
         });
 
         let (outcome, summary) = match step.mode {
@@ -281,10 +287,19 @@ pub(crate) async fn run_plan_loop(
             }
         };
 
-        stream_handle.emit(StreamEvent::PlanStepEnd {
-            index:   step.index,
-            outcome: outcome.label().to_owned(),
-            summary: summary.clone(),
+        let end_status = match &outcome {
+            StepOutcome::Success => format!("第{}步完成", step.index + 1),
+            StepOutcome::Failed { reason } => {
+                format!("第{}步失败：{}", step.index + 1, reason)
+            }
+            StepOutcome::NeedsReplan { reason } => {
+                format!("第{}步需要调整：{}", step.index + 1, reason)
+            }
+        };
+        stream_handle.emit(StreamEvent::PlanProgress {
+            current_step: step.index,
+            total_steps:  plan.steps.len(),
+            status_text:  end_status,
         });
 
         let needs_replan = matches!(
@@ -344,8 +359,7 @@ pub(crate) async fn run_plan_loop(
                     replan_count += 1;
 
                     stream_handle.emit(StreamEvent::PlanReplan {
-                        reason:    reason.clone(),
-                        new_steps: new_plan.steps.iter().map(|s| s.task.clone()).collect(),
+                        reason: reason.clone(),
                     });
 
                     // Replace remaining steps with the new plan's steps.
@@ -383,8 +397,7 @@ pub(crate) async fn run_plan_loop(
                         "plan executor: replan LLM call failed, aborting"
                     );
                     stream_handle.emit(StreamEvent::PlanReplan {
-                        reason:    reason.clone(),
-                        new_steps: vec![],
+                        reason: reason.clone(),
                     });
                     plan.status = PlanStatus::Failed;
                     break;

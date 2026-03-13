@@ -149,53 +149,77 @@ impl ProgressMessage {
     }
 }
 
-/// Plan progress state for tracking plan execution in Telegram.
-struct PlanProgress {
-    message_id: Option<MessageId>,
-    goal:       String,
-    steps:      Vec<String>,
-    /// Status per step: None = pending, Some(true) = success, Some(false) = failed.
-    status:     Vec<Option<bool>>,
-    current:    Option<usize>,
-    completed:  bool,
-    last_edit:  Instant,
+/// Display tier for plan messages in Telegram.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanTier {
+    /// steps <= 2, est < 10s: no plan message, just let final answer through.
+    Micro,
+    /// est 10-30s: 1-line status, keep editing.
+    Medium,
+    /// est > 30s or steps > 4: compact summary + status, single message edit.
+    Heavy,
 }
 
-impl PlanProgress {
-    fn new(goal: String, steps: Vec<String>) -> Self {
-        let count = steps.len();
+/// Plan display state for Telegram — three-tier strategy with single message edit.
+struct PlanDisplay {
+    message_id:              Option<MessageId>,
+    total_steps:             usize,
+    estimated_duration_secs: Option<u32>,
+    compact_summary:         Option<String>,
+    status_lines:            Vec<String>,
+    last_status:             String,
+    last_edit:               Instant,
+    tier:                    PlanTier,
+}
+
+impl PlanDisplay {
+    fn new(
+        total_steps: usize,
+        estimated_duration_secs: Option<u32>,
+        compact_summary: String,
+    ) -> Self {
+        let est = estimated_duration_secs.unwrap_or(0);
+        let tier = if total_steps <= 2 && est < 10 {
+            PlanTier::Micro
+        } else if est <= 30 && total_steps <= 4 {
+            PlanTier::Medium
+        } else {
+            PlanTier::Heavy
+        };
+
         Self {
             message_id: None,
-            goal,
-            steps,
-            status:     vec![None; count],
-            current:    None,
-            completed:  false,
-            last_edit:  Instant::now()
+            total_steps,
+            estimated_duration_secs,
+            compact_summary: if tier == PlanTier::Heavy {
+                Some(compact_summary)
+            } else {
+                None
+            },
+            status_lines: Vec::new(),
+            last_status: String::new(),
+            last_edit: Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
+            tier,
         }
     }
-}
 
-/// Render plan progress as a Telegram message.
-fn render_plan_progress(plan: &PlanProgress) -> String {
-    let done_count = plan.status.iter().filter(|s| s.is_some()).count();
-    let total = plan.steps.len();
-    let mut lines = vec![format!("\u{1f4cb} Plan: {} ({}/{})", plan.goal, done_count, total)];
-    lines.push(String::new());
-
-    for (i, step) in plan.steps.iter().enumerate() {
-        let icon = match plan.status.get(i).copied().flatten() {
-            Some(true) => "\u{2705}",   // ✅
-            Some(false) => "\u{274c}",  // ❌
-            None if plan.current == Some(i) => "\u{1f527}", // 🔧
-            None => "\u{2b1c}",         // ⬜
-        };
-        lines.push(format!("{icon} {}. {step}", i + 1));
+    /// Build the current message text for editing.
+    fn render(&self) -> String {
+        let mut text = String::new();
+        if let Some(ref summary) = self.compact_summary {
+            text.push_str(summary);
+            text.push('\n');
+        }
+        if let Some(last) = self.status_lines.last() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(last);
+        }
+        text
     }
-
-    lines.join("\n")
 }
 
 /// Format a single tool-progress line.
@@ -1548,7 +1572,7 @@ fn spawn_stream_forwarder(
 
         let mut progress = ProgressMessage::new();
         let mut progress_dirty = false;
-        let mut plan: Option<PlanProgress> = None;
+        let mut plan: Option<PlanDisplay> = None;
 
         loop {
             tokio::select! {
@@ -1699,20 +1723,33 @@ fn spawn_stream_forwarder(
                                 });
                             }
                         }
-                        Ok(StreamEvent::PlanCreated { goal, steps }) => {
-                            let mut p = PlanProgress::new(goal, steps);
-                            let text = render_plan_progress(&p);
-                            match bot.send_message(ChatId(chat_id), &text).await {
-                                Ok(msg) => { p.message_id = Some(msg.id); }
-                                Err(e) => { warn!(chat_id, error = %e, "failed to send plan message"); }
+                        Ok(StreamEvent::PlanCreated { total_steps, compact_summary, estimated_duration_secs, .. }) => {
+                            let mut p = PlanDisplay::new(total_steps, estimated_duration_secs, compact_summary);
+                            // Micro tier: don't send any plan message.
+                            if p.tier != PlanTier::Micro {
+                                let text = p.render();
+                                if !text.is_empty() {
+                                    match bot.send_message(ChatId(chat_id), &text).await {
+                                        Ok(msg) => { p.message_id = Some(msg.id); }
+                                        Err(e) => { warn!(chat_id, error = %e, "failed to send plan message"); }
+                                    }
+                                }
+                                p.last_edit = Instant::now();
                             }
-                            p.last_edit = Instant::now();
                             plan = Some(p);
                         }
-                        Ok(StreamEvent::PlanStepStart { index, .. }) => {
+                        Ok(StreamEvent::PlanProgress { status_text, .. }) => {
                             if let Some(ref mut p) = plan {
-                                p.current = Some(index);
-                                let text = render_plan_progress(p);
+                                if p.tier == PlanTier::Micro {
+                                    continue; // micro: suppress all plan updates
+                                }
+                                // Dedup: skip if identical to last status.
+                                if status_text == p.last_status {
+                                    continue;
+                                }
+                                p.last_status = status_text.clone();
+                                p.status_lines.push(status_text);
+                                let text = p.render();
                                 if p.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                     if let Some(mid) = p.message_id {
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
@@ -1721,31 +1758,15 @@ fn spawn_stream_forwarder(
                                 }
                             }
                         }
-                        Ok(StreamEvent::PlanStepEnd { index, outcome, .. }) => {
+                        Ok(StreamEvent::PlanReplan { reason }) => {
                             if let Some(ref mut p) = plan {
-                                let success = outcome != "failed";
-                                if let Some(s) = p.status.get_mut(index) {
-                                    *s = Some(success);
+                                if p.tier == PlanTier::Micro {
+                                    continue;
                                 }
-                                if p.current == Some(index) {
-                                    p.current = None;
-                                }
-                                let text = render_plan_progress(p);
-                                if p.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
-                                    if let Some(mid) = p.message_id {
-                                        let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
-                                    }
-                                    p.last_edit = Instant::now();
-                                }
-                            }
-                        }
-                        Ok(StreamEvent::PlanReplan { new_steps, .. }) => {
-                            if let Some(ref mut p) = plan {
-                                let count = new_steps.len();
-                                p.steps = new_steps;
-                                p.status = vec![None; count];
-                                p.current = None;
-                                let text = render_plan_progress(p);
+                                let status = format!("方案调整中…{reason}");
+                                p.status_lines.push(status.clone());
+                                p.last_status = status;
+                                let text = p.render();
                                 if let Some(mid) = p.message_id {
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                 }
@@ -1754,12 +1775,13 @@ fn spawn_stream_forwarder(
                         }
                         Ok(StreamEvent::PlanCompleted { summary }) => {
                             if let Some(ref mut p) = plan {
-                                p.completed = true;
-                                p.current = None;
-                                let mut text = render_plan_progress(p);
-                                text.push_str(&format!("\n\n\u{2705} {summary}"));
-                                if let Some(mid) = p.message_id {
-                                    let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                if p.tier != PlanTier::Micro {
+                                    let done_text = format!("\u{2705} {summary}");
+                                    p.status_lines.push(done_text);
+                                    let text = p.render();
+                                    if let Some(mid) = p.message_id {
+                                        let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                    }
                                 }
                             }
                             plan = None;

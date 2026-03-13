@@ -827,26 +827,19 @@ pub enum StreamEvent {
     },
     /// A plan has been created with a goal and ordered steps.
     PlanCreated {
-        goal:  String,
-        steps: Vec<String>,
+        goal:                    String,
+        total_steps:             usize,
+        compact_summary:         String,
+        estimated_duration_secs: Option<u32>,
     },
-    /// A plan step has started executing.
-    PlanStepStart {
-        index: usize,
-        task:  String,
-        mode:  String,
+    /// Incremental plan progress update (replaces PlanStepStart + PlanStepEnd).
+    PlanProgress {
+        current_step: usize,
+        total_steps:  usize,
+        status_text:  String,
     },
-    /// A plan step has finished.
-    PlanStepEnd {
-        index:   usize,
-        outcome: String,
-        summary: String,
-    },
-    /// The plan has been revised with new steps.
-    PlanReplan {
-        reason:    String,
-        new_steps: Vec<String>,
-    },
+    /// The plan has been revised.
+    PlanReplan { reason: String },
     /// The plan has completed successfully.
     PlanCompleted { summary: String },
 }

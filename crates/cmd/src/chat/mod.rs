@@ -483,21 +483,18 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
                 "[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"
             ),
         },
-        StreamEvent::PlanCreated { goal, steps } => CliEvent::Progress {
-            text: format!("Plan: {goal} ({} steps)", steps.len()),
-        },
-        StreamEvent::PlanStepStart { index, task, mode } => CliEvent::Progress {
-            text: format!("Step {}: {task} [{mode}]", index + 1),
-        },
-        StreamEvent::PlanStepEnd {
-            index,
-            outcome,
-            summary,
+        StreamEvent::PlanCreated {
+            compact_summary,
+            total_steps,
+            ..
         } => CliEvent::Progress {
-            text: format!("Step {} {outcome}: {summary}", index + 1),
+            text: format!("Plan ({total_steps} steps): {compact_summary}"),
         },
-        StreamEvent::PlanReplan { reason, new_steps } => CliEvent::Progress {
-            text: format!("Replanning ({reason}): {} steps", new_steps.len()),
+        StreamEvent::PlanProgress { status_text, .. } => CliEvent::Progress {
+            text: status_text,
+        },
+        StreamEvent::PlanReplan { reason } => CliEvent::Progress {
+            text: format!("Replanning: {reason}"),
         },
         StreamEvent::PlanCompleted { summary } => CliEvent::Progress {
             text: format!("Plan completed: {summary}"),
