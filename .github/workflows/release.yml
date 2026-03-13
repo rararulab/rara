@@ -161,6 +161,13 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
+      - name: Upload artifacts to MinIO
+        shell: bash
+        run: |
+          for f in ${{ steps.cargo-dist.outputs.paths }}; do
+            aws s3 cp "$f" "s3://artifacts/releases/${{ needs.plan.outputs.tag }}/" \
+              --endpoint-url http://10.0.0.167:9000
+          done
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:
