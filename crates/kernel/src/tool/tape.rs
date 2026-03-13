@@ -296,7 +296,7 @@ enum TapeParams {
 // ============================================================================
 
 #[async_trait]
-impl crate::tool::AgentTool for TapeTool {
+impl super::AgentTool for TapeTool {
     fn name(&self) -> &str { "tape" }
 
     fn description(&self) -> &str {
@@ -405,8 +405,8 @@ impl crate::tool::AgentTool for TapeTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &crate::tool::ToolContext,
-    ) -> anyhow::Result<crate::tool::ToolOutput> {
+        _context: &super::ToolContext,
+    ) -> anyhow::Result<super::ToolOutput> {
         let action: TapeParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid tape tool params: {e}"))?;
 

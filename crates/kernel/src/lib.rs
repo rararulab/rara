@@ -30,7 +30,6 @@
 
 pub mod agent;
 pub mod channel;
-pub(crate) mod create_plan_tool;
 pub mod error;
 pub mod event;
 pub mod guard;
@@ -48,11 +47,9 @@ pub mod notification;
 pub mod proactive;
 pub mod queue;
 pub mod schedule;
-pub(crate) mod schedule_tool;
 pub mod security;
 pub mod session;
 pub(crate) mod syscall;
-pub(crate) mod tape_tool;
 pub mod tool;
 
 pub use error::{KernelError, Result};

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod create_plan;
+pub(crate) mod schedule;
+pub(crate) mod tape;
+
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;

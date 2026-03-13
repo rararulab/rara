@@ -51,7 +51,7 @@ struct CreatePlanParams {
 // ============================================================================
 
 #[async_trait]
-impl crate::tool::AgentTool for CreatePlanTool {
+impl super::AgentTool for CreatePlanTool {
     fn name(&self) -> &str { "create_plan" }
 
     fn description(&self) -> &str {
@@ -98,8 +98,8 @@ impl crate::tool::AgentTool for CreatePlanTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &crate::tool::ToolContext,
-    ) -> anyhow::Result<crate::tool::ToolOutput> {
+        _context: &super::ToolContext,
+    ) -> anyhow::Result<super::ToolOutput> {
         let input: CreatePlanParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid create_plan params: {e}"))?;
 

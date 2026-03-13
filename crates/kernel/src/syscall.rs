@@ -41,8 +41,7 @@ use crate::{
     notification::NotificationBusRef,
     security::SecurityRef,
     session::{SessionKey, SessionTable},
-    tape_tool::TapeTool,
-    tool::{DynamicToolProviderRef, ToolRegistryRef},
+    tool::{DynamicToolProviderRef, ToolRegistryRef, tape::TapeTool},
 };
 
 /// Dispatches syscalls from session-scoped operations to the appropriate kernel
@@ -282,13 +281,13 @@ impl SyscallDispatcher {
                     );
                     registry.register(Arc::new(tape_tool));
                     // Schedule tools
-                    registry.register(Arc::new(crate::schedule_tool::ScheduleOnceTool));
-                    registry.register(Arc::new(crate::schedule_tool::ScheduleIntervalTool));
-                    registry.register(Arc::new(crate::schedule_tool::ScheduleCronTool));
-                    registry.register(Arc::new(crate::schedule_tool::ScheduleRemoveTool));
-                    registry.register(Arc::new(crate::schedule_tool::ScheduleListTool));
+                    registry.register(Arc::new(crate::tool::schedule::ScheduleOnceTool));
+                    registry.register(Arc::new(crate::tool::schedule::ScheduleIntervalTool));
+                    registry.register(Arc::new(crate::tool::schedule::ScheduleCronTool));
+                    registry.register(Arc::new(crate::tool::schedule::ScheduleRemoveTool));
+                    registry.register(Arc::new(crate::tool::schedule::ScheduleListTool));
                     // Plan tools
-                    registry.register(Arc::new(crate::create_plan_tool::CreatePlanTool));
+                    registry.register(Arc::new(crate::tool::create_plan::CreatePlanTool));
                 }
                 // Inject dynamic tools (e.g. MCP server tools).
                 if let Some(ref provider) = self.dynamic_tool_provider {

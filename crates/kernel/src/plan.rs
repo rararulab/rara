@@ -32,7 +32,7 @@ use tracing::{info, warn};
 
 use crate::{
     agent::{AgentManifest, AgentRole, AgentTurnResult},
-    create_plan_tool::CreatePlanTool,
+    tool::create_plan::CreatePlanTool,
     error::{KernelError, Result},
     guard::pipeline::GuardPipeline,
     handle::KernelHandle,
