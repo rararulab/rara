@@ -286,6 +286,7 @@ impl Kernel {
             Arc::clone(self.syscall.tool_registry()),
             Arc::clone(&self.global_semaphore),
             self.started_at,
+            self.tape_service.clone(),
         )
     }
 

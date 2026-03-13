@@ -198,14 +198,14 @@ impl ProgressMessage {
     }
 }
 
-/// Snapshot of a completed agent turn, stored for the inline "📊 详情" toggle.
+/// Snapshot of a completed agent turn, persisted to tape for the inline
+/// "📊 详情" toggle.
 ///
-/// Built from `ProgressMessage` fields when the stream closes. Stored in
-/// [`TraceStore`] keyed by `"{chat_id}:{msg_id}"`. Entries are TTL-cleaned
-/// (1 hour) on each new insertion to bound memory.
-///
-/// The callback handler (`handle_trace_callback`) reads this to render the
-/// expanded detail view; it never mutates the trace.
+/// Built from `ProgressMessage` fields when the stream closes. Written as a
+/// `turn.execution_trace` tape event keyed by session. The lightweight
+/// [`TraceIndex`] maps `"{chat_id}:{msg_id}"` to tape coordinates so the
+/// callback handler can read it back on demand.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ExecutionTrace {
     duration_secs:    u64,
     iterations:       usize,
@@ -219,23 +219,21 @@ struct ExecutionTrace {
     plan_steps:       Vec<String>,
     /// Tool execution records.
     tools:            Vec<ToolTraceEntry>,
-    /// When this trace was created (for TTL cleanup).
-    created_at:       Instant,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ToolTraceEntry {
-    name:     String,
-    duration: Option<std::time::Duration>,
-    success:  bool,
-    summary:  String,
-    error:    Option<String>,
+    name:        String,
+    /// Duration in milliseconds (serializable replacement for `std::time::Duration`).
+    duration_ms: Option<u64>,
+    success:     bool,
+    summary:     String,
+    error:       Option<String>,
 }
 
-/// Store for completed execution traces, keyed by `"{chat_id}:{msg_id}"`.
-///
-/// Shared between the stream forwarder (writes on stream close) and the
-/// callback handler (reads on button click). TTL-cleaned to 1 hour.
-type TraceStore = Arc<DashMap<String, ExecutionTrace>>;
+/// Lightweight index mapping `"{chat_id}:{msg_id}"` → `(tape_name, trace_id)`
+/// for tape lookup. Replaces the former in-memory `TraceStore`.
+type TraceIndex = Arc<DashMap<String, (String, String)>>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -567,8 +565,8 @@ fn render_trace_detail(trace: &ExecutionTrace) -> String {
             };
             let icon = if tool.success { "\u{2713}" } else { "\u{2717}" };
             let dur = tool
-                .duration
-                .map(|d| format!(" ({})", format_duration_compact(d)))
+                .duration_ms
+                .map(|ms| format!(" ({})", format_duration_compact(std::time::Duration::from_millis(ms))))
                 .unwrap_or_default();
             let summary = if tool.summary.is_empty() {
                 String::new()
@@ -712,9 +710,9 @@ pub struct TelegramAdapter {
     stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
     active_streams:    Arc<DashMap<i64, StreamingMessage>>,
-    /// Completed execution traces for inline toggle, keyed by
-    /// "{chat_id}:{msg_id}".
-    trace_store:       TraceStore,
+    /// Lightweight index for tape-persisted execution traces, keyed by
+    /// "{chat_id}:{msg_id}" → (tape_name, trace_id).
+    trace_index:       TraceIndex,
 }
 
 impl TelegramAdapter {
@@ -739,7 +737,7 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
-            trace_store: Arc::new(DashMap::new()),
+            trace_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -1064,7 +1062,8 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
-        let trace_store = Arc::clone(&self.trace_store);
+        let trace_index = Arc::clone(&self.trace_index);
+        let tape = handle.tape().clone();
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -1101,7 +1100,8 @@ impl ChannelAdapter for TelegramAdapter {
                 stream_hub,
                 active_streams,
                 command_handlers,
-                trace_store,
+                trace_index,
+                tape,
             )
             .await;
         });
@@ -1153,7 +1153,8 @@ async fn polling_loop(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
-    trace_store: TraceStore,
+    trace_index: TraceIndex,
+    tape: rara_kernel::memory::TapeService,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1209,7 +1210,8 @@ async fn polling_loop(
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
-                    let trace_store = Arc::clone(&trace_store);
+                    let trace_index = Arc::clone(&trace_index);
+                    let tape = tape.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1221,7 +1223,8 @@ async fn polling_loop(
                             &stream_hub,
                             &active_streams,
                             &command_handlers,
-                            &trace_store,
+                            &trace_index,
+                            &tape,
                         )
                         .await;
                     });
@@ -1377,13 +1380,15 @@ async fn handle_guard_callback(
 /// - `action` = "show" → expand to full trace, button becomes "收起"
 /// - `action` = "hide" → collapse back to compact summary, button becomes "详情"
 ///
-/// The trace is looked up from [`TraceStore`] by key `"{chat_id}:{msg_id}"`.
-/// If the trace has been TTL-cleaned (>1hr), the button silently does nothing.
+/// The trace is read from tape via [`TraceIndex`] coordinates. If the index
+/// entry is missing (process restarted) or the tape entry is gone, the button
+/// silently does nothing.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
-    trace_store: &TraceStore,
+    trace_index: &TraceIndex,
+    tape: &rara_kernel::memory::TapeService,
 ) {
     // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
     let parts: Vec<&str> = data.splitn(3, ':').collect();
@@ -1391,39 +1396,74 @@ async fn handle_trace_callback(
         let action = parts[1];
         let trace_key = parts[2];
 
-        if let Some(trace) = trace_store.get(trace_key) {
-            let (text, button_text, next_action) = match action {
-                "show" => (
-                    render_trace_detail(&trace),
-                    "\u{1f4ca} \u{6536}\u{8d77}",
-                    format!("trace:hide:{trace_key}"),
-                ),
-                _ => (
-                    render_compact_summary(&trace),
-                    "\u{1f4ca} \u{8be6}\u{60c5}",
-                    format!("trace:show:{trace_key}"),
-                ),
-            };
+        // Look up tape coordinates from index
+        let coords = trace_index.get(trace_key).map(|r| r.value().clone());
 
-            // Parse chat_id and msg_id from trace_key
-            if let Some((chat_id_str, msg_id_str)) = trace_key.split_once(':') {
-                if let (Ok(cid), Ok(mid)) =
-                    (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
-                {
-                    let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                        InlineKeyboardButton::callback(button_text, next_action),
-                    ]]);
-                    let _ = bot
-                        .edit_message_text(ChatId(cid), MessageId(mid), &text)
-                        .parse_mode(ParseMode::Html)
-                        .reply_markup(keyboard)
-                        .await;
+        if let Some((tape_name, trace_id)) = coords {
+            // Read trace from tape
+            if let Some(trace) = read_trace_from_tape(tape, &tape_name, &trace_id).await {
+                let (text, button_text, next_action) = match action {
+                    "show" => (
+                        render_trace_detail(&trace),
+                        "\u{1f4ca} \u{6536}\u{8d77}",
+                        format!("trace:hide:{trace_key}"),
+                    ),
+                    _ => (
+                        render_compact_summary(&trace),
+                        "\u{1f4ca} \u{8be6}\u{60c5}",
+                        format!("trace:show:{trace_key}"),
+                    ),
+                };
+
+                // Parse chat_id and msg_id from trace_key
+                if let Some((chat_id_str, msg_id_str)) = trace_key.split_once(':') {
+                    if let (Ok(cid), Ok(mid)) =
+                        (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
+                    {
+                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                            InlineKeyboardButton::callback(button_text, next_action),
+                        ]]);
+                        let _ = bot
+                            .edit_message_text(ChatId(cid), MessageId(mid), &text)
+                            .parse_mode(ParseMode::Html)
+                            .reply_markup(keyboard)
+                            .await;
+                    }
                 }
             }
         }
 
         let _ = bot.answer_callback_query(callback.id.clone()).await;
     }
+}
+
+/// Read an execution trace from tape by scanning for a matching trace_id.
+async fn read_trace_from_tape(
+    tape: &rara_kernel::memory::TapeService,
+    tape_name: &str,
+    trace_id: &str,
+) -> Option<ExecutionTrace> {
+    let entries = tape.entries(tape_name).await.ok()?;
+
+    // Scan backwards (most recent first) for the matching trace event.
+    for entry in entries.iter().rev() {
+        if entry.kind == rara_kernel::memory::TapEntryKind::Event {
+            if let Some(name) = entry.payload.get("name").and_then(|v| v.as_str()) {
+                if name == "turn.execution_trace" {
+                    if let Some(data) = entry.payload.get("data") {
+                        if let Some(id) = data.get("trace_id").and_then(|v| v.as_str()) {
+                            if id == trace_id {
+                                let trace_data = data.get("data")?;
+                                return serde_json::from_value(trace_data.clone()).ok();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Listens for new approval requests and sends inline keyboard messages
@@ -1508,7 +1548,8 @@ async fn handle_update(
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
-    trace_store: &TraceStore,
+    trace_index: &TraceIndex,
+    tape: &rara_kernel::memory::TapeService,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1527,7 +1568,7 @@ async fn handle_update(
                 return;
             }
             if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, trace_store).await;
+                handle_trace_callback(bot, callback, data, trace_index, tape).await;
                 return;
             }
         }
@@ -1803,7 +1844,8 @@ async fn handle_update(
                     bot.clone(),
                     chat_id,
                     sid,
-                    Arc::clone(trace_store),
+                    Arc::clone(trace_index),
+                    tape.clone(),
                 );
             }
         }
@@ -1885,7 +1927,8 @@ fn spawn_stream_forwarder(
     bot: teloxide::Bot,
     chat_id: i64,
     session_id: rara_kernel::session::SessionKey,
-    trace_store: TraceStore,
+    trace_index: TraceIndex,
+    tape: rara_kernel::memory::TapeService,
 ) {
     use rara_kernel::io::StreamEvent;
 
@@ -2247,13 +2290,12 @@ fn spawn_stream_forwarder(
                                     thinking_preview: std::mem::take(&mut progress.reasoning_preview),
                                     plan_steps,
                                     tools:            progress.tools.iter().map(|t| ToolTraceEntry {
-                                        name:     t.name.clone(),
-                                        duration: t.duration,
-                                        success:  t.success,
-                                        summary:  t.summary.clone(),
-                                        error:    t.error.clone(),
+                                        name:        t.name.clone(),
+                                        duration_ms: t.duration.map(|d| d.as_millis() as u64),
+                                        success:     t.success,
+                                        summary:     t.summary.clone(),
+                                        error:       t.error.clone(),
                                     }).collect(),
-                                    created_at:       Instant::now(),
                                 };
 
                                 let compact = render_compact_summary(&trace);
@@ -2271,11 +2313,24 @@ fn spawn_stream_forwarder(
                                     .reply_markup(keyboard)
                                     .await;
 
-                                // TTL cleanup: remove traces older than 1 hour
-                                trace_store.retain(|_, v| {
-                                    v.created_at.elapsed() < std::time::Duration::from_secs(3600)
-                                });
-                                trace_store.insert(trace_key, trace);
+                                // Persist trace to tape
+                                let trace_id = format!("trace_{}", chrono::Utc::now().timestamp_millis());
+                                let tape_name = session_id.to_string();
+                                let trace_json = serde_json::to_value(&trace).unwrap_or_default();
+
+                                if let Err(e) = tape.append_event(
+                                    &tape_name,
+                                    "turn.execution_trace",
+                                    serde_json::json!({
+                                        "trace_id": trace_id,
+                                        "data": trace_json,
+                                    }),
+                                ).await {
+                                    warn!(error = %e, "failed to persist execution trace to tape");
+                                }
+
+                                // Store lightweight index for callback lookup
+                                trace_index.insert(trace_key, (tape_name, trace_id));
                             }
 
                             break;

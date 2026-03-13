@@ -84,6 +84,8 @@ pub struct KernelHandle {
     global_semaphore: Arc<Semaphore>,
     /// When the kernel was created (for uptime calculation).
     started_at:       Timestamp,
+    /// Tape service for persistent session traces.
+    tape:             crate::memory::TapeService,
 }
 
 impl KernelHandle {
@@ -101,6 +103,7 @@ impl KernelHandle {
         tool_registry: ToolRegistryRef,
         global_semaphore: Arc<Semaphore>,
         started_at: Timestamp,
+        tape: crate::memory::TapeService,
     ) -> Self {
         Self {
             event_queue,
@@ -114,6 +117,7 @@ impl KernelHandle {
             tool_registry,
             global_semaphore,
             started_at,
+            tape,
         }
     }
 
@@ -296,6 +300,9 @@ impl KernelHandle {
 
     /// Access the unified event queue.
     pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
+
+    /// Access the tape service for persistent read/write.
+    pub fn tape(&self) -> &crate::memory::TapeService { &self.tape }
 
     // -- Query methods ------------------------------------------------------
 
