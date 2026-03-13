@@ -20,7 +20,7 @@ base64.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 flate2 = "1"
-notify-debouncer-full = "0.5"
+notify-debouncer-full = "0.7"
 percent-encoding = "2"
 rara-paths.workspace = true
 regex = "1"
@@ -39,5 +39,5 @@ tracing.workspace = true
 zip = "8.2.0"
 
 [dev-dependencies]
-rstest = "0.25"
+rstest = "0.26"
 tempfile = { workspace = true }
