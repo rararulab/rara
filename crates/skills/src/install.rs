@@ -289,7 +289,7 @@ fn sanitize_archive_path(path: &Path) -> Result<Option<PathBuf>> {
 }
 
 /// Recursively scan a cloned repo for SKILL.md files.
-/// Returns (Vec<SkillMetadata>, Vec<SkillState>) -- metadata for callers and
+/// Returns `(Vec<SkillMetadata>, Vec<SkillState>)` -- metadata for callers and
 /// state entries for the manifest.
 async fn scan_repo_skills(
     repo_dir: &Path,
