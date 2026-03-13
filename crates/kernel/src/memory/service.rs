@@ -808,7 +808,6 @@ impl TapeService {
             })
             .collect())
     }
-
 }
 
 fn build_session_branch(
@@ -824,12 +823,11 @@ fn build_session_branch(
         });
     }
 
-    let session_entry =
-        sessions_by_key
-            .get(session_key)
-            .ok_or_else(|| super::TapError::State {
-                message: format!("session not found while building tree: {session_key}"),
-            })?;
+    let session_entry = sessions_by_key
+        .get(session_key)
+        .ok_or_else(|| super::TapError::State {
+            message: format!("session not found while building tree: {session_key}"),
+        })?;
 
     let mut forks = Vec::new();
     if let Some(children) = fork_index.get(session_key) {

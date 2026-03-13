@@ -250,57 +250,57 @@ pub enum Signal {
 pub struct Session {
     // -- Identity & metadata --
     /// The session's conversation storage key.
-    pub session_key:          SessionKey,
+    pub session_key: SessionKey,
     /// Parent session (None for root-level sessions).
-    pub parent_id:            Option<SessionKey>,
+    pub parent_id: Option<SessionKey>,
     /// The agent definition driving this session.
-    pub manifest:             AgentManifest,
+    pub manifest: AgentManifest,
     /// The identity under which this session runs.
-    pub principal:            Principal,
+    pub principal: Principal,
     /// Per-session environment.
-    pub env:                  AgentEnv,
+    pub env: AgentEnv,
     /// Current lifecycle state.
-    pub state:                SessionState,
+    pub state: SessionState,
     /// When this session was created.
-    pub created_at:           Timestamp,
+    pub created_at: Timestamp,
     /// When this session was last active (for idle timeout).
-    pub finished_at:          Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
     /// Result of last execution (set on turn completion).
-    pub result:               Option<AgentRunLoopResult>,
+    pub result: Option<AgentRunLoopResult>,
     /// Channel sender for streaming [`AgentEvent`]s (milestones + final result)
     /// to the parent. Only set for child agents spawned via `spawn_child`.
-    pub result_tx:            Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
+    pub result_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     /// Files created or modified by this agent (for resource tracking).
-    pub created_files:        Vec<PathBuf>,
+    pub created_files: Vec<PathBuf>,
     /// Per-session runtime metrics (atomic counters for lock-free updates).
-    pub metrics:              Arc<RuntimeMetrics>,
+    pub metrics: Arc<RuntimeMetrics>,
     /// Detailed turn traces for observability (most recent 50 turns).
-    pub turn_traces:          Vec<TurnTrace>,
+    pub turn_traces: Vec<TurnTrace>,
     // -- Cancellation --
     /// Per-turn cancellation token.
-    pub turn_cancel:          CancellationToken,
+    pub turn_cancel: CancellationToken,
     /// Session-level cancellation token.
-    pub process_cancel:       CancellationToken,
+    pub process_cancel: CancellationToken,
     /// Execution mode override for this session. When `Some`, this takes
     /// priority over the agent manifest's `default_execution_mode`.
     /// Set via the `/msg_version` kernel command.
-    pub execution_mode:       Option<ExecutionMode>,
+    pub execution_mode: Option<ExecutionMode>,
     /// Whether this session is paused.
-    pub paused:               bool,
+    pub paused: bool,
     /// Buffered events received while the session was paused or busy.
-    pub pause_buffer:         Vec<KernelEventEnvelope>,
+    pub pause_buffer: Vec<KernelEventEnvelope>,
     /// The channel endpoint that originated this session (e.g. a specific
     /// Telegram chat). Used as a fallback for reply routing when the
     /// triggering message is synthetic (no platform origin).
-    pub origin_endpoint:      Option<Endpoint>,
+    pub origin_endpoint: Option<Endpoint>,
     /// Per-session semaphore limiting concurrent child sessions.
-    pub child_semaphore:      Arc<Semaphore>,
+    pub child_semaphore: Arc<Semaphore>,
     /// Permit from the *parent*'s `child_semaphore`.
     /// Held for the lifetime of this child session; dropping it releases the
     /// slot so the parent can spawn another child.
     pub(crate) _parent_child_permit: Option<OwnedSemaphorePermit>,
     /// Global semaphore permit.
-    pub(crate) _global_permit:       OwnedSemaphorePermit,
+    pub(crate) _global_permit: OwnedSemaphorePermit,
 }
 
 /// Per-process runtime metrics using atomic counters for lock-free updates.

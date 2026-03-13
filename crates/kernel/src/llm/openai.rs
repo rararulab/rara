@@ -797,11 +797,11 @@ struct RawFunctionChunk {
 #[derive(Debug, Deserialize)]
 struct RawUsage {
     #[serde(rename = "prompt_tokens")]
-    input:      Option<u32>,
+    input:  Option<u32>,
     #[serde(rename = "completion_tokens")]
-    output:     Option<u32>,
+    output: Option<u32>,
     #[serde(rename = "total_tokens")]
-    total:      Option<u32>,
+    total:  Option<u32>,
 }
 
 // --- Non-streaming response types ---

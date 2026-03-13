@@ -306,7 +306,6 @@ async fn real_model_soak_test_survives_long_tape_pressure() {
     let mut read_file_calls = 0usize;
     let mut saw_anchor = false;
     let mut saw_search = false;
-    
 
     while turn_index < MIN_REQUIRED_TURNS || Instant::now() < deadline {
         if turn_index == 0 {
