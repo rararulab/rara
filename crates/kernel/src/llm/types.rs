@@ -261,6 +261,7 @@ pub struct CompletionRequest {
     pub thinking:            Option<ThinkingConfig>,
     pub tool_choice:         ToolChoice,
     pub parallel_tool_calls: bool,
+    pub frequency_penalty:   Option<f32>,
 }
 
 // ---------------------------------------------------------------------------

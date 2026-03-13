@@ -183,6 +183,7 @@ Output ONLY the JSON array, no markdown fences or explanation."#;
         thinking:            None,
         tool_choice:         ToolChoice::None,
         parallel_tool_calls: false,
+        frequency_penalty:   None,
     };
 
     let response = driver
@@ -254,6 +255,7 @@ async fn update_category_files(
             thinking:            None,
             tool_choice:         ToolChoice::None,
             parallel_tool_calls: false,
+            frequency_penalty:   None,
         };
 
         let response = driver

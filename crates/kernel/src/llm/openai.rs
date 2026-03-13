@@ -548,6 +548,8 @@ struct ChatRequest<'a> {
     thinking:            Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options:      Option<WireStreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty:   Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -685,6 +687,7 @@ impl<'a> ChatRequest<'a> {
             parallel_tool_calls,
             thinking,
             stream_options,
+            frequency_penalty: request.frequency_penalty,
         }
     }
 }

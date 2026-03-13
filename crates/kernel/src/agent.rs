@@ -903,6 +903,11 @@ pub(crate) async fn run_agent_loop(
                 llm::ToolChoice::Auto
             },
             parallel_tool_calls: !tool_defs.is_empty() && capabilities.supports_parallel_tool_calls,
+            // Prevent LLM repetition loops — small models (e.g. step-3.5-flash) are
+            // especially prone to generating the same paragraph 3-4 times without
+            // a penalty. 0.3 is a conservative value that curbs repetition without
+            // degrading output quality. See #317.
+            frequency_penalty:   Some(0.3),
         };
 
         // Start streaming via LlmDriver

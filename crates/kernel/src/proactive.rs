@@ -129,6 +129,7 @@ pub async fn should_reply(
         thinking:            None,
         tool_choice:         ToolChoice::None,
         parallel_tool_calls: false,
+        frequency_penalty:   None,
     };
 
     let response = match driver.complete(request).await {
