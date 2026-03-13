@@ -114,13 +114,16 @@ const STREAM_SPLIT_THRESHOLD: usize = 3800;
 /// can construct a properly configured `Bot` without duplicating the proxy /
 /// timeout logic.
 ///
-/// The proxy URL is passed to [`reqwest::Proxy::all`] (supports `http://`,
+/// The proxy URL is passed to [`reqwest012::Proxy::all`] (supports `http://`,
 /// `https://`, `socks5://`).
+///
+/// Note: `reqwest012` is reqwest 0.12, kept because teloxide 0.17 is pinned
+/// to that major version and its `ClientBuilder` / `Proxy` types must match.
 pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyhow::Error> {
     match proxy {
         Some(url) => {
             let client = teloxide::net::default_reqwest_settings()
-                .proxy(reqwest::Proxy::all(url)?)
+                .proxy(reqwest012::Proxy::all(url)?)
                 .timeout(std::time::Duration::from_secs(
                     POLL_TIMEOUT_SECS as u64 + 30,
                 ))
@@ -537,7 +540,7 @@ impl TelegramAdapter {
     /// Build a [`teloxide::Bot`] with an optional proxy, then wrap it in an
     /// adapter.
     ///
-    /// The proxy URL is passed to [`reqwest::Proxy::all`] (supports
+    /// The proxy URL is passed to [`reqwest012::Proxy::all`] (supports
     /// `http://`, `https://`, `socks5://`).
     pub fn with_proxy(
         token: &str,
@@ -2305,7 +2308,7 @@ fn convert_inline_button(button: &InlineButton) -> InlineKeyboardButton {
     if let Some(ref data) = button.callback_data {
         InlineKeyboardButton::callback(&button.text, data)
     } else if let Some(ref url) = button.url {
-        match url.parse::<reqwest::Url>() {
+        match url.parse::<url::Url>() {
             Ok(parsed) => InlineKeyboardButton::url(&button.text, parsed),
             Err(_) => {
                 // Fallback to callback with text as data if URL is invalid.
