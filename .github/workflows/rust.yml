@@ -26,51 +26,20 @@ permissions:
   contents: read
 
 jobs:
-  rust-version:
-    name: Get Rust Version
-    runs-on: self-hosted
-    outputs:
-      version: ${{ steps.rust-version.outputs.version }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          persist-credentials: false
-
-      - name: Get Rust version from toolchain
-        id: rust-version
-        run: |
-          RUST_VERSION=$(grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2)
-          echo "version=$RUST_VERSION" >> $GITHUB_OUTPUT
-          echo "Rust version: $RUST_VERSION"
-
   clippy:
     name: Clippy
     runs-on: self-hosted
-    needs: rust-version
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ needs.rust-version.outputs.version }}
           components: clippy
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: '25.x'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
-        with:
-          shared-key: "rust-clippy"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: rust-clippy
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
@@ -78,39 +47,48 @@ jobs:
   docs:
     name: Documentation
     runs-on: self-hosted
-    needs: rust-version
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: nightly
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: '25.x'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
-        with:
-          shared-key: "rust-docs"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: rust-docs
 
       - name: Generate documentation
         run: cargo doc --workspace --all-features --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
+  test:
+    name: Test
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: rust-test
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cd06cfcb315894ee98ffbc4582bcafbcbc260bdb # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+
   coverage:
     name: Coverage
     runs-on: self-hosted
-    needs: rust-version
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
@@ -118,27 +96,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ needs.rust-version.outputs.version }}
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: '25.x'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          shared-key: rust-coverage
 
       - name: Install cargo-tarpaulin
         uses: taiki-e/install-action@cd06cfcb315894ee98ffbc4582bcafbcbc260bdb # v2
         with:
           tool: cargo-tarpaulin
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
-        with:
-          shared-key: "rust-coverage"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Generate coverage report
         run: |
@@ -163,17 +129,22 @@ jobs:
   rust-success:
     name: Rust Success
     runs-on: self-hosted
-    needs: [clippy, docs]
+    needs: [clippy, docs, test]
     if: always()
     steps:
       - name: Check all Rust jobs status
         env:
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
           if [[ "$CLIPPY_RESULT" != "success" || \
-                "$DOCS_RESULT" != "success" ]]; then
+                "$DOCS_RESULT" != "success" || \
+                "$TEST_RESULT" != "success" ]]; then
             echo "One or more Rust jobs failed"
+            echo "  clippy: $CLIPPY_RESULT"
+            echo "  docs:   $DOCS_RESULT"
+            echo "  test:   $TEST_RESULT"
             exit 1
           fi
           echo "All Rust jobs passed successfully"
