@@ -20,15 +20,34 @@ fn main() {
             .expect("cargo built-in env value 'OUT_DIR' must be set during compilation"),
     );
 
-    // const EQ_ATTR: &str = "#[derive(serde::Serialize, serde::Deserialize,  Eq)]";
+    let mut includes: Vec<PathBuf> = vec!["proto".into()];
+
+    // Add system protobuf include path for well-known types (e.g.
+    // google/protobuf/timestamp.proto)
+    if let Some(path) = std::env::var_os("PROTOC_INCLUDE") {
+        includes.push(path.into());
+    } else {
+        for candidate in ["/usr/include", "/usr/local/include"] {
+            let p = PathBuf::from(candidate);
+            if p.join("google/protobuf/timestamp.proto").exists() {
+                includes.push(p);
+                break;
+            }
+        }
+    }
 
     tonic_prost_build::configure()
         .file_descriptor_set_path(out_dir.join("rara_grpc_desc.bin"))
-        // .type_attribute("job.v1.hello.Message", EQ_ATTR)
-        .compile_protos(&[
-            "proto/hello/v1/hello.proto",
-            "proto/telegrambot/v1/command.proto",
-            "proto/execution/v1/worker.proto",
-        ], &["proto"])
+        .compile_protos(
+            &[
+                "proto/hello/v1/hello.proto",
+                "proto/telegrambot/v1/command.proto",
+                "proto/execution/v1/worker.proto",
+            ],
+            &includes
+                .iter()
+                .map(|p| p.to_str().unwrap())
+                .collect::<Vec<_>>(),
+        )
         .expect("compile proto");
 }
