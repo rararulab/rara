@@ -20,11 +20,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use oauth2::{
-    AccessToken, EmptyExtraTokenFields, RefreshToken, Scope, TokenResponse, basic::BasicTokenType,
-};
+use oauth2::{AccessToken, RefreshToken, Scope, TokenResponse, basic::BasicTokenType};
 use rara_keyring_store::{KeyringStore, KeyringStoreRef};
-use rmcp::transport::auth::{AuthorizationManager, OAuthTokenResponse};
+use rmcp::transport::auth::{AuthorizationManager, OAuthTokenResponse, VendorExtraTokenFields};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -557,7 +555,7 @@ impl From<FileTokenEntry> for StoredOAuthTokens {
         let mut response = OAuthTokenResponse::new(
             AccessToken::new(entry.access_token),
             BasicTokenType::Bearer,
-            EmptyExtraTokenFields {},
+            VendorExtraTokenFields::default(),
         );
 
         if let Some(refresh) = entry.refresh_token {

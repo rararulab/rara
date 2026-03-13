@@ -64,10 +64,7 @@ use futures::{
     future::{BoxFuture, Shared},
 };
 use rara_keyring_store::KeyringStoreRef;
-use rmcp::model::{
-    ClientCapabilities, ElicitationCapability, FormElicitationCapability, Implementation,
-    InitializeRequestParams, ProtocolVersion, Tool,
-};
+use rmcp::model::{ClientCapabilities, Implementation, InitializeRequestParams, ProtocolVersion, Tool};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -446,33 +443,17 @@ impl ManagedClient {
     ) -> Result<Self, StartupOutcomeError> {
         // Declare our client capabilities per the MCP specification.
         // https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
-        let params = InitializeRequestParams {
-            meta:             None,
-            capabilities:     ClientCapabilities {
-                experimental: None,
-                extensions:   None,
-                roots:        None,
-                sampling:     None,
-                // Elicitation: server can ask the user for input via forms.
-                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation
-                elicitation:  Some(ElicitationCapability {
-                    form: Some(FormElicitationCapability {
-                        schema_validation: None,
-                    }),
-                    url:  None,
-                }),
-                tasks:        None,
-            },
-            client_info:      Implementation {
-                name:        "rara-mcp-client".to_owned(),
-                version:     env!("CARGO_PKG_VERSION").to_owned(),
-                title:       Some("rara".into()),
-                description: None,
-                icons:       None,
-                website_url: None,
-            },
-            protocol_version: ProtocolVersion::LATEST,
-        };
+        // Elicitation: server can ask the user for input via forms.
+        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation
+        let capabilities = ClientCapabilities::builder()
+            .enable_elicitation()
+            .build();
+
+        let client_info = Implementation::new("rara-mcp-client", env!("CARGO_PKG_VERSION"))
+            .with_title("rara");
+
+        let params = InitializeRequestParams::new(capabilities, client_info)
+            .with_protocol_version(ProtocolVersion::LATEST);
 
         // Build the elicitation callback that bridges server-initiated
         // elicitation requests back to the UI via ElicitationRequestManager.
