@@ -14,6 +14,45 @@
 
 //! Shared helpers for rendering tool-call progress across adapters.
 
+/// Map raw tool names to Chinese activity phrases for user-facing progress.
+///
+/// Used by the Telegram adapter to show semantic status instead of raw tool names.
+pub fn tool_activity_label(raw: &str) -> &str {
+    match raw {
+        "shell_execute" | "bash" => "执行命令",
+        "web_search" => "搜索网页",
+        "web_fetch" | "http-fetch" => "获取网页",
+        "read-file" => "读取文件",
+        "write-file" => "写入文件",
+        "edit-file" => "编辑文件",
+        "find-files" | "list-directory" => "查找文件",
+        "grep" => "搜索内容",
+        "screenshot" => "截取屏幕",
+        "send-image" => "发送图片",
+        "send-email" => "发送邮件",
+        "memory_search" => "搜索记忆",
+        "memory_write" => "写入记忆",
+        "tape-handoff" => "交接任务",
+        "tape-info" => "查看会话",
+        "user-note" | "write-user-note" => "记录笔记",
+        "distill-user-notes" => "整理笔记",
+        "settings" => "调整设置",
+        "composio_list" | "composio_execute" | "composio_connect" | "composio_accounts" => "执行集成",
+        "list-skills" => "查看技能",
+        "create-skill" => "创建技能",
+        "delete-skill" => "删除技能",
+        "install-mcp-server" => "安装 MCP",
+        "list-mcp-servers" => "检查 MCP",
+        "remove-mcp-server" => "移除 MCP",
+        "dispatch-rara" => "分派任务",
+        "list-sessions" => "查看会话列表",
+        "read-tape" => "读取会话记录",
+        "update-soul-state" => "更新状态",
+        "evolve-soul" => "自我进化",
+        _ => "处理中",
+    }
+}
+
 /// Map raw tool names to shorter, human-friendly display names.
 pub fn tool_display_name(raw: &str) -> &str {
     match raw {
@@ -194,6 +233,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn activity_label_mapping() {
+        assert_eq!(tool_activity_label("shell_execute"), "执行命令");
+        assert_eq!(tool_activity_label("bash"), "执行命令");
+        assert_eq!(tool_activity_label("web_search"), "搜索网页");
+        assert_eq!(tool_activity_label("list-mcp-servers"), "检查 MCP");
+        assert_eq!(tool_activity_label("remove-mcp-server"), "移除 MCP");
+        assert_eq!(tool_activity_label("unknown_tool"), "处理中");
+    }
 
     #[test]
     fn display_name_mapping() {
