@@ -1031,11 +1031,12 @@ pub(crate) async fn run_agent_loop(
                     // input_tokens = latest iteration's prompt_tokens (current context size);
                     // output_tokens = sum of all iterations' completion_tokens.
                     if let Some(ref u) = last_usage {
-                        cumulative_output_tokens = cumulative_output_tokens.saturating_add(u.completion_tokens);
+                        cumulative_output_tokens =
+                            cumulative_output_tokens.saturating_add(u.completion_tokens);
                         stream_handle.emit(StreamEvent::UsageUpdate {
-                            input_tokens: u.prompt_tokens,
+                            input_tokens:  u.prompt_tokens,
                             output_tokens: cumulative_output_tokens,
-                            thinking_ms: cumulative_thinking_ms,
+                            thinking_ms:   cumulative_thinking_ms,
                         });
                     }
                     break;

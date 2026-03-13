@@ -159,41 +159,43 @@ struct ToolProgress {
 /// - `output_tokens` = cumulative completion tokens across all iterations
 /// - `thinking_ms` = cumulative extended-thinking duration
 struct ProgressMessage {
-    message_id:         Option<MessageId>,
-    tools:              Vec<ToolProgress>,
-    last_edit:          Instant,
-    turn_started:       Instant,
-    input_tokens:       u32,
-    output_tokens:      u32,
-    thinking_ms:        u64,
+    message_id:        Option<MessageId>,
+    tools:             Vec<ToolProgress>,
+    last_edit:         Instant,
+    turn_started:      Instant,
+    input_tokens:      u32,
+    output_tokens:     u32,
+    thinking_ms:       u64,
     /// Accumulated reasoning text for trace (truncated to ~500 chars).
     /// Collected from `StreamEvent::ReasoningDelta`; shown in expanded trace.
-    reasoning_preview:  String,
-    /// Model name, populated from `StreamEvent::TurnMetrics` (arrives before stream close).
-    model:              String,
+    reasoning_preview: String,
+    /// Model name, populated from `StreamEvent::TurnMetrics` (arrives before
+    /// stream close).
+    model:             String,
     /// Iteration count, populated from `StreamEvent::TurnMetrics`.
-    iterations:         usize,
-    /// Plan steps must be saved here because `PlanCompleted` sets `plan = None`.
-    /// If we don't save them before that, the trace loses all plan information.
-    saved_plan_steps:   Vec<String>,
+    iterations:        usize,
+    /// Plan steps must be saved here because `PlanCompleted` sets `plan =
+    /// None`. If we don't save them before that, the trace loses all plan
+    /// information.
+    saved_plan_steps:  Vec<String>,
 }
 
 impl ProgressMessage {
     fn new() -> Self {
         Self {
-            message_id:         None,
-            tools:              Vec::new(),
-            last_edit:          Instant::now()
+            message_id:        None,
+            tools:             Vec::new(),
+            last_edit:         Instant::now()
                 .checked_sub(MIN_EDIT_INTERVAL)
                 .unwrap_or_else(Instant::now),
-            turn_started:       Instant::now(),
-            input_tokens:       0,
-            output_tokens:      0,
-            thinking_ms:        0,
-            reasoning_preview:  String::new(),
-            model:              String::new(),
-            iterations:         0,
-            saved_plan_steps:   Vec::new(),
+            turn_started:      Instant::now(),
+            input_tokens:      0,
+            output_tokens:     0,
+            thinking_ms:       0,
+            reasoning_preview: String::new(),
+            model:             String::new(),
+            iterations:        0,
+            saved_plan_steps:  Vec::new(),
         }
     }
 }
@@ -224,7 +226,8 @@ struct ExecutionTrace {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ToolTraceEntry {
     name:        String,
-    /// Duration in milliseconds (serializable replacement for `std::time::Duration`).
+    /// Duration in milliseconds (serializable replacement for
+    /// `std::time::Duration`).
     duration_ms: Option<u64>,
     success:     bool,
     summary:     String,
@@ -418,7 +421,11 @@ fn format_phase_line(phase: &Phase) -> String {
 ///
 /// Consecutive tools with the same activity label are aggregated into a single
 /// line to avoid noisy repetition (e.g. 3x "检查 MCP" becomes one line).
-fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration, progress: &ProgressMessage) -> String {
+fn render_progress(
+    tools: &[ToolProgress],
+    turn_elapsed: std::time::Duration,
+    progress: &ProgressMessage,
+) -> String {
     if tools.is_empty() {
         return String::new();
     }
@@ -566,7 +573,12 @@ fn render_trace_detail(trace: &ExecutionTrace) -> String {
             let icon = if tool.success { "\u{2713}" } else { "\u{2717}" };
             let dur = tool
                 .duration_ms
-                .map(|ms| format!(" ({})", format_duration_compact(std::time::Duration::from_millis(ms))))
+                .map(|ms| {
+                    format!(
+                        " ({})",
+                        format_duration_compact(std::time::Duration::from_millis(ms))
+                    )
+                })
                 .unwrap_or_default();
             let summary = if tool.summary.is_empty() {
                 String::new()
@@ -1385,7 +1397,8 @@ async fn handle_guard_callback(
 ///
 /// Callback data format: `"trace:{action}:{chat_id}:{msg_id}"`
 /// - `action` = "show" → expand to full trace, button becomes "收起"
-/// - `action` = "hide" → collapse back to compact summary, button becomes "详情"
+/// - `action` = "hide" → collapse back to compact summary, button becomes
+///   "详情"
 ///
 /// The trace is read from tape via [`TraceIndex`] coordinates. If the index
 /// entry is missing (process restarted) or the tape entry is gone, the button
@@ -1427,9 +1440,11 @@ async fn handle_trace_callback(
                     if let (Ok(cid), Ok(mid)) =
                         (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
                     {
-                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                            InlineKeyboardButton::callback(button_text, next_action),
-                        ]]);
+                        let keyboard =
+                            InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+                                button_text,
+                                next_action,
+                            )]]);
                         let _ = bot
                             .edit_message_text(ChatId(cid), MessageId(mid), &text)
                             .parse_mode(ParseMode::Html)
