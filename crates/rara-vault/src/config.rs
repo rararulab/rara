@@ -36,7 +36,6 @@ pub struct VaultConfig {
     pub address: String,
 
     /// KV v2 mount path, e.g. `"secret/rara"`.
-    #[serde(default = "default_mount_path")]
     pub mount_path: String,
 
     /// Authentication configuration.
@@ -59,7 +58,6 @@ pub struct VaultConfig {
     pub timeout: Duration,
 
     /// Whether to fall back to local config when Vault is unreachable.
-    #[serde(default = "default_fallback")]
     pub fallback_to_local: bool,
 }
 
@@ -77,13 +75,9 @@ pub struct VaultAuthConfig {
     pub secret_id_file: PathBuf,
 }
 
-fn default_mount_path() -> String { "secret/rara".into() }
-
 fn default_watch_interval() -> Duration { Duration::from_secs(30) }
 
 fn default_timeout() -> Duration { Duration::from_secs(5) }
-
-fn default_fallback() -> bool { true }
 
 fn default_auth_method() -> String { "approle".into() }
 
@@ -123,15 +117,17 @@ mod tests {
     fn deserialize_with_defaults() {
         let yaml = r#"
 address: "http://localhost:8200"
+mount_path: "secret/data"
+fallback_to_local: false
 auth:
   role_id_file: /tmp/role-id
   secret_id_file: /tmp/secret-id
 "#;
         let config: VaultConfig = serde_yaml::from_str(yaml).expect("deserialize");
-        assert_eq!(config.mount_path, "secret/rara");
+        assert_eq!(config.mount_path, "secret/data");
         assert_eq!(config.watch_interval, Duration::from_secs(30));
         assert_eq!(config.timeout, Duration::from_secs(5));
-        assert!(config.fallback_to_local);
+        assert!(!config.fallback_to_local);
         assert_eq!(config.auth.method, "approle");
     }
 }

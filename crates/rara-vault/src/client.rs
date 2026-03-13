@@ -545,9 +545,9 @@ pub(crate) fn flatten_value(
         serde_json::Value::Array(arr) => {
             let joined: Vec<String> = arr
                 .iter()
-                .filter_map(|v| match v {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    other => Some(other.to_string()),
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 })
                 .collect();
             out.push((prefix.to_string(), joined.join(",")));

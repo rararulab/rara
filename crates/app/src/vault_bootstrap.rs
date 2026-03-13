@@ -16,40 +16,27 @@
 
 use std::collections::HashMap;
 
-use rara_vault::{VaultClient, VaultConfig};
-use tracing::{error, info, warn};
+use rara_vault::VaultClient;
+use tracing::info;
 
 use crate::AppConfig;
 
-/// Attempt to pull config from Vault and merge dynamic sections into AppConfig.
-pub async fn pull_and_merge(config: &mut AppConfig) -> Result<bool, rara_vault::VaultError> {
-    let Some(vault_config) = config.vault.clone() else {
+/// Pull config from Vault via the already-authenticated client and merge
+/// dynamic sections into AppConfig.
+///
+/// Returns `Ok(true)` if values were merged, `Ok(false)` if Vault returned
+/// no data.
+pub async fn pull_and_merge(
+    config: &mut AppConfig,
+    client: &VaultClient,
+) -> Result<bool, rara_vault::VaultError> {
+    let pairs = client.pull_all().await?;
+    if pairs.is_empty() {
         return Ok(false);
-    };
-
-    match try_pull(&vault_config).await {
-        Ok(pairs) => {
-            merge_vault_pairs_into_config(config, &pairs);
-            info!(count = pairs.len(), "vault config pulled and merged");
-            Ok(true)
-        }
-        Err(error) if vault_config.fallback_to_local => {
-            warn!(error = %error, "vault unreachable, falling back to local config");
-            Ok(false)
-        }
-        Err(error) => {
-            error!(error = %error, "vault unreachable and fallback_to_local is false");
-            Err(error)
-        }
     }
-}
-
-async fn try_pull(
-    vault_config: &VaultConfig,
-) -> Result<Vec<(String, String)>, rara_vault::VaultError> {
-    let client = VaultClient::new(vault_config.clone())?;
-    client.login().await?;
-    client.pull_all().await
+    merge_vault_pairs_into_config(config, &pairs);
+    info!(count = pairs.len(), "vault config pulled and merged");
+    Ok(true)
 }
 
 fn merge_vault_pairs_into_config(config: &mut AppConfig, pairs: &[(String, String)]) {
@@ -157,23 +144,4 @@ llm:
         );
     }
 
-    #[tokio::test]
-    async fn pull_and_merge_returns_false_when_no_vault_configured() {
-        let yaml = r#"
-users:
-  - name: test
-    role: root
-    platforms: []
-http:
-  bind_address: "127.0.0.1:25555"
-grpc:
-  bind_address: "127.0.0.1:50051"
-  server_address: "127.0.0.1:50051"
-mita:
-  heartbeat_interval: "30m"
-"#;
-        let mut config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let result = pull_and_merge(&mut config).await;
-        assert!(matches!(result, Ok(false)));
-    }
 }

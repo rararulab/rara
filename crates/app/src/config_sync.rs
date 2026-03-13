@@ -28,7 +28,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -44,11 +44,12 @@ const DEBOUNCE_MS: u64 = 1500;
 
 /// Bidirectional sync between config.yaml and the settings KV store.
 pub struct ConfigFileSync {
-    settings:          Arc<dyn SettingsProvider>,
-    app_config:        Arc<RwLock<AppConfig>>,
-    config_path:       PathBuf,
-    last_written_hash: Arc<AtomicU64>,
-    vault_client:      Option<Arc<VaultClient>>,
+    settings:            Arc<dyn SettingsProvider>,
+    app_config:          Arc<RwLock<AppConfig>>,
+    config_path:         PathBuf,
+    last_written_hash:   Arc<AtomicU64>,
+    vault_client:        Option<Arc<VaultClient>>,
+    last_vault_push_ms:  Arc<AtomicU64>,
 }
 
 fn content_hash(content: &str) -> u64 {
@@ -64,6 +65,7 @@ impl ConfigFileSync {
         app_config: AppConfig,
         config_path: PathBuf,
         vault_client: Option<Arc<VaultClient>>,
+        last_vault_push_ms: Arc<AtomicU64>,
     ) -> anyhow::Result<Self> {
         let sync = Self {
             settings,
@@ -71,6 +73,7 @@ impl ConfigFileSync {
             config_path,
             last_written_hash: Arc::new(AtomicU64::new(0)),
             vault_client,
+            last_vault_push_ms,
         };
         let initial_config = sync.app_config.read().await.clone();
         sync.sync_from_app_config(&initial_config).await?;
@@ -128,6 +131,11 @@ impl ConfigFileSync {
             if let Err(e) = client.push_changes(vault_pairs).await {
                 warn!(error = %e, "failed to push settings to vault");
             } else {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                self.last_vault_push_ms.store(now, Ordering::Relaxed);
                 debug!("settings pushed to vault");
             }
         }
@@ -268,7 +276,10 @@ impl ConfigFileSync {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::AtomicU64,
+    };
 
     use super::ConfigFileSync;
     use crate::AppConfig;
@@ -380,9 +391,15 @@ composio:
         tokio::fs::write(&config_path, yaml).await.unwrap();
 
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let _sync = ConfigFileSync::new(settings_provider.clone(), config, config_path, None)
-            .await
-            .unwrap();
+        let _sync = ConfigFileSync::new(
+            settings_provider.clone(),
+            config,
+            config_path,
+            None,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .await
+        .unwrap();
 
         // Verify KV store was populated
         assert_eq!(
@@ -477,9 +494,15 @@ llm:
             },
         );
 
-        let _sync = ConfigFileSync::new(settings_provider.clone(), config, config_path, None)
-            .await
-            .unwrap();
+        let _sync = ConfigFileSync::new(
+            settings_provider.clone(),
+            config,
+            config_path,
+            None,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             settings_provider
@@ -546,10 +569,15 @@ llm:
         tokio::fs::write(&config_path, yaml).await.unwrap();
 
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let sync =
-            ConfigFileSync::new(settings_provider.clone(), config, config_path.clone(), None)
-                .await
-                .unwrap();
+        let sync = ConfigFileSync::new(
+            settings_provider.clone(),
+            config,
+            config_path.clone(),
+            None,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .await
+        .unwrap();
 
         sync.writeback_to_file().await.unwrap();
 

@@ -15,41 +15,41 @@
 //! Background task that polls Vault for config changes and syncs to settings
 //! KV.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Context;
 use rara_domain_shared::settings::SettingsProvider;
-use rara_vault::{VaultClient, VaultConfig};
+use rara_vault::VaultClient;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+/// Grace period after a config-sync push during which the watcher will
+/// update its version cache but skip applying changes to the settings
+/// store, preventing push → pull → push echo loops.
+const ECHO_GRACE_MS: u64 = 5_000;
+
 pub fn spawn_vault_watcher(
-    vault_config: VaultConfig,
+    client: Arc<VaultClient>,
+    interval: Duration,
     settings: Arc<dyn SettingsProvider>,
+    last_vault_push_ms: Arc<AtomicU64>,
     cancel: CancellationToken,
 ) {
     tokio::spawn(async move {
-        let interval = vault_config.watch_interval;
-        let client = match VaultClient::new(vault_config) {
-            Ok(client) => client,
-            Err(error) => {
-                warn!(error = %error, "vault watcher: failed to build client");
-                return;
-            }
-        };
-
         let mut last_versions = HashMap::new();
-        match client.login().await {
-            Ok(()) => match fetch_versions(&client).await {
-                Ok(versions) => {
-                    last_versions = versions;
-                }
-                Err(error) => {
-                    warn!(error = %error, "vault watcher: failed to read initial metadata");
-                }
-            },
+        match fetch_versions(&client).await {
+            Ok(versions) => {
+                last_versions = versions;
+            }
             Err(error) => {
-                warn!(error = %error, "vault watcher: initial login failed, will retry");
+                warn!(error = %error, "vault watcher: failed to read initial metadata");
             }
         }
 
@@ -63,7 +63,12 @@ pub fn spawn_vault_watcher(
                     break;
                 }
                 _ = ticker.tick() => {
-                    if let Err(error) = poll_and_sync(&client, &settings, &mut last_versions).await {
+                    if let Err(error) = poll_and_sync(
+                        &client,
+                        &settings,
+                        &mut last_versions,
+                        &last_vault_push_ms,
+                    ).await {
                         warn!(error = %error, "vault watcher: poll failed, will retry next interval");
                     }
                 }
@@ -96,12 +101,22 @@ async fn poll_and_sync(
     client: &VaultClient,
     settings: &Arc<dyn SettingsProvider>,
     last_versions: &mut HashMap<String, u64>,
+    last_vault_push_ms: &AtomicU64,
 ) -> anyhow::Result<()> {
     ensure_authenticated(client).await?;
 
     let current_versions = fetch_versions(client).await?;
     if !versions_changed(last_versions, &current_versions) {
         debug!("vault watcher: no metadata changes detected");
+        return Ok(());
+    }
+
+    // If config_sync recently pushed to Vault, the version bump is our
+    // own echo. Update the cache but skip applying to settings.
+    let push_ago = epoch_ms().saturating_sub(last_vault_push_ms.load(Ordering::Relaxed));
+    if push_ago < ECHO_GRACE_MS {
+        debug!("vault watcher: version change within echo grace window, skipping apply");
+        *last_versions = current_versions;
         return Ok(());
     }
 
@@ -123,6 +138,13 @@ async fn poll_and_sync(
 
     *last_versions = current_versions;
     Ok(())
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 async fn ensure_authenticated(client: &VaultClient) -> Result<(), rara_vault::VaultError> {
