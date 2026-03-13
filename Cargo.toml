@@ -290,10 +290,11 @@ allow-dirty = ["ci"]
 tap = "rararulab/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
-# Use appropriate runners for each target
+# Use self-hosted runners for each target
 [workspace.metadata.dist.github-custom-runners]
-aarch64-apple-darwin = "macos-latest"
-x86_64-unknown-linux-gnu = "ubuntu-latest"
+global = "self-hosted"
+aarch64-apple-darwin = "macos"
+x86_64-unknown-linux-gnu = "linux"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
