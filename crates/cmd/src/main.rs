@@ -189,6 +189,12 @@ impl GatewayArgs {
         let process_snapshot: rara_app::gateway::SnapshotHandle = Default::default();
         let alert_thresholds: rara_app::gateway::ThresholdsHandle = Default::default();
 
+        // Load persisted thresholds from gateway-state.yaml.
+        {
+            let state = rara_app::gateway::load_gateway_state();
+            *alert_thresholds.write().await = state.alert_thresholds;
+        }
+
         {
             let snapshot = process_snapshot.clone();
             let thresholds = alert_thresholds.clone();
