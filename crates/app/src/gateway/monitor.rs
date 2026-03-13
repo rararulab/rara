@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::sync::RwLock;
 
@@ -54,7 +54,7 @@ pub struct ProcessSnapshot {
 // ---------------------------------------------------------------------------
 
 /// Thresholds for resource alerts. `None` = alert disabled.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AlertThresholds {
     /// CPU usage percentage threshold.
     pub cpu_percent: Option<f32>,
@@ -82,6 +82,49 @@ pub type SnapshotHandle = Arc<RwLock<ProcessSnapshot>>;
 
 /// Shared handle to alert thresholds.
 pub type ThresholdsHandle = Arc<RwLock<AlertThresholds>>;
+
+// ---------------------------------------------------------------------------
+// GatewayState — persisted runtime state
+// ---------------------------------------------------------------------------
+
+/// Persisted gateway runtime state (survives restarts).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GatewayState {
+    #[serde(default)]
+    pub alert_thresholds: AlertThresholds,
+}
+
+/// Path to the gateway runtime state file.
+fn state_file_path() -> std::path::PathBuf {
+    rara_paths::config_dir().join("gateway-state.yaml")
+}
+
+/// Load gateway state from disk. Returns default if file doesn't exist or is invalid.
+pub fn load_gateway_state() -> GatewayState {
+    let path = state_file_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_yaml::from_str(&content).unwrap_or_default(),
+        Err(_) => GatewayState::default(),
+    }
+}
+
+/// Save gateway state to disk. Errors are logged but not propagated.
+pub fn save_gateway_state(state: &GatewayState) {
+    let path = state_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_yaml::to_string(state) {
+        Ok(yaml) => {
+            if let Err(e) = std::fs::write(&path, yaml) {
+                tracing::warn!(error = %e, "Failed to save gateway state");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to serialize gateway state");
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ProcessMonitor — collects metrics each tick

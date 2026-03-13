@@ -365,6 +365,10 @@ impl GatewayTelegramListener {
                     return "Usage: /threshold cpu <percent>".to_owned();
                 };
                 self.alert_thresholds.write().await.cpu_percent = Some(val);
+                let state = super::monitor::GatewayState {
+                    alert_thresholds: self.alert_thresholds.read().await.clone(),
+                };
+                super::monitor::save_gateway_state(&state);
                 format!("CPU threshold set to {val}%")
             }
             "mem" => {
@@ -372,10 +376,18 @@ impl GatewayTelegramListener {
                     return "Usage: /threshold mem <MB>".to_owned();
                 };
                 self.alert_thresholds.write().await.mem_mb = Some(val);
+                let state = super::monitor::GatewayState {
+                    alert_thresholds: self.alert_thresholds.read().await.clone(),
+                };
+                super::monitor::save_gateway_state(&state);
                 format!("Memory threshold set to {val} MB")
             }
             "clear" => {
                 *self.alert_thresholds.write().await = Default::default();
+                let state = super::monitor::GatewayState {
+                    alert_thresholds: self.alert_thresholds.read().await.clone(),
+                };
+                super::monitor::save_gateway_state(&state);
                 "All thresholds cleared.".to_owned()
             }
             _ => "Usage: /threshold [cpu <percent> | mem <MB> | clear]".to_owned(),
