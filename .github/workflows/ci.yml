@@ -16,6 +16,7 @@ defaults:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   changes:
