@@ -181,7 +181,7 @@ impl VaultClient {
 
     /// Renew the current client token in-place.
     pub async fn renew_token(&self) -> Result<(), VaultError> {
-        let token = self.get_token().await?;
+        let token = self.get_token_raw().await?;
         let url = format!("{}/v1/auth/token/renew-self", self.config.address);
 
         let resp = self
@@ -300,9 +300,11 @@ impl VaultClient {
     /// into dot-separated key-value pairs compatible with the settings
     /// store format used by `crates/app/src/flatten.rs`.
     ///
-    /// For example, `secret/rara/config/http` with
-    /// `{"bind_address": "127.0.0.1:25555"}` becomes
-    /// `[("http.bind_address", "127.0.0.1:25555")]`.
+    /// Vault key names are mapped to settings key prefixes via
+    /// [`vault_key_to_settings_prefix`]. For example, the Vault path
+    /// `secrets/knowledge` maps to settings prefix `memory.knowledge`,
+    /// so `{"embedding_model": "..."}` becomes
+    /// `[("memory.knowledge.embedding_model", "...")]`.
     pub async fn pull_all(&self) -> Result<Vec<(String, String)>, VaultError> {
         let mut pairs = Vec::new();
 
@@ -316,7 +318,8 @@ impl VaultClient {
                 let vault_path = format!("{prefix}/{key}");
                 match self.read_secret(&vault_path).await {
                     Ok(resp) => {
-                        flatten_value(key, &serde_json::Value::Object(
+                        let settings_prefix = vault_key_to_settings_prefix(key);
+                        flatten_value(&settings_prefix, &serde_json::Value::Object(
                             resp.data.data.into_iter().collect(),
                         ), &mut pairs);
                     }
@@ -440,11 +443,45 @@ impl VaultClient {
     // Internal helpers
     // ------------------------------------------------------------------
 
-    async fn get_token(&self) -> Result<String, VaultError> {
+    /// Return the cached token without triggering renewal.
+    /// Used internally by `renew_token()` and `login()` to avoid recursion.
+    async fn get_token_raw(&self) -> Result<String, VaultError> {
         let state = self.token_state.read().await;
         match state.as_ref() {
             Some(ts) => Ok(ts.token.clone()),
             None => Err(VaultError::TokenExpired),
+        }
+    }
+
+    /// Return a valid token, renewing transparently if past half TTL.
+    async fn get_token(&self) -> Result<String, VaultError> {
+        {
+            let state = self.token_state.read().await;
+            match state.as_ref() {
+                Some(ts) => {
+                    let elapsed = ts.acquired_at.elapsed().as_secs();
+                    if elapsed >= ts.lease_duration / 2 {
+                        drop(state);
+                        if let Err(e) = self.renew_token_or_relogin().await {
+                            warn!(error = %e, "token renewal failed, returning cached token");
+                        }
+                    }
+                }
+                None => return Err(VaultError::TokenExpired),
+            }
+        }
+        self.get_token_raw().await
+    }
+
+    /// Try to renew the token; if renewal fails, fall back to a full re-login.
+    async fn renew_token_or_relogin(&self) -> Result<(), VaultError> {
+        debug!("token past half TTL, attempting renewal");
+        match self.renew_token().await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                warn!(error = %e, "token renewal failed, attempting full re-login");
+                self.login().await
+            }
         }
     }
 }
@@ -452,6 +489,35 @@ impl VaultClient {
 // ---------------------------------------------------------------------------
 // Flatten / unflatten helpers
 // ---------------------------------------------------------------------------
+
+/// Map a Vault key name to the settings key prefix used by the existing
+/// Settings KV store.
+///
+/// Most Vault keys map 1:1 (e.g. `"http"` → `"http"`), but some have
+/// different prefixes in the settings store:
+/// - `"knowledge"` → `"memory.knowledge"` (settings keys: `memory.knowledge.*`)
+/// - `"composio"` → uses constants from `rara_domain_shared::settings::keys`
+///   but those happen to match `"composio.*"` pattern
+///
+/// The reverse mapping is in [`settings_prefix_to_vault_key`].
+fn vault_key_to_settings_prefix(vault_key: &str) -> String {
+    match vault_key {
+        "knowledge" => "memory.knowledge".into(),
+        other => other.into(),
+    }
+}
+
+/// Map a settings key prefix back to the Vault key name.
+///
+/// Inverse of [`vault_key_to_settings_prefix`].
+fn settings_prefix_to_vault_key(settings_key: &str) -> &str {
+    if settings_key.starts_with("memory.knowledge") {
+        "knowledge"
+    } else {
+        // For most keys, the first segment is the Vault key name.
+        settings_key.split('.').next().unwrap_or(settings_key)
+    }
+}
 
 /// Recursively flatten a JSON value into dot-separated key-value pairs.
 ///
@@ -491,11 +557,42 @@ pub(crate) fn flatten_value(
     }
 }
 
+/// Settings keys that must be routed to `secrets/` instead of `config/`.
+///
+/// This list defines which flattened key prefixes contain sensitive data
+/// (API keys, tokens, passwords) and must be written to the `secrets/`
+/// path in Vault, where stricter ACL policies apply.
+const SECRET_KEY_PREFIXES: &[&str] = &[
+    "telegram.bot_token",
+    "composio.api_key",
+    "composio.entity_id",
+    "gmail.app_password",
+    "memory.memos.token",
+];
+
+/// Check if a flattened settings key contains a secret value that should
+/// be stored under `secrets/` rather than `config/`.
+fn is_secret_key(key: &str) -> bool {
+    // Exact match on known secret keys
+    if SECRET_KEY_PREFIXES.iter().any(|&prefix| key == prefix) {
+        return true;
+    }
+    // LLM provider api_key fields: "llm.providers.{name}.api_key"
+    if key.starts_with("llm.providers.") && key.ends_with(".api_key") {
+        return true;
+    }
+    // Symphony tracker api_key
+    if key.starts_with("symphony.") && key.contains("api_key") {
+        return true;
+    }
+    false
+}
+
 /// Group flat key-value pairs into Vault write paths.
 ///
-/// The first segment of each key becomes the Vault path under `config/`.
-/// For example, `"http.bind_address" = "127.0.0.1:25555"` maps to
-/// path `"config/http"` with data `{"bind_address": "127.0.0.1:25555"}`.
+/// Sensitive keys (API keys, tokens) are routed to `secrets/{section}`,
+/// everything else goes to `config/{section}`. This maintains the
+/// permission separation between config/ and secrets/ in Vault.
 pub(crate) fn unflatten_to_vault_paths(
     pairs: Vec<(String, String)>,
 ) -> HashMap<String, HashMap<String, serde_json::Value>> {
@@ -503,9 +600,16 @@ pub(crate) fn unflatten_to_vault_paths(
 
     for (key, value) in pairs {
         if let Some(dot_pos) = key.find('.') {
-            let section = &key[..dot_pos];
-            let rest = &key[dot_pos + 1..];
-            let path = format!("config/{section}");
+            let vault_key = settings_prefix_to_vault_key(&key);
+            let vault_prefix = if is_secret_key(&key) { "secrets" } else { "config" };
+            let path = format!("{vault_prefix}/{vault_key}");
+
+            // Strip the settings prefix to get the field path within
+            // the Vault secret. For "memory.knowledge.embedding_model",
+            // vault_key is "knowledge", so we need the part after
+            // "memory.knowledge." → "embedding_model".
+            let settings_prefix = vault_key_to_settings_prefix(vault_key);
+            let rest = key.strip_prefix(&format!("{settings_prefix}.")).unwrap_or(&key[dot_pos + 1..]);
 
             let entry = grouped.entry(path).or_default();
             set_nested_value(entry, rest, serde_json::Value::String(value));
@@ -679,37 +783,107 @@ mod tests {
     }
 
     #[test]
-    fn unflatten_roundtrip() {
+    fn unflatten_routes_secrets_correctly() {
         let input = vec![
             ("http.bind_address".into(), "127.0.0.1:25555".into()),
             ("http.port".into(), "8080".into()),
+            // api_key should go to secrets/, not config/
             (
                 "llm.providers.openrouter.api_key".into(),
                 "sk-xxx".into(),
             ),
+            // base_url is not a secret, goes to config/
+            (
+                "llm.providers.openrouter.base_url".into(),
+                "https://openrouter.ai/api/v1".into(),
+            ),
+            // telegram bot_token should go to secrets/
+            ("telegram.bot_token".into(), "123:ABC".into()),
+            // telegram chat_id is not a secret
+            ("telegram.chat_id".into(), "456".into()),
         ];
 
         let grouped = unflatten_to_vault_paths(input);
 
-        // http → config/http
+        // http.bind_address → config/http
         let http_data = grouped.get("config/http").expect("config/http");
         assert_eq!(
             http_data.get("bind_address"),
             Some(&serde_json::Value::String("127.0.0.1:25555".into()))
         );
-        assert_eq!(
-            http_data.get("port"),
-            Some(&serde_json::Value::String("8080".into()))
-        );
 
-        // llm → config/llm (nested)
-        let llm_data = grouped.get("config/llm").expect("config/llm");
-        let providers = llm_data.get("providers").expect("providers");
+        // llm api_key → secrets/llm
+        let llm_secrets = grouped.get("secrets/llm").expect("secrets/llm");
+        let providers = llm_secrets.get("providers").expect("providers");
         let openrouter = providers.get("openrouter").expect("openrouter");
         assert_eq!(
             openrouter.get("api_key"),
             Some(&serde_json::Value::String("sk-xxx".into()))
         );
+
+        // llm base_url → config/llm (not secrets)
+        let llm_config = grouped.get("config/llm").expect("config/llm");
+        let providers = llm_config.get("providers").expect("providers");
+        let openrouter = providers.get("openrouter").expect("openrouter");
+        assert_eq!(
+            openrouter.get("base_url"),
+            Some(&serde_json::Value::String("https://openrouter.ai/api/v1".into()))
+        );
+
+        // telegram.bot_token → secrets/telegram
+        let tg_secrets = grouped.get("secrets/telegram").expect("secrets/telegram");
+        assert_eq!(
+            tg_secrets.get("bot_token"),
+            Some(&serde_json::Value::String("123:ABC".into()))
+        );
+
+        // telegram.chat_id → config/telegram
+        let tg_config = grouped.get("config/telegram").expect("config/telegram");
+        assert_eq!(
+            tg_config.get("chat_id"),
+            Some(&serde_json::Value::String("456".into()))
+        );
+    }
+
+    #[test]
+    fn unflatten_knowledge_uses_vault_key() {
+        // Settings key is "memory.knowledge.embedding_model"
+        // but Vault path should be "config/knowledge" with field "embedding_model"
+        let input = vec![
+            (
+                "memory.knowledge.embedding_model".into(),
+                "text-embedding-3-small".into(),
+            ),
+            (
+                "memory.knowledge.embedding_dimensions".into(),
+                "1536".into(),
+            ),
+        ];
+
+        let grouped = unflatten_to_vault_paths(input);
+
+        let know_data = grouped.get("config/knowledge").expect("config/knowledge");
+        assert_eq!(
+            know_data.get("embedding_model"),
+            Some(&serde_json::Value::String("text-embedding-3-small".into()))
+        );
+        assert_eq!(
+            know_data.get("embedding_dimensions"),
+            Some(&serde_json::Value::String("1536".into()))
+        );
+    }
+
+    #[test]
+    fn vault_key_mapping_roundtrip() {
+        // knowledge ↔ memory.knowledge
+        assert_eq!(vault_key_to_settings_prefix("knowledge"), "memory.knowledge");
+        assert_eq!(settings_prefix_to_vault_key("memory.knowledge.embedding_model"), "knowledge");
+
+        // Most keys are identity mappings
+        assert_eq!(vault_key_to_settings_prefix("http"), "http");
+        assert_eq!(settings_prefix_to_vault_key("http.bind_address"), "http");
+        assert_eq!(vault_key_to_settings_prefix("llm"), "llm");
+        assert_eq!(settings_prefix_to_vault_key("llm.default_provider"), "llm");
     }
 
     #[test]
