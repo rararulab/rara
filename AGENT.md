@@ -504,19 +504,14 @@ for item in items {
   * 基础设施（Docker/Compose/Env/Telemetry）要可维护。
 * 模块组织：尽量按业务域拆分为多个 workspace crate，以降低耦合并改善编译体验。
 
-### 10.2 Git 工作流（从初始化之后开始执行）
+### 10.2 Git 工作流（PR-based）
 
-* 除“仓库刚初始化、尚无协作历史”的特殊阶段外，不允许直接在 `main` 上开发业务改动。
-* 后续所有工作都走 worktree 流程：
-  * 由 subagent 创建 worktree；
-  * 在 worktree 中完成开发与验证；
-  * 提交 commit；
-  * 合并回 `main`；
-  * push 到 remote 的 `main`。
-
-建议命令（示例，按需调整 branch 名称）：
-
-```sh
-git worktree add ../job-wt-<topic> -b codex/<topic>
-cd ../job-wt-<topic>
-```
+* 禁止直接在 `main` 上开发或合并。
+* 所有变更必须通过 GitHub PR 合并，流程如下：
+  1. 创建 issue（`gh issue create`，必须带 `created-by:claude` label）；
+  2. 创建 worktree + 分支（`git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}`）；
+  3. 在 worktree 中完成开发、验证并 commit；
+  4. push 分支到 remote（`git push -u origin issue-{N}-{name}`）；
+  5. 创建 PR（`gh pr create`，body 中包含 `Closes #N`）；
+  6. PR 合并后清理 worktree 和本地分支。
+* 禁止本地 `git merge` 到 `main` — 所有合并通过 GitHub PR 完成。

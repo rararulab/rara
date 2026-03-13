@@ -9,17 +9,17 @@ Rara is a self-evolving, developer-first personal proactive agent built in Rust.
 
 ## Development Workflow
 
-### Issue → Worktree → Subagent → Merge
+### Issue → Worktree → PR → Merge
 
-This is the standard workflow for all feature/refactor work:
+This is the standard workflow for all feature/refactor work. All changes go through GitHub PRs — never merge locally on main.
 
 ```
 1. CREATE ISSUE    →  gh issue create + labels
 2. CREATE WORKTREE →  git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
 3. DISPATCH        →  Task subagent works in the worktree
 4. VERIFY          →  cargo check + npm run build on worktree
-5. MERGE           →  git merge issue-{N}-{name} (resolve conflicts if needed)
-6. CLEANUP         →  git worktree remove + git branch -d + gh issue close
+5. PUSH & PR       →  git push -u origin + gh pr create
+6. CLEANUP         →  git worktree remove + git branch -d (after PR merged)
 ```
 
 #### Step 1: Create Issue
@@ -46,28 +46,25 @@ cargo check -p {crate-name}   # Rust backend
 cd web && npm run build        # Frontend (if touched)
 ```
 
-#### Step 5: Merge to Main
+#### Step 5: Push & Create PR
 ```bash
-git checkout main
-git merge issue-{N}-{short-name}
-# If conflicts: resolve → git add → git commit --no-edit
+git push -u origin issue-{N}-{short-name}
+gh pr create --title "fix(scope): description" --body "Closes #{N}"
 ```
+- Commit message must include `Closes #N` so the issue is auto-closed when PR merges
+- Never merge locally — all merges happen through GitHub PR
 
-#### Step 6: Cleanup
+#### Step 6: Cleanup (after PR merged)
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
 git branch -d issue-{N}-{short-name}
-gh issue close {N} --comment "Completed in {commit-hash} — {summary}."
 ```
-
-**Important**: `Closes #N` in commit messages only works when pushed to remote. For local-only workflows, always close issues explicitly with `gh issue close`.
 
 ### Parallel Execution
 
 When user requests involve multiple independent changes, split into separate issues and dispatch subagents in parallel:
-- Each subagent gets its own worktree and branch
-- Merge sequentially to main, resolving conflicts as they arise
-- The second merge may need conflict resolution where both branches touched the same files
+- Each subagent gets its own worktree, branch, and PR
+- PRs are reviewed and merged independently on GitHub
 
 ### Database Migrations
 
@@ -90,9 +87,9 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT use manual `impl Display` + `impl Error` — use `snafu`
 - Do NOT use mock repositories in tests — use `testcontainers`
 - Do NOT work directly on `main` — always use worktrees for subagent work
+- Do NOT merge locally on `main` — all merges go through GitHub PRs
 - Do NOT create issues without `created-by:claude` label
-- Do NOT forget to close issues after merge — `gh issue close` explicitly
-- Do NOT leave stale worktrees — clean up after every merge
+- Do NOT leave stale worktrees — clean up after PR is merged
 - Do NOT modify already-applied migration files — create a new migration instead
 - Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file
 - Do NOT use noop/hollow trait implementations to糊弄编译器 — trait method 有真正实现时不允许默认空体（silently return `Ok(())` / `Ok(None)` / `vec![]`）；可选 UX hook（`typing_indicator`, lifecycle hooks）是唯一例外
