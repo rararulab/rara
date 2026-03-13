@@ -1,0 +1,26 @@
+database:
+  max_connections: 5
+http:
+  bind_address: 127.0.0.1:0
+  max_body_size: 100MiB
+  enable_cors: false
+  request_timeout: 60
+grpc:
+  bind_address: 127.0.0.1:0
+  server_address: 127.0.0.1:0
+  max_recv_message_size: 512MiB
+  max_send_message_size: 512MiB
+telemetry:
+  otlp_endpoint: null
+  otlp_protocol: null
+llm:
+  default_provider: ollama
+  providers:
+    ollama:
+      base_url: http://10.0.0.167:11434/v1
+      api_key: ollama
+      default_model: qwen2.5:32b
+users:
+- name: ryan
+  role: root
+  platforms: []

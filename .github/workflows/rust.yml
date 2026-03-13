@@ -86,6 +86,39 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace --all-features
 
+  integration:
+    name: Integration (Ollama)
+    runs-on: arc-runner-set
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: rust-test
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cd06cfcb315894ee98ffbc4582bcafbcbc260bdb # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Verify Ollama connectivity
+        run: curl -sf http://10.0.0.167:11434/api/tags | head -c 200
+
+      - name: Prepare CI config
+        run: cp config.ci.yaml config.yaml
+
+      - name: Run integration tests
+        run: cargo nextest run --workspace --all-features --run-ignored ignored-only
+        env:
+          RARA_REAL_TAPE_SOAK_SECS: "120"
+          RARA_REAL_TAPE_TURN_TIMEOUT_SECS: "300"
+        timeout-minutes: 15
+
   coverage:
     name: Coverage
     runs-on: arc-runner-set
