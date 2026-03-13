@@ -23,7 +23,7 @@ env:
 jobs:
   build-base:
     name: Build Base Image
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout code
@@ -55,7 +55,7 @@ jobs:
   build-backend:
     name: Build Backend Image
     needs: [build-base]
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -88,7 +88,7 @@ jobs:
 
   build-frontend:
     name: Build Frontend Image
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout code

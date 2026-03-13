@@ -10,7 +10,7 @@ permissions:
 jobs:
   release-plz-pr:
     name: Create Release PR
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     if: ${{ github.repository_owner == 'rararulab' && github.ref == 'refs/heads/main' }}
     concurrency:
       group: release-plz-${{ github.ref }}
