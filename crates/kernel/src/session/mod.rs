@@ -298,9 +298,9 @@ pub struct Session {
     /// Permit from the *parent*'s `child_semaphore`.
     /// Held for the lifetime of this child session; dropping it releases the
     /// slot so the parent can spawn another child.
-    pub _parent_child_permit: Option<OwnedSemaphorePermit>,
+    pub(crate) _parent_child_permit: Option<OwnedSemaphorePermit>,
     /// Global semaphore permit.
-    pub _global_permit:       OwnedSemaphorePermit,
+    pub(crate) _global_permit:       OwnedSemaphorePermit,
 }
 
 /// Per-process runtime metrics using atomic counters for lock-free updates.

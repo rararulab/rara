@@ -319,10 +319,7 @@ impl SecuritySubsystem {
             Ok(Some(u)) => Some(u),
             _ => {
                 if let Some((_prefix, name)) = user_id_str.split_once(':') {
-                    match self.user_store.get_by_name(name).await {
-                        Ok(found) => found,
-                        Err(_) => None,
-                    }
+                    self.user_store.get_by_name(name).await.unwrap_or_default()
                 } else {
                     None
                 }

@@ -425,8 +425,7 @@ async fn detect_repo_root(exe_path: &std::path::Path) -> Result<PathBuf, Executo
 
     if !output.status.success() {
         return Err(ExecutorError::RepoDetect {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            source: std::io::Error::other(
                 format!(
                     "git rev-parse failed in {}: {}",
                     exe_dir.display(),

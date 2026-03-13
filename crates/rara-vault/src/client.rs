@@ -537,9 +537,9 @@ pub(crate) fn flatten_value(
         serde_json::Value::Array(arr) => {
             let joined: Vec<String> = arr
                 .iter()
-                .filter_map(|v| match v {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    other => Some(other.to_string()),
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 })
                 .collect();
             out.push((prefix.to_string(), joined.join(",")));
@@ -574,7 +574,7 @@ const SECRET_KEY_PREFIXES: &[&str] = &[
 /// be stored under `secrets/` rather than `config/`.
 fn is_secret_key(key: &str) -> bool {
     // Exact match on known secret keys
-    if SECRET_KEY_PREFIXES.iter().any(|&prefix| key == prefix) {
+    if SECRET_KEY_PREFIXES.contains(&key) {
         return true;
     }
     // LLM provider api_key fields: "llm.providers.{name}.api_key"

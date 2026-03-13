@@ -278,9 +278,9 @@ impl LlmDriver for OpenAiDriver {
             .collect();
 
         let usage = raw.usage.map(|u| Usage {
-            prompt_tokens:     u.prompt_tokens.unwrap_or(0),
-            completion_tokens: u.completion_tokens.unwrap_or(0),
-            total_tokens:      u.total_tokens.unwrap_or(0),
+            prompt_tokens:     u.input.unwrap_or(0),
+            completion_tokens: u.output.unwrap_or(0),
+            total_tokens:      u.total.unwrap_or(0),
         });
 
         Ok(CompletionResponse {
@@ -466,9 +466,9 @@ impl StreamAccumulator {
         // Usage (some providers send it in the last chunk)
         if let Some(ref usage) = chunk.usage {
             self.usage = Some(Usage {
-                prompt_tokens:     usage.prompt_tokens.unwrap_or(0),
-                completion_tokens: usage.completion_tokens.unwrap_or(0),
-                total_tokens:      usage.total_tokens.unwrap_or(0),
+                prompt_tokens:     usage.input.unwrap_or(0),
+                completion_tokens: usage.output.unwrap_or(0),
+                total_tokens:      usage.total.unwrap_or(0),
             });
         }
     }
@@ -620,7 +620,9 @@ impl<'a> ChatRequest<'a> {
             .map(WireMessage::from_message)
             .collect();
 
-        let (tools, tool_choice, parallel_tool_calls) = if !request.tools.is_empty() {
+        let (tools, tool_choice, parallel_tool_calls) = if request.tools.is_empty() {
+            (None, None, None)
+        } else {
             let tools: Vec<WireTool<'a>> = request
                 .tools
                 .iter()
@@ -650,8 +652,6 @@ impl<'a> ChatRequest<'a> {
             };
 
             (Some(tools), tool_choice, parallel)
-        } else {
-            (None, None, None)
         };
 
         let thinking = request.thinking.as_ref().and_then(|t| {
@@ -796,9 +796,12 @@ struct RawFunctionChunk {
 
 #[derive(Debug, Deserialize)]
 struct RawUsage {
-    prompt_tokens:     Option<u32>,
-    completion_tokens: Option<u32>,
-    total_tokens:      Option<u32>,
+    #[serde(rename = "prompt_tokens")]
+    input:      Option<u32>,
+    #[serde(rename = "completion_tokens")]
+    output:     Option<u32>,
+    #[serde(rename = "total_tokens")]
+    total:      Option<u32>,
 }
 
 // --- Non-streaming response types ---

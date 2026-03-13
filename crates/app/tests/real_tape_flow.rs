@@ -306,7 +306,7 @@ async fn real_model_soak_test_survives_long_tape_pressure() {
     let mut read_file_calls = 0usize;
     let mut saw_anchor = false;
     let mut saw_search = false;
-    let final_preview: String;
+    
 
     while turn_index < MIN_REQUIRED_TURNS || Instant::now() < deadline {
         if turn_index == 0 {
@@ -373,7 +373,7 @@ async fn real_model_soak_test_survives_long_tape_pressure() {
         final_trace.error
     );
     saw_search |= trace_has_tape_action(final_trace, "search");
-    final_preview = trace_text_preview(final_trace);
+    let final_preview: String = trace_text_preview(final_trace);
     assert!(
         final_preview.contains("2768"),
         "final recall should return the Shanghai -> Tokyo price, got: {final_preview}"

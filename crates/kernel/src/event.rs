@@ -397,7 +397,7 @@ pub struct KernelEventEnvelope {
 impl KernelEventEnvelope {
     /// Create a `UserMessage` event.
     pub fn user_message(msg: InboundMessage) -> Self {
-        let base_key = msg.session_key.clone().unwrap_or_else(SessionKey::new);
+        let base_key = msg.session_key.clone().unwrap_or_default();
         Self {
             base: EventBase::from(base_key),
             kind: KernelEvent::UserMessage(msg),
@@ -406,7 +406,7 @@ impl KernelEventEnvelope {
 
     /// Create a `GroupMessage` event.
     pub fn group_message(msg: InboundMessage) -> Self {
-        let base_key = msg.session_key.clone().unwrap_or_else(SessionKey::new);
+        let base_key = msg.session_key.clone().unwrap_or_default();
         Self {
             base: EventBase::from(base_key),
             kind: KernelEvent::GroupMessage(msg),
@@ -432,7 +432,7 @@ impl KernelEventEnvelope {
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
     ) -> Self {
         Self {
-            base: EventBase::from(desired_session_key.unwrap_or_else(SessionKey::new)),
+            base: EventBase::from(desired_session_key.unwrap_or_default()),
             kind: KernelEvent::CreateSession {
                 manifest,
                 input,

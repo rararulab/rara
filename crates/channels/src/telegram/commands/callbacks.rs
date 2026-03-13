@@ -14,9 +14,9 @@
 
 //! Callback handlers for inline keyboard interactions.
 //!
-//! - [`SessionSwitchCallbackHandler`]: handles `switch:{session_key}`
+//! - [`SessionSwitchCallbackHandler`] — handles `switch:{session_key}`
 //!   callbacks.
-//! - [`SearchPaginationCallbackHandler`]: handles
+//! - [`SearchPaginationCallbackHandler`] — handles
 //!   `search_more:{count}:{params}` callbacks.
 
 use std::sync::Arc;

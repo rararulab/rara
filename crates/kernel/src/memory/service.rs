@@ -731,7 +731,7 @@ impl TapeService {
             anchors_by_key.insert(key.clone(), self.load_anchor_nodes(key).await?);
         }
 
-        let root = self.build_session_branch(
+        let root = build_session_branch(
             &root_key,
             &sessions_by_key,
             &anchors_by_key,
@@ -809,56 +809,56 @@ impl TapeService {
             .collect())
     }
 
-    fn build_session_branch(
-        &self,
-        session_key: &str,
-        sessions_by_key: &std::collections::HashMap<String, crate::session::SessionEntry>,
-        anchors_by_key: &std::collections::HashMap<String, Vec<AnchorNode>>,
-        fork_index: &std::collections::HashMap<String, Vec<(String, String)>>,
-        visited: &mut std::collections::HashSet<String>,
-    ) -> TapResult<SessionBranch> {
-        if !visited.insert(session_key.to_owned()) {
-            return Err(super::TapError::State {
-                message: format!("cycle detected while building tree at session: {session_key}"),
+}
+
+fn build_session_branch(
+    session_key: &str,
+    sessions_by_key: &std::collections::HashMap<String, crate::session::SessionEntry>,
+    anchors_by_key: &std::collections::HashMap<String, Vec<AnchorNode>>,
+    fork_index: &std::collections::HashMap<String, Vec<(String, String)>>,
+    visited: &mut std::collections::HashSet<String>,
+) -> TapResult<SessionBranch> {
+    if !visited.insert(session_key.to_owned()) {
+        return Err(super::TapError::State {
+            message: format!("cycle detected while building tree at session: {session_key}"),
+        });
+    }
+
+    let session_entry =
+        sessions_by_key
+            .get(session_key)
+            .ok_or_else(|| super::TapError::State {
+                message: format!("session not found while building tree: {session_key}"),
+            })?;
+
+    let mut forks = Vec::new();
+    if let Some(children) = fork_index.get(session_key) {
+        let mut ordered = children.clone();
+        // Keep output ordering stable for deterministic snapshots/tests.
+        ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        for (at_anchor, child_key) in ordered {
+            let child_branch = build_session_branch(
+                &child_key,
+                sessions_by_key,
+                anchors_by_key,
+                fork_index,
+                visited,
+            )?;
+            forks.push(ForkEdge {
+                at_anchor,
+                branch: child_branch,
             });
         }
-
-        let session_entry =
-            sessions_by_key
-                .get(session_key)
-                .ok_or_else(|| super::TapError::State {
-                    message: format!("session not found while building tree: {session_key}"),
-                })?;
-
-        let mut forks = Vec::new();
-        if let Some(children) = fork_index.get(session_key) {
-            let mut ordered = children.clone();
-            // Keep output ordering stable for deterministic snapshots/tests.
-            ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-            for (at_anchor, child_key) in ordered {
-                let child_branch = self.build_session_branch(
-                    &child_key,
-                    sessions_by_key,
-                    anchors_by_key,
-                    fork_index,
-                    visited,
-                )?;
-                forks.push(ForkEdge {
-                    at_anchor,
-                    branch: child_branch,
-                });
-            }
-        }
-
-        visited.remove(session_key);
-
-        Ok(SessionBranch {
-            session_key: session_key.to_owned(),
-            title: session_entry.title.clone(),
-            anchors: anchors_by_key.get(session_key).cloned().unwrap_or_default(),
-            forks,
-        })
     }
+
+    visited.remove(session_key);
+
+    Ok(SessionBranch {
+        session_key: session_key.to_owned(),
+        title: session_entry.title.clone(),
+        anchors: anchors_by_key.get(session_key).cloned().unwrap_or_default(),
+        forks,
+    })
 }
 
 fn map_session_error(error: SessionError) -> super::TapError {

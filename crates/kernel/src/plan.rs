@@ -779,6 +779,7 @@ async fn execute_worker_step(
                     step = step.index,
                     iterations = result.iterations,
                     tool_calls = result.tool_calls,
+                    milestones = milestones.len(),
                     "plan executor: worker completed"
                 );
 

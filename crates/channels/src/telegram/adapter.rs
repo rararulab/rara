@@ -455,12 +455,12 @@ fn render_progress(
         if collapsed > 0 {
             let collapsed_dur: std::time::Duration = finished_phases[..collapsed]
                 .iter()
-                .flat_map(|p| p.total_duration)
+                .filter_map(|p| p.total_duration)
                 .sum();
-            let dur_str = if !collapsed_dur.is_zero() {
-                format!(" ({})", format_duration_compact(collapsed_dur))
-            } else {
+            let dur_str = if collapsed_dur.is_zero() {
                 String::new()
+            } else {
+                format!(" ({})", format_duration_compact(collapsed_dur))
             };
             lines.push(format!("\u{22ef} 已完成 {collapsed} 步{dur_str}"));
         }
@@ -775,6 +775,7 @@ impl TelegramAdapter {
     }
 
     /// Create a new Telegram adapter with a custom polling timeout.
+    #[must_use]
     pub fn with_polling_timeout(mut self, timeout_secs: u32) -> Self {
         self.polling_timeout = timeout_secs;
         self
@@ -782,6 +783,7 @@ impl TelegramAdapter {
 
     /// Register command handlers (builder pattern — must be called before `Arc`
     /// wrapping).
+    #[must_use]
     pub fn with_command_handlers(self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
         *self
             .command_handlers
@@ -800,6 +802,7 @@ impl TelegramAdapter {
     }
 
     /// Register callback handlers.
+    #[must_use]
     pub fn with_callback_handlers(mut self, handlers: Vec<Arc<dyn CallbackHandler>>) -> Self {
         self.callback_handlers = handlers;
         self
@@ -809,6 +812,7 @@ impl TelegramAdapter {
     ///
     /// Commands like `/search` and `/jd` are restricted to this chat only.
     /// This is a convenience builder that mutates the internal config.
+    #[must_use]
     pub fn with_primary_chat_id(self, id: i64) -> Self {
         {
             let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
@@ -823,6 +827,7 @@ impl TelegramAdapter {
     /// interactions. Messages from other groups receive an "unauthorized"
     /// response and are not dispatched further.
     /// This is a convenience builder that mutates the internal config.
+    #[must_use]
     pub fn with_allowed_group_chat_id(self, id: i64) -> Self {
         {
             let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
@@ -834,6 +839,7 @@ impl TelegramAdapter {
     /// Set the full runtime config.
     ///
     /// Replaces the current config with the provided one.
+    #[must_use]
     pub fn with_config(self, config: TelegramConfig) -> Self {
         {
             let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
@@ -1774,7 +1780,7 @@ async fn handle_update(
     // If the Telegram message has a photo, download and compress it for LLM vision.
     let raw = if let Some(photos) = msg.photo() {
         if let Some(largest) = photos.last() {
-            match download_and_compress_photo(&bot, &largest.file.id).await {
+            match download_and_compress_photo(bot, &largest.file.id).await {
                 Ok((media_type, b64_data, original_path, compressed_path)) => {
                     // Combine text + image into multimodal content.
                     let text = match raw.content {
@@ -2301,10 +2307,10 @@ fn spawn_stream_forwarder(
                                 // Plan steps come from either:
                                 // 1. saved_plan_steps (if PlanCompleted fired), or
                                 // 2. the still-active plan (if stream closed mid-plan).
-                                let plan_steps = if !progress.saved_plan_steps.is_empty() {
-                                    std::mem::take(&mut progress.saved_plan_steps)
-                                } else {
+                                let plan_steps = if progress.saved_plan_steps.is_empty() {
                                     plan.as_ref().map(|p| p.status_lines.clone()).unwrap_or_default()
+                                } else {
+                                    std::mem::take(&mut progress.saved_plan_steps)
                                 };
 
                                 let trace = ExecutionTrace {

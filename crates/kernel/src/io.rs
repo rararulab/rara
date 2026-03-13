@@ -404,6 +404,7 @@ impl OutboundEnvelope {
     }
 
     /// Set the origin endpoint for session-scoped routing.
+    #[must_use]
     pub fn with_origin(mut self, endpoint: Option<Endpoint>) -> Self {
         self.origin_endpoint = endpoint;
         self

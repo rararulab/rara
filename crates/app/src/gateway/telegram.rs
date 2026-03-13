@@ -85,7 +85,7 @@ impl GatewayTelegramListener {
                 warn!(error = %e, "gateway telegram: failed to verify bot — listener will not start");
                 return;
             }
-        };
+        }
         let mut offset: Option<i32> = None;
 
         loop {

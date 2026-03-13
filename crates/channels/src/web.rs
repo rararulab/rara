@@ -668,35 +668,33 @@ async fn sse_handler(
     let stream = futures::stream::unfold(
         (rx, shutdown_rx, params.session_key.clone()),
         |(mut rx, mut shutdown_rx, session_key)| async move {
-            loop {
-                tokio::select! {
-                    msg = rx.recv() => {
-                        match msg {
-                            Ok(data) => {
-                                let event: Result<Event, std::convert::Infallible> =
-                                    Ok(Event::default().data(data));
-                                return Some((event, (rx, shutdown_rx, session_key)));
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                warn!(session_key, skipped = n, "SSE receiver lagged");
-                                let err_event = serde_json::json!({
-                                    "type": "error",
-                                    "message": format!("missed {n} events")
-                                });
-                                let event: Result<Event, std::convert::Infallible> =
-                                    Ok(Event::default().data(err_event.to_string()));
-                                return Some((event, (rx, shutdown_rx, session_key)));
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                debug!(session_key, "broadcast channel closed, ending SSE stream");
-                                return None;
-                            }
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Ok(data) => {
+                            let event: Result<Event, std::convert::Infallible> =
+                                Ok(Event::default().data(data));
+                            Some((event, (rx, shutdown_rx, session_key)))
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(session_key, skipped = n, "SSE receiver lagged");
+                            let err_event = serde_json::json!({
+                                "type": "error",
+                                "message": format!("missed {n} events")
+                            });
+                            let event: Result<Event, std::convert::Infallible> =
+                                Ok(Event::default().data(err_event.to_string()));
+                            Some((event, (rx, shutdown_rx, session_key)))
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            debug!(session_key, "broadcast channel closed, ending SSE stream");
+                            None
                         }
                     }
-                    _ = shutdown_rx.changed() => {
-                        debug!(session_key, "shutdown signal, ending SSE stream");
-                        return None;
-                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    debug!(session_key, "shutdown signal, ending SSE stream");
+                    None
                 }
             }
         },
