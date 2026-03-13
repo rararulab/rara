@@ -1,23 +1,25 @@
-## What does this PR do?
+## Summary
 
 <!-- Brief description of the changes -->
-<!-- 💡 Tip: Request @copilot review for AI-powered code suggestions -->
 
 ## Type of change
 
 - [ ] Bug fix
 - [ ] New feature
 - [ ] Breaking change
+- [ ] Refactor
+- [ ] CI / Infrastructure
 - [ ] Documentation
-- [ ] Other: 
 
-## Testing
+## Closes
+
+<!-- REQUIRED: Link the issue this PR resolves. PR merge will auto-close the issue. -->
+<!-- If no issue exists, create one first: gh issue create -->
+
+Closes #
+
+## Test plan
 
 - [ ] `just test` passes
 - [ ] `just lint` passes
-- [ ] `just fmt` applied
 - [ ] Tested locally
-
-## Related issues
-
-Closes #
