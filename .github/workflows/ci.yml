@@ -16,14 +16,42 @@ defaults:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: self-hosted
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Filter paths
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'crates/**'
+              - 'api/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+
   lint:
     name: Lint
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/lint.yml
 
   rust:
     name: Rust
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -31,7 +59,7 @@ jobs:
   release-pr:
     name: Release PR
     needs: [lint, rust]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
     permissions:
       contents: write
       pull-requests: write
