@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Panic Hook and Deadlock Detection
+//! # Panic Hook
 //!
-//! Enhanced panic handling with structured logging, backtraces, and optional
-//! deadlock detection. Provides better error reporting and monitoring.
+//! Enhanced panic handling with structured logging and backtraces.
 
-#[cfg(feature = "deadlock_detection")]
-use std::time::Duration;
 use std::{panic, sync::LazyLock};
 
 use backtrace::Backtrace;
@@ -35,7 +32,6 @@ pub static PANIC_COUNTER: LazyLock<IntCounter> =
 /// - Captures and logs backtraces
 /// - Increments panic counter metrics
 /// - Includes span context when available
-/// - Optionally runs deadlock detection (if feature enabled)
 pub fn set_panic_hook() {
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic| {
@@ -55,25 +51,4 @@ pub fn set_panic_hook() {
         PANIC_COUNTER.inc();
         default_hook(panic);
     }));
-
-    // Start deadlock detection thread if feature is enabled
-    #[cfg(feature = "deadlock_detection")]
-    let _ = std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(Duration::from_secs(5));
-            let deadlocks = parking_lot::deadlock::check_deadlock();
-            if deadlocks.is_empty() {
-                continue;
-            }
-
-            tracing::info!("{} deadlocks detected", deadlocks.len());
-            for (i, threads) in deadlocks.iter().enumerate() {
-                tracing::info!("Deadlock #{}", i);
-                for t in threads {
-                    tracing::info!("Thread Id {:#?}", t.thread_id());
-                    tracing::info!("{:#?}", t.backtrace());
-                }
-            }
-        }
-    });
 }
