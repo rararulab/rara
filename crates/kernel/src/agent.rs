@@ -812,6 +812,12 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
+    // These are *cumulative* across all iterations within the turn.
+    // `cumulative_output_tokens` sums completion_tokens from every iteration;
+    // `input_tokens` in the emitted event is always the *latest* iteration's
+    // prompt_tokens (= current context size), NOT a cumulative sum — because
+    // each iteration re-sends the full context.
     let mut cumulative_output_tokens: u32 = 0;
     let mut cumulative_thinking_ms: u64 = 0;
     let user_id = tool_context.user_id.as_deref();
@@ -919,6 +925,11 @@ pub(crate) async fn run_agent_loop(
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
         let mut last_usage: Option<llm::Usage> = None;
+        // Per-iteration reasoning timer — set on the first ReasoningDelta,
+        // settled (added to cumulative_thinking_ms) on either:
+        //   a) the first TextDelta (reasoning → content transition), or
+        //   b) the Done delta (model finished without content, e.g. tool-only).
+        // Must be `take()`-d exactly once per iteration to avoid double-counting.
         let mut reasoning_start: Option<Instant> = None;
 
         loop {
@@ -951,7 +962,9 @@ pub(crate) async fn run_agent_loop(
                                     .as_millis() as u64,
                             );
                         }
-                        // First text after reasoning — thinking phase ended
+                        // Settle reasoning timer on the FIRST TextDelta only
+                        // (accumulated_text is still empty → this is the transition
+                        // from reasoning to content). Uses take() so it fires once.
                         if accumulated_text.is_empty() {
                             if let Some(rs) = reasoning_start.take() {
                                 cumulative_thinking_ms += rs.elapsed().as_millis() as u64;
@@ -1009,10 +1022,14 @@ pub(crate) async fn run_agent_loop(
                         }
                     }
                     last_usage = usage;
-                    // Settle any un-settled reasoning time
+                    // Fallback: settle reasoning if no TextDelta arrived
+                    // (e.g. tool-only iteration with extended thinking).
                     if let Some(rs) = reasoning_start.take() {
                         cumulative_thinking_ms += rs.elapsed().as_millis() as u64;
                     }
+                    // Emit cumulative usage to stream consumers (Telegram progress UX).
+                    // input_tokens = latest iteration's prompt_tokens (current context size);
+                    // output_tokens = sum of all iterations' completion_tokens.
                     if let Some(ref u) = last_usage {
                         cumulative_output_tokens = cumulative_output_tokens.saturating_add(u.completion_tokens);
                         stream_handle.emit(StreamEvent::UsageUpdate {

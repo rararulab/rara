@@ -148,6 +148,16 @@ struct ToolProgress {
 }
 
 /// Progress message state for tool execution feedback.
+///
+/// During streaming: renders live progress with tool activity + token footer.
+/// On stream close: converted into an [`ExecutionTrace`], and the Telegram
+/// message is edited to a compact summary with an inline "📊 详情" button
+/// that toggles the full trace view.
+///
+/// ## Token semantics (from kernel `UsageUpdate`)
+/// - `input_tokens` = latest iteration's prompt tokens (current context size)
+/// - `output_tokens` = cumulative completion tokens across all iterations
+/// - `thinking_ms` = cumulative extended-thinking duration
 struct ProgressMessage {
     message_id:         Option<MessageId>,
     tools:              Vec<ToolProgress>,
@@ -157,12 +167,14 @@ struct ProgressMessage {
     output_tokens:      u32,
     thinking_ms:        u64,
     /// Accumulated reasoning text for trace (truncated to ~500 chars).
+    /// Collected from `StreamEvent::ReasoningDelta`; shown in expanded trace.
     reasoning_preview:  String,
-    /// Model name from TurnMetrics.
+    /// Model name, populated from `StreamEvent::TurnMetrics` (arrives before stream close).
     model:              String,
-    /// Iteration count from TurnMetrics.
+    /// Iteration count, populated from `StreamEvent::TurnMetrics`.
     iterations:         usize,
-    /// Saved plan status lines (preserved before PlanCompleted clears plan).
+    /// Plan steps must be saved here because `PlanCompleted` sets `plan = None`.
+    /// If we don't save them before that, the trace loses all plan information.
     saved_plan_steps:   Vec<String>,
 }
 
@@ -186,7 +198,14 @@ impl ProgressMessage {
     }
 }
 
-/// Collected execution trace for post-completion detail view.
+/// Snapshot of a completed agent turn, stored for the inline "📊 详情" toggle.
+///
+/// Built from `ProgressMessage` fields when the stream closes. Stored in
+/// [`TraceStore`] keyed by `"{chat_id}:{msg_id}"`. Entries are TTL-cleaned
+/// (1 hour) on each new insertion to bound memory.
+///
+/// The callback handler (`handle_trace_callback`) reads this to render the
+/// expanded detail view; it never mutates the trace.
 struct ExecutionTrace {
     duration_secs:    u64,
     iterations:       usize,
@@ -212,7 +231,10 @@ struct ToolTraceEntry {
     error:    Option<String>,
 }
 
-/// Store for completed execution traces, keyed by "{chat_id}:{msg_id}".
+/// Store for completed execution traces, keyed by `"{chat_id}:{msg_id}"`.
+///
+/// Shared between the stream forwarder (writes on stream close) and the
+/// callback handler (reads on button click). TTL-cleaned to 1 hour.
 type TraceStore = Arc<DashMap<String, ExecutionTrace>>;
 
 /// Display tier for plan messages in Telegram.
@@ -483,6 +505,8 @@ fn format_token_count(tokens: u32) -> String {
 }
 
 /// Render a compact one-line summary for a completed execution trace.
+/// Example: `✅ 45s · ↑12.5k ↓1.2k · thought 9s`
+/// This is the collapsed state shown with the inline "详情" button.
 fn render_compact_summary(trace: &ExecutionTrace) -> String {
     let mut parts = Vec::new();
     parts.push(format_duration_compact(std::time::Duration::from_secs(
@@ -508,6 +532,9 @@ fn render_compact_summary(trace: &ExecutionTrace) -> String {
 }
 
 /// Render full execution trace detail for the expanded view.
+/// Sections: 🧠 Thinking → 📋 Plan → 🔧 Tools → 📊 Usage
+/// Hard-truncated to 4000 chars (Telegram limit is 4096).
+/// Uses HTML formatting: `<b>`, `<blockquote>`, entity escaping.
 fn render_trace_detail(trace: &ExecutionTrace) -> String {
     let mut text = render_compact_summary(trace);
     text.push_str("\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
@@ -1345,6 +1372,13 @@ async fn handle_guard_callback(
 }
 
 /// Handle a trace show/hide callback query from an inline keyboard button.
+///
+/// Callback data format: `"trace:{action}:{chat_id}:{msg_id}"`
+/// - `action` = "show" → expand to full trace, button becomes "收起"
+/// - `action` = "hide" → collapse back to compact summary, button becomes "详情"
+///
+/// The trace is looked up from [`TraceStore`] by key `"{chat_id}:{msg_id}"`.
+/// If the trace has been TTL-cleaned (>1hr), the button silently does nothing.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
@@ -1482,7 +1516,10 @@ async fn handle_update(
         Err(e) => e.into_inner().clone(),
     };
 
-    // Handle callback queries (guard approval, trace toggle).
+    // Handle callback queries by prefix routing:
+    //   "guard:*"  → guard approval (approve/deny)
+    //   "trace:*"  → execution trace toggle (show/hide detail view)
+    //   other      → TODO: convert to RawPlatformMessage for kernel processing
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
             if data.starts_with("guard:") {
@@ -1494,7 +1531,6 @@ async fn handle_update(
                 return;
             }
         }
-        // Non-guard/non-trace callbacks: TODO — convert to RawPlatformMessage.
         return;
     }
 
@@ -2110,7 +2146,9 @@ fn spawn_stream_forwarder(
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                     }
                                 }
-                                // Save plan steps for trace before clearing
+                                // IMPORTANT: save plan steps BEFORE `plan = None` below.
+                                // PlanCompleted clears the plan, but we need the steps
+                                // for the post-completion trace detail view.
                                 progress.saved_plan_steps = p.status_lines.clone();
                             }
                             plan = None;
@@ -2135,7 +2173,9 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::ReasoningDelta { text }) => {
-                            // Collect reasoning preview (truncate to ~500 chars)
+                            // Collect reasoning preview for trace detail view.
+                            // Hard-truncated to ~500 chars to bound memory; the
+                            // full reasoning stays in the kernel's TurnTrace.
                             if progress.reasoning_preview.len() < 500 {
                                 let remaining = 500 - progress.reasoning_preview.len();
                                 if text.len() <= remaining {
@@ -2147,10 +2187,12 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::TurnMetrics { model, iterations, .. }) => {
+                            // TurnMetrics arrives just before stream close —
+                            // stash for the ExecutionTrace built in RecvError::Closed.
                             progress.model = model;
                             progress.iterations = iterations;
                         }
-                        Ok(_) => {} // Ignore: Progress
+                        Ok(_) => {} // Ignore: Progress (stage changes have no TG UX)
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }
@@ -2180,9 +2222,15 @@ fn spawn_stream_forwarder(
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
 
-                            // Finalize progress message with compact summary + trace button
+                            // ── Finalize: convert progress → compact summary + trace button ──
+                            // The progress message (which showed live tool activity) is
+                            // replaced with a one-line summary. An inline keyboard button
+                            // lets the user toggle the full execution trace on demand.
+                            // The trace is stored in TraceStore with 1-hour TTL.
                             if let Some(mid) = progress.message_id {
-                                // Also capture plan steps from any still-active plan
+                                // Plan steps come from either:
+                                // 1. saved_plan_steps (if PlanCompleted fired), or
+                                // 2. the still-active plan (if stream closed mid-plan).
                                 let plan_steps = if !progress.saved_plan_steps.is_empty() {
                                     std::mem::take(&mut progress.saved_plan_steps)
                                 } else {
