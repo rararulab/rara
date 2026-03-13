@@ -24,11 +24,6 @@ jobs:
           fetch-depth: false
           persist-credentials: false
 
-      - name: Setup Rust
-        uses: ./.github/actions/setup-rust
-        with:
-          shared-key: release-plz
-
       - name: Clean ignored files
         run: |
           rm -rf bin/
