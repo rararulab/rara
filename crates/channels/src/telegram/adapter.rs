@@ -129,6 +129,7 @@ pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyh
 struct ToolProgress {
     id:         String,
     name:       String,
+    activity:   String,
     summary:    String,
     started_at: Instant,
     finished:   bool,
@@ -245,118 +246,162 @@ fn format_duration_compact(d: std::time::Duration) -> String {
 }
 
 fn format_tool_line(t: &ToolProgress) -> String {
-    let label = if t.summary.is_empty() {
-        t.name.clone()
-    } else {
-        format!("[{}] {}", t.name, t.summary)
-    };
     if t.finished {
         let time = t
             .duration
             .map(|d| format!(" ({})", format_duration_compact(d)))
             .unwrap_or_default();
         if t.success {
-            format!("\u{2705} {label}{time}")
+            format!("\u{2705} {}{time}", t.activity)
         } else {
             match &t.error {
                 Some(err) => {
                     let short_err: String = err.chars().take(60).collect();
-                    format!("\u{274c} {label}{time}: {short_err}")
+                    format!("\u{274c} {}{time}: {short_err}", t.activity)
                 }
-                None => format!("\u{274c} {label}{time}"),
+                None => format!("\u{274c} {}{time}", t.activity),
             }
         }
     } else {
-        let elapsed = format_duration_compact(t.started_at.elapsed());
-        format!("\u{1f527} {label}... {elapsed}")
+        format!("正在{}…", t.activity)
+    }
+}
+
+/// A phase is a group of consecutive tools with the same activity label.
+struct Phase {
+    activity:       String,
+    count:          usize,
+    all_finished:   bool,
+    all_success:    bool,
+    total_duration: Option<std::time::Duration>,
+    first_error:    Option<String>,
+}
+
+/// Group consecutive tools by activity label into phases.
+fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
+    let mut phases: Vec<Phase> = Vec::new();
+
+    for tool in tools {
+        let merge = phases
+            .last()
+            .map(|p| p.activity == tool.activity)
+            .unwrap_or(false);
+
+        if merge {
+            let phase = phases.last_mut().unwrap();
+            phase.count += 1;
+            phase.all_finished = phase.all_finished && tool.finished;
+            phase.all_success = phase.all_success && tool.success;
+            if let Some(d) = tool.duration {
+                phase.total_duration = Some(
+                    phase.total_duration.unwrap_or(std::time::Duration::ZERO) + d,
+                );
+            }
+            if phase.first_error.is_none() {
+                phase.first_error = tool.error.clone();
+            }
+        } else {
+            phases.push(Phase {
+                activity: tool.activity.clone(),
+                count: 1,
+                all_finished: tool.finished,
+                all_success: tool.success,
+                total_duration: tool.duration,
+                first_error: tool.error.clone(),
+            });
+        }
+    }
+
+    phases
+}
+
+/// Format a single phase line.
+fn format_phase_line(phase: &Phase) -> String {
+    if phase.all_finished {
+        let time = phase
+            .total_duration
+            .map(|d| format!(" ({})", format_duration_compact(d)))
+            .unwrap_or_default();
+        if phase.all_success {
+            format!("\u{2705} {}{time}", phase.activity)
+        } else {
+            match &phase.first_error {
+                Some(err) => {
+                    let short_err: String = err.chars().take(60).collect();
+                    format!("\u{274c} {}{time}: {short_err}", phase.activity)
+                }
+                None => format!("\u{274c} {}{time}", phase.activity),
+            }
+        }
+    } else {
+        format!("正在{}…", phase.activity)
     }
 }
 
 /// Render tool progress lines for display in Telegram.
 ///
-/// When there are more than 5 tools, older completed steps are collapsed into a
-/// single "\u{22ef} N earlier steps" line to keep the message compact.
+/// Consecutive tools with the same activity label are aggregated into a single
+/// line to avoid noisy repetition (e.g. 3x "检查 MCP" becomes one line).
 fn render_progress(tools: &[ToolProgress], turn_elapsed: std::time::Duration) -> String {
-    let in_progress_count = tools.iter().filter(|t| !t.finished).count();
-    let finished_count = tools.iter().filter(|t| t.finished).count();
-    let total = tools.len();
+    if tools.is_empty() {
+        return String::new();
+    }
 
-    // Header: show concurrent count when multiple tools running.
+    // Aggregate consecutive tools with the same activity into phases.
+    let phases = aggregate_phases(tools);
     let mut lines = Vec::new();
-    if in_progress_count > 1 {
-        lines.push(format!("\u{26a1} {in_progress_count} tools running"));
+
+    // Count in-progress phases.
+    let active = phases.iter().filter(|p| !p.all_finished).count();
+    if active > 1 {
+        lines.push(format!("\u{26a1} {active} 项任务并行中"));
     }
 
-    if total <= 5 {
-        for t in tools {
-            lines.push(format_tool_line(t));
+    let total_phases = phases.len();
+    if total_phases <= 5 {
+        for phase in &phases {
+            lines.push(format_phase_line(phase));
         }
-        // Footer: total elapsed time.
-        if in_progress_count > 0 {
-            lines.push(format!("\u{23f1} {}", format_duration_compact(turn_elapsed)));
-        }
-        return lines.join("\n");
-    }
+    } else {
+        // Compact: collapse older finished phases.
+        let finished_phases: Vec<_> = phases.iter().filter(|p| p.all_finished).collect();
+        let in_progress_phases: Vec<_> = phases.iter().filter(|p| !p.all_finished).collect();
+        let show_last = 2;
+        let collapsed = finished_phases.len().saturating_sub(show_last);
 
-    let last_finished: Vec<_> = tools.iter().filter(|t| t.finished).rev().take(2).collect();
-    let collapsed = finished_count.saturating_sub(last_finished.len());
-
-    if collapsed > 0 {
-        // Build category breakdown with total time: "⋯ 8×bash, 5×search (12.3s)"
-        let collapsed_tools: Vec<_> = tools
-            .iter()
-            .filter(|t| t.finished)
-            .take(collapsed)
-            .collect();
-        let mut counts: Vec<(&str, usize)> = Vec::new();
-        for t in &collapsed_tools {
-            if let Some(entry) = counts.iter_mut().find(|(n, _)| *n == t.name.as_str()) {
-                entry.1 += 1;
+        if collapsed > 0 {
+            let collapsed_dur: std::time::Duration = finished_phases[..collapsed]
+                .iter()
+                .flat_map(|p| p.total_duration)
+                .sum();
+            let dur_str = if !collapsed_dur.is_zero() {
+                format!(" ({})", format_duration_compact(collapsed_dur))
             } else {
-                counts.push((&t.name, 1));
-            }
+                String::new()
+            };
+            lines.push(format!("\u{22ef} 已完成 {collapsed} 步{dur_str}"));
         }
-        counts.sort_by(|a, b| b.1.cmp(&a.1));
-        let parts: Vec<_> = counts
-            .iter()
-            .take(4)
-            .map(|(name, count)| format!("{count}\u{00d7}{name}"))
-            .collect();
-        let remaining: usize = counts.iter().skip(4).map(|(_, c)| c).sum();
-        let mut breakdown = parts.join(", ");
-        if remaining > 0 {
-            breakdown.push_str(&format!(", +{remaining}"));
-        }
-        // Sum durations of collapsed tools.
-        let total_dur: std::time::Duration = collapsed_tools
-            .iter()
-            .filter_map(|t| t.duration)
-            .sum();
-        if !total_dur.is_zero() {
-            breakdown.push_str(&format!(" ({})", format_duration_compact(total_dur)));
-        }
-        lines.push(format!("\u{22ef} {breakdown}"));
-    }
 
-    // Last 2 finished (in original order).
-    for t in last_finished.into_iter().rev() {
-        lines.push(format_tool_line(t));
-    }
+        // Last N finished phases.
+        for phase in finished_phases.iter().skip(collapsed) {
+            lines.push(format_phase_line(phase));
+        }
 
-    // In-progress tools.
-    for t in tools.iter().filter(|t| !t.finished) {
-        lines.push(format_tool_line(t));
+        // In-progress phases.
+        for phase in &in_progress_phases {
+            lines.push(format_phase_line(phase));
+        }
     }
 
     // Footer: total elapsed time (only while tools are still running).
-    if in_progress_count > 0 {
-        lines.push(format!("\u{23f1} {}", format_duration_compact(turn_elapsed)));
+    if phases.iter().any(|p| !p.all_finished) {
+        lines.push(format!("\u{23f1}\u{fe0f} {}", format_duration_compact(turn_elapsed)));
     }
 
     lines.join("\n")
 }
 
-use crate::tool_display::tool_display_info;
+use crate::tool_display::{tool_activity_label, tool_display_info};
 
 /// Per-chat streaming state for progressive `editMessageText` updates.
 struct StreamingMessage {
@@ -1638,9 +1683,11 @@ fn spawn_stream_forwarder(
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
                             let (display, summary) = tool_display_info(&name, &arguments);
+                            let activity = tool_activity_label(&name).to_owned();
                             progress.tools.push(ToolProgress {
                                 id,
                                 name: display,
+                                activity,
                                 summary,
                                 started_at: Instant::now(),
                                 finished: false,

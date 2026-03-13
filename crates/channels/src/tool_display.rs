@@ -14,47 +14,172 @@
 
 //! Shared helpers for rendering tool-call progress across adapters.
 
+use std::str::FromStr;
+
+use strum::EnumMessage;
+
+/// Known tool kinds with display name and activity label.
+///
+/// - `serialize` = raw tool name from the LLM
+/// - `detailed_message` = short English display name (used by web adapter, logs)
+/// - `message` = Chinese activity phrase (used by TG adapter for user-facing progress)
+///
+/// Multiple raw names can map to the same variant via multiple `serialize` attrs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::EnumMessage)]
+pub enum ToolKind {
+    #[strum(serialize = "shell_execute")]
+    #[strum(message = "执行命令", detailed_message = "shell")]
+    ShellExecute,
+
+    #[strum(serialize = "bash")]
+    #[strum(message = "执行命令", detailed_message = "bash")]
+    Bash,
+
+    #[strum(serialize = "web_search")]
+    #[strum(message = "搜索网页", detailed_message = "search")]
+    WebSearch,
+
+    #[strum(serialize = "web_fetch", serialize = "http-fetch")]
+    #[strum(message = "获取网页", detailed_message = "fetch")]
+    WebFetch,
+
+    #[strum(serialize = "read-file")]
+    #[strum(message = "读取文件", detailed_message = "read")]
+    ReadFile,
+
+    #[strum(serialize = "write-file")]
+    #[strum(message = "写入文件", detailed_message = "write")]
+    WriteFile,
+
+    #[strum(serialize = "edit-file")]
+    #[strum(message = "编辑文件", detailed_message = "edit")]
+    EditFile,
+
+    #[strum(serialize = "find-files")]
+    #[strum(message = "查找文件", detailed_message = "find")]
+    FindFiles,
+
+    #[strum(serialize = "list-directory")]
+    #[strum(message = "查找文件", detailed_message = "ls")]
+    ListDirectory,
+
+    #[strum(serialize = "grep")]
+    #[strum(message = "搜索内容", detailed_message = "grep")]
+    Grep,
+
+    #[strum(serialize = "screenshot")]
+    #[strum(message = "截取屏幕", detailed_message = "screenshot")]
+    Screenshot,
+
+    #[strum(serialize = "send-image")]
+    #[strum(message = "发送图片", detailed_message = "send-image")]
+    SendImage,
+
+    #[strum(serialize = "send-email")]
+    #[strum(message = "发送邮件", detailed_message = "email")]
+    SendEmail,
+
+    #[strum(serialize = "memory_search")]
+    #[strum(message = "搜索记忆", detailed_message = "memory-search")]
+    MemorySearch,
+
+    #[strum(serialize = "memory_write")]
+    #[strum(message = "写入记忆", detailed_message = "memory-write")]
+    MemoryWrite,
+
+    #[strum(serialize = "tape-handoff")]
+    #[strum(message = "交接任务", detailed_message = "tape-handoff")]
+    TapeHandoff,
+
+    #[strum(serialize = "tape-info")]
+    #[strum(message = "查看会话", detailed_message = "tape-info")]
+    TapeInfo,
+
+    #[strum(serialize = "user-note", serialize = "write-user-note")]
+    #[strum(message = "记录笔记", detailed_message = "note")]
+    UserNote,
+
+    #[strum(serialize = "distill-user-notes")]
+    #[strum(message = "整理笔记", detailed_message = "note-distill")]
+    DistillUserNotes,
+
+    #[strum(serialize = "settings")]
+    #[strum(message = "调整设置", detailed_message = "settings")]
+    Settings,
+
+    #[strum(
+        serialize = "composio_list",
+        serialize = "composio_execute",
+        serialize = "composio_connect",
+        serialize = "composio_accounts"
+    )]
+    #[strum(message = "执行集成", detailed_message = "composio")]
+    Composio,
+
+    #[strum(serialize = "list-skills")]
+    #[strum(message = "查看技能", detailed_message = "skills")]
+    ListSkills,
+
+    #[strum(serialize = "create-skill")]
+    #[strum(message = "创建技能", detailed_message = "skill-create")]
+    CreateSkill,
+
+    #[strum(serialize = "delete-skill")]
+    #[strum(message = "删除技能", detailed_message = "skill-delete")]
+    DeleteSkill,
+
+    #[strum(serialize = "install-mcp-server")]
+    #[strum(message = "安装 MCP", detailed_message = "mcp-install")]
+    InstallMcp,
+
+    #[strum(serialize = "list-mcp-servers")]
+    #[strum(message = "检查 MCP", detailed_message = "mcp-list")]
+    ListMcp,
+
+    #[strum(serialize = "remove-mcp-server")]
+    #[strum(message = "移除 MCP", detailed_message = "mcp-remove")]
+    RemoveMcp,
+
+    #[strum(serialize = "dispatch-rara")]
+    #[strum(message = "分派任务", detailed_message = "dispatch")]
+    Dispatch,
+
+    #[strum(serialize = "list-sessions")]
+    #[strum(message = "查看会话列表", detailed_message = "sessions")]
+    ListSessions,
+
+    #[strum(serialize = "read-tape")]
+    #[strum(message = "读取会话记录", detailed_message = "tape-read")]
+    ReadTape,
+
+    #[strum(serialize = "update-soul-state")]
+    #[strum(message = "更新状态", detailed_message = "soul-update")]
+    UpdateSoulState,
+
+    #[strum(serialize = "evolve-soul")]
+    #[strum(message = "自我进化", detailed_message = "soul-evolve")]
+    EvolveSoul,
+}
+
+impl ToolKind {
+    /// Parse a raw tool name, returning `None` for unknown tools.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::from_str(raw).ok()
+    }
+}
+
 /// Map raw tool names to shorter, human-friendly display names.
 pub fn tool_display_name(raw: &str) -> &str {
-    match raw {
-        "shell_execute" => "shell",
-        "bash" => "bash",
-        "web_search" => "search",
-        "web_fetch" | "http-fetch" => "fetch",
-        "read-file" => "read",
-        "write-file" => "write",
-        "edit-file" => "edit",
-        "find-files" => "find",
-        "list-directory" => "ls",
-        "grep" => "grep",
-        "screenshot" => "screenshot",
-        "send-image" => "send-image",
-        "send-email" => "email",
-        "memory_search" => "memory-search",
-        "memory_write" => "memory-write",
-        "tape-handoff" => "tape-handoff",
-        "tape-info" => "tape-info",
-        "user-note" => "note",
-        "settings" => "settings",
-        "composio_list" => "composio",
-        "composio_execute" => "composio",
-        "composio_connect" => "composio",
-        "composio_accounts" => "composio",
-        "list-skills" => "skills",
-        "create-skill" => "skill-create",
-        "delete-skill" => "skill-delete",
-        "install-mcp-server" => "mcp-install",
-        "list-mcp-servers" => "mcp-list",
-        "remove-mcp-server" => "mcp-remove",
-        "dispatch-rara" => "dispatch",
-        "list-sessions" => "sessions",
-        "read-tape" => "tape-read",
-        "write-user-note" => "note-write",
-        "distill-user-notes" => "note-distill",
-        "update-soul-state" => "soul-update",
-        "evolve-soul" => "soul-evolve",
-        other => other,
-    }
+    ToolKind::parse(raw)
+        .and_then(|k| k.get_detailed_message())
+        .unwrap_or(raw)
+}
+
+/// Map raw tool names to Chinese activity phrases for user-facing progress.
+pub fn tool_activity_label(raw: &str) -> &str {
+    ToolKind::parse(raw)
+        .and_then(|k| k.get_message())
+        .unwrap_or("处理中")
 }
 
 /// Extract a one-line summary from tool arguments based on the tool name.
@@ -192,11 +317,44 @@ fn truncate_summary(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use strum::EnumMessage;
 
     use super::*;
 
     #[test]
-    fn display_name_mapping() {
+    fn tool_kind_from_str() {
+        assert_eq!(ToolKind::parse("bash"), Some(ToolKind::Bash));
+        assert_eq!(ToolKind::parse("shell_execute"), Some(ToolKind::ShellExecute));
+        assert_eq!(ToolKind::parse("http-fetch"), Some(ToolKind::WebFetch));
+        assert_eq!(ToolKind::parse("composio_list"), Some(ToolKind::Composio));
+        assert_eq!(ToolKind::parse("composio_execute"), Some(ToolKind::Composio));
+        assert_eq!(ToolKind::parse("user-note"), Some(ToolKind::UserNote));
+        assert_eq!(ToolKind::parse("write-user-note"), Some(ToolKind::UserNote));
+        assert_eq!(ToolKind::parse("unknown_tool"), None);
+    }
+
+    #[test]
+    fn tool_kind_messages() {
+        assert_eq!(ToolKind::Bash.get_message(), Some("执行命令"));
+        assert_eq!(ToolKind::Bash.get_detailed_message(), Some("bash"));
+        assert_eq!(ToolKind::WebSearch.get_message(), Some("搜索网页"));
+        assert_eq!(ToolKind::WebSearch.get_detailed_message(), Some("search"));
+        assert_eq!(ToolKind::ListMcp.get_message(), Some("检查 MCP"));
+        assert_eq!(ToolKind::ListMcp.get_detailed_message(), Some("mcp-list"));
+    }
+
+    #[test]
+    fn activity_label_via_function() {
+        assert_eq!(tool_activity_label("shell_execute"), "执行命令");
+        assert_eq!(tool_activity_label("bash"), "执行命令");
+        assert_eq!(tool_activity_label("web_search"), "搜索网页");
+        assert_eq!(tool_activity_label("list-mcp-servers"), "检查 MCP");
+        assert_eq!(tool_activity_label("remove-mcp-server"), "移除 MCP");
+        assert_eq!(tool_activity_label("unknown_tool"), "处理中");
+    }
+
+    #[test]
+    fn display_name_via_function() {
         assert_eq!(tool_display_name("shell_execute"), "shell");
         assert_eq!(tool_display_name("web_search"), "search");
         assert_eq!(tool_display_name("web_fetch"), "fetch");
@@ -205,6 +363,8 @@ mod tests {
         assert_eq!(tool_display_name("grep"), "grep");
         assert_eq!(tool_display_name("tape-handoff"), "tape-handoff");
         assert_eq!(tool_display_name("memory_search"), "memory-search");
+        // Unknown tools fall back to raw name.
+        assert_eq!(tool_display_name("some-custom-tool"), "some-custom-tool");
     }
 
     #[test]
