@@ -26,7 +26,7 @@ pub enum VaultError {
 
     #[snafu(display("Failed to read auth credential file {path}: {source}"))]
     CredentialFile {
-        path: String,
+        path:   String,
         source: std::io::Error,
     },
 

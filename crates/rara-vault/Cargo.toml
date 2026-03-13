@@ -8,17 +8,17 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+humantime-serde = "1"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-humantime-serde = "1"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full", "macros"] }
 serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full", "macros"] }
 
 [lints]
 workspace = true

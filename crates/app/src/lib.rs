@@ -18,6 +18,8 @@ mod context_mode;
 pub mod flatten;
 pub mod gateway;
 mod tools;
+mod vault_bootstrap;
+mod vault_watcher;
 
 use std::{
     path::{Path, PathBuf},
@@ -37,7 +39,7 @@ use rara_server::{
     http::{RestServerConfig, health_routes, start_rest_server},
 };
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Whatever};
+use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -96,6 +98,9 @@ pub struct AppConfig {
     /// Symphony autonomous coding agent orchestrator (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symphony:               Option<rara_symphony::SymphonyConfig>,
+    /// Vault configuration center (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault:                  Option<rara_vault::VaultConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -253,6 +258,27 @@ pub async fn start_with_options(
     options: StartOptions,
 ) -> Result<AppHandle, Whatever> {
     info!("Initializing job application");
+    let mut config = config;
+
+    // Build a single VaultClient for the entire app lifetime (if configured).
+    let vault_client: Option<Arc<rara_vault::VaultClient>> =
+        build_vault_client(&config).await;
+
+    // Bootstrap: pull dynamic config from Vault and merge into AppConfig.
+    if let Some(ref client) = vault_client {
+        match vault_bootstrap::pull_and_merge(&mut config, client).await {
+            Ok(true) => info!("Vault config merged into AppConfig"),
+            Ok(false) => {}
+            Err(e) => {
+                let fallback = config.vault.as_ref().is_some_and(|v| v.fallback_to_local);
+                if fallback {
+                    warn!(error = %e, "Vault pull failed, falling back to local config");
+                } else {
+                    whatever!("Vault bootstrap failed: {e}");
+                }
+            }
+        }
+    }
 
     let db_store = init_infra(&config)
         .await
@@ -268,16 +294,25 @@ pub async fn start_with_options(
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
 
-    // Resolve config file path (same logic as AppConfig::new)
+    // Resolve config file path: prefer local ./config.yaml if it exists,
+    // otherwise fall back to the global config path. This mirrors the
+    // load priority in AppConfig::new().
     let config_path = {
-        let mut path = std::env::current_dir().unwrap_or_default();
-        path.push("config.yaml");
-        path
+        let local = std::env::current_dir()
+            .unwrap_or_default()
+            .join("config.yaml");
+        if local.is_file() { local } else { rara_paths::config_file().clone() }
     };
-    let config_file_sync =
-        config_sync::ConfigFileSync::new(settings_provider.clone(), config.clone(), config_path)
-            .await
-            .whatever_context("Failed to initialize config file sync")?;
+    let last_vault_push_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let config_file_sync = config_sync::ConfigFileSync::new(
+        settings_provider.clone(),
+        config.clone(),
+        config_path,
+        vault_client.clone(),
+        last_vault_push_ms.clone(),
+    )
+    .await
+    .whatever_context("Failed to initialize config file sync")?;
 
     let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
         .await
@@ -371,6 +406,18 @@ pub async fn start_with_options(
         tokio::spawn(async move {
             config_file_sync.start(cancel).await;
         });
+    }
+    if let Some(ref client) = vault_client {
+        if let Some(ref vault_config) = config.vault {
+            vault_watcher::spawn_vault_watcher(
+                client.clone(),
+                vault_config.watch_interval,
+                settings_provider.clone(),
+                last_vault_push_ms.clone(),
+                cancellation_token.clone(),
+            );
+            info!("Vault config watcher started");
+        }
     }
 
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
@@ -676,6 +723,36 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
         .whatever_context("Failed to run database migrations")?;
     info!("Database initialized");
     Ok(db_store)
+}
+
+async fn build_vault_client(config: &AppConfig) -> Option<Arc<rara_vault::VaultClient>> {
+    let vault_config = config.vault.as_ref()?;
+    let client = match rara_vault::VaultClient::new(vault_config.clone()) {
+        Ok(client) => Arc::new(client),
+        Err(e) => {
+            if vault_config.fallback_to_local {
+                warn!(error = %e, "failed to build vault client, falling back to local config");
+                return None;
+            }
+            error!(error = %e, "failed to build vault client");
+            return None;
+        }
+    };
+
+    match client.login().await {
+        Ok(()) => {
+            info!("Vault client authenticated");
+            Some(client)
+        }
+        Err(e) => {
+            if vault_config.fallback_to_local {
+                warn!(error = %e, "vault login failed, falling back to local config");
+            } else {
+                error!(error = %e, "vault login failed");
+            }
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
