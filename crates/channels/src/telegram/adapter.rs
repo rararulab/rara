@@ -597,9 +597,16 @@ fn render_trace_detail(trace: &ExecutionTrace) -> String {
         text.push_str(&format!(" \u{00b7} {}", trace_html_escape(&trace.model)));
     }
 
-    // Telegram message limit is 4096 chars
+    // Telegram message limit is 4096 chars.
+    // Must truncate on a char boundary to avoid panic on multi-byte UTF-8.
     if text.len() > 4000 {
-        text.truncate(3990);
+        let truncate_at = text
+            .char_indices()
+            .take_while(|(i, _)| *i <= 3990)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(3990.min(text.len()));
+        text.truncate(truncate_at);
         text.push_str("\n\u{2026}(truncated)");
     }
 
@@ -2219,13 +2226,18 @@ fn spawn_stream_forwarder(
                             // Collect reasoning preview for trace detail view.
                             // Hard-truncated to ~500 chars to bound memory; the
                             // full reasoning stays in the kernel's TurnTrace.
-                            if progress.reasoning_preview.len() < 500 {
-                                let remaining = 500 - progress.reasoning_preview.len();
-                                if text.len() <= remaining {
+                            // Uses .chars().count() for char-level limit to avoid
+                            // panic on slicing multi-byte UTF-8 (中文, emoji, etc).
+                            let current_chars = progress.reasoning_preview.chars().count();
+                            if current_chars < 500 {
+                                let remaining = 500 - current_chars;
+                                let text_chars = text.chars().count();
+                                if text_chars <= remaining {
                                     progress.reasoning_preview.push_str(&text);
                                 } else {
-                                    progress.reasoning_preview.push_str(&text[..remaining]);
-                                    progress.reasoning_preview.push_str("\u{2026}");
+                                    let safe_end: String = text.chars().take(remaining).collect();
+                                    progress.reasoning_preview.push_str(&safe_end);
+                                    progress.reasoning_preview.push('\u{2026}');
                                 }
                             }
                         }
