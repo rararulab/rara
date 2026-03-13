@@ -46,7 +46,6 @@ on:
     secrets:
       HOMEBREW_TAP_TOKEN:
         required: false
-  pull_request:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
@@ -58,9 +57,9 @@ jobs:
     runs-on: "ubuntu-latest"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ inputs.tag || (!github.event.pull_request && github.ref_name || '') }}
-      tag-flag: ${{ inputs.tag && format('--tag={0}', inputs.tag) || (!github.event.pull_request && format('--tag={0}', github.ref_name) || '') }}
-      publishing: ${{ inputs.tag != '' || !github.event.pull_request }}
+      tag: ${{ inputs.tag || github.ref_name }}
+      tag-flag: ${{ format('--tag={0}', inputs.tag || github.ref_name) }}
+      publishing: "true"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -77,14 +76,9 @@ jobs:
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/cargo-dist
-      # sure would be cool if github gave us proper conditionals...
-      # so here's a doubly-nested ternary-via-truthiness to try to provide the best possible
-      # functionality based true whether this is a pull_request, and whether it's from a fork.
-      # (PRs run true the *source* but secrets are usually true the *target* -- that's *good*
-      # but also really annoying to build CI around when it needs secrets to work right.)
       - id: plan
         run: |
-          cargo dist ${{ (!github.event.pull_request && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          cargo dist host --steps=create --tag=${{ inputs.tag || github.ref_name }} --output-format=json > plan-dist-manifest.json
           echo "cargo dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
