@@ -8,6 +8,7 @@ homepage = "https://github.com/rararulab/rara"
 readme = "README.md"
 keywords = ["rust", "agent", "proactive", "developer-tools", "ai"]
 categories = ["command-line-utilities"]
+publish = false
 
 [workspace.lints.rust]
 unsafe_code = "deny"
