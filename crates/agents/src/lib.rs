@@ -34,15 +34,15 @@ use std::sync::LazyLock;
 use rara_kernel::agent::{AgentManifest, AgentRole, Priority};
 
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
-    name:                   "rara".to_string(),
-    role:                   AgentRole::Chat,
-    description:            "Rara — personal AI assistant with personality and tools".to_string(),
-    model:                  None,
-    system_prompt:          RARA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:            None,
-    provider_hint:          None,
-    max_iterations:         Some(25),
-    tools:                  vec![
+    name: "rara".to_string(),
+    role: AgentRole::Chat,
+    description: "Rara — personal AI assistant with personality and tools".to_string(),
+    model: None,
+    system_prompt: RARA_SYSTEM_PROMPT.to_string(),
+    soul_prompt: None,
+    provider_hint: None,
+    max_iterations: Some(25),
+    tools: vec![
         "bash".to_string(),
         "grep".to_string(),
         "read-file".to_string(),
@@ -74,84 +74,88 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "remove-mcp-server".to_string(),
         "create_plan".to_string(),
     ],
-    max_children:           None,
-    max_context_tokens:     None,
-    priority:               Priority::default(),
-    metadata:               serde_json::Value::Null,
-    sandbox:                None,
+    max_children: None,
+    max_context_tokens: None,
+    priority: Priority::default(),
+    metadata: serde_json::Value::Null,
+    sandbox: None,
     default_execution_mode: None,
 });
 
 /// Build the **rara** agent manifest — the default user-facing chat agent.
-pub fn rara() -> &'static AgentManifest { &RARA_MANIFEST }
+pub fn rara() -> &'static AgentManifest {
+    &RARA_MANIFEST
+}
 
 // ---------------------------------------------------------------------------
 // Nana — friendly chat companion
 // ---------------------------------------------------------------------------
 
 static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
-    name:                   "nana".to_string(),
-    role:                   AgentRole::Chat,
-    description:            "Nana — friendly chat companion, rara's sister".to_string(),
-    model:                  None,
-    system_prompt:          NANA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:            None,
-    provider_hint:          None,
-    max_iterations:         Some(10),
-    tools:                  vec!["tape".to_string()],
-    max_children:           Some(0),
-    max_context_tokens:     None,
-    priority:               Priority::default(),
-    metadata:               serde_json::Value::Null,
-    sandbox:                None,
+    name: "nana".to_string(),
+    role: AgentRole::Chat,
+    description: "Nana — friendly chat companion, rara's sister".to_string(),
+    model: None,
+    system_prompt: NANA_SYSTEM_PROMPT.to_string(),
+    soul_prompt: None,
+    provider_hint: None,
+    max_iterations: Some(10),
+    tools: vec!["tape".to_string()],
+    max_children: Some(0),
+    max_context_tokens: None,
+    priority: Priority::default(),
+    metadata: serde_json::Value::Null,
+    sandbox: None,
     default_execution_mode: None,
 });
 
 /// Build the **nana** agent manifest — a chat-only companion for regular users.
-pub fn nana() -> &'static AgentManifest { &NANA_MANIFEST }
+pub fn nana() -> &'static AgentManifest {
+    &NANA_MANIFEST
+}
 
 // ---------------------------------------------------------------------------
 // Worker — lightweight task-execution agent
 // ---------------------------------------------------------------------------
 
 static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
-    name:                   "worker".to_string(),
-    role:                   AgentRole::Worker,
-    description:            "Worker — lightweight task-execution agent for sub-agent spawning"
-        .to_string(),
-    model:                  None,
-    system_prompt:          WORKER_SYSTEM_PROMPT.to_string(),
-    soul_prompt:            None,
-    provider_hint:          None,
-    max_iterations:         Some(15),
-    tools:                  vec![],
-    max_children:           Some(0),
-    max_context_tokens:     None,
-    priority:               Priority::default(),
-    metadata:               serde_json::Value::Null,
-    sandbox:                None,
+    name: "worker".to_string(),
+    role: AgentRole::Worker,
+    description: "Worker — lightweight task-execution agent for sub-agent spawning".to_string(),
+    model: None,
+    system_prompt: WORKER_SYSTEM_PROMPT.to_string(),
+    soul_prompt: None,
+    provider_hint: None,
+    max_iterations: Some(15),
+    tools: vec![],
+    max_children: Some(0),
+    max_context_tokens: None,
+    priority: Priority::default(),
+    metadata: serde_json::Value::Null,
+    sandbox: None,
     default_execution_mode: None,
 });
 
 /// Build the **worker** agent manifest — a lightweight sub-agent for task
 /// execution.
-pub fn worker() -> &'static AgentManifest { &WORKER_MANIFEST }
+pub fn worker() -> &'static AgentManifest {
+    &WORKER_MANIFEST
+}
 
 // ---------------------------------------------------------------------------
 // Mita — background proactive agent
 // ---------------------------------------------------------------------------
 
 static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
-    name:                   "mita".to_string(),
-    role:                   AgentRole::Worker,
-    description:            "Mita — background proactive agent with heartbeat-driven observation"
-        .to_string(),
-    model:                  None,
-    system_prompt:          MITA_SYSTEM_PROMPT.to_string(),
-    soul_prompt:            None,
-    provider_hint:          None,
-    max_iterations:         Some(20),
-    tools:                  vec![
+    name: "mita".to_string(),
+    role: AgentRole::Worker,
+    description: "Mita — background proactive agent with heartbeat-driven observation".to_string(),
+    model: None,
+    system_prompt: MITA_SYSTEM_PROMPT.to_string(),
+    soul_prompt: None,
+    provider_hint: None,
+    max_iterations: Some(20),
+    tools: vec![
         "tape".to_string(),
         "list-sessions".to_string(),
         "read-tape".to_string(),
@@ -161,17 +165,19 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "update-soul-state".to_string(),
         "evolve-soul".to_string(),
     ],
-    max_children:           Some(0),
-    max_context_tokens:     None,
-    priority:               Priority::default(),
-    metadata:               serde_json::Value::Null,
-    sandbox:                None,
+    max_children: Some(0),
+    max_context_tokens: None,
+    priority: Priority::default(),
+    metadata: serde_json::Value::Null,
+    sandbox: None,
     default_execution_mode: None,
 });
 
 /// Build the **mita** agent manifest — a background proactive agent that
 /// observes sessions and dispatches instructions to Rara.
-pub fn mita() -> &'static AgentManifest { &MITA_MANIFEST }
+pub fn mita() -> &'static AgentManifest {
+    &MITA_MANIFEST
+}
 
 // ---------------------------------------------------------------------------
 // ScheduledJob — dedicated agent for scheduled task execution
@@ -184,11 +190,11 @@ pub fn mita() -> &'static AgentManifest { &MITA_MANIFEST }
 /// the system prompt includes runtime information (job ID, schedule, task).
 pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> AgentManifest {
     AgentManifest {
-        name:                   "scheduled_job".to_string(),
-        role:                   AgentRole::Worker,
-        description:            "Executes a scheduled task and summarizes the result".to_string(),
-        model:                  None,
-        system_prompt:          format!(
+        name: "scheduled_job".to_string(),
+        role: AgentRole::Worker,
+        description: "Executes a scheduled task and summarizes the result".to_string(),
+        model: None,
+        system_prompt: format!(
             "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
              {trigger_summary}\nTask: {message}\n\n## Instructions\n1. Execute the task described \
              above using available tools.\n2. After completion, provide a brief summary of what \
@@ -196,15 +202,15 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
              `kernel` tool with:\n- action: \"publish\"\n- event_type: \"scheduled_task_done\"\n- \
              payload: {{ \"message\": \"<your summary of what was done and the outcome>\" }}\n"
         ),
-        soul_prompt:            None,
-        provider_hint:          None,
-        max_iterations:         Some(15),
-        tools:                  vec![],
-        max_children:           Some(0),
-        max_context_tokens:     None,
-        priority:               Priority::default(),
-        metadata:               serde_json::Value::Null,
-        sandbox:                None,
+        soul_prompt: None,
+        provider_hint: None,
+        max_iterations: Some(15),
+        tools: vec![],
+        max_children: Some(0),
+        max_context_tokens: None,
+        priority: Priority::default(),
+        metadata: serde_json::Value::Null,
+        sandbox: None,
         default_execution_mode: None,
     }
 }
@@ -245,6 +251,7 @@ Execution rules:
 - If there is no dedicated tool, explore practical fallbacks such as local CLIs, bash, HTTP requests, or small scripts.
 - If the user gives credentials and a target service, use them to complete the task.
 - For longer multi-step jobs, give occasional short progress updates.
+- For questions about external projects, services, or concepts you don't recognize, use http-fetch to look them up on the web (e.g. fetch their homepage or GitHub README). Do not grep the local workspace for external entities.
 
 Proactive behavior:
 - When the user mentions a deadline, TODO, or future event, propose creating a reminder using schedule tools.
