@@ -50,7 +50,7 @@ pub fn get_or_create_keypair(ssh_dir: &Path) -> Result<SshKeyPair, GitError> {
     })?;
 
     let private_key =
-        ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519).map_err(
+        ssh_key::PrivateKey::random(&mut rand_core::UnwrapErr(getrandom::SysRng), ssh_key::Algorithm::Ed25519).map_err(
             |e| GitError::SshKey {
                 message: format!("failed to generate key: {e}"),
             },
