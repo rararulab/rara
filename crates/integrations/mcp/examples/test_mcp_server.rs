@@ -75,14 +75,13 @@ impl TestServer {
 #[tool_handler]
 impl ServerHandler for TestServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("Test MCP server for integration tests".into()),
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            ..Default::default()
-        }
+        )
+        .with_instructions("Test MCP server for integration tests")
     }
 
     async fn list_resources(
@@ -106,12 +105,10 @@ impl ServerHandler for TestServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         if request.uri == "test://greeting" {
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(
-                    "Hello from test server!",
-                    request.uri,
-                )],
-            })
+            Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                "Hello from test server!",
+                request.uri,
+            )]))
         } else {
             Err(rmcp::ErrorData::resource_not_found(
                 format!("unknown resource: {}", request.uri),
