@@ -42,9 +42,18 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock as StdRwLock},
+    sync::{Arc, LazyLock, RwLock as StdRwLock},
     time::Instant,
 };
+
+/// 匹配 LLM 意外输出到 content 中的 tool call XML 标签。
+/// 覆盖 `<toolcall>`, `<tool_call>`, `<tool_use>`, `<function=...>` 及其自闭合变体。
+static TOOL_CALL_XML_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?si)<(?:toolcall|tool_call|tool_use|function=[^>]*)(?:\s[^>]*)?>.*?</(?:toolcall|tool_call|tool_use|function)>|<(?:toolcall|tool_call|tool_use|function=[^>]*)(?:\s[^>]*)?/>"
+    )
+    .expect("tool call XML regex must compile")
+});
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -1519,6 +1528,12 @@ async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: Comm
 // Stream forwarder — progressive editMessageText
 // ---------------------------------------------------------------------------
 
+/// 从累积文本中剥离 LLM 意外泄漏的 tool call XML，返回清理后的文本。
+/// 若文本未被修改则返回原始切片的克隆（零拷贝路径由 regex 保证）。
+fn strip_tool_call_xml(text: &str) -> String {
+    TOOL_CALL_XML_RE.replace_all(text, "").into_owned()
+}
+
 /// Spawn a background task that subscribes to [`StreamHub`] for the given
 /// session and progressively updates a Telegram message via `editMessageText`.
 fn spawn_stream_forwarder(
@@ -1586,8 +1601,10 @@ fn spawn_stream_forwarder(
                                     state.dirty = true;
 
                                     if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
-                                        let split_chars = state.accumulated.chars().count();
-                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                        // 剥离 LLM 可能泄漏到 content 中的 tool call XML
+                                        let cleaned = strip_tool_call_xml(&state.accumulated);
+                                        let split_chars = cleaned.chars().count();
+                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&cleaned);
                                         Some(FlushRequest {
                                             message_ids: state.message_ids.clone(),
                                             text_html: html,
@@ -1795,7 +1812,9 @@ fn spawn_stream_forwarder(
                             let flush_req = {
                                 if let Some(state) = active_streams.get(&chat_id) {
                                     if state.dirty {
-                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                        // 剥离 LLM 可能泄漏到 content 中的 tool call XML
+                                        let cleaned = strip_tool_call_xml(&state.accumulated);
+                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&cleaned);
                                         Some(FlushRequest {
                                             message_ids: state.message_ids.clone(),
                                             text_html: html,
