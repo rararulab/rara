@@ -106,14 +106,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
 
-      - name: Setup mdBook
-        uses: jontze/action-mdbook@6c0be56d14c4bf16861b00af61f50ff7400ce502 # v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          use-linkcheck: true
-          use-mermaid: true
-          use-toc: true
-
       - name: Build mdbook
         run: mdbook build docs
 
