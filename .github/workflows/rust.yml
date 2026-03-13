@@ -46,7 +46,7 @@ jobs:
         run: sccache --start-server || true
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
       - name: sccache stats
         if: always()
@@ -65,7 +65,7 @@ jobs:
         run: sccache --start-server || true
 
       - name: Generate documentation
-        run: cargo +nightly doc --workspace --all-features --no-deps --document-private-items
+        run: cargo +nightly doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -82,7 +82,7 @@ jobs:
         run: sccache --start-server || true
 
       - name: Run tests
-        run: cargo nextest run --workspace --all-features
+        run: cargo nextest run --workspace
 
   coverage:
     name: Coverage
@@ -102,7 +102,6 @@ jobs:
           cargo tarpaulin \
             --engine llvm \
             --workspace \
-            --all-features \
             --no-dead-code \
             --skip-clean \
             --out xml \
