@@ -17,6 +17,13 @@ env:
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
+  RUSTC_WRAPPER: sccache
+  SCCACHE_BUCKET: sccache
+  SCCACHE_REGION: us-east-1
+  SCCACHE_ENDPOINT: http://10.0.0.167:9000
+  SCCACHE_S3_USE_SSL: "false"
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin
 
 defaults:
   run:
@@ -35,8 +42,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Start sccache
+        run: sccache --start-server || true
+
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   docs:
     name: Documentation
@@ -46,6 +60,9 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      - name: Start sccache
+        run: sccache --start-server || true
 
       - name: Generate documentation
         run: cargo +nightly doc --workspace --all-features --no-deps --document-private-items
@@ -61,6 +78,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Start sccache
+        run: sccache --start-server || true
+
       - name: Run tests
         run: cargo nextest run --workspace --all-features
 
@@ -73,6 +93,9 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      - name: Start sccache
+        run: sccache --start-server || true
 
       - name: Generate coverage report
         run: |
