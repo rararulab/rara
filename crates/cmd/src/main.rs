@@ -185,6 +185,37 @@ impl GatewayArgs {
             std::sync::Arc::clone(&notifier),
         );
 
+        // 1.5 Create process monitor.
+        let process_snapshot: rara_app::gateway::SnapshotHandle = Default::default();
+        let alert_thresholds: rara_app::gateway::ThresholdsHandle = Default::default();
+
+        {
+            let snapshot = process_snapshot.clone();
+            let thresholds = alert_thresholds.clone();
+            let sup_handle = supervisor_handle.clone();
+            let notifier = std::sync::Arc::clone(&notifier);
+            let poll_interval = gateway_config.health_poll_interval;
+            let cancel = cancel.clone();
+
+            tokio::spawn(async move {
+                let mut monitor =
+                    rara_app::gateway::ProcessMonitor::new(snapshot, thresholds);
+                let mut ticker = tokio::time::interval(poll_interval);
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            let pid = sup_handle.status().pid;
+                            let alerts = monitor.tick(pid).await;
+                            for alert in alerts {
+                                notifier.resource_alert(&alert).await;
+                            }
+                        }
+                        () = cancel.cancelled() => break,
+                    }
+                }
+            });
+        }
+
         // 2. Create update detector + watch receiver.
         let (detector, update_rx) =
             rara_app::gateway::UpdateDetector::new(gateway_config.clone()).await;
@@ -215,6 +246,8 @@ impl GatewayArgs {
             supervisor_handle: supervisor_handle.clone(),
             update_state_rx: update_rx.clone(),
             shutdown: cancel.clone(),
+            process_snapshot: process_snapshot.clone(),
+            alert_thresholds: alert_thresholds.clone(),
         };
         let admin_bind = gateway_config.bind_address.clone();
         let _admin_handle = rara_app::gateway::server::serve(&admin_bind, admin_state)
@@ -229,6 +262,8 @@ impl GatewayArgs {
             supervisor_handle,
             update_rx,
             health_url,
+            process_snapshot,
+            alert_thresholds,
         );
         let listener_cancel = cancel.clone();
         tokio::spawn(async move {

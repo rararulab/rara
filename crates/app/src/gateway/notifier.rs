@@ -105,6 +105,16 @@ impl UpdateNotifier {
         .await;
     }
 
+    // -- resource events ------------------------------------------------------
+
+    pub async fn resource_alert(&self, detail: &str) {
+        self.send(&format!(
+            "\u{26a0}\u{fe0f} <b>Resource alert</b>\n{detail}\n{}",
+            self.status_block(),
+        ))
+        .await;
+    }
+
     // -- error events ---------------------------------------------------------
 
     pub async fn executor_creation_failed(&self, err: &str) {

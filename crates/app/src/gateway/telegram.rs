@@ -37,6 +37,8 @@ pub struct GatewayTelegramListener {
     supervisor_handle: SupervisorHandle,
     update_state_rx:   watch::Receiver<UpdateState>,
     health_url:        String,
+    process_snapshot:  super::monitor::SnapshotHandle,
+    alert_thresholds:  super::monitor::ThresholdsHandle,
 }
 
 impl GatewayTelegramListener {
@@ -50,6 +52,8 @@ impl GatewayTelegramListener {
         supervisor_handle: SupervisorHandle,
         update_state_rx: watch::Receiver<UpdateState>,
         health_url: String,
+        process_snapshot: super::monitor::SnapshotHandle,
+        alert_thresholds: super::monitor::ThresholdsHandle,
     ) -> Self {
         Self {
             bot,
@@ -57,6 +61,8 @@ impl GatewayTelegramListener {
             supervisor_handle,
             update_state_rx,
             health_url,
+            process_snapshot,
+            alert_thresholds,
         }
     }
 
@@ -161,6 +167,8 @@ impl GatewayTelegramListener {
             "/sync" => self.cmd_sync(args).await,
             "/logs" => self.cmd_logs().await,
             "/health" => self.cmd_health().await,
+            "/stats" => self.cmd_stats().await,
+            "/threshold" => self.cmd_threshold(args).await,
             "/help" => self.cmd_help(),
             _ => format!("Unknown command: <code>{command}</code>\nUse /help to see available commands."),
         }
@@ -309,6 +317,71 @@ impl GatewayTelegramListener {
         }
     }
 
+    async fn cmd_stats(&self) -> String {
+        let snap = self.process_snapshot.read().await.clone();
+        let pid_str = snap.pid.map(|p| p.to_string()).unwrap_or_else(|| "\u{2014}".into());
+        let rss_mb = snap.rss_bytes / (1024 * 1024);
+        let virt_mb = snap.virt_bytes / (1024 * 1024);
+        let disk_r_mb = snap.disk_read_bytes / (1024 * 1024);
+        let disk_w_mb = snap.disk_write_bytes / (1024 * 1024);
+
+        let thresholds = self.alert_thresholds.read().await;
+
+        format!(
+            "<b>Process Stats</b>\n\n\
+             pid: <code>{pid_str}</code>\n\
+             cpu: {:.1}%\n\
+             rss: {} MB\n\
+             virt: {} MB\n\
+             threads: {}\n\
+             open fds: {}\n\
+             disk read: {} MB\n\
+             disk write: {} MB\n\
+             uptime: {}s\n\
+             sampled: {}\n\n\
+             <b>Thresholds</b>\n{}",
+            snap.cpu_percent,
+            rss_mb,
+            virt_mb,
+            snap.thread_count,
+            snap.open_fds,
+            disk_r_mb,
+            disk_w_mb,
+            snap.uptime_secs,
+            snap.sampled_at,
+            thresholds.summary(),
+        )
+    }
+
+    async fn cmd_threshold(&self, args: &[&str]) -> String {
+        if args.is_empty() {
+            let t = self.alert_thresholds.read().await;
+            return format!("<b>Current thresholds</b>\n{}", t.summary());
+        }
+
+        match args[0] {
+            "cpu" => {
+                let Some(val) = args.get(1).and_then(|v| v.parse::<f32>().ok()) else {
+                    return "Usage: /threshold cpu <percent>".to_owned();
+                };
+                self.alert_thresholds.write().await.cpu_percent = Some(val);
+                format!("CPU threshold set to {val}%")
+            }
+            "mem" => {
+                let Some(val) = args.get(1).and_then(|v| v.parse::<u64>().ok()) else {
+                    return "Usage: /threshold mem <MB>".to_owned();
+                };
+                self.alert_thresholds.write().await.mem_mb = Some(val);
+                format!("Memory threshold set to {val} MB")
+            }
+            "clear" => {
+                *self.alert_thresholds.write().await = Default::default();
+                "All thresholds cleared.".to_owned()
+            }
+            _ => "Usage: /threshold [cpu <percent> | mem <MB> | clear]".to_owned(),
+        }
+    }
+
     fn cmd_help(&self) -> String {
         "<b>Gateway Commands</b>\n\n\
          /restart — Restart the agent process\n\
@@ -317,6 +390,11 @@ impl GatewayTelegramListener {
          /sync --restart — Git pull + restart agent\n\
          /logs — Show last 50 lines of agent logs\n\
          /health — Check agent HTTP health endpoint\n\
+         /stats — Show process resource usage\n\
+         /threshold — View/set alert thresholds\n\
+         /threshold cpu &lt;N&gt; — Set CPU% alert threshold\n\
+         /threshold mem &lt;N&gt; — Set memory (MB) alert threshold\n\
+         /threshold clear — Disable all alerts\n\
          /help — Show this message"
             .to_owned()
     }

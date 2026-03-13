@@ -39,6 +39,8 @@ pub struct GatewayAppState {
     pub supervisor_handle: SupervisorHandle,
     pub update_state_rx:   watch::Receiver<UpdateState>,
     pub shutdown:          CancellationToken,
+    pub process_snapshot:  super::monitor::SnapshotHandle,
+    pub alert_thresholds:  super::monitor::ThresholdsHandle,
 }
 
 // ---------------------------------------------------------------------------
@@ -47,8 +49,9 @@ pub struct GatewayAppState {
 
 #[derive(Debug, Serialize)]
 struct GatewayStatusResponse {
-    agent:  SupervisorStatus,
-    update: UpdateStatusResponse,
+    agent:   SupervisorStatus,
+    update:  UpdateStatusResponse,
+    process: super::monitor::ProcessSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +74,7 @@ struct OkResponse {
 async fn get_status(State(state): State<GatewayAppState>) -> Json<GatewayStatusResponse> {
     let agent = state.supervisor_handle.status();
     let update = state.update_state_rx.borrow().clone();
+    let process = state.process_snapshot.read().await.clone();
 
     Json(GatewayStatusResponse {
         agent,
@@ -80,6 +84,7 @@ async fn get_status(State(state): State<GatewayAppState>) -> Json<GatewayStatusR
             update_available: update.update_available,
             last_check_time:  update.last_check_time.map(|t| t.to_rfc3339()),
         },
+        process,
     })
 }
 
