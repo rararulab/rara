@@ -301,14 +301,32 @@ impl SyscallDispatcher {
                 event_type: _,
                 payload,
             } => {
-                let message = payload
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("(empty notification)")
-                    .to_string();
-                let _ = kernel_handle.event_queue().try_push(
-                    crate::event::KernelEventEnvelope::send_notification(message),
-                );
+                // Try common field names in priority order.
+                let message = ["message", "text", "content", "body"]
+                    .iter()
+                    .find_map(|&field| {
+                        payload
+                            .get(field)
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.trim().is_empty())
+                    });
+
+                match message {
+                    Some(msg) => {
+                        let _ = kernel_handle.event_queue().try_push(
+                            crate::event::KernelEventEnvelope::send_notification(
+                                msg.to_string(),
+                            ),
+                        );
+                    }
+                    None => {
+                        warn!(
+                            payload = ?payload,
+                            "PublishEvent: no usable message field found in payload, \
+                             dropping notification"
+                        );
+                    }
+                }
             }
             Syscall::RegisterJob {
                 trigger,
@@ -978,7 +996,7 @@ impl crate::tool::AgentTool for SyscallTool {
                     "description": "Event type string for publish"
                 },
                 "payload": {
-                    "description": "Event payload (any JSON) for publish"
+                    "description": "Event payload for publish. For user-visible notifications, include a non-empty 'message' field (e.g. {\"message\": \"Task completed\"})."
                 }
             }
         })
