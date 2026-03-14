@@ -812,6 +812,9 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    // Guard: prevent more than one automatic kernel-triggered handoff per turn
+    // to avoid a pathological loop where each iteration triggers another handoff.
+    let mut auto_handoff_done = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1594,15 +1597,86 @@ pub(crate) async fn run_agent_loop(
                 capabilities.context_window_tokens,
             );
             match pressure {
-                ContextPressure::Critical { usage_ratio, .. } => {
-                    context_pressure_warning = Some(format!(
-                        "[Context Usage Critical] Current context ~{} tokens ({:.0}%), context \
-                         window capacity {} tokens. You MUST immediately create a tape anchor \
-                         with summary and next_steps.",
-                        tape_info.estimated_context_tokens,
-                        usage_ratio * 100.0,
-                        capabilities.context_window_tokens,
-                    ));
+                ContextPressure::Critical { usage_ratio, estimated_tokens } => {
+                    // ── Auto-handoff (kernel-driven, no agent decision needed) ──
+                    // When context reaches the critical threshold (≥85%) the kernel
+                    // creates a handoff anchor directly, bypassing the agent.  This
+                    // prevents the context window from silently overflowing when the
+                    // agent ignores the MUST-anchor hints.
+                    //
+                    // `auto_handoff_done` is reset to `false` at the start of each
+                    // turn so at most one automatic handoff occurs per turn, avoiding
+                    // a tight loop where every iteration triggers another handoff.
+                    if !auto_handoff_done {
+                        info!(
+                            iteration,
+                            estimated_tokens,
+                            usage_ratio = format!("{:.1}%", usage_ratio * 100.0),
+                            context_window = capabilities.context_window_tokens,
+                            "context pressure critical — kernel auto-triggering handoff"
+                        );
+                        stream_handle.emit(StreamEvent::Progress {
+                            stage: format!(
+                                "Context at {:.0}% — creating automatic checkpoint…",
+                                usage_ratio * 100.0
+                            ),
+                        });
+
+                        let auto_state = crate::memory::HandoffState {
+                            phase:      Some("auto".to_owned()),
+                            summary:    Some(format!(
+                                "Automatic kernel handoff: context reached {:.0}% of the \
+                                 {}-token window ({} estimated tokens). Prior conversation \
+                                 is preserved in tape and searchable via tape.search.",
+                                usage_ratio * 100.0,
+                                capabilities.context_window_tokens,
+                                estimated_tokens,
+                            )),
+                            next_steps: None,
+                            source_ids: vec![],
+                            owner:      Some("kernel".to_owned()),
+                            extra:      None,
+                        };
+
+                        match tape.handoff(tape_name, "auto-handoff", auto_state).await {
+                            Ok(_) => {
+                                auto_handoff_done = true;
+                                info!(
+                                    tape = tape_name,
+                                    "kernel auto-handoff anchor created successfully"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    tape = tape_name,
+                                    error = %e,
+                                    "kernel auto-handoff failed — falling back to hint injection"
+                                );
+                                // Fall back to the hint-injection path below.
+                                context_pressure_warning = Some(format!(
+                                    "[Context Usage Critical] Current context ~{} tokens \
+                                     ({:.0}%), context window capacity {} tokens. You MUST \
+                                     immediately create a tape anchor with summary and \
+                                     next_steps.",
+                                    tape_info.estimated_context_tokens,
+                                    usage_ratio * 100.0,
+                                    capabilities.context_window_tokens,
+                                ));
+                            }
+                        }
+                    } else {
+                        // Auto-handoff already performed this turn; just inject
+                        // a gentle reminder so the agent is aware of the pressure.
+                        context_pressure_warning = Some(format!(
+                            "[Context Usage Critical] Current context ~{} tokens ({:.0}%), \
+                             context window capacity {} tokens. A kernel checkpoint was \
+                             created this turn; consider anchoring again if you accumulate \
+                             more large outputs.",
+                            tape_info.estimated_context_tokens,
+                            usage_ratio * 100.0,
+                            capabilities.context_window_tokens,
+                        ));
+                    }
                 }
                 ContextPressure::Warning { usage_ratio, .. } => {
                     context_pressure_warning = Some(format!(
