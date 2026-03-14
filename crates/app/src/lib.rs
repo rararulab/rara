@@ -453,16 +453,38 @@ pub async fn start_with_options(
     // Build command handlers shared across all channels.
     let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
         use rara_channels::telegram::commands::{
-            KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
+            BasicCommandHandler, KernelBotServiceClient, McpCommandHandler, SessionCommandHandler,
+            StopCommandHandler, TapeCommandHandler,
         };
         let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
             std::sync::Arc::new(KernelBotServiceClient::new(
                 rara.session_index.clone(),
                 rara.tape_service.clone(),
             ));
+        let session_handler =
+            std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone()));
+        let stop_handler =
+            std::sync::Arc::new(StopCommandHandler::new(bot_client.clone(), kernel_handle.clone()));
+        let tape_handler =
+            std::sync::Arc::new(TapeCommandHandler::new(bot_client));
+        // Collect all command definitions so /help can list them.
+        use rara_kernel::channel::command::CommandHandler as _;
+        let all_commands: Vec<rara_kernel::channel::command::CommandDefinition> = [
+            session_handler.commands(),
+            stop_handler.commands(),
+            tape_handler.commands(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let basic_handler = std::sync::Arc::new(BasicCommandHandler::new(all_commands));
+        let mcp_handler = std::sync::Arc::new(McpCommandHandler::new(bot_client));
         vec![
-            std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
-            std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
+            basic_handler,
+            session_handler,
+            stop_handler,
+            tape_handler,
+            mcp_handler,
         ]
     };
 
