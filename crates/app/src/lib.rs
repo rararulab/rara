@@ -453,7 +453,7 @@ pub async fn start_with_options(
     // Build command handlers shared across all channels.
     let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
         use rara_channels::telegram::commands::{
-            KernelBotServiceClient, SessionCommandHandler, StopCommandHandler,
+            KernelBotServiceClient, McpCommandHandler, SessionCommandHandler, StopCommandHandler,
         };
         let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
             std::sync::Arc::new(KernelBotServiceClient::new(
@@ -462,7 +462,8 @@ pub async fn start_with_options(
             ));
         vec![
             std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone())),
-            std::sync::Arc::new(StopCommandHandler::new(bot_client, kernel_handle.clone())),
+            std::sync::Arc::new(StopCommandHandler::new(bot_client.clone(), kernel_handle.clone())),
+            std::sync::Arc::new(McpCommandHandler::new(bot_client)),
         ]
     };
 

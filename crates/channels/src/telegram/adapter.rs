@@ -1119,6 +1119,25 @@ impl ChannelAdapter for TelegramAdapter {
             .clone()
             .into();
 
+        // Register slash-menu with Telegram so '/' shows available commands.
+        {
+            let all_cmds: Vec<teloxide::types::BotCommand> = command_handlers
+                .iter()
+                .flat_map(|h| h.commands())
+                .map(|def| teloxide::types::BotCommand::new(&def.name, &def.description))
+                .collect();
+            if !all_cmds.is_empty() {
+                if let Err(e) = bot.set_my_commands(all_cmds).await {
+                    warn!(error = %e, "telegram: failed to register bot commands");
+                } else {
+                    info!(
+                        "telegram: registered {} bot command(s)",
+                        command_handlers.iter().flat_map(|h| h.commands()).count()
+                    );
+                }
+            }
+        }
+
         // Spawn approval request listener — sends inline keyboard to primary chat.
         {
             let approval_rx = handle.security().approval().subscribe_requests();
