@@ -466,7 +466,7 @@ pub async fn start_with_options(
         let stop_handler =
             std::sync::Arc::new(StopCommandHandler::new(bot_client.clone(), kernel_handle.clone()));
         let tape_handler =
-            std::sync::Arc::new(TapeCommandHandler::new(bot_client));
+            std::sync::Arc::new(TapeCommandHandler::new(bot_client.clone()));
         // Collect all command definitions so /help can list them.
         use rara_kernel::channel::command::CommandHandler as _;
         let all_commands: Vec<rara_kernel::channel::command::CommandDefinition> = [
