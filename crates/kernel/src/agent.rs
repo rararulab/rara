@@ -1632,11 +1632,29 @@ pub(crate) async fn run_agent_loop(
         }
     }
 
-    // Max iterations exhausted — return partial results
+    // Max iterations exhausted — return partial results with failure markers
     warn!(
         max_iterations,
         tool_calls_made, "inline agent loop hit max iterations limit, returning partial results"
     );
+    let exhaustion_error = format!(
+        "max iterations exhausted ({max_iterations} iterations, {tool_calls_made} tool calls)"
+    );
+    // Emit a stream warning so adapters (Telegram, SSE) can surface it to the
+    // user immediately.
+    stream_handle.emit(StreamEvent::Progress {
+        stage: format!(
+            "[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"
+        ),
+    });
+    // If the agent spent the entire turn doing tool calls and produced no
+    // visible text, synthesise a fallback message so the user is not left with
+    // a blank response.
+    if last_accumulated_text.is_empty() {
+        last_accumulated_text = format!(
+            "[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]"
+        );
+    }
     let trace = TurnTrace {
         duration_ms:      turn_start.elapsed().as_millis() as u64,
         model:            model.clone(),
@@ -1644,8 +1662,8 @@ pub(crate) async fn run_agent_loop(
         iterations:       iteration_traces,
         final_text_len:   last_accumulated_text.len(),
         total_tool_calls: tool_calls_made,
-        success:          true,
-        error:            None,
+        success:          false,
+        error:            Some(exhaustion_error),
     };
     // Best-effort mood update — failure is silently logged, never blocks the
     // response.
