@@ -866,8 +866,13 @@ pub(crate) async fn run_agent_loop(
             messages.push(llm::Message::user(recovery_msg));
         }
 
-        // Inject active background tasks status.
-        let bg_tasks = handle.background_tasks(&session_key);
+        // Inject active background tasks status (first iteration only to
+        // avoid repeated token cost in multi-iteration turns).
+        let bg_tasks = if iteration == 0 {
+            handle.background_tasks(&session_key)
+        } else {
+            Vec::new()
+        };
         if !bg_tasks.is_empty() {
             let task_list: String = bg_tasks
                 .iter()

@@ -143,7 +143,7 @@ pub enum WebEvent {
     /// A background agent has finished.
     BackgroundTaskDone {
         task_id: String,
-        status:  String,
+        status:  rara_kernel::io::BackgroundTaskStatus,
     },
     /// Stream completed (no more deltas).
     Done,

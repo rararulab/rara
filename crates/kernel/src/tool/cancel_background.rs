@@ -18,7 +18,7 @@ use tracing::info;
 
 use crate::{
     handle::KernelHandle,
-    io::StreamEvent,
+    io::{BackgroundTaskStatus, StreamEvent},
     session::{SessionKey, Signal},
     tool::{AgentTool, ToolContext, ToolOutput},
 };
@@ -85,7 +85,7 @@ impl AgentTool for CancelBackgroundTool {
             &self.session_key,
             StreamEvent::BackgroundTaskDone {
                 task_id: task_id.to_string(),
-                status:  "cancelled".to_string(),
+                status:  BackgroundTaskStatus::Cancelled,
             },
         );
 

@@ -181,15 +181,30 @@ async fn handle_child_completed(
 
     if is_background {
         // Remove from active list
-        self.process_table.with_mut(&parent_id, |p| {
-            p.background_tasks.retain(|t| t.child_key != child_id);
-        });
+        self.handle.remove_background_task(&parent_id, &child_id);
+
+        // Emit BackgroundTaskDone so clients remove the status indicator.
+        self.handle.stream_hub().emit_to_session(
+            &parent_id,
+            StreamEvent::BackgroundTaskDone {
+                task_id: child_id.to_string(),
+                status,
+            },
+        );
 
         // Build directive with full result context for the proactive turn.
         // On failure, include the TurnTrace so parent can diagnose without
         // needing to read the child tape manually.
-        let status = if result.output.starts_with("error:") { "failed" } else { "completed" };
-        let trace_section = if status == "failed" {
+        //
+        // NOTE: Failure detection is fragile — AgentRunLoopResult has no
+        // status/error field, so we rely on output prefix heuristics.
+        // TODO: Add explicit status field to AgentRunLoopResult.
+        let status = if result.output.starts_with("error:") {
+            BackgroundTaskStatus::Failed
+        } else {
+            BackgroundTaskStatus::Completed
+        };
+        let trace_section = if status == BackgroundTaskStatus::Failed {
             // Serialize the last TurnTrace from the child session for debugging.
             // The trace contains iteration details, tool calls, and error messages.
             let trace_json = self.process_table
@@ -230,16 +245,16 @@ async fn handle_child_completed(
 
 ### 4. Context 注入
 
-在 `run_agent_loop` 的 context building 阶段（reminders 注入处），检查 parent session 是否有 active background tasks，如有则注入 system reminder。
+在 `run_agent_loop` 的 **第一次 iteration**（`iteration == 0`）时注入 active background tasks 列表。仅在首次注入，避免每次 iteration 重复添加相同信息。
 
 ```rust
-// crates/kernel/src/agent.rs — run_agent_loop() 中 reminders 构建处
+// crates/kernel/src/agent.rs — run_agent_loop() iteration 0
 
-let background_tasks: Vec<BackgroundTaskEntry> = process_table
-    .with(&session_key, |p| p.background_tasks.clone())
-    .unwrap_or_default();
+if iteration == 0 {
+    let background_tasks: Vec<BackgroundTaskEntry> = handle
+        .background_tasks(&session_key);
 
-if !background_tasks.is_empty() {
+    if !background_tasks.is_empty() {
     let task_list: String = background_tasks
         .iter()
         .enumerate()
@@ -288,6 +303,46 @@ pub struct ToolContext {
 | `crates/kernel/src/agent.rs` | Add background task status injection in context building |
 | `crates/kernel/src/tool/mod.rs` | Add `kernel_handle` to `ToolContext` |
 | `crates/kernel/src/handle.rs` | Add `register_background_task()` method |
+
+### 7. Client-Side Progress Display (StreamEvent)
+
+参考 Claude Code 的 subagent 进度条设计，通过 `StreamEvent` 实时推送 background task 状态变化，客户端渲染进度指示器（含 elapsed timer）。
+
+```rust
+// crates/kernel/src/io.rs
+
+/// Terminal status of a background agent task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskStatus {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+// StreamEvent 新增 variants:
+BackgroundTaskStarted {
+    task_id:     String,
+    agent_name:  String,
+    description: String,
+},
+BackgroundTaskDone {
+    task_id: String,
+    status:  BackgroundTaskStatus,
+},
+```
+
+**事件流:**
+- `SpawnBackgroundTool::execute()` 成功后 emit `BackgroundTaskStarted`
+- `handle_child_completed()` 检测到 background task 完成后 emit `BackgroundTaskDone`
+- `CancelBackgroundTool::execute()` 取消后 emit `BackgroundTaskDone { status: Cancelled }`
+
+**客户端行为:**
+- 收到 `BackgroundTaskStarted` → 显示进度指示器（agent_name + description + elapsed timer）
+- 收到 `BackgroundTaskDone` → 移除进度指示器，可选显示完成/失败状态
+
+`StreamHub::emit_to_session()` 方法用于向特定 session 的客户端推送事件。
+<!-- TODO: emit_to_session 当前使用线性扫描 session，高并发时需优化 -->
 
 ## Security Considerations
 

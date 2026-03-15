@@ -792,6 +792,16 @@ define_id!(
 ///
 /// These are ephemeral — not stored durably. Final results and errors
 /// are published through the `OutboundBus`.
+/// Terminal status of a background agent task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskStatus {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Incremental events emitted during agent execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
@@ -831,8 +841,7 @@ pub enum StreamEvent {
     /// Client should remove the status indicator for this task.
     BackgroundTaskDone {
         task_id: String,
-        /// "completed" | "failed" | "cancelled"
-        status:  String,
+        status:  BackgroundTaskStatus,
     },
     /// Cumulative token usage update (emitted after each LLM iteration).
     ///
@@ -956,6 +965,9 @@ impl StreamHub {
     ///
     /// Used by background task lifecycle events that need to push to a
     /// session's streams without holding a `StreamHandle`.
+    ///
+    /// TODO: Linear scan over all streams. Consider adding a
+    /// `session_key → Vec<StreamId>` index if stream count grows.
     pub fn emit_to_session(&self, session_key: &SessionKey, event: StreamEvent) {
         for entry in self.streams.iter() {
             if &entry.value().session_key == session_key {

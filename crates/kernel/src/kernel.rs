@@ -908,7 +908,9 @@ impl Kernel {
             self.handle()
                 .remove_background_task(&parent_id, &child_id);
 
-            // Build directive with result context.
+            // TODO: AgentRunLoopResult has no explicit success/error field.
+            // This heuristic is fragile — consider adding a status field to
+            // AgentRunLoopResult in a follow-up.
             let status = if result.output.starts_with("error:")
                 || result.output.starts_with("Error:")
                 || result.iterations == 0
@@ -918,6 +920,12 @@ impl Kernel {
                 "completed"
             };
 
+            // NOTE: The child session may already be removed from the
+            // process table by cleanup_process() before this event is
+            // handled. In that case turn_traces is unavailable and the
+            // debug trace section will be empty. The child's tape file
+            // (~/.config/rara/tapes/{child_id}.jsonl) still contains the
+            // full history for post-mortem analysis.
             let trace_section = if status == "failed" {
                 self.process_table
                     .with(&child_id, |p| {
@@ -954,11 +962,16 @@ impl Kernel {
             );
 
             // Emit BackgroundTaskDone so clients remove the status indicator.
+            let bg_status = if status == "failed" {
+                crate::io::BackgroundTaskStatus::Failed
+            } else {
+                crate::io::BackgroundTaskStatus::Completed
+            };
             self.io.stream_hub().emit_to_session(
                 &parent_id,
                 crate::io::StreamEvent::BackgroundTaskDone {
                     task_id: child_id.to_string(),
-                    status:  status.to_string(),
+                    status:  bg_status,
                 },
             );
 
