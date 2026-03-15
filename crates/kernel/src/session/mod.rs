@@ -256,6 +256,8 @@ pub struct BackgroundTaskEntry {
     pub description: String,
     /// When the task was spawned.
     pub created_at: jiff::Timestamp,
+    /// The inbound message that triggered the spawn.
+    pub trigger_message_id: crate::io::MessageId,
 }
 
 /// A running session instance in the session table.

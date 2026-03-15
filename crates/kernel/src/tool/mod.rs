@@ -103,6 +103,8 @@ pub struct ToolContext {
     pub origin_endpoint: Option<crate::io::Endpoint>,
     /// Event queue for pushing outbound events.
     pub event_queue:     Option<crate::queue::EventQueueRef>,
+    /// The inbound message ID that triggered the current turn.
+    pub rara_message_id: Option<crate::io::MessageId>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -112,6 +114,7 @@ impl std::fmt::Debug for ToolContext {
             .field("session_key", &self.session_key)
             .field("origin_endpoint", &self.origin_endpoint)
             .field("event_queue", &self.event_queue.as_ref().map(|_| "..."))
+            .field("rara_message_id", &self.rara_message_id)
             .finish()
     }
 }

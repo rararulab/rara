@@ -904,6 +904,18 @@ impl Kernel {
             .is_background_task(&parent_id, &child_id);
 
         if is_background {
+            // Capture trigger_message_id before removing from active list.
+            let trigger_message_id = self
+                .handle()
+                .process_table()
+                .with(&parent_id, |p| {
+                    p.background_tasks
+                        .iter()
+                        .find(|t| t.child_key == child_id)
+                        .map(|t| t.trigger_message_id.clone())
+                })
+                .flatten();
+
             // Remove from active list.
             self.handle()
                 .remove_background_task(&parent_id, &child_id);
@@ -946,9 +958,14 @@ impl Kernel {
                 BackgroundTaskStatus::Completed => "completed",
                 BackgroundTaskStatus::Cancelled => "cancelled",
             };
+            let trigger_info = trigger_message_id
+                .as_ref()
+                .map(|id| format!("trigger_message_id={id}\n"))
+                .unwrap_or_default();
             let directive = format!(
                 "[Background Task {status_label}]\n\
                  task_id={child_id}\n\
+                 {trigger_info}\
                  iterations={}, tool_calls={}\n\n\
                  Result:\n{truncated_output}{trace_section}\n\n\
                  Proactively inform the user of the outcome. Be concise. \
@@ -966,6 +983,12 @@ impl Kernel {
                 "background_task_done".to_string(),
                 serde_json::json!(child_id.to_string()),
             );
+            if let Some(ref mid) = trigger_message_id {
+                msg.metadata.insert(
+                    "trigger_message_id".to_string(),
+                    serde_json::json!(mid.to_string()),
+                );
+            }
 
             // Emit BackgroundTaskDone so clients remove the status indicator.
             self.io.stream_hub().emit_to_session(
@@ -2127,6 +2150,7 @@ impl Kernel {
                     session_key: Some(session_key.clone()),
                     origin_endpoint: origin_endpoint.clone(),
                     event_queue: Some(event_queue.clone()),
+                    rara_message_id: Some(msg_id.clone()),
                 };
 
                 // Route to v1 (reactive) or v2 (plan-execute) based on the

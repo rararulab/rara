@@ -891,12 +891,13 @@ pub(crate) async fn run_agent_loop(
                         })
                         .unwrap_or_else(|| "just now".to_string());
                     format!(
-                        "  {}. task_id={} name={} — {} (started {})",
+                        "  {}. task_id={} name={} — {} (started {}, triggered_by={})",
                         i + 1,
                         t.child_key,
                         t.agent_name,
                         t.description,
                         elapsed,
+                        t.trigger_message_id,
                     )
                 })
                 .collect::<Vec<_>>()

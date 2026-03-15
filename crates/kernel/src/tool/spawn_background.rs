@@ -74,7 +74,7 @@ impl AgentTool for SpawnBackgroundTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let input = params["input"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: input"))?
@@ -120,6 +120,10 @@ impl AgentTool for SpawnBackgroundTool {
                 agent_name: manifest.name.clone(),
                 description: description.clone(),
                 created_at: jiff::Timestamp::now(),
+                trigger_message_id: context
+                    .rara_message_id
+                    .clone()
+                    .unwrap_or_else(crate::io::MessageId::new),
             },
         );
 
