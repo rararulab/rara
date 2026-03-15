@@ -20,6 +20,7 @@ use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
 mod bash;
 mod composio;
+mod debug_trace;
 mod edit_file;
 mod find_files;
 mod grep;
@@ -49,6 +50,7 @@ mod user_note;
 mod write_file;
 
 use bash::BashTool;
+use debug_trace::DebugTraceTool;
 use edit_file::EditFileTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -146,6 +148,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // Tape management tools
         Arc::new(TapeInfoTool::new(deps.tape_service.clone())),
         Arc::new(TapeHandoffTool::new(deps.tape_service.clone())),
+        Arc::new(DebugTraceTool::new(deps.tape_service.clone())),
         // User memory
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
         // Session info
