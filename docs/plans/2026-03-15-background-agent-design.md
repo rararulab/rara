@@ -209,7 +209,7 @@ async fn handle_child_completed(
             // The trace contains iteration details, tool calls, and error messages.
             let trace_json = self.process_table
                 .with(&child_id, |p| {
-                    p.turn_traces.back().map(|t| serde_json::to_string_pretty(t).ok())
+                    p.turn_traces.last().and_then(|t| serde_json::to_string_pretty(t).ok())
                 })
                 .flatten().flatten()
                 .unwrap_or_default();
@@ -276,19 +276,21 @@ if iteration == 0 {
 }
 ```
 
-### 5. ToolContext 扩展
+### 5. Tool 持有 KernelHandle（构造注入）
 
-`SpawnBackgroundTool` 需要 `KernelHandle` 来调用 `spawn_child`。当前 `ToolContext` 只暴露 `event_queue`。
+`SpawnBackgroundTool` 和 `CancelBackgroundTool` 需要 `KernelHandle` 来调用 `spawn_child` / `send_signal`。
 
-**方案**: 在 `ToolContext` 中新增 `kernel_handle: Option<Arc<KernelHandle>>`。这与 schedule tools 已有的模式一致（schedule tools 通过 event_queue 推事件，但 spawn_child 需要 await oneshot reply）。
+**方案**: 与 `SyscallTool` 相同的 pattern — tool struct 在构造时持有 `KernelHandle` + `SessionKey`。Tool registry 在每次 `GetToolRegistry` syscall 处理时 per-session 重建，因此每个 session 拿到的 tool 实例绑定自己的 session key。
 
 ```rust
-pub struct ToolContext {
-    pub user_id:         Option<String>,
-    pub session_key:     Option<SessionKey>,
-    pub origin_endpoint: Option<Endpoint>,
-    pub event_queue:     Option<EventQueueRef>,
-    pub kernel_handle:   Option<Arc<KernelHandle>>,  // NEW
+pub struct SpawnBackgroundTool {
+    handle:      KernelHandle,
+    session_key: SessionKey,
+}
+
+pub struct CancelBackgroundTool {
+    handle:      KernelHandle,
+    session_key: SessionKey,
 }
 ```
 
@@ -301,7 +303,7 @@ pub struct ToolContext {
 | `crates/kernel/src/tool/mod.rs` | Add `pub(crate) mod spawn_background;` export |
 | `crates/kernel/src/kernel.rs` | Modify `handle_child_completed()` to detect background tasks and trigger proactive turn |
 | `crates/kernel/src/agent.rs` | Add background task status injection in context building |
-| `crates/kernel/src/tool/mod.rs` | Add `kernel_handle` to `ToolContext` |
+| `crates/kernel/src/tool/mod.rs` | Add module exports for spawn/cancel tools |
 | `crates/kernel/src/handle.rs` | Add `register_background_task()` method |
 
 ### 7. Client-Side Progress Display (StreamEvent)

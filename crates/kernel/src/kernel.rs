@@ -911,13 +911,14 @@ impl Kernel {
             // TODO: AgentRunLoopResult has no explicit success/error field.
             // This heuristic is fragile — consider adding a status field to
             // AgentRunLoopResult in a follow-up.
+            use crate::io::BackgroundTaskStatus;
             let status = if result.output.starts_with("error:")
                 || result.output.starts_with("Error:")
                 || result.iterations == 0
             {
-                "failed"
+                BackgroundTaskStatus::Failed
             } else {
-                "completed"
+                BackgroundTaskStatus::Completed
             };
 
             // NOTE: The child session may already be removed from the
@@ -926,7 +927,7 @@ impl Kernel {
             // debug trace section will be empty. The child's tape file
             // (~/.config/rara/tapes/{child_id}.jsonl) still contains the
             // full history for post-mortem analysis.
-            let trace_section = if status == "failed" {
+            let trace_section = if status == BackgroundTaskStatus::Failed {
                 self.process_table
                     .with(&child_id, |p| {
                         p.turn_traces
@@ -940,8 +941,13 @@ impl Kernel {
                 String::new()
             };
 
+            let status_label = match status {
+                BackgroundTaskStatus::Failed => "failed",
+                BackgroundTaskStatus::Completed => "completed",
+                BackgroundTaskStatus::Cancelled => "cancelled",
+            };
             let directive = format!(
-                "[Background Task {status}]\n\
+                "[Background Task {status_label}]\n\
                  task_id={child_id}\n\
                  iterations={}, tool_calls={}\n\n\
                  Result:\n{truncated_output}{trace_section}\n\n\
@@ -962,23 +968,18 @@ impl Kernel {
             );
 
             // Emit BackgroundTaskDone so clients remove the status indicator.
-            let bg_status = if status == "failed" {
-                crate::io::BackgroundTaskStatus::Failed
-            } else {
-                crate::io::BackgroundTaskStatus::Completed
-            };
             self.io.stream_hub().emit_to_session(
                 &parent_id,
                 crate::io::StreamEvent::BackgroundTaskDone {
                     task_id: child_id.to_string(),
-                    status:  bg_status,
+                    status,
                 },
             );
 
             info!(
                 parent_id = %parent_id,
                 child_id = %child_id,
-                status = status,
+                status = ?status,
                 "triggering proactive turn for background task result"
             );
 
