@@ -953,6 +953,15 @@ impl Kernel {
                 serde_json::json!(child_id.to_string()),
             );
 
+            // Emit BackgroundTaskDone so clients remove the status indicator.
+            self.io.stream_hub().emit_to_session(
+                &parent_id,
+                crate::io::StreamEvent::BackgroundTaskDone {
+                    task_id: child_id.to_string(),
+                    status:  status.to_string(),
+                },
+            );
+
             info!(
                 parent_id = %parent_id,
                 child_id = %child_id,

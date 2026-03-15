@@ -134,6 +134,17 @@ pub enum WebEvent {
     PlanReplan { reason: String },
     /// The plan has completed.
     PlanCompleted { summary: String },
+    /// A background agent has been spawned.
+    BackgroundTaskStarted {
+        task_id:     String,
+        agent_name:  String,
+        description: String,
+    },
+    /// A background agent has finished.
+    BackgroundTaskDone {
+        task_id: String,
+        status:  String,
+    },
     /// Stream completed (no more deltas).
     Done,
 }
@@ -216,6 +227,12 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
         StreamEvent::UsageUpdate { .. } => None,
+        StreamEvent::BackgroundTaskStarted { task_id, agent_name, description } => {
+            Some(WebEvent::BackgroundTaskStarted { task_id, agent_name, description })
+        }
+        StreamEvent::BackgroundTaskDone { task_id, status } => {
+            Some(WebEvent::BackgroundTaskDone { task_id, status })
+        }
     }
 }
 

@@ -18,6 +18,7 @@ use tracing::info;
 
 use crate::{
     handle::KernelHandle,
+    io::StreamEvent,
     session::{SessionKey, Signal},
     tool::{AgentTool, ToolContext, ToolOutput},
 };
@@ -78,6 +79,15 @@ impl AgentTool for CancelBackgroundTool {
 
         // Remove from active list first so ChildSessionDone won't trigger proactive turn.
         self.handle.remove_background_task(&self.session_key, &task_id);
+
+        // Emit BackgroundTaskDone so clients remove the status indicator.
+        self.handle.stream_hub().emit_to_session(
+            &self.session_key,
+            StreamEvent::BackgroundTaskDone {
+                task_id: task_id.to_string(),
+                status:  "cancelled".to_string(),
+            },
+        );
 
         // Send Terminate signal to child session.
         if let Err(e) = self.handle.send_signal(task_id, Signal::Terminate) {

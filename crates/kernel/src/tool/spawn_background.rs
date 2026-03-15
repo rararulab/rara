@@ -19,7 +19,7 @@ use tracing::info;
 use crate::{
     agent::AgentManifest,
     handle::KernelHandle,
-    io::AgentEvent,
+    io::{AgentEvent, StreamEvent},
     session::{BackgroundTaskEntry, SessionKey},
     tool::{AgentTool, ToolContext, ToolOutput},
 };
@@ -122,6 +122,16 @@ impl AgentTool for SpawnBackgroundTool {
                 created_at: jiff::Timestamp::now(),
             },
         );
+
+        // Emit BackgroundTaskStarted to parent's active streams so clients
+        // can display an ongoing status indicator with elapsed timer.
+        self.handle
+            .stream_hub()
+            .emit_to_session(&self.session_key, StreamEvent::BackgroundTaskStarted {
+                task_id:     child_key.to_string(),
+                agent_name:  manifest.name.clone(),
+                description: description.clone(),
+            });
 
         // Spawn fire-and-forget watcher to drain result_rx.
         tokio::spawn(async move {

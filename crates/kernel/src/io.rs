@@ -819,6 +819,21 @@ pub enum StreamEvent {
     },
     /// Progress stage update.
     Progress { stage: String },
+    /// A background agent has been spawned. Client should display an
+    /// ongoing status indicator with elapsed timer until
+    /// `BackgroundTaskDone` arrives.
+    BackgroundTaskStarted {
+        task_id:     String,
+        agent_name:  String,
+        description: String,
+    },
+    /// A background agent has finished (completed, failed, or cancelled).
+    /// Client should remove the status indicator for this task.
+    BackgroundTaskDone {
+        task_id: String,
+        /// "completed" | "failed" | "cancelled"
+        status:  String,
+    },
     /// Cumulative token usage update (emitted after each LLM iteration).
     ///
     /// - `input_tokens`: the *latest* iteration's prompt_tokens (= current
@@ -936,6 +951,18 @@ impl StreamHub {
     /// streams on the same session.
     #[tracing::instrument(skip(self))]
     pub fn close(&self, stream_id: &StreamId) { self.streams.remove(stream_id); }
+
+    /// Emit a stream event to all active streams for a session.
+    ///
+    /// Used by background task lifecycle events that need to push to a
+    /// session's streams without holding a `StreamHandle`.
+    pub fn emit_to_session(&self, session_key: &SessionKey, event: StreamEvent) {
+        for entry in self.streams.iter() {
+            if &entry.value().session_key == session_key {
+                let _ = entry.value().tx.send(event.clone());
+            }
+        }
+    }
 
     /// Subscribe to all active streams for a given session.
     ///
