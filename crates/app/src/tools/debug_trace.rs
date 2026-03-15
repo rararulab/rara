@@ -72,11 +72,7 @@ impl AgentTool for DebugTraceTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(50) as usize;
 
-        let tape_name = ctx
-            .session_key
-            .as_ref()
-            .map(|k| k.to_string())
-            .ok_or_else(|| anyhow::anyhow!("no session context"))?;
+        let tape_name = ctx.session_key.to_string();
 
         let entries = self
             .tape_service

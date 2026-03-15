@@ -81,19 +81,10 @@ impl AgentTool for SendImageTool {
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         // Extract required context fields.
-        let session_key = context
-            .session_key
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("send_image requires an active session context"))?;
+        let session_key = context.session_key.clone();
         let origin_endpoint = context.origin_endpoint.clone();
-        let event_queue = context
-            .event_queue
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("send_image requires an active session context"))?;
-        let user_id = context
-            .user_id
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("send_image requires an active session context"))?;
+        let event_queue = context.event_queue.clone();
+        let user_id = &context.user_id;
 
         // Parse parameters.
         let file_path = params

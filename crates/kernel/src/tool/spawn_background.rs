@@ -120,10 +120,7 @@ impl AgentTool for SpawnBackgroundTool {
                 agent_name: manifest.name.clone(),
                 description: description.clone(),
                 created_at: jiff::Timestamp::now(),
-                trigger_message_id: context
-                    .rara_message_id
-                    .clone()
-                    .expect("rara_message_id must be set in ToolContext"),
+                trigger_message_id: context.rara_message_id.clone(),
             },
         );
 

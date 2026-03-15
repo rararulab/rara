@@ -198,7 +198,7 @@ pub(crate) async fn run_plan_loop(
 
     // -- Phase 1: Plan creation -----------------------------------------------
 
-    let plan = create_plan_via_llm(handle, session_key, &user_text).await?;
+    let plan = create_plan_via_llm(handle, session_key, &user_text, &tool_context).await?;
 
     // Persist plan to tape as a Plan entry.
     let plan_json = serde_json::to_value(&plan).map_err(|e| KernelError::AgentExecution {
@@ -344,6 +344,7 @@ pub(crate) async fn run_plan_loop(
                 &past_steps,
                 &remaining_steps,
                 &reason,
+                &tool_context,
             )
             .await
             {
@@ -465,6 +466,7 @@ async fn create_plan_via_llm(
     handle: &KernelHandle,
     session_key: SessionKey,
     user_text: &str,
+    tool_context: &crate::tool::ToolContext,
 ) -> Result<Plan> {
     let (driver, model) = handle
         .session_resolve_driver(session_key)
@@ -520,7 +522,7 @@ async fn create_plan_via_llm(
             })?;
 
         let tool_output = create_plan_tool
-            .execute(params, &crate::tool::ToolContext::default())
+            .execute(params, &tool_context)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("create_plan tool execution failed: {e}"),
@@ -558,6 +560,7 @@ async fn replan_via_llm(
     past_steps: &[PastStep],
     remaining_steps: &[&PlanStep],
     failure_reason: &str,
+    tool_context: &crate::tool::ToolContext,
 ) -> Result<Plan> {
     let (driver, model) = handle
         .session_resolve_driver(session_key)
@@ -648,7 +651,7 @@ async fn replan_via_llm(
             })?;
 
         let tool_output = create_plan_tool
-            .execute(params, &crate::tool::ToolContext::default())
+            .execute(params, &tool_context)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("replan create_plan tool execution failed: {e}"),

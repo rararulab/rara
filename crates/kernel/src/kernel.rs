@@ -2146,11 +2146,11 @@ impl Kernel {
                 // etc.). The ToolContext carries the authenticated user_id so
                 // tools can access it without relying on LLM-supplied identity.
                 let tool_context = crate::tool::ToolContext {
-                    user_id: Some(user.0.clone()),
-                    session_key: Some(session_key.clone()),
+                    user_id: user.0.clone(),
+                    session_key: session_key.clone(),
                     origin_endpoint: origin_endpoint.clone(),
-                    event_queue: Some(event_queue.clone()),
-                    rara_message_id: Some(msg_id.clone()),
+                    event_queue: event_queue.clone(),
+                    rara_message_id: msg_id.clone(),
                 };
 
                 // Route to v1 (reactive) or v2 (plan-execute) based on the

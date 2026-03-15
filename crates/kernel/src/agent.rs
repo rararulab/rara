@@ -746,7 +746,8 @@ pub(crate) async fn run_agent_loop(
     // Filter tools by user permissions — users can only see tools they are
     // authorized to use.  This prevents the LLM from even attempting to call
     // tools the user lacks permission for.
-    let tools = if let Some(ref user_id) = tool_context.user_id {
+    let tools = {
+        let user_id = &tool_context.user_id;
         match handle.security().user_store().get_by_name(user_id).await {
             Ok(Some(user)) => {
                 let filtered = manifest_filtered.filtered_by_user(&user);
@@ -756,14 +757,12 @@ pub(crate) async fn run_agent_loop(
                         .filter(|(name, _)| !user.can_use_tool(name))
                         .map(|(name, _)| name.to_string())
                         .collect();
-                    info!(user_id, ?denied, "filtered tools by user permissions");
+                    info!(user_id = user_id.as_str(), ?denied, "filtered tools by user permissions");
                 }
                 Arc::new(filtered)
             }
             _ => Arc::new(manifest_filtered),
         }
-    } else {
-        Arc::new(manifest_filtered)
     };
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
@@ -826,7 +825,7 @@ pub(crate) async fn run_agent_loop(
     // each iteration re-sends the full context.
     let mut cumulative_output_tokens: u32 = 0;
     let mut cumulative_thinking_ms: u64 = 0;
-    let user_id = tool_context.user_id.as_deref();
+    let user_id = Some(tool_context.user_id.as_str());
 
     for iteration in 0..max_iterations {
         // ── Rebuild messages from tape each iteration (single source of truth) ──
@@ -1362,17 +1361,13 @@ pub(crate) async fn run_agent_loop(
         iter_span.record("tool_count", valid_tool_calls.len());
 
         // Resolve user for runtime permission guard (defense in depth).
-        let runtime_user = if let Some(ref uid) = tool_context.user_id {
-            handle
-                .security()
-                .user_store()
-                .get_by_name(uid)
-                .await
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
+        let runtime_user = handle
+            .security()
+            .user_store()
+            .get_by_name(&tool_context.user_id)
+            .await
+            .ok()
+            .flatten();
 
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
