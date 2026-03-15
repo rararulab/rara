@@ -118,40 +118,41 @@ use crate::llm::{LlmDriver, Message};
 use crate::memory::HandoffState;
 
 pub struct FoldSummary {
-    /// 当前上下文的关键信息摘要
+    /// Key information summary of the current context.
     pub summary: String,
-    /// 下一步需要做什么
+    /// Actionable next steps.
     pub next_steps: String,
 }
 
 pub struct ContextFolder {
-    /// 用于摘要的 LLM driver
+    /// LLM driver used for summarization.
     driver: Arc<dyn LlmDriver>,
-    /// 摘要用的模型标识符（provider-agnostic）
+    /// Model identifier for summarization (provider-agnostic).
     model: String,
 }
 
 impl ContextFolder {
-    /// 将一组 messages 折叠为摘要。
+    /// Fold a sequence of messages into a summary.
     ///
-    /// 使用独立的短上下文 LLM 调用，不走主 agent loop。
-    /// max_summary_tokens 根据被压缩内容的量动态计算。
+    /// Uses an independent short-context LLM call; does NOT go through the
+    /// main agent loop.  `max_summary_tokens` is computed dynamically from
+    /// the source token count.
     pub async fn fold_with_prior(
         &self,
         prior_summary: Option<&str>,
         messages: &[Message],
         source_token_estimate: usize,
     ) -> Result<FoldSummary> {
-        // 动态摘要长度：原内容的 ~10%，下限 256，上限 2048
+        // Dynamic summary length: ~10% of source, clamped to [256, 2048]
         let max_tokens = (source_token_estimate / 10).clamp(256, 2048);
 
         let fold_prompt = Message::system(FOLD_SYSTEM_PROMPT.to_string());
 
         let mut content = String::new();
         if let Some(prior) = prior_summary {
-            content.push_str(&format!("## 之前的对话历史\n{}\n\n", prior));
+            content.push_str(&format!("## Prior conversation history\n{}\n\n", prior));
         }
-        content.push_str("## 需要总结的新对话\n");
+        content.push_str("## New conversation to summarize\n");
         content.push_str(&self.format_messages_for_fold(messages));
 
         let user_msg = Message::user(content);
@@ -169,10 +170,10 @@ impl ContextFolder {
         self.parse_fold_response(&response)
     }
 
-    /// 将纯文本压缩到目标字符数。
+    /// Compress plain text to a target character count.
     ///
-    /// 用于 P1 fold_branch：子 agent 返回的结果文本可能很长，
-    /// 需要压缩后再作为 ToolResult 写回父上下文。
+    /// Used by P1 fold_branch: the child agent's result text may be long
+    /// and needs compression before being written back as a ToolResult.
     pub async fn fold_text(&self, text: &str, target_chars: usize) -> Result<String> {
         let prompt = Message::system(
             "Compress the following text to be concise while preserving all key facts, \
@@ -198,7 +199,7 @@ impl ContextFolder {
         Ok(response.text)
     }
 
-    /// 将 FoldSummary 转为 HandoffState，直接复用现有 anchor 体系。
+    /// Convert FoldSummary into HandoffState, reusing the existing anchor system.
     pub fn to_handoff_state(summary: &FoldSummary, pressure: f64) -> HandoffState {
         HandoffState {
             phase: Some("auto-fold".into()),
@@ -237,24 +238,23 @@ IMPORTANT: Generate the summary in the SAME LANGUAGE as the conversation being s
 
 const FOLD_THRESHOLD: f64 = 0.60;
 
-// agent loop 开始前初始化（与 consecutive_silent_iters 等同级）
+// Initialized before the agent loop (alongside consecutive_silent_iters, etc.)
 let mut last_fold_entry_id: Option<u64> = None;
 
-// 在每次迭代的 rebuild_messages_for_llm 之前，
-// 复用现有 tape.info() + classify_context_pressure 检测压力
+// Before each iteration's rebuild_messages_for_llm,
+// reuse tape.info() + classify_context_pressure to measure pressure.
 if let Ok(tape_info) = tape.info(tape_name).await {
     let pressure = tape_info.estimated_context_tokens as f64
         / capabilities.context_window_tokens as f64;
 
     if pressure > FOLD_THRESHOLD {
-        // Cooldown 检查：距上次 fold anchor 后是否有足够的新 entry
-        let entries_since_last_fold = tape_info.entries_since_last_anchor;
-        let min_entries = config.context_folding.min_entries_between_folds; // 默认 15
+        let min_entries = config.context_folding.min_entries_between_folds; // default 15
 
-        // Cooldown: 只看 auto-fold anchor，不看用户手动 handoff
+        // Cooldown: only count entries since last auto-fold anchor,
+        // ignoring user-initiated handoffs.
         let entries_since_last_fold = match last_fold_entry_id {
             Some(id) => tape.entries_after(tape_name, id).await?.len(),
-            None => tape_info.total_entries, // 从未 fold 过，全部 entry 都算
+            None => tape_info.total_entries, // never folded yet — all entries count
         };
 
         if entries_since_last_fold >= min_entries {
@@ -267,12 +267,12 @@ if let Ok(tape_info) = tape.info(tape_name).await {
 
             let messages = tape.build_llm_context(tape_name).await?;
 
-            // 层级折叠：获取前一个 anchor 的摘要
+            // Hierarchical fold: fetch prior anchor's summary
             let prior_summary = anchor_summary_text(
                 &tape.from_last_anchor(tape_name).await?,
             );
 
-            // fold 失败不中断 agent loop，fallback 到现有 0.70/0.85 机制
+            // Fold failure must not abort the agent loop; fall back to 0.70/0.85 warnings.
             match context_folder.fold_with_prior(
                 prior_summary.as_deref(),
                 &messages,
@@ -281,7 +281,7 @@ if let Ok(tape_info) = tape.info(tape_name).await {
                 Ok(fold) => {
                     let handoff_state = ContextFolder::to_handoff_state(&fold, pressure);
                     tape.handoff(tape_name, "auto-fold", handoff_state).await?;
-                    // 记录 fold anchor 的 entry ID 用于 cooldown
+                    // Record the fold anchor's entry ID for cooldown tracking
                     last_fold_entry_id = tape.last_entry_id(tape_name).await.ok();
                 }
                 Err(e) => {
@@ -304,9 +304,9 @@ if let Ok(tape_info) = tape.info(tape_name).await {
 kernel:
   context_folding:
     enabled: true
-    fold_threshold: 0.60             # 上下文压力阈值（低于现有 0.70 warn）
-    min_entries_between_folds: 15     # cooldown：至少 15 条新 entry 才允许再次 fold
-    # 摘要模型标识符（provider-agnostic，留空则 fallback 到当前 session 模型）
+    fold_threshold: 0.60             # context pressure threshold (below existing 0.70 warn)
+    min_entries_between_folds: 15     # cooldown: at least 15 new entries before next fold
+    # summarization model identifier (provider-agnostic; null falls back to session model)
     fold_model: null
 ```
 
@@ -322,23 +322,23 @@ kernel:
 ```rust
 // crates/kernel/src/tool/builtin/fold_branch.rs
 
-/// 将子任务分支到独立上下文中执行，结果压缩后返回。
+/// Branch a subtask into an isolated context; compress and return the result.
 ///
-/// 用途：当子任务会产生大量中间上下文（如分析多个文件、
-/// 搜索+汇总等），用 fold_branch 避免膨胀父上下文。
+/// Use when a subtask would generate excessive intermediate context
+/// (e.g. analyzing many files, search + aggregation).
 pub struct FoldBranchTool;
 
 #[derive(Deserialize)]
 pub struct FoldBranchArgs {
-    /// 子任务描述（作为子 agent 的 system prompt 补充）
+    /// Subtask description (appended to child agent's system prompt).
     pub task: String,
-    /// 具体指令（作为子 agent 的 user message）
+    /// Concrete instruction (sent as the child agent's user message).
     pub instruction: String,
-    /// 子 agent 可用的 tool 列表（可选，默认继承父）
+    /// Tools available to the child agent (optional; inherits parent's by default).
     pub tools: Option<Vec<String>>,
-    /// 最大迭代数（可选，默认 10）
+    /// Max iterations for the child agent (optional; default 10).
     pub max_iterations: Option<u32>,
-    /// 超时秒数（可选，默认从配置读取）
+    /// Timeout in seconds (optional; read from config by default).
     pub timeout_secs: Option<u64>,
 }
 
@@ -346,9 +346,10 @@ impl BuiltinTool for FoldBranchTool {
     fn name(&self) -> &str { "fold_branch" }
 
     fn description(&self) -> &str {
-        "将子任务分支到独立上下文中执行。子 agent 有干净的上下文窗口，\
-         不受父对话历史影响。执行完成后，结果自动压缩返回。\
-         适用于：分析大量文件、搜索汇总、复杂推理等会产生大量中间上下文的任务。"
+        "Branch a subtask into an isolated context. The child agent gets a clean \
+         context window, free from parent conversation history. Results are \
+         automatically compressed on return. Use for: analyzing many files, \
+         search + aggregation, complex reasoning that generates heavy intermediate context."
     }
 
     async fn execute(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult> {
@@ -358,8 +359,8 @@ impl BuiltinTool for FoldBranchTool {
         let manifest = AgentManifest {
             name: format!("fold-branch-{}", Uuid::new_v4().as_simple()),
             system_prompt: Some(format!(
-                "你是一个专注的子任务执行者。\n\n## 任务\n{}\n\n\
-                 完成后用简洁的结构化格式输出结果，不需要过程叙述。",
+                "You are a focused subtask executor.\n\n## Task\n{}\n\n\
+                 Output results in concise, structured format. No process narration.",
                 args.task
             )),
             tools: args.tools.unwrap_or_else(|| ctx.available_tools()),
@@ -367,7 +368,7 @@ impl BuiltinTool for FoldBranchTool {
             ..AgentManifest::ephemeral()
         };
 
-        // 同步等待，区别于 spawn_background
+        // Synchronous wait (unlike spawn_background which is fire-and-forget)
         let handle = kernel.spawn_child(
             &ctx.session_key,
             &ctx.principal,
@@ -376,7 +377,7 @@ impl BuiltinTool for FoldBranchTool {
         ).await?;
 
         let timeout_secs = args.timeout_secs
-            .unwrap_or(ctx.config.context_folding.branch_timeout_secs); // 默认 120
+            .unwrap_or(ctx.config.context_folding.branch_timeout_secs); // default 120
         let timeout = Duration::from_secs(timeout_secs);
 
         let result = tokio::time::timeout(timeout, async {
@@ -390,7 +391,7 @@ impl BuiltinTool for FoldBranchTool {
         }).await
         .map_err(|_| Error::BranchTimeout { timeout_secs })?;
 
-        // 结果过长时压缩
+        // Compress if result exceeds target size
         let compressed = if result.len() > COMPACT_TARGET_CHARS {
             ctx.context_folder.fold_text(&result, COMPACT_TARGET_CHARS).await?
         } else {
@@ -409,15 +410,15 @@ fold_branch 和 spawn_background 共享 `child_semaphore`。如果多个 fold_br
 方案：在 `child_semaphore` 中为 background agent 保留 slot。
 
 ```rust
-// Session 上新增配置
+// New config on Session
 pub struct ChildSlotConfig {
-    /// 总 child 并发数（默认 8）
+    /// Total child concurrency limit (default 8).
     pub total: usize,
-    /// 为 background agent 保留的 slot 数（默认 2）
+    /// Slots reserved for background agents (default 2).
     pub reserved_background: usize,
 }
 
-// fold_branch spawn 前检查
+// Pre-spawn check in fold_branch
 let available = session.child_semaphore.available_permits();
 let reserved = session.child_slot_config.reserved_background;
 if available <= reserved {
@@ -439,13 +440,14 @@ if available <= reserved {
                     │ fold_branch │  │ spawn_background   │
                     │ (P1, #341)  │  │ (#339)             │
                     ├─────────────┤  ├────────────────────┤
-                    │ 同步等待     │  │ 异步 fire-and-forget│
-                    │ 结果内联返回  │  │ 结果触发 proactive  │
-                    │ 压缩为       │  │ turn 推送给用户     │
-                    │ ToolResult   │  │                    │
-                    │ 目的：上下文  │  │ 目的：长任务        │
-                    │ 管理         │  │ 不阻塞用户          │
-                    │ 用 general   │  │ 用 reserved         │
+                    │ sync wait    │  │ async fire-and-forget│
+                    │ inline result│  │ triggers proactive  │
+                    │ compressed   │  │ turn to push result │
+                    │ ToolResult   │  │ to user             │
+                    │ purpose:     │  │ purpose:            │
+                    │ ctx mgmt     │  │ long tasks w/o      │
+                    │ general slots│  │ blocking user       │
+                    │              │  │ reserved slots      │
                     │ slots        │  │ slots               │
                     └─────────────┘  └────────────────────┘
 ```
