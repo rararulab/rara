@@ -123,7 +123,7 @@ impl AgentTool for SpawnBackgroundTool {
                 trigger_message_id: context
                     .rara_message_id
                     .clone()
-                    .unwrap_or_else(crate::io::MessageId::new),
+                    .expect("rara_message_id must be set in ToolContext"),
             },
         );
 
