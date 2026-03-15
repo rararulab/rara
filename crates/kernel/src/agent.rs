@@ -463,6 +463,10 @@ pub struct TurnTrace {
     pub total_tool_calls: usize,
     pub success:          bool,
     pub error:            Option<String>,
+    /// Rara internal message ID for end-to-end correlation.
+    /// For user-triggered turns this is the `InboundMessage.id`;
+    /// for proactive turns a fresh ID is generated at dispatch time.
+    pub rara_message_id:  crate::io::MessageId,
 }
 
 /// Result of a single agent turn.
@@ -498,6 +502,7 @@ impl AgentTurnResult {
                 total_tool_calls: 0,
                 success:          true,
                 error:            None,
+                rara_message_id:  crate::io::MessageId::new(),
             },
         }
     }
@@ -709,6 +714,7 @@ pub(crate) async fn run_agent_loop(
     output_interceptor: crate::tool::DynamicOutputInterceptor,
     guard_pipeline: Arc<GuardPipeline>,
     notification_bus: NotificationBusRef,
+    rara_message_id: crate::io::MessageId,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1126,15 +1132,19 @@ pub(crate) async fn run_agent_loop(
         // Terminal response (no tool calls, or recovery iteration must exit)
         if !has_tool_calls || llm_error_recovery_used {
             // Persist final assistant message to tape.
-            let usage_meta = last_usage.as_ref().map(|u| {
-                serde_json::json!({
-                    "usage": {
+            let meta = {
+                let mut m = serde_json::json!({
+                    "rara_message_id": rara_message_id.to_string(),
+                });
+                if let Some(u) = last_usage.as_ref() {
+                    m["usage"] = serde_json::json!({
                         "prompt_tokens": u.prompt_tokens,
                         "completion_tokens": u.completion_tokens,
-                        "total_tokens": u.total_tokens
-                    }
-                })
-            });
+                        "total_tokens": u.total_tokens,
+                    });
+                }
+                Some(m)
+            };
             let _ = tape
                 .append_message(
                     tape_name,
@@ -1142,7 +1152,7 @@ pub(crate) async fn run_agent_loop(
                         "role": "assistant",
                         "content": &accumulated_text,
                     }),
-                    usage_meta.clone(),
+                    meta.clone(),
                 )
                 .await;
 
@@ -1171,6 +1181,7 @@ pub(crate) async fn run_agent_loop(
                 total_tool_calls: tool_calls_made,
                 success:          true,
                 error:            None,
+                rara_message_id,
             };
             // Best-effort mood update — failure is silently logged, never
             // blocks the response.
@@ -1239,7 +1250,7 @@ pub(crate) async fn run_agent_loop(
                                     "error": &error_message,
                                 }]
                             }),
-                            None,
+                            Some(serde_json::json!({"rara_message_id": rara_message_id.to_string()})),
                         )
                         .await;
                     let raw_args: String = tool_call.arguments_buf.chars().take(100).collect();
@@ -1280,20 +1291,24 @@ pub(crate) async fn run_agent_loop(
                     })
                 })
                 .collect();
-            let usage_meta = last_usage.as_ref().map(|u| {
-                serde_json::json!({
-                    "usage": {
+            let tool_call_meta = {
+                let mut m = serde_json::json!({
+                    "rara_message_id": rara_message_id.to_string(),
+                });
+                if let Some(u) = last_usage.as_ref() {
+                    m["usage"] = serde_json::json!({
                         "prompt_tokens": u.prompt_tokens,
                         "completion_tokens": u.completion_tokens,
-                        "total_tokens": u.total_tokens
-                    }
-                })
-            });
+                        "total_tokens": u.total_tokens,
+                    });
+                }
+                Some(m)
+            };
             let _ = tape
                 .append_tool_call(
                     tape_name,
                     serde_json::json!({ "calls": calls_json }),
-                    usage_meta,
+                    tool_call_meta,
                 )
                 .await;
         }
@@ -1521,7 +1536,7 @@ pub(crate) async fn run_agent_loop(
                 .append_tool_result(
                     tape_name,
                     serde_json::json!({ "results": results_json.clone() }),
-                    None,
+                    Some(serde_json::json!({"rara_message_id": rara_message_id.to_string()})),
                 )
                 .await;
             if should_remind_tape_anchor(&tool_names, &results_json) {
@@ -1669,6 +1684,7 @@ pub(crate) async fn run_agent_loop(
         total_tool_calls: tool_calls_made,
         success:          false,
         error:            Some(exhaustion_error),
+        rara_message_id,
     };
     // Best-effort mood update — failure is silently logged, never blocks the
     // response.

@@ -186,6 +186,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
             iterations,
             tool_calls,
             model,
+            rara_message_id: _,
         } => Some(WebEvent::TurnMetrics {
             duration_ms,
             iterations,

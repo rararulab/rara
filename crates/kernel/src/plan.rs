@@ -191,6 +191,7 @@ pub(crate) async fn run_plan_loop(
     output_interceptor: crate::tool::DynamicOutputInterceptor,
     guard_pipeline: Arc<GuardPipeline>,
     notification_bus: NotificationBusRef,
+    rara_message_id: crate::io::MessageId,
 ) -> Result<AgentTurnResult> {
     info!(session_key = %session_key, "plan executor: starting v2 plan-execute loop");
     let start = Instant::now();
@@ -268,6 +269,7 @@ pub(crate) async fn run_plan_loop(
                     output_interceptor.clone(),
                     guard_pipeline.clone(),
                     notification_bus.clone(),
+                    rara_message_id,
                     &mut total_iterations,
                     &mut total_tool_calls,
                     &mut last_model,
@@ -447,6 +449,7 @@ pub(crate) async fn run_plan_loop(
             } else {
                 None
             },
+            rara_message_id,
         },
     })
 }
@@ -840,6 +843,7 @@ async fn execute_inline_step(
     output_interceptor: crate::tool::DynamicOutputInterceptor,
     guard_pipeline: Arc<GuardPipeline>,
     notification_bus: NotificationBusRef,
+    rara_message_id: crate::io::MessageId,
     total_iterations: &mut usize,
     total_tool_calls: &mut usize,
     last_model: &mut String,
@@ -859,6 +863,7 @@ async fn execute_inline_step(
         output_interceptor,
         guard_pipeline,
         notification_bus,
+        rara_message_id,
     )
     .await;
 

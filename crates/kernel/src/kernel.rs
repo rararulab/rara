@@ -1307,7 +1307,11 @@ impl Kernel {
         });
         if let Err(e) = &self
             .tape_service
-            .append_message(&tape_name, tape_payload, None)
+            .append_message(
+                &tape_name,
+                tape_payload,
+                Some(serde_json::json!({"rara_message_id": msg.id.to_string()})),
+            )
             .await
         {
             warn!(%e, "group: failed to persist message to tape");
@@ -1809,7 +1813,11 @@ impl Kernel {
             });
             if let Err(e) = &self
                 .tape_service
-                .append_message(&tape_name, tape_payload, None)
+                .append_message(
+                    &tape_name,
+                    tape_payload,
+                    Some(serde_json::json!({"rara_message_id": msg.id.to_string()})),
+                )
                 .await
             {
                 warn!(%e, "failed to persist user message to tape");
@@ -2043,6 +2051,10 @@ impl Kernel {
                     user_text
                 };
 
+                // Use the inbound message ID as the turn's rara_message_id
+                // for end-to-end correlation.
+                let rara_message_id = msg_id.clone();
+
                 let turn_result = if use_plan_executor {
                     run_plan_loop(
                         &kernel_handle,
@@ -2057,6 +2069,7 @@ impl Kernel {
                         output_interceptor,
                         guard_pipeline,
                         notification_bus,
+                        rara_message_id,
                     )
                     .await
                 } else {
@@ -2073,6 +2086,7 @@ impl Kernel {
                         output_interceptor,
                         guard_pipeline,
                         notification_bus,
+                        rara_message_id,
                     )
                     .await
                 };
@@ -2109,6 +2123,7 @@ impl Kernel {
                         iterations:  result.iterations,
                         tool_calls:  result.tool_calls,
                         model:       result.model.clone(),
+                        rara_message_id: result.trace.rara_message_id.to_string(),
                     });
                 }
 
@@ -2250,10 +2265,6 @@ impl Kernel {
                     estimated_output_tokens,
                 );
 
-                // Store turn trace for observability.
-                self.process_table
-                    .push_turn_trace(session_key, turn.trace.clone());
-
                 // Record metrics.
                 if let Some(metrics) = self.process_table.get_metrics(&session_key) {
                     metrics.record_llm_call();
@@ -2269,6 +2280,11 @@ impl Kernel {
                 };
                 let _ = self.process_table.set_result(session_key, result.clone());
 
+                // Store turn trace for observability — before delivery so the
+                // trace is recorded even if the envelope push fails.
+                self.process_table
+                    .push_turn_trace(session_key, turn.trace.clone());
+
                 // Push Deliver event for the reply — use egress session for routing.
                 // When origin_endpoint is None (e.g. scheduled tasks, subagents),
                 // skip delivery to avoid broadcasting to all user endpoints.
@@ -2283,6 +2299,7 @@ impl Kernel {
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
+
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))

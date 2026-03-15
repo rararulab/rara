@@ -840,6 +840,7 @@ pub enum StreamEvent {
         iterations:  usize,
         tool_calls:  usize,
         model:       String,
+        rara_message_id: String,
     },
     /// A plan has been created with a goal and ordered steps.
     PlanCreated {

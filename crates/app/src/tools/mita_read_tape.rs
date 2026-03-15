@@ -103,12 +103,16 @@ impl AgentTool for ReadTapeTool {
         let formatted: Vec<Value> = entries
             .iter()
             .map(|entry| {
-                json!({
+                let mut obj = json!({
                     "id": entry.id,
                     "kind": entry.kind.to_string(),
                     "payload": entry.payload,
                     "timestamp": entry.timestamp.to_string(),
-                })
+                });
+                if let Some(ref meta) = entry.metadata {
+                    obj["metadata"] = meta.clone();
+                }
+                obj
             })
             .collect();
 
