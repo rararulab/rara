@@ -926,8 +926,10 @@ impl StreamHandle {
 /// Manages the lifecycle of per-execution streams and provides
 /// subscription endpoints for egress/frontends.
 pub struct StreamHub {
-    streams:  DashMap<StreamId, StreamEntry>,
-    capacity: usize,
+    streams:          DashMap<StreamId, StreamEntry>,
+    /// Reverse index: session_key → active stream IDs for O(1) lookup.
+    session_streams:  DashMap<SessionKey, Vec<StreamId>>,
+    capacity:         usize,
 }
 
 impl StreamHub {
@@ -935,6 +937,7 @@ impl StreamHub {
     pub fn new(capacity: usize) -> Self {
         Self {
             streams: DashMap::new(),
+            session_streams: DashMap::new(),
             capacity,
         }
     }
@@ -952,6 +955,10 @@ impl StreamHub {
             tx: tx.clone(),
         };
         self.streams.insert(stream_id.clone(), entry);
+        self.session_streams
+            .entry(session_key)
+            .or_default()
+            .push(stream_id.clone());
         StreamHandle { stream_id, tx }
     }
 
@@ -960,19 +967,28 @@ impl StreamHub {
     /// This is precise — only the specified stream is removed, not other
     /// streams on the same session.
     #[tracing::instrument(skip(self))]
-    pub fn close(&self, stream_id: &StreamId) { self.streams.remove(stream_id); }
+    pub fn close(&self, stream_id: &StreamId) {
+        if let Some((_, entry)) = self.streams.remove(stream_id) {
+            if let Some(mut ids) = self.session_streams.get_mut(&entry.session_key) {
+                ids.retain(|id| id != stream_id);
+                if ids.is_empty() {
+                    drop(ids);
+                    self.session_streams.remove(&entry.session_key);
+                }
+            }
+        }
+    }
 
     /// Emit a stream event to all active streams for a session.
     ///
     /// Used by background task lifecycle events that need to push to a
     /// session's streams without holding a `StreamHandle`.
-    ///
-    /// TODO: Linear scan over all streams. Consider adding a
-    /// `session_key → Vec<StreamId>` index if stream count grows.
     pub fn emit_to_session(&self, session_key: &SessionKey, event: StreamEvent) {
-        for entry in self.streams.iter() {
-            if &entry.value().session_key == session_key {
-                let _ = entry.value().tx.send(event.clone());
+        if let Some(ids) = self.session_streams.get(session_key) {
+            for id in ids.iter() {
+                if let Some(entry) = self.streams.get(id) {
+                    let _ = entry.value().tx.send(event.clone());
+                }
             }
         }
     }
@@ -985,10 +1001,15 @@ impl StreamHub {
         &self,
         session_key: &SessionKey,
     ) -> Vec<(StreamId, broadcast::Receiver<StreamEvent>)> {
-        self.streams
-            .iter()
-            .filter(|entry| &entry.value().session_key == session_key)
-            .map(|entry| (entry.key().clone(), entry.value().tx.subscribe()))
+        let Some(ids) = self.session_streams.get(session_key) else {
+            return Vec::new();
+        };
+        ids.iter()
+            .filter_map(|id| {
+                self.streams
+                    .get(id)
+                    .map(|entry| (id.clone(), entry.value().tx.subscribe()))
+            })
             .collect()
     }
 }
