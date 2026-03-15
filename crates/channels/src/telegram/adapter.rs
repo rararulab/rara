@@ -260,11 +260,19 @@ struct ToolTraceEntry {
 
 /// Pre-rendered trace cache entry. Both views are rendered at trace-write time
 /// so that callback handlers need zero I/O and zero computation.
+///
+/// Trade-off: detail_html is pre-rendered even if most users never click
+/// "详情". This costs ~4KB extra per trace but avoids needing the full
+/// `ExecutionTrace` struct in the cache (which would be harder to manage).
+/// For typical traces this is negligible; if traces become very large,
+/// consider lazy rendering on first click.
 #[derive(Clone)]
 struct TraceCacheEntry {
     compact_html: String,
     detail_html: String,
 }
+
+const TRACE_CACHE_CAPACITY: usize = 1000;
 
 /// Lightweight index mapping `"{chat_id}:{msg_id}"` → pre-rendered HTML.
 /// Entries are lost on process restart (acceptable — old buttons silently no-op).
@@ -1483,13 +1491,20 @@ async fn handle_trace_callback(
     let action = parts[1];
     let trace_key = parts[2];
 
-    // Answer callback immediately — removes Telegram spinner regardless of
-    // whether we can actually update the message.
-    let _ = bot.answer_callback_query(callback.id.clone()).await;
-
     // Look up pre-rendered HTML from cache
     let cached = trace_index.get(trace_key).map(|r| r.value().clone());
-    let Some(entry) = cached else { return };
+
+    // Answer callback immediately — removes Telegram spinner.
+    // On cache miss, show a hint so the user understands why nothing happened.
+    if cached.is_none() {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("缓存已过期，请重新触发")
+            .await;
+        return;
+    }
+    let _ = bot.answer_callback_query(callback.id.clone()).await;
+    let entry = cached.unwrap();
 
     let (text, button_text, next_action) = match action {
         "show" => (
@@ -2410,7 +2425,18 @@ fn spawn_stream_forwarder(
                                     warn!(error = %e, "failed to persist execution trace to tape");
                                 }
 
-                                // Store pre-rendered HTML for instant callback response
+                                // Store pre-rendered HTML for instant callback response.
+                                // Evict oldest entries when cache exceeds capacity.
+                                if trace_index.len() >= TRACE_CACHE_CAPACITY {
+                                    let keys: Vec<String> = trace_index
+                                        .iter()
+                                        .take(TRACE_CACHE_CAPACITY / 2)
+                                        .map(|r| r.key().clone())
+                                        .collect();
+                                    for k in keys {
+                                        trace_index.remove(&k);
+                                    }
+                                }
                                 trace_index.insert(trace_key, TraceCacheEntry {
                                     compact_html,
                                     detail_html,
