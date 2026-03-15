@@ -59,11 +59,13 @@ Fold 后上下文缩短 → 几轮后涨回 0.6 → 再次 fold → 循环。需
 ```
 触发 fold 的条件（必须全部满足）：
   1. pressure > FOLD_THRESHOLD (0.60)
-  2. 距上次 fold 的 anchor 之后，新增 entry 数 >= min_entries_between_folds (15)
+  2. 距上次 auto-fold anchor 之后，新增 entry 数 >= min_entries_between_folds (15)
   3. context_folding.enabled == true
 ```
 
 用 entry 数而非时间/轮数作为 cooldown 指标——entry 数直接反映上下文增长量，比 turn 数更精确（一个 turn 可能有多次 tool call = 多条 entry）。
+
+**注意**：cooldown 只看 `phase == "auto-fold"` 的 anchor，不看用户手动 handoff 或 session start anchor。否则用户手动 handoff 后会意外重置 cooldown 计数。实现方式：agent loop 中维护 `last_fold_entry_id: Option<u64>`，每次 fold 后记录新 anchor 的 entry ID，检查 cooldown 时用 `tape.entries_after(last_fold_entry_id).count()` 而非通用的 entries_since_last_anchor。
 
 ### 整体流程
 
@@ -167,6 +169,35 @@ impl ContextFolder {
         self.parse_fold_response(&response)
     }
 
+    /// 将纯文本压缩到目标字符数。
+    ///
+    /// 用于 P1 fold_branch：子 agent 返回的结果文本可能很长，
+    /// 需要压缩后再作为 ToolResult 写回父上下文。
+    pub async fn fold_text(&self, text: &str, target_chars: usize) -> Result<String> {
+        let prompt = Message::system(
+            "Compress the following text to be concise while preserving all key facts, \
+             decisions, and actionable information. Use the same language as the input. \
+             Output ONLY the compressed text, no wrapper."
+                .to_string(),
+        );
+        let user_msg = Message::user(format!(
+            "Compress to ~{target_chars} characters:\n\n{text}"
+        ));
+
+        let max_tokens = (target_chars / 3).clamp(128, 2048) as u32; // rough char→token
+        let response = self.driver.chat(
+            &self.model,
+            &[prompt, user_msg],
+            &ChatOptions {
+                max_tokens: Some(max_tokens),
+                temperature: Some(0.0),
+                ..Default::default()
+            },
+        ).await?;
+
+        Ok(response.text)
+    }
+
     /// 将 FoldSummary 转为 HandoffState，直接复用现有 anchor 体系。
     pub fn to_handoff_state(summary: &FoldSummary, pressure: f64) -> HandoffState {
         HandoffState {
@@ -183,19 +214,20 @@ impl ContextFolder {
     }
 }
 
-const FOLD_SYSTEM_PROMPT: &str = r#"你是一个上下文压缩专家。
-给定一段对话历史，生成两部分：
+const FOLD_SYSTEM_PROMPT: &str = r#"You are a context compression specialist.
+Given a conversation history, produce two parts:
 
-1. **summary**: 关键信息摘要。必须保留：
-   - 用户身份和偏好
-   - 所有事实性信息（文件路径、代码状态、配置值）
-   - 已做出的决策及其理由
-   - 错误和已尝试的解决方案
-   删除：寒暄、重复的工具输出、中间推理过程
+1. **summary**: Key information summary. MUST preserve:
+   - User identity and preferences
+   - All factual information (file paths, code state, config values)
+   - Decisions made and their reasoning
+   - Errors encountered and solutions attempted
+   DELETE: greetings, redundant tool outputs, intermediate reasoning steps
 
-2. **next_steps**: 当前正在进行或即将进行的工作。
+2. **next_steps**: Work currently in progress or about to begin.
 
-输出 JSON: {"summary": "...", "next_steps": "..."}"#;
+Output JSON: {"summary": "...", "next_steps": "..."}
+IMPORTANT: Generate the summary in the SAME LANGUAGE as the conversation being summarized."#;
 ```
 
 #### 2. Agent Loop 集成
@@ -204,6 +236,9 @@ const FOLD_SYSTEM_PROMPT: &str = r#"你是一个上下文压缩专家。
 // crates/kernel/src/agent.rs — run_agent_loop 内
 
 const FOLD_THRESHOLD: f64 = 0.60;
+
+// agent loop 开始前初始化（与 consecutive_silent_iters 等同级）
+let mut last_fold_entry_id: Option<u64> = None;
 
 // 在每次迭代的 rebuild_messages_for_llm 之前，
 // 复用现有 tape.info() + classify_context_pressure 检测压力
@@ -215,6 +250,12 @@ if let Ok(tape_info) = tape.info(tape_name).await {
         // Cooldown 检查：距上次 fold anchor 后是否有足够的新 entry
         let entries_since_last_fold = tape_info.entries_since_last_anchor;
         let min_entries = config.context_folding.min_entries_between_folds; // 默认 15
+
+        // Cooldown: 只看 auto-fold anchor，不看用户手动 handoff
+        let entries_since_last_fold = match last_fold_entry_id {
+            Some(id) => tape.entries_after(tape_name, id).await?.len(),
+            None => tape_info.total_entries, // 从未 fold 过，全部 entry 都算
+        };
 
         if entries_since_last_fold >= min_entries {
             tracing::info!(
@@ -231,15 +272,26 @@ if let Ok(tape_info) = tape.info(tape_name).await {
                 &tape.from_last_anchor(tape_name).await?,
             );
 
-            let fold = context_folder.fold_with_prior(
+            // fold 失败不中断 agent loop，fallback 到现有 0.70/0.85 机制
+            match context_folder.fold_with_prior(
                 prior_summary.as_deref(),
                 &messages,
                 tape_info.estimated_context_tokens as usize,
-            ).await?;
-
-            // 直接复用 TapeService::handoff()，anchor_context() 零改动兼容
-            let handoff_state = ContextFolder::to_handoff_state(&fold, pressure);
-            tape.handoff(tape_name, "auto-fold", handoff_state).await?;
+            ).await {
+                Ok(fold) => {
+                    let handoff_state = ContextFolder::to_handoff_state(&fold, pressure);
+                    tape.handoff(tape_name, "auto-fold", handoff_state).await?;
+                    // 记录 fold anchor 的 entry ID 用于 cooldown
+                    last_fold_entry_id = tape.last_entry_id(tape_name).await.ok();
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "auto-fold: LLM summarization failed, skipping fold; \
+                         0.70/0.85 pressure warnings remain as fallback"
+                    );
+                }
+            }
         }
     }
 }
