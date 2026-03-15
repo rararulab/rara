@@ -14,6 +14,7 @@
 
 pub(crate) mod create_plan;
 pub(crate) mod schedule;
+pub(crate) mod spawn_background;
 pub(crate) mod tape;
 
 use std::{collections::HashMap, sync::Arc};
