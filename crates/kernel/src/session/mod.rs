@@ -245,6 +245,19 @@ pub enum Signal {
     Resume,
 }
 
+/// Tracks a background child agent spawned by this session.
+#[derive(Debug, Clone)]
+pub struct BackgroundTaskEntry {
+    /// Child session key (doubles as task_id).
+    pub child_key: SessionKey,
+    /// Human-readable name from the spawned manifest.
+    pub agent_name: String,
+    /// Description provided by the parent agent.
+    pub description: String,
+    /// When the task was spawned.
+    pub created_at: jiff::Timestamp,
+}
+
 /// A running session instance in the session table.
 #[derive(Debug)]
 pub struct Session {
@@ -289,6 +302,8 @@ pub struct Session {
     pub paused: bool,
     /// Buffered events received while the session was paused or busy.
     pub pause_buffer: Vec<KernelEventEnvelope>,
+    /// Active background tasks spawned by this session.
+    pub background_tasks: Vec<BackgroundTaskEntry>,
     /// The channel endpoint that originated this session (e.g. a specific
     /// Telegram chat). Used as a fallback for reply routing when the
     /// triggering message is synthetic (no platform origin).

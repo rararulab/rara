@@ -717,6 +717,7 @@ impl Kernel {
             paused: false,
             origin_endpoint,
             pause_buffer: Vec::new(),
+            background_tasks: Vec::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _parent_child_permit: None,
             _global_permit: global_permit,
