@@ -193,6 +193,8 @@ struct ProgressMessage {
     model: String,
     /// Iteration count, populated from `StreamEvent::TurnMetrics`.
     iterations: usize,
+    /// Rara internal message ID — the `InboundMessage.id` that triggered this turn.
+    rara_message_id: String,
     /// Plan steps must be saved here because `PlanCompleted` sets `plan =
     /// None`. If we don't save them before that, the trace loses all plan
     /// information.
@@ -200,7 +202,7 @@ struct ProgressMessage {
 }
 
 impl ProgressMessage {
-    fn new() -> Self {
+    fn new(rara_message_id: String) -> Self {
         Self {
             message_id: None,
             tools: Vec::new(),
@@ -214,6 +216,7 @@ impl ProgressMessage {
             reasoning_preview: String::new(),
             model: String::new(),
             iterations: 0,
+            rara_message_id,
             saved_plan_steps: Vec::new(),
         }
     }
@@ -240,6 +243,8 @@ struct ExecutionTrace {
     plan_steps: Vec<String>,
     /// Tool execution records.
     tools: Vec<ToolTraceEntry>,
+    /// Rara internal message ID for end-to-end correlation.
+    rara_message_id: String,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -627,6 +632,11 @@ fn render_trace_detail(trace: &ExecutionTrace) -> String {
     if !trace.model.is_empty() {
         text.push_str(&format!(" \u{00b7} {}", trace_html_escape(&trace.model)));
     }
+
+    text.push_str(&format!(
+        "\n\n\u{1f194} <b>Message ID</b>\n  <code>{}</code>",
+        trace_html_escape(&trace.rara_message_id),
+    ));
 
     // Telegram message limit is 4096 chars.
     // Must truncate on a char boundary to avoid panic on multi-byte UTF-8.
@@ -1892,6 +1902,7 @@ async fn handle_update(
     };
 
     let session_id = msg.session_key.clone();
+    let rara_message_id = msg.id.to_string();
 
     // Route: group proactive candidates go through GroupMessage event for
     // lightweight LLM judgment; directly-addressed messages go through the
@@ -1916,6 +1927,7 @@ async fn handle_update(
                     sid,
                     Arc::clone(trace_index),
                     tape.clone(),
+                    rara_message_id.clone(),
                 );
             }
         }
@@ -2012,6 +2024,7 @@ fn spawn_stream_forwarder(
     session_id: rara_kernel::session::SessionKey,
     trace_index: TraceIndex,
     tape: rara_kernel::memory::TapeService,
+    rara_message_id: String,
 ) {
     use rara_kernel::io::StreamEvent;
 
@@ -2055,7 +2068,7 @@ fn spawn_stream_forwarder(
         let mut typing_interval = tokio::time::interval(std::time::Duration::from_secs(4));
         typing_interval.tick().await; // skip immediate first tick
 
-        let mut progress = ProgressMessage::new();
+        let mut progress = ProgressMessage::new(rara_message_id);
         let mut progress_dirty = false;
         let mut plan: Option<PlanDisplay> = None;
 
@@ -2384,6 +2397,7 @@ fn spawn_stream_forwarder(
                                         summary:     t.summary.clone(),
                                         error:       t.error.clone(),
                                     }).collect(),
+                                    rara_message_id:  progress.rara_message_id.clone(),
                                 };
 
                                 let compact = render_compact_summary(&trace);
