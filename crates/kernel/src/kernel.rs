@@ -896,6 +896,72 @@ impl Kernel {
         {
             warn!(%e, "failed to persist child result message to tape");
         }
+
+        // If this child was a background task, trigger a proactive turn on the
+        // parent to deliver the result.
+        let is_background = self
+            .handle()
+            .is_background_task(&parent_id, &child_id);
+
+        if is_background {
+            // Remove from active list.
+            self.handle()
+                .remove_background_task(&parent_id, &child_id);
+
+            // Build directive with result context.
+            let status = if result.output.starts_with("error:")
+                || result.output.starts_with("Error:")
+                || result.iterations == 0
+            {
+                "failed"
+            } else {
+                "completed"
+            };
+
+            let trace_section = if status == "failed" {
+                self.process_table
+                    .with(&child_id, |p| {
+                        p.turn_traces
+                            .last()
+                            .and_then(|t| serde_json::to_string_pretty(t).ok())
+                    })
+                    .flatten()
+                    .map(|trace| format!("\n\n[Debug Trace]\n{trace}"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            let directive = format!(
+                "[Background Task {status}]\n\
+                 task_id={child_id}\n\
+                 iterations={}, tool_calls={}\n\n\
+                 Result:\n{truncated_output}{trace_section}\n\n\
+                 Proactively inform the user of the outcome. Be concise. \
+                 If the task failed, explain what went wrong.",
+                result.iterations, result.tool_calls,
+            );
+
+            let system_user = crate::identity::UserId("system".to_string());
+            let mut msg = crate::io::InboundMessage::synthetic(
+                directive,
+                system_user,
+                parent_id,
+            );
+            msg.metadata.insert(
+                "background_task_done".to_string(),
+                serde_json::json!(child_id.to_string()),
+            );
+
+            info!(
+                parent_id = %parent_id,
+                child_id = %child_id,
+                status = status,
+                "triggering proactive turn for background task result"
+            );
+
+            self.deliver_to_session(parent_id, msg).await;
+        }
     }
 
     /// Clean up a process runtime entry.
