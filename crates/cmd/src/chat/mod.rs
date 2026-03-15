@@ -475,6 +475,7 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             iterations,
             tool_calls,
             model,
+            rara_message_id: _,
         } => CliEvent::Progress {
             text: format!(
                 "[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"
