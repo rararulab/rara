@@ -866,6 +866,46 @@ pub(crate) async fn run_agent_loop(
             messages.push(llm::Message::user(recovery_msg));
         }
 
+        // Inject active background tasks status.
+        let bg_tasks = handle.background_tasks(&session_key);
+        if !bg_tasks.is_empty() {
+            let task_list: String = bg_tasks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let elapsed = jiff::Timestamp::now()
+                        .since(t.created_at)
+                        .ok()
+                        .map(|d| {
+                            let secs = d.get_seconds();
+                            if secs < 60 {
+                                format!("{secs}s ago")
+                            } else {
+                                format!("{}m ago", secs / 60)
+                            }
+                        })
+                        .unwrap_or_else(|| "just now".to_string());
+                    format!(
+                        "  {}. task_id={} name={} — {} (started {})",
+                        i + 1,
+                        t.child_key,
+                        t.agent_name,
+                        t.description,
+                        elapsed,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            messages.push(crate::llm::Message::user(format!(
+                "[Active Background Tasks]\n\
+                 You have {} background task(s) running:\n{task_list}\n\
+                 Results will be delivered automatically when complete. \
+                 Use cancel_background(task_id) to cancel if needed.",
+                bg_tasks.len()
+            )));
+        }
+
         messages = sanitize_messages_for_llm(&messages);
 
         let iter_span = info_span!(
