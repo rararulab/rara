@@ -21,6 +21,6 @@ llm:
       api_key: ollama
       default_model: ${OLLAMA_MODEL}
 users:
-- name: ryan
+- name: ci-bot
   role: root
   platforms: []
