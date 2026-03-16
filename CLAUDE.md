@@ -119,6 +119,53 @@ When user requests involve multiple independent changes, split into separate iss
 - Include `(#N)` issue reference in commit message
 - Include `Closes #N` in commit body
 
+## Code Comments
+
+- All new or modified public items (`pub fn`, `pub struct`, `pub enum`, `pub trait`) MUST have English doc comments (`///`)
+- Add inline comments to explain **why**, not **what** — skip comments that merely restate the code
+- Do NOT retroactively add comments to unchanged code — only comment what you touch
+- Complex algorithms, non-obvious invariants, and safety-critical logic require comments even on private items
+
+## AGENT.md Requirements
+
+Every crate and significant module directory MUST have an `AGENT.md` file that guides AI agents working in that area. This is mandatory for new crates and expected to be added incrementally for existing ones.
+
+### When to Create
+
+- **New crate**: `AGENT.md` is required at crate root (`crates/{name}/AGENT.md`) before the PR can merge
+- **New major module**: If a subdirectory has its own domain logic (e.g., `kernel/src/guard/`), add an `AGENT.md` there
+- **Significant refactor**: If you restructure a crate's internals, update or create its `AGENT.md`
+
+### Template
+
+```markdown
+# {crate-name} — Agent Guidelines
+
+## Purpose
+One sentence: what this crate does and why it exists.
+
+## Architecture
+Key modules, data flow, and public API surface. Point to real source files rather than abstract descriptions.
+
+## Critical Invariants
+Constraints that MUST NOT be violated (thread safety, ordering guarantees, security boundaries).
+Explain the consequence of violation.
+
+## What NOT To Do
+Explicit anti-patterns with reasoning. Format: "Do NOT X — because Y".
+
+## Dependencies
+Upstream/downstream crate relationships and external service dependencies.
+```
+
+### Rules
+
+- Keep each `AGENT.md` under 300 lines — only include what an agent cannot infer from reading the code
+- Write in English
+- Executable commands and real file paths over abstract descriptions
+- Update `AGENT.md` in the same PR when you change the crate's architecture or invariants
+- Do NOT let AI auto-generate `AGENT.md` from scratch — the author (human or agent who built the feature) writes it based on actual design decisions
+
 ## What NOT To Do
 
 - Do NOT put repository impls or routes in `yunara-store` — business logic stays in its own crates
@@ -137,3 +184,5 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT 用过于宽泛的条件触发 memory search — "proactively search memory" 会让每次交互都触发搜索+无意义叙述。触发条件必须明确限定（如"用户明确问到过去的事"）
 - Do NOT 修改 agent system prompt 后不测试 — 至少用 "hello"、"你好" 等简单输入验证不会产生异常/重复输出
 - Do NOT 在 CI 未全绿的情况下向用户汇报"PR 已完成" — 必须用 `gh pr checks --watch` 等到所有 check 通过，失败则修复后重新推送并再次验证
+- Do NOT create a new crate without an `AGENT.md` — every crate must ship with agent guidelines from day one
+- Do NOT write code comments in any language other than English — all comments, doc comments, and string literals must be English
