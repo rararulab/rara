@@ -298,17 +298,29 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(Arc::new(registry));
             }
             Syscall::PublishEvent {
-                event_type: _,
+                event_type,
                 payload,
             } => {
                 let message = payload
                     .get("message")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("(empty notification)")
-                    .to_string();
-                let _ = kernel_handle.event_queue().try_push(
-                    crate::event::KernelEventEnvelope::send_notification(message),
-                );
+                    .map(|s| s.trim())
+                    .unwrap_or("");
+
+                if message.is_empty() {
+                    tracing::warn!(
+                        event_type = %event_type,
+                        sender = %syscall_sender,
+                        payload_keys = ?payload.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+                        "PublishEvent dropped: payload.message is missing or blank"
+                    );
+                } else {
+                    let _ = kernel_handle.event_queue().try_push(
+                        crate::event::KernelEventEnvelope::send_notification(
+                            message.to_string(),
+                        ),
+                    );
+                }
             }
             Syscall::RegisterJob {
                 trigger,
