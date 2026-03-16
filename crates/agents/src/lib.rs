@@ -69,6 +69,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "list-skills".to_string(),
         "create-skill".to_string(),
         "delete-skill".to_string(),
+        "marketplace".to_string(),
         "install-mcp-server".to_string(),
         "list-mcp-servers".to_string(),
         "remove-mcp-server".to_string(),
