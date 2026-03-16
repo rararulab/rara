@@ -2467,7 +2467,7 @@ fn spawn_stream_forwarder(
                                     .await;
 
                                 // Persist trace to tape
-                                let trace_id = format!("trace_{}", chrono::Utc::now().timestamp_millis());
+                                let trace_id = ulid::Ulid::new().to_string();
                                 let tape_name = session_id.to_string();
                                 let trace_json = serde_json::to_value(&trace).unwrap_or_default();
 
