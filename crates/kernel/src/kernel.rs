@@ -1328,9 +1328,37 @@ impl Kernel {
             default_execution_mode: None,
         };
 
-        // 3. Spawn the agent.
+        // 3. Acquire a child permit from the parent's semaphore to enforce max_children
+        //    backpressure.  Use try_acquire (non-blocking) — if the parent is already
+        //    at capacity we skip this firing; the recurring job will retry on its next
+        //    interval.
+        let child_sem = self
+            .process_table
+            .with(&job.session_key, |p| p.child_semaphore.clone());
+        let child_permit = match child_sem {
+            Some(sem) => match sem.try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    info!(
+                        job_id = %job_id,
+                        session_key = %session_key,
+                        "skipping scheduled job: parent at child limit, will retry next interval"
+                    );
+                    return;
+                }
+            },
+            None => {
+                warn!(
+                    job_id = %job_id,
+                    session_key = %session_key,
+                    "skipping scheduled job: parent session not in process table"
+                );
+                return;
+            }
+        };
+
         let principal = crate::identity::Principal::lookup(job.principal.user_id.0.clone());
-        match self
+        let spawn_result = self
             .handle_spawn_agent(
                 manifest,
                 job.message.clone(),
@@ -1340,71 +1368,71 @@ impl Kernel {
                 None,                  // let kernel generate session key
                 None,                  // no origin endpoint
             )
-            .await
-        {
-            Ok(spawned_key) => {
-                info!(
-                    job_id = %job_id,
-                    session_key = %spawned_key,
-                    parent_key = %job.session_key,
-                    "scheduled job agent spawned with parent linkage"
-                );
+            .await;
 
-                // Install result_tx so the child is treated as a one-shot
-                // agent: when its first turn completes, the has_result_tx
-                // check (line ~2553) triggers cleanup_process →
-                // ChildSessionDone → handle_child_completed on the parent.
-                // Without this, the child would just transition to Ready and
-                // never notify the parent.
-                let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
-                self.process_table.with_mut(&spawned_key, |session| {
-                    session.result_tx = Some(result_tx);
-                });
-
-                // Register as background task so handle_child_completed
-                // triggers a proactive turn on the parent when the job
-                // finishes.
-                self.handle().register_background_task(
-                    &job.session_key,
-                    crate::session::BackgroundTaskEntry {
-                        child_key:          spawned_key,
-                        agent_name:         "scheduled_job".to_string(),
-                        description:        job.message.clone(),
-                        created_at:         jiff::Timestamp::now(),
-                        trigger_message_id: crate::io::MessageId::new(),
-                    },
-                );
-
-                // Emit BackgroundTaskStarted so clients show a status
-                // indicator.
-                self.io.stream_hub().emit_to_session(
-                    &job.session_key,
-                    crate::io::StreamEvent::BackgroundTaskStarted {
-                        task_id:     spawned_key.to_string(),
-                        agent_name:  "scheduled_job".to_string(),
-                        description: job.message.clone(),
-                    },
-                );
-
-                // Drain result_rx in fire-and-forget task (same pattern as
-                // SpawnBackgroundTool).
-                tokio::spawn(async move {
-                    let mut rx = result_rx;
-                    while let Some(event) = rx.recv().await {
-                        if matches!(event, crate::io::AgentEvent::Done(_)) {
-                            break;
-                        }
-                    }
-                });
-            }
+        let spawned_key = match spawn_result {
+            Ok(key) => key,
             Err(e) => {
                 error!(
                     job_id = %job_id,
                     error = %e,
                     "failed to spawn scheduled job agent"
                 );
+                return;
             }
-        }
+        };
+
+        info!(
+            job_id = %job_id,
+            session_key = %spawned_key,
+            parent_key = %job.session_key,
+            "scheduled job agent spawned with parent linkage"
+        );
+
+        // Install result_tx so the child is treated as a one-shot agent:
+        // when its first turn completes, the has_result_tx check triggers
+        // cleanup_process → ChildSessionDone → handle_child_completed on
+        // the parent.  Also store the child_permit so it is released when
+        // the child session is dropped (same as spawn_child).
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
+        self.process_table.with_mut(&spawned_key, |session| {
+            session.result_tx = Some(result_tx);
+            session._parent_child_permit = Some(child_permit);
+        });
+
+        // Register as background task so handle_child_completed triggers
+        // a proactive turn on the parent when the job finishes.
+        self.handle().register_background_task(
+            &job.session_key,
+            crate::session::BackgroundTaskEntry {
+                child_key:          spawned_key,
+                agent_name:         "scheduled_job".to_string(),
+                description:        job.message.clone(),
+                created_at:         jiff::Timestamp::now(),
+                trigger_message_id: crate::io::MessageId::new(),
+            },
+        );
+
+        // Emit BackgroundTaskStarted so clients show a status indicator.
+        self.io.stream_hub().emit_to_session(
+            &job.session_key,
+            crate::io::StreamEvent::BackgroundTaskStarted {
+                task_id:     spawned_key.to_string(),
+                agent_name:  "scheduled_job".to_string(),
+                description: job.message.clone(),
+            },
+        );
+
+        // Drain result_rx in fire-and-forget task (same pattern as
+        // SpawnBackgroundTool).
+        tokio::spawn(async move {
+            let mut rx = result_rx;
+            while let Some(event) = rx.recv().await {
+                if matches!(event, crate::io::AgentEvent::Done(_)) {
+                    break;
+                }
+            }
+        });
     }
 
     /// Handle a group-chat message where the bot was not directly mentioned.
