@@ -36,4 +36,7 @@ pub enum DockError {
 
     #[snafu(display("Invalid session ID: {id}"))]
     InvalidSessionId { id: String },
+
+    #[snafu(display("Session already exists: {id}"))]
+    SessionAlreadyExists { id: String },
 }

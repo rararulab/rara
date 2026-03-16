@@ -72,8 +72,16 @@ impl DockSessionStore {
     }
 
     /// Create a brand-new session and persist it.
+    ///
+    /// Returns [`DockError::SessionAlreadyExists`] if a session with the given
+    /// ID has already been persisted.
     pub fn create_session(&self, id: &str, title: &str) -> Result<DockSessionDocument, DockError> {
         Self::validate_session_id(id)?;
+
+        let doc_path = self.session_document_path(id);
+        if doc_path.exists() {
+            return Err(DockError::SessionAlreadyExists { id: id.to_string() });
+        }
 
         let now = now_millis();
         let doc = DockSessionDocument {
@@ -85,6 +93,7 @@ impl DockSessionStore {
                 updated_at:      now,
                 selected_anchor: None,
             },
+            blocks:      Vec::new(),
             annotations: Vec::new(),
             facts:       Vec::new(),
         };
@@ -240,11 +249,28 @@ fn apply_mutation_to_document(doc: &mut DockSessionDocument, mutation: &DockMuta
             }
         }
 
-        // -- Block mutations (applied to canvas snapshot, not document) ----
-        // Block add/update/remove are typically applied to DockCanvasSnapshot
-        // via `state::apply_mutation`. The document does not persist blocks
-        // directly, so these are no-ops at the document level.
-        MutationOp::BlockAdd | MutationOp::BlockUpdate | MutationOp::BlockRemove => {}
+        // -- Block mutations --------------------------------------------------
+        MutationOp::BlockAdd => {
+            if let Some(block) = &mutation.block {
+                doc.blocks.push(block.clone());
+            }
+        }
+        MutationOp::BlockUpdate => {
+            if let Some(block) = &mutation.block {
+                if let Some(existing) = doc.blocks.iter_mut().find(|b| b.id == block.id) {
+                    *existing = block.clone();
+                }
+            }
+        }
+        MutationOp::BlockRemove => {
+            let remove_id = mutation
+                .id
+                .as_deref()
+                .or(mutation.block.as_ref().map(|b| b.id.as_str()));
+            if let Some(id) = remove_id {
+                doc.blocks.retain(|b| b.id != id);
+            }
+        }
     }
 }
 
