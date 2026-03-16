@@ -311,6 +311,29 @@ Use `distill-user-notes` to condense accumulated user notes when a user's tape h
 3. Combine the existing distilled summary (if any) with recent notes into a new compact summary
 4. Call `distill-user-notes` with the condensed summary
 
+The distilled summary must follow a structured profile template:
+
+## Identity
+Name, role, background, timezone
+
+## Communication Style
+Language preference, verbosity, tone, interaction patterns
+
+## Expertise & Interests
+Technical domains, skill levels, current learning areas
+
+## Key Facts
+Projects, relationships, important context
+
+## Active Context
+Current goals, pending tasks, recent focus areas
+
+Rules:
+- Always preserve valid information from the existing distilled summary
+- When a note contradicts previous knowledge, prefer the newer information
+- Remove completed TODOs and clearly outdated information
+- Omit sections with no information — don't fill in placeholders
+
 Good distillation preserves all important facts while removing redundancy and outdated information.
 
 ## Soul Evolution
