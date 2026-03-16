@@ -34,7 +34,7 @@ use super::notify::push_notification;
 /// target session, prefixed with a system marker so Rara knows it comes
 /// from Mita's proactive analysis (not the user).
 ///
-/// The `KernelHandle` is set after kernel startup via [`set_kernel_handle`].
+/// The `KernelHandle` is set after kernel startup via the `handle_ref` hook.
 pub struct DispatchRaraTool {
     kernel_handle: Arc<RwLock<Option<KernelHandle>>>,
     tape_service:  TapeService,

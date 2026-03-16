@@ -17,7 +17,7 @@
 //! The [`Kernel`] is the single entry point for all agent operations.
 //! It manages a [`SessionTable`] of running sessions, enforces concurrency
 //! limits via dual semaphores (global + per-session), and provides
-//! [`spawn`](Kernel::spawn) as the primary API for creating sessions.
+//! `spawn` as the primary API for creating sessions.
 //!
 //! # Architecture
 //!
@@ -36,8 +36,8 @@
 //!   └── ShardedEventQueue (single-queue or multi-shard mode)
 //! ```
 //!
-//! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
-//! sends [`Syscall`] variants through the unified event queue.
+//! Each spawned agent receives a `ProcessHandle` — a thin event pusher that
+//! sends `Syscall` variants through the unified event queue.
 
 use std::{sync::Arc, time::Duration};
 
@@ -272,7 +272,7 @@ impl Kernel {
         }
     }
 
-    /// Create a [`KernelHandle`] for external callers.
+    /// Create a `KernelHandle` for external callers.
     ///
     /// The handle is cheap to clone (all `Arc`s) and routes all mutations
     /// through the event queue, while exposing read-only accessors for
@@ -904,9 +904,7 @@ impl Kernel {
 
         // If this child was a background task, trigger a proactive turn on the
         // parent to deliver the result.
-        let is_background = self
-            .handle()
-            .is_background_task(&parent_id, &child_id);
+        let is_background = self.handle().is_background_task(&parent_id, &child_id);
 
         if is_background {
             // Capture trigger_message_id before removing from active list.
@@ -922,8 +920,7 @@ impl Kernel {
                 .flatten();
 
             // Remove from active list.
-            self.handle()
-                .remove_background_task(&parent_id, &child_id);
+            self.handle().remove_background_task(&parent_id, &child_id);
 
             // TODO: AgentRunLoopResult has no explicit success/error field.
             // This heuristic is fragile — consider adding a status field to
@@ -968,22 +965,16 @@ impl Kernel {
                 .map(|id| format!("trigger_message_id={id}\n"))
                 .unwrap_or_default();
             let directive = format!(
-                "[Background Task {status_label}]\n\
-                 task_id={child_id}\n\
-                 {trigger_info}\
-                 iterations={}, tool_calls={}\n\n\
-                 Result:\n{truncated_output}{trace_section}\n\n\
-                 Proactively inform the user of the outcome. Be concise. \
-                 If the task failed, explain what went wrong.",
+                "[Background Task \
+                 {status_label}]\ntask_id={child_id}\n{trigger_info}iterations={}, \
+                 tool_calls={}\n\nResult:\n{truncated_output}{trace_section}\n\nProactively \
+                 inform the user of the outcome. Be concise. If the task failed, explain what \
+                 went wrong.",
                 result.iterations, result.tool_calls,
             );
 
             let system_user = crate::identity::UserId("system".to_string());
-            let mut msg = crate::io::InboundMessage::synthetic(
-                directive,
-                system_user,
-                parent_id,
-            );
+            let mut msg = crate::io::InboundMessage::synthetic(directive, system_user, parent_id);
             msg.metadata.insert(
                 "background_task_done".to_string(),
                 serde_json::json!(child_id.to_string()),
@@ -1062,8 +1053,8 @@ impl Kernel {
     ///
     /// `msg.session_key` arrives as `Option<SessionKey>` from the I/O layer:
     /// - `Some` — channel binding already exists, reuse the session.
-    /// - `None` — first message from this chat. Creates a new [`SessionEntry`]
-    ///   + [`ChannelBinding`] so future messages are routed automatically, then
+    /// - `None` — first message from this chat. Creates a new `SessionEntry`
+    ///   + `ChannelBinding` so future messages are routed automatically, then
     ///   patches `msg.session_key = Some(new_key)`.
     ///
     /// After resolution, `session_id` is always a valid key and all

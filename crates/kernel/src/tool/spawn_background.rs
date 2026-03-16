@@ -38,7 +38,10 @@ impl SpawnBackgroundTool {
     pub const NAME: &str = crate::tool_names::SPAWN_BACKGROUND;
 
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
-        Self { handle, session_key }
+        Self {
+            handle,
+            session_key,
+        }
     }
 }
 
@@ -47,9 +50,9 @@ impl AgentTool for SpawnBackgroundTool {
     fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
-        "Spawn a background agent to handle a long-running task. The agent runs \
-         independently and results are delivered when complete. You cannot interact \
-         with the background agent after spawning it."
+        "Spawn a background agent to handle a long-running task. The agent runs independently and \
+         results are delivered when complete. You cannot interact with the background agent after \
+         spawning it."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -128,13 +131,14 @@ impl AgentTool for SpawnBackgroundTool {
 
         // Emit BackgroundTaskStarted to parent's active streams so clients
         // can display an ongoing status indicator with elapsed timer.
-        self.handle
-            .stream_hub()
-            .emit_to_session(&self.session_key, StreamEvent::BackgroundTaskStarted {
+        self.handle.stream_hub().emit_to_session(
+            &self.session_key,
+            StreamEvent::BackgroundTaskStarted {
                 task_id:     child_key.to_string(),
                 agent_name:  manifest.name.clone(),
                 description: description.clone(),
-            });
+            },
+        );
 
         // Spawn fire-and-forget watcher to drain result_rx.
         tokio::spawn(async move {

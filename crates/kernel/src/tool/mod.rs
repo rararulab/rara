@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod cancel_background;
 pub(crate) mod create_plan;
 pub(crate) mod schedule;
-pub(crate) mod cancel_background;
 pub(crate) mod spawn_background;
 pub(crate) mod tape;
 
@@ -171,8 +171,8 @@ impl ToolRegistry {
         self.tools.iter().map(|(name, tool)| (name.as_str(), tool))
     }
 
-    /// Convert all tools to [`llm::ToolDefinition`] format for the
-    /// [`LlmDriver`](crate::llm::LlmDriver) path.
+    /// Convert all tools to `llm::ToolDefinition` format for the
+    /// `LlmDriver` path.
     #[must_use]
     pub fn to_llm_tool_definitions(&self) -> Vec<crate::llm::ToolDefinition> {
         self.tools
@@ -190,7 +190,7 @@ impl ToolRegistry {
     pub fn tool_names(&self) -> Vec<String> { self.tools.keys().cloned().collect() }
 
     /// Create a new registry containing only tools the user is authorized to
-    /// use (based on [`KernelUser::can_use_tool`]).
+    /// use (based on `KernelUser::can_use_tool`).
     #[must_use]
     pub fn filtered_by_user(&self, user: &crate::identity::KernelUser) -> Self {
         let mut new = Self::new();

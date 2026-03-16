@@ -16,13 +16,12 @@
 //!
 //! This module implements the kernel's I/O transport layer:
 //!
-//! - **Ingress**: channel adapters publish messages through
-//!   [`IngressPipeline`](ingress::IngressPipeline) into the unified
-//!   [`EventQueue`](crate::queue::EventQueue).
+//! - **Ingress**: channel adapters publish messages through `IngressPipeline`
+//!   into the unified [`EventQueue`](crate::queue::EventQueue).
 //! - **Egress**: the kernel event loop delivers outbound envelopes via
 //!   [`IOSubsystem::deliver`] to registered adapters.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)
-//!   flow through the [`StreamHub`](stream::StreamHub) for connected frontends.
+//!   flow through the `StreamHub` for connected frontends.
 //!
 //! ## Architecture
 //!
@@ -137,7 +136,7 @@ pub enum InteractionType {
 /// - **`Some(key)`** — a channel binding already maps this chat to a session.
 /// - **`None`** — first message from a new chat; no binding exists yet.
 ///
-/// Before routing, [`Kernel::handle_user_message()`] resolves `None` by
+/// Before routing, `Kernel::handle_user_message()` resolves `None` by
 /// creating a new session + writing a channel binding, then patches
 /// `session_key` to `Some`. All downstream code (routing, LLM turn,
 /// stream forwarder) therefore always sees `Some`.
@@ -679,7 +678,7 @@ pub struct PipeRegistry {
     pipes:          DashMap<PipeId, PipeEntry>,
     /// Named pipe index: name -> PipeId.
     named:          DashMap<String, PipeId>,
-    /// Parked readers for named pipes (take-once via Mutex<Option>).
+    /// Parked readers for named pipes (take-once via `Mutex<Option>`).
     parked_readers: DashMap<PipeId, Mutex<Option<PipeReader>>>,
 }
 
@@ -792,7 +791,6 @@ define_id!(
 ///
 /// These are ephemeral — not stored durably. Final results and errors
 /// are published through the `OutboundBus`.
-
 /// Terminal status of a background agent task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -861,10 +859,10 @@ pub enum StreamEvent {
     },
     /// Turn metrics summary (emitted before stream close).
     TurnMetrics {
-        duration_ms: u64,
-        iterations:  usize,
-        tool_calls:  usize,
-        model:       String,
+        duration_ms:     u64,
+        iterations:      usize,
+        tool_calls:      usize,
+        model:           String,
         rara_message_id: String,
     },
     /// A plan has been created with a goal and ordered steps.
@@ -926,10 +924,10 @@ impl StreamHandle {
 /// Manages the lifecycle of per-execution streams and provides
 /// subscription endpoints for egress/frontends.
 pub struct StreamHub {
-    streams:          DashMap<StreamId, StreamEntry>,
+    streams:         DashMap<StreamId, StreamEntry>,
     /// Reverse index: session_key → active stream IDs for O(1) lookup.
-    session_streams:  DashMap<SessionKey, Vec<StreamId>>,
-    capacity:         usize,
+    session_streams: DashMap<SessionKey, Vec<StreamId>>,
+    capacity:        usize,
 }
 
 impl StreamHub {
@@ -1024,7 +1022,7 @@ pub type IdentityResolverRef = Arc<dyn IdentityResolver>;
 /// Raw message from a channel adapter before identity/session resolution.
 ///
 /// Adapters construct this from platform-specific events and hand it to
-/// [`IngressPipeline::ingest`]. The ingress pipeline then resolves identity
+/// `IngressPipeline::ingest`. The ingress pipeline then resolves identity
 /// and session before publishing to the bus.
 #[derive(Debug)]
 pub struct RawPlatformMessage {
@@ -1342,7 +1340,7 @@ impl IngressRateLimiter {
 /// When no channel binding exists (first message from a new chat),
 /// `session_key` is `None`. The kernel — not the I/O layer — is responsible for
 /// creating the session and writing the binding. See
-/// [`Kernel::handle_user_message()`].
+/// `Kernel::handle_user_message()`.
 ///
 /// Constructed at the app/boot layer and injected into
 /// [`Kernel::new()`](crate::kernel::Kernel::new) as a single unit.
@@ -1402,7 +1400,7 @@ impl IOSubsystem {
     /// - **Not found / no chat_id** → `session_key = None`
     ///
     /// The kernel handles the `None` case by creating a session on demand.
-    /// See [`Kernel::handle_user_message()`].
+    /// See `Kernel::handle_user_message()`.
     #[tracing::instrument(
         skip(self, raw),
         fields(

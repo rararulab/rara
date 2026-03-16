@@ -15,7 +15,7 @@
 //! Queue subsystem for kernel event dispatch.
 //!
 //! The [`EventQueue`] trait is a push-only sink. The drain/wait hot path
-//! goes through [`ShardQueue`] directly.
+//! goes through `ShardQueue` directly.
 
 mod sharded;
 
@@ -32,7 +32,7 @@ pub type EventQueueRef = Arc<dyn EventQueue>;
 
 /// Push-only event sink for the kernel event queue.
 ///
-/// The drain/wait hot path is handled by [`ShardQueue`] directly —
+/// The drain/wait hot path is handled by `ShardQueue` directly —
 /// this trait only covers the ingress (push) side.
 pub trait EventQueue: Send + Sync + 'static {
     /// Push an event into the queue. Returns `IOError::Full` if at capacity.

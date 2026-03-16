@@ -19,7 +19,7 @@
 //! high-level methods for session management, model catalog queries, and
 //! channel bindings.
 //!
-//! Session metadata is managed by [`SessionIndex`]. Message persistence has
+//! Session metadata is managed by [`SessionIndexRef`]. Message persistence has
 //! moved to the tape subsystem via [`TapeService`].
 
 use std::sync::Arc;
@@ -40,7 +40,7 @@ use crate::chat::{
 /// `SessionService` ties together two concerns:
 ///
 /// 1. **Session metadata** — CRUD operations on sessions and channel bindings,
-///    delegated to a [`SessionIndex`] implementation.
+///    delegated to a [`SessionIndexRef`] implementation.
 /// 2. **Channel routing** — Mapping external messaging channels to internal
 ///    session keys via channel bindings.
 ///

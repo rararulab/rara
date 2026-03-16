@@ -249,13 +249,13 @@ pub enum Signal {
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskEntry {
     /// Child session key (doubles as task_id).
-    pub child_key: SessionKey,
+    pub child_key:          SessionKey,
     /// Human-readable name from the spawned manifest.
-    pub agent_name: String,
+    pub agent_name:         String,
     /// Description provided by the parent agent.
-    pub description: String,
+    pub description:        String,
     /// When the task was spawned.
-    pub created_at: jiff::Timestamp,
+    pub created_at:         jiff::Timestamp,
     /// The inbound message that triggered the spawn.
     pub trigger_message_id: crate::io::MessageId,
 }
@@ -282,7 +282,7 @@ pub struct Session {
     pub finished_at: Option<Timestamp>,
     /// Result of last execution (set on turn completion).
     pub result: Option<AgentRunLoopResult>,
-    /// Channel sender for streaming [`AgentEvent`]s (milestones + final result)
+    /// Channel sender for streaming `AgentEvent`s (milestones + final result)
     /// to the parent. Only set for child agents spawned via `spawn_child`.
     pub result_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     /// Files created or modified by this agent (for resource tracking).

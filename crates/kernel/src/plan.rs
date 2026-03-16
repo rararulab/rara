@@ -20,8 +20,8 @@
 //!    inline steps (or `KernelHandle::spawn_child` for worker steps).
 //! 3. Supports replanning when a step fails or requests revision.
 //!
-//! The entry point is [`run_plan_loop`], which has the same signature as
-//! [`crate::agent::run_agent_loop`] so the kernel can route to either.
+//! The entry point is `run_plan_loop`, which has the same signature as
+//! `run_agent_loop` so the kernel can route to either.
 
 use std::{sync::Arc, time::Instant};
 
@@ -522,7 +522,7 @@ async fn create_plan_via_llm(
             })?;
 
         let tool_output = create_plan_tool
-            .execute(params, &tool_context)
+            .execute(params, tool_context)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("create_plan tool execution failed: {e}"),
@@ -651,7 +651,7 @@ async fn replan_via_llm(
             })?;
 
         let tool_output = create_plan_tool
-            .execute(params, &tool_context)
+            .execute(params, tool_context)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("replan create_plan tool execution failed: {e}"),

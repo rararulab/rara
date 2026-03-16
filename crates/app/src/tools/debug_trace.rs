@@ -40,8 +40,8 @@ impl AgentTool for DebugTraceTool {
 
     fn description(&self) -> &str {
         "Look up all tape entries related to a specific rara_message_id in the current session. \
-         Returns the full execution trace (messages, tool calls, results) with metadata. \
-         Only use when the user asks to debug or trace a specific message."
+         Returns the full execution trace (messages, tool calls, results) with metadata. Only use \
+         when the user asks to debug or trace a specific message."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -67,10 +67,7 @@ impl AgentTool for DebugTraceTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("message_id is required"))?;
 
-        let limit = params
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(50) as usize;
+        let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
         let tape_name = ctx.session_key.to_string();
 

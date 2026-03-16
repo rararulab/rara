@@ -171,7 +171,7 @@ impl SoulState {
         Ok(())
     }
 
-    /// Append a history entry, keeping at most [`MAX_HISTORY_ENTRIES`].
+    /// Append a history entry, keeping at most 10 entries.
     pub fn append_history(&mut self, entry: HistoryEntry) {
         self.history.push(entry);
         if self.history.len() > MAX_HISTORY_ENTRIES {

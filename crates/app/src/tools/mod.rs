@@ -122,19 +122,6 @@ pub fn rara_tool_names() -> Vec<String> {
     .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rara_tool_names_includes_key_tools() {
-        let names = rara_tool_names();
-        for expected in ["bash", "tape", "marketplace", "kernel"] {
-            assert!(names.iter().any(|n| n == expected), "missing: {expected}");
-        }
-    }
-}
-
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
     pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -233,5 +220,18 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     ToolRegistrationResult {
         dispatch_rara_handle: dispatch_handle_ref,
         list_sessions_handle: list_sessions_handle_ref,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rara_tool_names_includes_key_tools() {
+        let names = rara_tool_names();
+        for expected in ["bash", "tape", "marketplace", "kernel"] {
+            assert!(names.iter().any(|n| n == expected), "missing: {expected}");
+        }
     }
 }

@@ -21,12 +21,12 @@
 //!
 //! | Component   | Trait            | Purpose                          |
 //! |-------------|------------------|----------------------------------|
-//! | LLM         | [`LlmDriver`]    | Chat completion requests         |
-//! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
+//! | LLM         | `LlmDriver`    | Chat completion requests         |
+//! | Tool        | `ToolRegistry` | Tool registration + dispatch     |
 //! | Memory      | (tape-based)     | Agent memory via tape subsystem   |
-//! | Session     | [`SessionIndex`] | Session metadata persistence      |
-//! | Guard       | [`Guard`]        | Tool approval + output moderation |
-//! | Notification Bus | [`NotificationBus`] | Inter-component notification broadcasting |
+//! | Session     | `SessionIndex` | Session metadata persistence      |
+//! | Guard       | `Guard`        | Tool approval + output moderation |
+//! | Notification Bus | `NotificationBus` | Inter-component notification broadcasting |
 
 pub mod agent;
 pub mod channel;

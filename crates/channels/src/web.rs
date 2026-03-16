@@ -227,9 +227,15 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
         StreamEvent::UsageUpdate { .. } => None,
-        StreamEvent::BackgroundTaskStarted { task_id, agent_name, description } => {
-            Some(WebEvent::BackgroundTaskStarted { task_id, agent_name, description })
-        }
+        StreamEvent::BackgroundTaskStarted {
+            task_id,
+            agent_name,
+            description,
+        } => Some(WebEvent::BackgroundTaskStarted {
+            task_id,
+            agent_name,
+            description,
+        }),
         StreamEvent::BackgroundTaskDone { task_id, status } => {
             Some(WebEvent::BackgroundTaskDone { task_id, status })
         }
@@ -378,7 +384,7 @@ fn verify_owner_token(expected: &str, provided: &str) -> bool { expected == prov
 
 /// Build a Web endpoint and its associated UserId for endpoint registration.
 ///
-/// The `UserId` format matches [`AppIdentityResolver`] (`"web:{user_id}"`).
+/// The `UserId` format matches the app identity resolver (`"web:{user_id}"`).
 fn web_endpoint_for(session_key: &str) -> Endpoint {
     Endpoint {
         channel_type: ChannelType::Web,
@@ -900,15 +906,12 @@ mod tests {
     use super::{WebEvent, stream_event_to_web_event};
 
     #[test]
-    fn reasoning_deltas_are_forwarded_to_web_clients() {
+    fn reasoning_deltas_are_not_forwarded_to_web_clients() {
         let event = StreamEvent::ReasoningDelta {
             text: "internal".to_owned(),
         };
 
-        assert!(matches!(
-            stream_event_to_web_event(event),
-            Some(WebEvent::ReasoningDelta { text }) if text == "internal"
-        ));
+        assert!(stream_event_to_web_event(event).is_none());
     }
 
     #[test]

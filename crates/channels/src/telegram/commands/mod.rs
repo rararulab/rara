@@ -24,7 +24,7 @@
 //! - [`client`]: Backend service client trait and response types.
 //! - [`basic`]: `/start` and `/help` commands.
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
-//! - [`job`]: `/search` and `/jd` commands.
+//! - [`kernel_client`]: `/search` and `/jd` commands.
 //! - [`mcp`]: `/mcp` command.
 //! - [`tape`]: `/anchors` and `/checkout` commands.
 //! - [`callbacks`]: Inline keyboard callback handlers.

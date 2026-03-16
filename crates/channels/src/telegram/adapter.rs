@@ -46,7 +46,8 @@ use std::{
     time::Instant,
 };
 
-/// Matches complete tool-call XML blocks (open + close, possibly mismatched names).
+/// Matches complete tool-call XML blocks (open + close, possibly mismatched
+/// names).
 static TOOL_CALL_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
         r"(?si)<(?:toolcall|tool_call|tool_use|function=[^>]*)(?:\s[^>]*)?>.*?</(?:toolcall|tool_call|tool_use|function)>|<(?:toolcall|tool_call|tool_use|function=[^>]*)(?:\s[^>]*)?/>"
@@ -155,15 +156,15 @@ pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyh
 
 /// Single tool's progress state within a streaming turn.
 struct ToolProgress {
-    id: String,
-    name: String,
-    activity: String,
-    summary: String,
+    id:         String,
+    name:       String,
+    activity:   String,
+    summary:    String,
     started_at: Instant,
-    finished: bool,
-    success: bool,
-    duration: Option<std::time::Duration>,
-    error: Option<String>,
+    finished:   bool,
+    success:    bool,
+    duration:   Option<std::time::Duration>,
+    error:      Option<String>,
 }
 
 /// Progress message state for tool execution feedback.
@@ -178,27 +179,28 @@ struct ToolProgress {
 /// - `output_tokens` = cumulative completion tokens across all iterations
 /// - `thinking_ms` = cumulative extended-thinking duration
 struct ProgressMessage {
-    message_id: Option<MessageId>,
-    tools: Vec<ToolProgress>,
-    last_edit: Instant,
-    turn_started: Instant,
-    input_tokens: u32,
-    output_tokens: u32,
-    thinking_ms: u64,
+    message_id:        Option<MessageId>,
+    tools:             Vec<ToolProgress>,
+    last_edit:         Instant,
+    turn_started:      Instant,
+    input_tokens:      u32,
+    output_tokens:     u32,
+    thinking_ms:       u64,
     /// Accumulated reasoning text for trace (truncated to ~500 chars).
     /// Collected from `StreamEvent::ReasoningDelta`; shown in expanded trace.
     reasoning_preview: String,
     /// Model name, populated from `StreamEvent::TurnMetrics` (arrives before
     /// stream close).
-    model: String,
+    model:             String,
     /// Iteration count, populated from `StreamEvent::TurnMetrics`.
-    iterations: usize,
-    /// Rara internal message ID — the `InboundMessage.id` that triggered this turn.
-    rara_message_id: String,
+    iterations:        usize,
+    /// Rara internal message ID — the `InboundMessage.id` that triggered this
+    /// turn.
+    rara_message_id:   String,
     /// Plan steps must be saved here because `PlanCompleted` sets `plan =
     /// None`. If we don't save them before that, the trace loses all plan
     /// information.
-    saved_plan_steps: Vec<String>,
+    saved_plan_steps:  Vec<String>,
 }
 
 impl ProgressMessage {
@@ -224,7 +226,6 @@ impl ProgressMessage {
 
 use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
 
-
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlanTier {
@@ -239,14 +240,14 @@ enum PlanTier {
 /// Plan display state for Telegram — three-tier strategy with single message
 /// edit.
 struct PlanDisplay {
-    message_id: Option<MessageId>,
-    total_steps: usize,
+    message_id:              Option<MessageId>,
+    total_steps:             usize,
     estimated_duration_secs: Option<u32>,
-    compact_summary: Option<String>,
-    status_lines: Vec<String>,
-    last_status: String,
-    last_edit: Instant,
-    tier: PlanTier,
+    compact_summary:         Option<String>,
+    status_lines:            Vec<String>,
+    last_status:             String,
+    last_edit:               Instant,
+    tier:                    PlanTier,
 }
 
 impl PlanDisplay {
@@ -336,12 +337,12 @@ fn format_tool_line(t: &ToolProgress) -> String {
 
 /// A phase is a group of consecutive tools with the same activity label.
 struct Phase {
-    activity: String,
-    count: usize,
-    all_finished: bool,
-    all_success: bool,
+    activity:       String,
+    count:          usize,
+    all_finished:   bool,
+    all_success:    bool,
     total_duration: Option<std::time::Duration>,
-    first_error: Option<String>,
+    first_error:    Option<String>,
 }
 
 /// Group consecutive tools by activity label into phases.
@@ -368,12 +369,12 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
             }
         } else {
             phases.push(Phase {
-                activity: tool.activity.clone(),
-                count: 1,
-                all_finished: tool.finished,
-                all_success: tool.success,
+                activity:       tool.activity.clone(),
+                count:          1,
+                all_finished:   tool.finished,
+                all_success:    tool.success,
                 total_duration: tool.duration,
-                first_error: tool.error.clone(),
+                first_error:    tool.error.clone(),
             });
         }
     }
@@ -630,25 +631,25 @@ use crate::tool_display::{tool_activity_label, tool_display_info};
 struct StreamingMessage {
     /// All message IDs sent for this stream (multiple when splitting long
     /// content).
-    message_ids: Vec<MessageId>,
+    message_ids:           Vec<MessageId>,
     /// Accumulated raw text for the current (latest) message.
-    accumulated: String,
+    accumulated:           String,
     /// Number of raw characters already finalized into earlier split messages.
     streamed_prefix_chars: usize,
     /// Last successful `editMessageText` timestamp for throttling.
-    last_edit: Instant,
+    last_edit:             Instant,
     /// Whether new text has been appended since the last edit.
-    dirty: bool,
+    dirty:                 bool,
 }
 
 impl StreamingMessage {
     fn new() -> Self {
         Self {
-            message_ids: Vec::new(),
-            accumulated: String::new(),
+            message_ids:           Vec::new(),
+            accumulated:           String::new(),
             streamed_prefix_chars: 0,
-            last_edit: Instant::now(),
-            dirty: false,
+            last_edit:             Instant::now(),
+            dirty:                 false,
         }
     }
 }
@@ -660,20 +661,20 @@ impl StreamingMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramConfig {
     /// Primary chat ID for privileged commands (e.g. /search, /jd).
-    pub primary_chat_id: Option<i64>,
+    pub primary_chat_id:       Option<i64>,
     /// Allowed group chat ID. Only this group is authorized for bot
     /// interaction.
     pub allowed_group_chat_id: Option<i64>,
     /// How the bot handles group chat messages.
-    pub group_policy: GroupPolicy,
+    pub group_policy:          GroupPolicy,
 }
 
 impl Default for TelegramConfig {
     fn default() -> Self {
         Self {
-            primary_chat_id: None,
+            primary_chat_id:       None,
             allowed_group_chat_id: None,
-            group_policy: GroupPolicy::MentionOrSmallGroup,
+            group_policy:          GroupPolicy::MentionOrSmallGroup,
         }
     }
 }
@@ -703,24 +704,24 @@ impl Default for TelegramConfig {
 /// 3. Call [`stop`](ChannelAdapter::stop) to signal the polling loop to exit
 ///    gracefully.
 pub struct TelegramAdapter {
-    bot: teloxide::Bot,
-    allowed_chat_ids: Vec<i64>,
-    polling_timeout: u32,
-    shutdown_tx: watch::Sender<bool>,
-    shutdown_rx: watch::Receiver<bool>,
+    bot:               teloxide::Bot,
+    allowed_chat_ids:  Vec<i64>,
+    polling_timeout:   u32,
+    shutdown_tx:       watch::Sender<bool>,
+    shutdown_rx:       watch::Receiver<bool>,
     /// Bot username from getMe (set during start).
-    bot_username: Arc<RwLock<Option<String>>>,
+    bot_username:      Arc<RwLock<Option<String>>>,
     /// Registered command handlers for slash commands.
-    command_handlers: StdRwLock<Vec<Arc<dyn CommandHandler>>>,
+    command_handlers:  StdRwLock<Vec<Arc<dyn CommandHandler>>>,
     /// Registered callback handlers for interactive elements.
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
     /// ID).
-    config: Arc<StdRwLock<TelegramConfig>>,
+    config:            Arc<StdRwLock<TelegramConfig>>,
     /// StreamHub for subscribing to real-time token deltas.
-    stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
+    stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
-    active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    active_streams:    Arc<DashMap<i64, StreamingMessage>>,
 }
 
 impl TelegramAdapter {
@@ -841,9 +842,7 @@ impl TelegramAdapter {
     /// Callers can use this to update configuration at runtime (e.g. change the
     /// primary chat ID) without restarting the adapter. The polling loop reads
     /// the config on every update, so changes take effect immediately.
-    pub fn config_handle(&self) -> Arc<StdRwLock<TelegramConfig>> {
-        Arc::clone(&self.config)
-    }
+    pub fn config_handle(&self) -> Arc<StdRwLock<TelegramConfig>> { Arc::clone(&self.config) }
 
     /// Read a snapshot of the current config.
     ///
@@ -894,9 +893,7 @@ impl TelegramAdapter {
 
 #[async_trait]
 impl ChannelAdapter for TelegramAdapter {
-    fn channel_type(&self) -> ChannelType {
-        ChannelType::Telegram
-    }
+    fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
     async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
         let (chat_id, _thread_id) = match &endpoint.address {
@@ -1460,14 +1457,11 @@ async fn handle_trace_callback(
         ),
     };
 
-    if let (Ok(cid), Ok(mid)) =
-        (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
-    {
-        let keyboard =
-            InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-                button_text,
-                next_action,
-            )]]);
+    if let (Ok(cid), Ok(mid)) = (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>()) {
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            button_text,
+            next_action,
+        )]]);
         let _ = bot
             .edit_message_text(ChatId(cid), MessageId(mid), &text)
             .parse_mode(ParseMode::Html)
@@ -1475,8 +1469,6 @@ async fn handle_trace_callback(
             .await;
     }
 }
-
-
 
 /// Listens for new approval requests and sends inline keyboard messages
 /// to the primary Telegram chat so the user can approve or deny.
@@ -1943,7 +1935,7 @@ fn strip_tool_call_xml(text: &str) -> String {
     pass2.into_owned()
 }
 
-/// Spawn a background task that subscribes to [`StreamHub`] for the given
+/// Spawn a background task that subscribes to the stream hub for the given
 /// session and progressively updates a Telegram message via `editMessageText`.
 fn spawn_stream_forwarder(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
@@ -2468,7 +2460,7 @@ fn slice_after_char_prefix(content: &str, prefix_chars: usize) -> String {
 /// Allows dropping the DashMap guard before making async Telegram API calls.
 struct FlushRequest {
     message_ids: Vec<MessageId>,
-    text_html: String,
+    text_html:   String,
     split_chars: usize,
 }
 
@@ -2723,9 +2715,7 @@ async fn download_and_compress_photo(
     Ok((media_type, b64, original_path, compressed_path))
 }
 
-pub fn format_session_key(chat_id: i64) -> String {
-    format!("tg:{chat_id}")
-}
+pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }
 
 /// Parse a chat ID from a session key.
 ///
@@ -2841,6 +2831,17 @@ fn contains_rara_keyword(text: &str) -> bool {
         || lower.contains("拉拉")
 }
 
+/// Strip the bot @mention from message text.
+///
+/// Removes the `@botname` substring and trims surrounding whitespace.
+fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
+    let Some(username) = bot_username else {
+        return text.trim().to_owned();
+    };
+    let mention = format!("@{username}");
+    text.replace(&mention, "").trim().to_owned()
+}
+
 #[cfg(test)]
 mod strip_tool_call_xml_tests {
     use super::strip_tool_call_xml;
@@ -2899,15 +2900,4 @@ mod strip_tool_call_xml_tests {
         assert!(result.contains("Before"));
         assert!(result.contains("after"));
     }
-}
-
-/// Strip the bot @mention from message text.
-///
-/// Removes the `@botname` substring and trims surrounding whitespace.
-fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
-    let Some(username) = bot_username else {
-        return text.trim().to_owned();
-    };
-    let mention = format!("@{username}");
-    text.replace(&mention, "").trim().to_owned()
 }

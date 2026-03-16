@@ -305,7 +305,7 @@ impl VaultClient {
     /// store format used by `crates/app/src/flatten.rs`.
     ///
     /// Vault key names are mapped to settings key prefixes via
-    /// [`vault_key_to_settings_prefix`]. For example, the Vault path
+    /// `vault_key_to_settings_prefix`. For example, the Vault path
     /// `secrets/knowledge` maps to settings prefix `memory.knowledge`,
     /// so `{"embedding_model": "..."}` becomes
     /// `[("memory.knowledge.embedding_model", "...")]`.

@@ -33,7 +33,10 @@ impl CancelBackgroundTool {
     pub const NAME: &str = crate::tool_names::CANCEL_BACKGROUND;
 
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
-        Self { handle, session_key }
+        Self {
+            handle,
+            session_key,
+        }
     }
 }
 
@@ -41,9 +44,7 @@ impl CancelBackgroundTool {
 impl AgentTool for CancelBackgroundTool {
     fn name(&self) -> &str { Self::NAME }
 
-    fn description(&self) -> &str {
-        "Cancel a running background task by task_id."
-    }
+    fn description(&self) -> &str { "Cancel a running background task by task_id." }
 
     fn parameters_schema(&self) -> Value {
         serde_json::json!({
@@ -91,7 +92,8 @@ impl AgentTool for CancelBackgroundTool {
 
         // Signal succeeded — now safe to remove from active list so
         // ChildSessionDone won't trigger a proactive turn.
-        self.handle.remove_background_task(&self.session_key, &task_id);
+        self.handle
+            .remove_background_task(&self.session_key, &task_id);
 
         // Emit BackgroundTaskDone so clients remove the status indicator.
         self.handle.stream_hub().emit_to_session(

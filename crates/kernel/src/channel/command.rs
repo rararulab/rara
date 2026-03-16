@@ -49,7 +49,7 @@ pub struct CommandDefinition {
     pub name:        String,
     /// Human-readable description (e.g. "Search for jobs").
     pub description: String,
-    /// Usage example (e.g. "/search <keywords> [@ location]").
+    /// Usage example (e.g. "/search `<keywords>` \[@ location\]").
     pub usage:       Option<String>,
 }
 

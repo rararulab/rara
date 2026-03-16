@@ -14,7 +14,7 @@
 
 //! Sharded event queue — routes events to N session-sharded queues + 1 global
 //! queue for parallel processing by
-//! [`EventProcessor`](crate::processor::EventProcessor)s.
+//! `EventProcessor`s.
 //!
 //! Event classification:
 //! - **Global**: `UserMessage`, `SpawnAgent`, `Shutdown`
@@ -128,7 +128,7 @@ fn num_cpus() -> usize {
 /// shards for the multi-processor event loop.
 ///
 /// All shard queues are stored as `Arc<ShardQueue>` so that
-/// [`EventProcessor`](crate::processor::EventProcessor) tasks can
+/// `EventProcessor` tasks can
 /// hold references to them independently.
 pub struct ShardedEventQueue {
     /// Per-session shards. Events are routed by `session_key % num_shards`.

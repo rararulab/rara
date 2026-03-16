@@ -186,7 +186,7 @@ impl TaintTracker {
     /// chat message) so that downstream sink policies for `bash`/`shell_exec`
     /// can block tool calls whose context contains raw user input.
     /// Without this, the `UserInput` label would never be produced — no tool
-    /// output emits it — making the sink rule in [`sink_for_tool`] dead code.
+    /// output emits it — making the sink rule in `sink_for_tool` dead code.
     #[instrument(skip(self), fields(%session))]
     pub fn record_user_input(&self, session: &SessionKey) {
         self.sessions
@@ -231,8 +231,8 @@ impl TaintTracker {
     /// internal tools (file_read, search, etc.) produce no taint.
     ///
     /// **Note:** `web_fetch` plays a dual role — it is both a taint *source*
-    /// here (producing [`TaintLabel::ExternalNetwork`]) and a taint *sink* in
-    /// [`sink_for_tool`] (blocking `Secret`/`Pii`). See the doc comment on
+    /// here (producing `TaintLabel::ExternalNetwork`) and a taint *sink* in
+    /// `sink_for_tool` (blocking `Secret`/`Pii`). See the doc comment on
     /// `sink_for_tool` for the asymmetry implications.
     fn labels_for_tool_output(tool_name: &str) -> HashSet<TaintLabel> {
         match tool_name {
@@ -261,7 +261,7 @@ impl TaintTracker {
     ///
     /// # `web_fetch` source/sink asymmetry
     ///
-    /// `web_fetch` is both a taint source ([`labels_for_tool_output`] emits
+    /// `web_fetch` is both a taint source (`labels_for_tool_output` emits
     /// `ExternalNetwork`) and a taint sink (this function blocks `Secret` and
     /// `Pii`). The practical consequence is **one-directional** protection:
     ///
