@@ -10,43 +10,50 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// ListCmd returns the "list" subcommand.
-func ListCmd() *cli.Command {
+// Cmd returns the top-level "worktree" command group.
+func Cmd() *cli.Command {
 	return &cli.Command{
-		Name:    "list",
-		Aliases: []string{"ls"},
-		Usage:   "List all worktrees",
+		Name:    "worktree",
+		Aliases: []string{"wt"},
+		Usage:   "Manage git worktree lifecycle",
+		// Default action: launch interactive TUI
 		Action: func(_ context.Context, _ *cli.Command) error {
-			out, err := exec.Command("git", "worktree", "list").CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("git worktree list: %w\n%s", err, out)
-			}
-			fmt.Print(string(out))
-			return nil
+			return RunTUI()
+		},
+		Commands: []*cli.Command{
+			{
+				Name:    "list",
+				Aliases: []string{"ls"},
+				Usage:   "List all worktrees (non-interactive)",
+				Action: func(_ context.Context, _ *cli.Command) error {
+					return runList()
+				},
+			},
+			{
+				Name:  "clean",
+				Usage: "Remove worktrees whose branches are merged into main (non-interactive)",
+				Action: func(_ context.Context, _ *cli.Command) error {
+					return runClean()
+				},
+			},
+			{
+				Name:  "nuke",
+				Usage: "Force-remove ALL worktrees except the main checkout (non-interactive)",
+				Action: func(_ context.Context, _ *cli.Command) error {
+					return runNuke()
+				},
+			},
 		},
 	}
 }
 
-// CleanCmd returns the "clean" subcommand that removes merged worktrees.
-func CleanCmd() *cli.Command {
-	return &cli.Command{
-		Name:  "clean",
-		Usage: "Remove worktrees whose branches are merged into main",
-		Action: func(_ context.Context, _ *cli.Command) error {
-			return runClean()
-		},
+func runList() error {
+	out, err := exec.Command("git", "worktree", "list").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree list: %w\n%s", err, out)
 	}
-}
-
-// NukeCmd returns the "nuke" subcommand that force-removes all worktrees.
-func NukeCmd() *cli.Command {
-	return &cli.Command{
-		Name:  "nuke",
-		Usage: "Force-remove ALL worktrees except the main checkout",
-		Action: func(_ context.Context, _ *cli.Command) error {
-			return runNuke()
-		},
-	}
+	fmt.Print(string(out))
+	return nil
 }
 
 func runClean() error {
@@ -92,7 +99,6 @@ func runClean() error {
 		removed++
 	}
 
-	// Delete merged branches that have no worktree
 	for branch := range merged {
 		if branchHandled[branch] {
 			continue
