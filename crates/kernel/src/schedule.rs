@@ -20,6 +20,7 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    io::{BufRead, Write as _},
     path::PathBuf,
 };
 
@@ -153,24 +154,50 @@ pub struct JobEntry {
 /// (which only derive `Eq`).
 type WheelKey = (i64, Uuid);
 
+/// Maximum number of lines in `job_events.jsonl` before truncation.
+///
+/// When the file exceeds this, it is truncated to the most recent
+/// `MAX_JOB_EVENTS` lines on the next startup.
+const MAX_EVENT_FILE_LINES: usize = 1024;
+
 /// A simple scheduling structure backed by a `BTreeMap<WheelKey, JobEntry>`.
 ///
 /// Jobs are keyed by `(next_at_seconds, job_uuid)` so `drain_expired` can
 /// efficiently pop all entries whose time has passed.
+///
+/// Job lifecycle events are persisted to a sibling `job_events.jsonl` file
+/// using append-only JSONL writes. On startup the most recent
+/// [`MAX_JOB_EVENTS`] entries are loaded into an in-memory ring buffer.
 pub struct JobWheel {
     /// Jobs ordered by (next_fire_time_secs, job_uuid).
-    jobs:   BTreeMap<WheelKey, JobEntry>,
-    /// Path to the JSON persistence file.
-    path:   PathBuf,
+    jobs:        BTreeMap<WheelKey, JobEntry>,
+    /// Path to the JSON persistence file (`jobs.json`).
+    path:        PathBuf,
     /// Ring buffer of recent job lifecycle events for observability.
-    events: VecDeque<JobEvent>,
+    events:      VecDeque<JobEvent>,
+    /// Path to the JSONL event log (`job_events.jsonl`).
+    events_path: PathBuf,
 }
 
 impl JobWheel {
     /// Build a wheel key from a job entry.
     fn key(entry: &JobEntry) -> WheelKey { (entry.trigger.next_at().as_second(), entry.id.0) }
 
+    /// Derive the event log path from the jobs persistence path.
+    ///
+    /// Replaces the `.json` extension with `_events.jsonl`, preserving any
+    /// unique prefix in the filename (e.g. `rara-test-jobs-{uuid}.json` →
+    /// `rara-test-jobs-{uuid}_events.jsonl`).
+    fn events_path_from(path: &std::path::Path) -> PathBuf {
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        path.with_file_name(format!("{stem}_events.jsonl"))
+    }
+
     /// Load jobs from the JSON persistence file, or create an empty wheel.
+    ///
+    /// Also restores the most recent [`MAX_JOB_EVENTS`] entries from the
+    /// sibling `job_events.jsonl` file.  If the event file exceeds
+    /// [`MAX_EVENT_FILE_LINES`], it is truncated to the tail on load.
     pub fn load(path: PathBuf) -> Self {
         let jobs = match std::fs::read_to_string(&path) {
             Ok(content) => {
@@ -194,11 +221,69 @@ impl JobWheel {
                 BTreeMap::new()
             }
         };
+
+        let events_path = Self::events_path_from(&path);
+        let events = Self::load_events(&events_path);
+
         Self {
             jobs,
             path,
-            events: VecDeque::new(),
+            events,
+            events_path,
         }
+    }
+
+    /// Read the JSONL event log and return the most recent entries.
+    ///
+    /// If the file has more than [`MAX_EVENT_FILE_LINES`] lines, it is
+    /// rewritten with only the tail to prevent unbounded growth.
+    fn load_events(events_path: &std::path::Path) -> VecDeque<JobEvent> {
+        let file = match std::fs::File::open(events_path) {
+            Ok(f) => f,
+            Err(_) => return VecDeque::new(),
+        };
+
+        let reader = std::io::BufReader::new(file);
+        let mut all_events: Vec<JobEvent> = Vec::new();
+
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<JobEvent>(&line) {
+                Ok(event) => all_events.push(event),
+                Err(e) => {
+                    warn!(error = %e, "skipping malformed line in job_events.jsonl");
+                }
+            }
+        }
+
+        let total = all_events.len();
+
+        // Truncate the file if it exceeds the line limit.
+        if total > MAX_EVENT_FILE_LINES {
+            let keep = &all_events[total - MAX_JOB_EVENTS..];
+            if let Ok(mut f) = std::fs::File::create(events_path) {
+                for event in keep {
+                    if let Ok(json) = serde_json::to_string(event) {
+                        let _ = writeln!(f, "{json}");
+                    }
+                }
+            }
+            info!(
+                truncated_from = total,
+                truncated_to = MAX_JOB_EVENTS,
+                "truncated job_events.jsonl on startup"
+            );
+        }
+
+        // Load the tail into the in-memory ring buffer.
+        let start = total.saturating_sub(MAX_JOB_EVENTS);
+        let events: VecDeque<JobEvent> = all_events.into_iter().skip(start).collect();
+
+        info!(count = events.len(), "restored job events from disk");
+        events
     }
 
     /// Return the next fire time, or `None` if the wheel is empty.
@@ -285,8 +370,26 @@ impl JobWheel {
             .collect()
     }
 
-    /// Record a job lifecycle event in the ring buffer.
+    /// Record a job lifecycle event.
+    ///
+    /// The event is appended to the in-memory ring buffer **and** written
+    /// as a single JSON line to `job_events.jsonl` for crash-safe persistence.
     pub fn push_event(&mut self, event: JobEvent) {
+        // Append to JSONL file (best-effort, don't block on I/O errors).
+        if let Ok(json) = serde_json::to_string(&event) {
+            if let Some(parent) = self.events_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.events_path)
+            {
+                let _ = writeln!(f, "{json}");
+            }
+        }
+
+        // Maintain the in-memory ring buffer.
         if self.events.len() >= MAX_JOB_EVENTS {
             self.events.pop_front();
         }
@@ -351,10 +454,12 @@ mod tests {
     fn temp_wheel() -> JobWheel {
         let path =
             std::env::temp_dir().join(format!("rara-test-jobs-{}.json", uuid::Uuid::new_v4()));
+        let events_path = JobWheel::events_path_from(&path);
         JobWheel {
             jobs: BTreeMap::new(),
             path,
             events: VecDeque::new(),
+            events_path,
         }
     }
 
@@ -498,6 +603,67 @@ mod tests {
         let deadline = wheel.next_deadline().unwrap();
         // next_deadline truncates to seconds, so compare at second granularity.
         assert_eq!(deadline.as_second(), t1.as_second());
+    }
+
+    #[test]
+    fn events_persist_and_restore_across_reload() {
+        let path =
+            std::env::temp_dir().join(format!("rara-test-jobs-{}.json", uuid::Uuid::new_v4()));
+
+        // Create a wheel and push some events.
+        let mut wheel = JobWheel::load(path.clone());
+        let job_id = JobId::default();
+        wheel.push_event(JobEvent {
+            job_id,
+            timestamp: Timestamp::now(),
+            kind: JobEventKind::Fired,
+            message: "persist test".to_string(),
+        });
+        wheel.push_event(JobEvent {
+            job_id,
+            timestamp: Timestamp::now(),
+            kind: JobEventKind::Spawned {
+                child_key: "child-abc".to_string(),
+            },
+            message: "persist test".to_string(),
+        });
+        assert_eq!(wheel.recent_events().len(), 2);
+
+        // Reload from disk — events should survive.
+        let wheel2 = JobWheel::load(path.clone());
+        assert_eq!(wheel2.recent_events().len(), 2);
+        assert!(matches!(
+            wheel2.recent_events()[0].kind,
+            JobEventKind::Fired
+        ));
+        assert!(matches!(
+            wheel2.recent_events()[1].kind,
+            JobEventKind::Spawned { .. }
+        ));
+
+        // Cleanup temp files.
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(JobWheel::events_path_from(&path));
+    }
+
+    #[test]
+    fn event_ring_buffer_caps_at_max() {
+        let mut wheel = temp_wheel();
+        let job_id = JobId::default();
+        for i in 0..(MAX_JOB_EVENTS + 10) {
+            wheel.push_event(JobEvent {
+                job_id,
+                timestamp: Timestamp::now(),
+                kind: JobEventKind::Deferred {
+                    reason: format!("test {i}"),
+                },
+                message: "cap test".to_string(),
+            });
+        }
+        assert_eq!(wheel.recent_events().len(), MAX_JOB_EVENTS);
+
+        // Cleanup temp event file.
+        let _ = std::fs::remove_file(&wheel.events_path);
     }
 
     #[test]
