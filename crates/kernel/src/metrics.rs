@@ -122,6 +122,42 @@ pub static TURN_TOKENS_OUTPUT: LazyLock<IntCounterVec> = LazyLock::new(|| {
     .unwrap()
 });
 
+// -- Scheduled jobs ----------------------------------------------------------
+
+/// Outcome label for scheduled job metrics.
+pub const OUTCOME_LABEL: &str = "outcome";
+/// Trigger type label for scheduled job metrics.
+pub const TRIGGER_TYPE_LABEL: &str = "trigger_type";
+
+/// Total scheduled jobs fired (drained from the wheel).
+pub static SCHEDULED_JOB_FIRED: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_scheduled_job_fired_total",
+        "Total scheduled jobs fired from the wheel",
+        &[TRIGGER_TYPE_LABEL]
+    )
+    .unwrap()
+});
+
+/// Scheduled job spawn outcomes: "spawned", "failed", "deferred".
+pub static SCHEDULED_JOB_OUTCOME: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "kernel_scheduled_job_outcome_total",
+        "Scheduled job spawn outcomes",
+        &[OUTCOME_LABEL]
+    )
+    .unwrap()
+});
+
+/// Total one-shot jobs requeued after deferral.
+pub static SCHEDULED_JOB_REQUEUED: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "kernel_scheduled_job_requeued_total",
+        "Total one-shot jobs requeued after deferral"
+    )
+    .unwrap()
+});
+
 // -- Event processing --------------------------------------------------------
 
 /// Total events processed by the event loop.

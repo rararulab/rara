@@ -1353,9 +1353,20 @@ impl Kernel {
         let job_id = job.id;
         let trigger_summary = job.trigger.summary();
 
+        let trigger_type = match &job.trigger {
+            crate::schedule::Trigger::Once { .. } => "once",
+            crate::schedule::Trigger::Interval { .. } => "interval",
+            crate::schedule::Trigger::Cron { .. } => "cron",
+        };
+
+        crate::metrics::SCHEDULED_JOB_FIRED
+            .with_label_values(&[trigger_type])
+            .inc();
+
         info!(
             job_id = %job_id,
             session_key = %session_key,
+            trigger_type = trigger_type,
             "scheduled task fired"
         );
 
@@ -1397,6 +1408,9 @@ impl Kernel {
             Some(sem) => match sem.try_acquire_owned() {
                 Ok(permit) => permit,
                 Err(_) => {
+                    crate::metrics::SCHEDULED_JOB_OUTCOME
+                        .with_label_values(&["deferred"])
+                        .inc();
                     info!(
                         job_id = %job_id,
                         session_key = %session_key,
@@ -1407,6 +1421,9 @@ impl Kernel {
                 }
             },
             None => {
+                crate::metrics::SCHEDULED_JOB_OUTCOME
+                    .with_label_values(&["deferred"])
+                    .inc();
                 warn!(
                     job_id = %job_id,
                     session_key = %session_key,
@@ -1439,6 +1456,9 @@ impl Kernel {
         let spawned_key = match spawn_result {
             Ok(key) => key,
             Err(e) => {
+                crate::metrics::SCHEDULED_JOB_OUTCOME
+                    .with_label_values(&["failed"])
+                    .inc();
                 error!(
                     job_id = %job_id,
                     error = %e,
@@ -1447,6 +1467,10 @@ impl Kernel {
                 return;
             }
         };
+
+        crate::metrics::SCHEDULED_JOB_OUTCOME
+            .with_label_values(&["spawned"])
+            .inc();
 
         info!(
             job_id = %job_id,
@@ -1533,6 +1557,7 @@ impl Kernel {
         job.trigger = crate::schedule::Trigger::Once { run_at: retry_at };
 
         if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+            crate::metrics::SCHEDULED_JOB_REQUEUED.inc();
             info!(
                 job_id = %job.id,
                 retry_at = %retry_at,
