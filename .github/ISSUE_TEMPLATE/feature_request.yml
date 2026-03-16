@@ -10,6 +10,25 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the system does this relate to?
+      options:
+        - kernel (core runtime, heartbeat, event bus)
+        - memory (tape, session, context)
+        - llm (LLM integration, providers)
+        - tools (tool system, built-in tools)
+        - web (frontend, UI)
+        - api (HTTP API, routes)
+        - cli (command-line interface)
+        - extensions (skills, plugins)
+        - ci (CI/CD, build, release)
+        - other
+    validations:
+      required: true
+
   - type: textarea
     id: alternatives
     attributes:

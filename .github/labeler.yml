@@ -1,0 +1,56 @@
+# Auto-label PRs based on changed file paths
+# Used by .github/workflows/labeler.yml
+
+core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/kernel/**
+          - crates/rara-model/**
+          - crates/domain/**
+          - crates/soul/**
+          - crates/symphony/**
+
+backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/server/**
+          - crates/channels/**
+          - crates/sessions/**
+          - crates/agents/**
+          - crates/integrations/**
+
+ui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - web/**
+
+extension:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/extensions/**
+          - crates/skills/**
+
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.rs"
+          - Cargo.toml
+          - Cargo.lock
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - docs/**
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - Cargo.lock
+          - web/package-lock.json
+          - web/package.json
