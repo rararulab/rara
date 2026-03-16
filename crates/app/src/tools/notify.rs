@@ -21,5 +21,7 @@ use rara_kernel::{event::KernelEventEnvelope, tool::ToolContext};
 ///
 /// Silently does nothing if the event queue is unavailable (e.g. in tests).
 pub fn push_notification(context: &ToolContext, message: impl Into<String>) {
-    let _ = context.event_queue.try_push(KernelEventEnvelope::send_notification(message.into()));
+    let _ = context
+        .event_queue
+        .try_push(KernelEventEnvelope::send_notification(message.into()));
 }

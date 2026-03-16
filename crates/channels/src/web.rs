@@ -227,9 +227,15 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
         StreamEvent::UsageUpdate { .. } => None,
-        StreamEvent::BackgroundTaskStarted { task_id, agent_name, description } => {
-            Some(WebEvent::BackgroundTaskStarted { task_id, agent_name, description })
-        }
+        StreamEvent::BackgroundTaskStarted {
+            task_id,
+            agent_name,
+            description,
+        } => Some(WebEvent::BackgroundTaskStarted {
+            task_id,
+            agent_name,
+            description,
+        }),
         StreamEvent::BackgroundTaskDone { task_id, status } => {
             Some(WebEvent::BackgroundTaskDone { task_id, status })
         }

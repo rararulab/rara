@@ -329,9 +329,7 @@ impl SyscallDispatcher {
                     );
                 } else {
                     let _ = kernel_handle.event_queue().try_push(
-                        crate::event::KernelEventEnvelope::send_notification(
-                            message.to_string(),
-                        ),
+                        crate::event::KernelEventEnvelope::send_notification(message.to_string()),
                     );
                 }
             }

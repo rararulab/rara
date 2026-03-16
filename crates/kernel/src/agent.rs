@@ -757,7 +757,11 @@ pub(crate) async fn run_agent_loop(
                         .filter(|(name, _)| !user.can_use_tool(name))
                         .map(|(name, _)| name.to_string())
                         .collect();
-                    info!(user_id = user_id.as_str(), ?denied, "filtered tools by user permissions");
+                    info!(
+                        user_id = user_id.as_str(),
+                        ?denied,
+                        "filtered tools by user permissions"
+                    );
                 }
                 Arc::new(filtered)
             }
@@ -903,9 +907,8 @@ pub(crate) async fn run_agent_loop(
                 .join("\n");
 
             messages.push(crate::llm::Message::user(format!(
-                "[Active Background Tasks]\n\
-                 You have {} background task(s) running:\n{task_list}\n\
-                 Results will be delivered automatically when complete. \
+                "[Active Background Tasks]\nYou have {} background task(s) \
+                 running:\n{task_list}\nResults will be delivered automatically when complete. \
                  Use cancel-background(task_id) to cancel if needed.",
                 bg_tasks.len()
             )));
@@ -1218,14 +1221,14 @@ pub(crate) async fn run_agent_loop(
                 tool_calls: vec![],
             });
             let trace = TurnTrace {
-                duration_ms:      turn_start.elapsed().as_millis() as u64,
-                model:            model.clone(),
-                input_text:       Some(input_text.clone()),
-                iterations:       iteration_traces,
-                final_text_len:   accumulated_text.len(),
+                duration_ms: turn_start.elapsed().as_millis() as u64,
+                model: model.clone(),
+                input_text: Some(input_text.clone()),
+                iterations: iteration_traces,
+                final_text_len: accumulated_text.len(),
                 total_tool_calls: tool_calls_made,
-                success:          true,
-                error:            None,
+                success: true,
+                error: None,
                 rara_message_id,
             };
             // Best-effort mood update — failure is silently logged, never
@@ -1295,7 +1298,9 @@ pub(crate) async fn run_agent_loop(
                                     "error": &error_message,
                                 }]
                             }),
-                            Some(serde_json::json!({"rara_message_id": rara_message_id.to_string()})),
+                            Some(
+                                serde_json::json!({"rara_message_id": rara_message_id.to_string()}),
+                            ),
                         )
                         .await;
                     let raw_args: String = tool_call.arguments_buf.chars().take(100).collect();
@@ -1704,27 +1709,24 @@ pub(crate) async fn run_agent_loop(
     // Emit a stream warning so adapters (Telegram, SSE) can surface it to the
     // user immediately.
     stream_handle.emit(StreamEvent::Progress {
-        stage: format!(
-            "[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"
-        ),
+        stage: format!("[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"),
     });
     // If the agent spent the entire turn doing tool calls and produced no
     // visible text, synthesise a fallback message so the user is not left with
     // a blank response.
     if last_accumulated_text.is_empty() {
-        last_accumulated_text = format!(
-            "[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]"
-        );
+        last_accumulated_text =
+            format!("[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]");
     }
     let trace = TurnTrace {
-        duration_ms:      turn_start.elapsed().as_millis() as u64,
-        model:            model.clone(),
-        input_text:       Some(input_text.clone()),
-        iterations:       iteration_traces,
-        final_text_len:   last_accumulated_text.len(),
+        duration_ms: turn_start.elapsed().as_millis() as u64,
+        model: model.clone(),
+        input_text: Some(input_text.clone()),
+        iterations: iteration_traces,
+        final_text_len: last_accumulated_text.len(),
         total_tool_calls: tool_calls_made,
-        success:          false,
-        error:            Some(exhaustion_error),
+        success: false,
+        error: Some(exhaustion_error),
         rara_message_id,
     };
     // Best-effort mood update — failure is silently logged, never blocks the
@@ -1813,7 +1815,9 @@ mod tests {
         assert!(prompt.contains("`tape`"));
         assert!(prompt.contains("- `anchor`: checkpoint + trim context."));
         assert!(prompt.contains("- `search` / `entries`: recall details from before an anchor."));
-        assert!(prompt.contains("You need exact tokens, IDs, codes, names, or quoted details from earlier context"));
+        assert!(prompt.contains(
+            "You need exact tokens, IDs, codes, names, or quoted details from earlier context"
+        ));
         assert!(prompt.contains("Always include a detailed `summary` and concrete `next_steps`"));
         assert!(prompt.contains("<delegation_contract>"));
         assert!(prompt.contains("action: \"spawn\""));

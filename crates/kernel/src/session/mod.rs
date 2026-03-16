@@ -249,13 +249,13 @@ pub enum Signal {
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskEntry {
     /// Child session key (doubles as task_id).
-    pub child_key: SessionKey,
+    pub child_key:          SessionKey,
     /// Human-readable name from the spawned manifest.
-    pub agent_name: String,
+    pub agent_name:         String,
     /// Description provided by the parent agent.
-    pub description: String,
+    pub description:        String,
     /// When the task was spawned.
-    pub created_at: jiff::Timestamp,
+    pub created_at:         jiff::Timestamp,
     /// The inbound message that triggered the spawn.
     pub trigger_message_id: crate::io::MessageId,
 }

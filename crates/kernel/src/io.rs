@@ -859,10 +859,10 @@ pub enum StreamEvent {
     },
     /// Turn metrics summary (emitted before stream close).
     TurnMetrics {
-        duration_ms: u64,
-        iterations:  usize,
-        tool_calls:  usize,
-        model:       String,
+        duration_ms:     u64,
+        iterations:      usize,
+        tool_calls:      usize,
+        model:           String,
         rara_message_id: String,
     },
     /// A plan has been created with a goal and ordered steps.
@@ -924,10 +924,10 @@ impl StreamHandle {
 /// Manages the lifecycle of per-execution streams and provides
 /// subscription endpoints for egress/frontends.
 pub struct StreamHub {
-    streams:          DashMap<StreamId, StreamEntry>,
+    streams:         DashMap<StreamId, StreamEntry>,
     /// Reverse index: session_key → active stream IDs for O(1) lookup.
-    session_streams:  DashMap<SessionKey, Vec<StreamId>>,
-    capacity:         usize,
+    session_streams: DashMap<SessionKey, Vec<StreamId>>,
+    capacity:        usize,
 }
 
 impl StreamHub {
