@@ -29,6 +29,7 @@ import {
   dockBootstrap,
   dockCreateSession,
   dockGetSession,
+  dockMutateSession,
   dockTurn,
   dockUpdateWorkspace,
 } from "@/api/dock";
@@ -419,6 +420,12 @@ export function useDockStore(): DockStore {
         selection: partial.selection ?? null,
       };
       setAnnotations((prev) => [...prev, annotation]);
+      const sid = activeSessionIdRef.current;
+      if (sid) {
+        dockMutateSession(sid, [
+          { op: "annotation.add", actor: "human", annotation },
+        ]).catch(() => {});
+      }
       return annotation;
     },
     [],
@@ -428,10 +435,25 @@ export function useDockStore(): DockStore {
     setAnnotations((prev) =>
       prev.map((a) => (a.id === id ? { ...a, content } : a)),
     );
+    const sid = activeSessionIdRef.current;
+    if (sid) {
+      const ann = annotationsRef.current.find((a) => a.id === id);
+      if (ann) {
+        dockMutateSession(sid, [
+          { op: "annotation.update", actor: "human", annotation: { ...ann, content } },
+        ]).catch(() => {});
+      }
+    }
   }, []);
 
   const removeAnnotation = useCallback((id: string) => {
     setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    const sid = activeSessionIdRef.current;
+    if (sid) {
+      dockMutateSession(sid, [
+        { op: "annotation.remove", actor: "human", id },
+      ]).catch(() => {});
+    }
   }, []);
 
   // -----------------------------------------------------------------------
@@ -442,6 +464,12 @@ export function useDockStore(): DockStore {
     (content: string, source: Actor = "human") => {
       const fact: DockFact = { id: generateId(), content, source };
       setFacts((prev) => [...prev, fact]);
+      const sid = activeSessionIdRef.current;
+      if (sid) {
+        dockMutateSession(sid, [
+          { op: "fact.add", actor: "human", fact },
+        ]).catch(() => {});
+      }
     },
     [],
   );
@@ -450,10 +478,25 @@ export function useDockStore(): DockStore {
     setFacts((prev) =>
       prev.map((f) => (f.id === id ? { ...f, content } : f)),
     );
+    const sid = activeSessionIdRef.current;
+    if (sid) {
+      const f = factsRef.current.find((f) => f.id === id);
+      if (f) {
+        dockMutateSession(sid, [
+          { op: "fact.update", actor: "human", fact: { ...f, content } },
+        ]).catch(() => {});
+      }
+    }
   }, []);
 
   const removeFact = useCallback((id: string) => {
     setFacts((prev) => prev.filter((f) => f.id !== id));
+    const sid = activeSessionIdRef.current;
+    if (sid) {
+      dockMutateSession(sid, [
+        { op: "fact.remove", actor: "human", id },
+      ]).catch(() => {});
+    }
   }, []);
 
   // -----------------------------------------------------------------------
