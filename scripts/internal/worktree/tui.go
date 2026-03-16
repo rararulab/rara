@@ -68,11 +68,16 @@ func newTUIModel(entries []Entry) tuiModel {
 		rows[i] = entryToRow(e, false)
 	}
 
+	// Total width = sum of column widths + padding (2 per col)
+	totalWidth := 0
+	for _, c := range columns {
+		totalWidth += c.Width + 2
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
-		table.WithRows(rows),
+		table.WithWidth(totalWidth),
 		table.WithFocused(true),
-		table.WithHeight(min(len(entries)+1, 25)),
 	)
 
 	s := table.DefaultStyles()
@@ -85,6 +90,10 @@ func newTUIModel(entries []Entry) tuiModel {
 		Background(lipgloss.Color("57")).
 		Bold(false)
 	t.SetStyles(s)
+
+	// Set rows and height AFTER styles are applied so viewport calculates correctly
+	t.SetRows(rows)
+	t.SetHeight(min(len(entries)+1, 25))
 
 	return tuiModel{
 		table:    t,
