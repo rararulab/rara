@@ -80,6 +80,18 @@ gh pr create --title "fix(scope): description" --body "Closes #{N}"
 - Commit message must include `Closes #N` so the issue is auto-closed when PR merges
 - Never merge locally — all merges happen through GitHub PR
 
+#### Step 5.5: Wait for CI Green (MANDATORY)
+
+After creating the PR, **you MUST verify that all CI checks pass before reporting completion to the user.**
+
+```bash
+gh pr checks {PR-number} --watch    # Wait for all checks to complete
+```
+
+- If any check fails, investigate and fix in the worktree, push again, and re-verify
+- Do NOT report "PR created" or "task done" to the user while CI is still pending or failing
+- Only after all checks are green may you inform the user that the PR is ready
+
 #### Step 6: Cleanup (after PR merged)
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
@@ -124,3 +136,4 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT 在 agent system prompt 中添加"先说计划再行动"类规则 — "先发 plan 再执行" 会导致 LLM 在简单交互（hello）中也产生冗余/重复的叙述文本。正确原则是 "act first, report after"（参见 #201）
 - Do NOT 用过于宽泛的条件触发 memory search — "proactively search memory" 会让每次交互都触发搜索+无意义叙述。触发条件必须明确限定（如"用户明确问到过去的事"）
 - Do NOT 修改 agent system prompt 后不测试 — 至少用 "hello"、"你好" 等简单输入验证不会产生异常/重复输出
+- Do NOT 在 CI 未全绿的情况下向用户汇报"PR 已完成" — 必须用 `gh pr checks --watch` 等到所有 check 通过，失败则修复后重新推送并再次验证
