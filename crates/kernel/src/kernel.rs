@@ -2621,6 +2621,37 @@ impl Kernel {
             });
         }
 
+        // -- Session title generation (async, best-effort) -------------------
+        // After the first successful turn, spawn a task to auto-generate a
+        // human-readable title for the session using LLM. Only fires when
+        // the session has no title yet.
+        if !_turn_failed {
+            let session_index = Arc::clone(self.io.session_index());
+            let needs_title = match session_index.get_session(&session_key).await {
+                Ok(Some(entry)) => entry.title.is_none(),
+                _ => false,
+            };
+            if needs_title {
+                let tape_service = self.tape_service.clone();
+                let driver_registry = Arc::clone(self.syscall.driver_registry());
+                let sk = session_key;
+                let tape_name = sk.to_string();
+                tokio::spawn(async move {
+                    if let Err(e) = generate_session_title(
+                        &tape_service,
+                        &tape_name,
+                        &driver_registry,
+                        session_index.as_ref(),
+                        &sk,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%e, session_key = %sk, "session title generation failed");
+                    }
+                });
+            }
+        }
+
         // Drain pause buffer — if the user sent messages while the turn was
         // running, re-inject them so they start a new turn on this session.
         let buffered = self.process_table.drain_pause_buffer(&session_key);
@@ -2637,4 +2668,92 @@ impl Kernel {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Session title generation (standalone helper)
+// ---------------------------------------------------------------------------
+
+/// Auto-generate a short session title from the first user/assistant exchange.
+///
+/// Reads the tape for the first user and assistant messages, asks the LLM for a
+/// concise title (<=30 chars, matching the user's language), and persists it
+/// via the session index. Errors are propagated to the caller for logging.
+async fn generate_session_title(
+    tape_service: &crate::memory::TapeService,
+    tape_name: &str,
+    driver_registry: &crate::llm::DriverRegistry,
+    session_index: &dyn crate::session::SessionIndex,
+    session_key: &SessionKey,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use crate::memory::TapEntryKind;
+
+    let entries = tape_service
+        .from_last_anchor(tape_name, Some(&[TapEntryKind::Message]))
+        .await?;
+
+    let first_user_msg = entries
+        .iter()
+        .find_map(|e| {
+            let p = &e.payload;
+            if p.get("role")?.as_str()? == "user" {
+                p.get("content")?.as_str().map(String::from)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    if first_user_msg.is_empty() {
+        return Ok(());
+    }
+
+    let first_assistant_msg = entries
+        .iter()
+        .find_map(|e| {
+            let p = &e.payload;
+            if p.get("role")?.as_str()? == "assistant" {
+                p.get("content")?.as_str().map(String::from)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let (driver, model) = driver_registry.resolve("title_generator", None, None)?;
+
+    let assistant_preview: String = first_assistant_msg.chars().take(500).collect();
+
+    let prompt = format!(
+        "Given this conversation opening, generate a concise title (max 30 characters).\nMatch \
+         the language of the user's message.\nReturn ONLY the title, nothing else.\n\nUser: \
+         {first_user_msg}\nAssistant: {assistant_preview}"
+    );
+
+    let request = crate::llm::CompletionRequest {
+        model,
+        messages: vec![crate::llm::Message::user(prompt)],
+        tools: vec![],
+        temperature: Some(0.3),
+        max_tokens: Some(60),
+        thinking: None,
+        tool_choice: crate::llm::ToolChoice::None,
+        parallel_tool_calls: false,
+        frequency_penalty: None,
+    };
+
+    let response = driver.complete(request).await?;
+
+    if let Some(title) = response.content {
+        let title = title.trim().trim_matches('"').to_string();
+        if !title.is_empty() && title.chars().count() <= 50 {
+            if let Ok(Some(mut entry)) = session_index.get_session(session_key).await {
+                entry.title = Some(title);
+                entry.updated_at = chrono::Utc::now();
+                let _ = session_index.update_session(&entry).await;
+            }
+        }
+    }
+
+    Ok(())
 }
