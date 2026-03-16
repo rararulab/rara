@@ -307,6 +307,37 @@ nuke:
 
 alias ma := migrate-add
 
+# ========================================================================================
+# Worktree Management
+# ========================================================================================
+
+DEVTOOL := "scripts/bin/devtool"
+
+[doc("build devtool binary")]
+[group("🔧 Development")]
+devtool-build:
+    @cd scripts && go build -o bin/devtool ./cmd/devtool/
+
+[doc("list all git worktrees")]
+[group("🌳 Worktree")]
+wt-list: devtool-build
+    @{{DEVTOOL}} wt list
+
+[doc("clean up merged worktrees (removes worktrees whose branches are merged into main)")]
+[group("🌳 Worktree")]
+wt-clean: devtool-build
+    @{{DEVTOOL}} wt clean
+
+[doc("force-remove ALL worktrees except the main checkout (⚠️ destructive)")]
+[group("🌳 Worktree")]
+[confirm("⚠️ This will remove ALL worktrees and their local branches. Continue?")]
+wt-nuke: devtool-build
+    @{{DEVTOOL}} wt nuke
+
+# ========================================================================================
+# Dependency Management
+# ========================================================================================
+
 [doc("update dependencies interactively")]
 [group("🔧 Development")]
 deps-update:
