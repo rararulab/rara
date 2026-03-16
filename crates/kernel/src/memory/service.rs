@@ -625,6 +625,28 @@ impl TapeService {
             .collect())
     }
 
+    /// Return entries whose ID is strictly greater than `after_entry_id`.
+    ///
+    /// Used by the context folding cooldown logic to count entries added since
+    /// the last auto-fold anchor.
+    pub async fn entries_after(
+        &self,
+        tape_name: &str,
+        after_entry_id: u64,
+    ) -> TapResult<Vec<TapEntry>> {
+        let entries = self.entries(tape_name).await?;
+        Ok(entries
+            .into_iter()
+            .filter(|e| e.id > after_entry_id)
+            .collect())
+    }
+
+    /// Return the ID of the last entry on the tape, or 0 if the tape is empty.
+    pub async fn last_entry_id(&self, tape_name: &str) -> TapResult<u64> {
+        let entries = self.entries(tape_name).await?;
+        Ok(entries.last().map(|e| e.id).unwrap_or(0))
+    }
+
     /// Search message entries using ranked Unicode-aware text matching.
     pub async fn search(
         &self,
