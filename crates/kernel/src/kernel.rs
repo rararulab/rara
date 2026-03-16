@@ -1437,29 +1437,29 @@ impl Kernel {
         });
     }
 
-    /// Re-add a job to the wheel with a short delay so it retries.
+    /// Re-add a one-shot job to the wheel with a short delay so it retries.
     ///
-    /// This is used when a scheduled job cannot be spawned right now (e.g.
-    /// parent at child limit or not in process table).  Without this,
-    /// `Trigger::Once` jobs would be silently lost since `drain_expired`
-    /// already consumed them.
+    /// Only `Trigger::Once` jobs need this — recurring (Interval/Cron) jobs
+    /// have already been rescheduled by `drain_expired` before this point,
+    /// so requeueing them would create a duplicate extra run.
     fn requeue_job(&self, mut job: crate::schedule::JobEntry) {
+        if !matches!(job.trigger, crate::schedule::Trigger::Once { .. }) {
+            // Recurring jobs already have their next firing in the wheel.
+            return;
+        }
+
         const RETRY_DELAY_SECS: i64 = 10;
         let retry_at = jiff::Timestamp::now()
             .checked_add(jiff::SignedDuration::from_secs(RETRY_DELAY_SECS))
             .unwrap_or_else(|_| jiff::Timestamp::now());
 
-        // Override the trigger to fire once at retry_at, regardless of the
-        // original trigger type.  Recurring jobs have already been
-        // rescheduled by drain_expired, so this extra one-shot retry is
-        // harmless — worst case it fires one extra time.
         job.trigger = crate::schedule::Trigger::Once { run_at: retry_at };
 
         if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
             info!(
                 job_id = %job.id,
                 retry_at = %retry_at,
-                "requeued scheduled job for retry"
+                "requeued one-shot job for retry"
             );
             wheel.add(job);
             wheel.persist();
