@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod fold;
+
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -820,6 +822,19 @@ pub(crate) async fn run_agent_loop(
     let mut consecutive_silent_iters: usize = 0;
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
+    // Auto-fold: track last fold anchor for cooldown calculation.
+    let mut last_fold_entry_id: Option<u64> = None;
+    let context_folder = if handle.config().context_folding.enabled {
+        let fold_model = handle
+            .config()
+            .context_folding
+            .fold_model
+            .clone()
+            .unwrap_or_else(|| model.clone());
+        Some(fold::ContextFolder::new(driver.clone(), fold_model))
+    } else {
+        None
+    };
     let mut llm_error_recovery_message: Option<String> = None;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
@@ -1648,6 +1663,106 @@ pub(crate) async fn run_agent_loop(
                 },
                 tool_calls: tool_call_traces,
             });
+        }
+
+        // ── Auto-fold: hierarchical summarization ─────────────────────
+        // When context pressure exceeds the fold threshold and enough
+        // entries have accumulated, perform an automatic fold via an
+        // independent LLM summarization call. On failure we simply log
+        // and fall through to the existing 0.70/0.85 pressure warnings.
+        if let Some(ref folder) = context_folder {
+            if let Ok(tape_info) = tape.info(tape_name).await {
+                let pressure = tape_info.estimated_context_tokens as f64
+                    / capabilities.context_window_tokens as f64;
+                let fold_cfg = &handle.config().context_folding;
+
+                if pressure > fold_cfg.fold_threshold {
+                    let entries_since_fold = match last_fold_entry_id {
+                        Some(_) => tape_info.entries_since_last_anchor,
+                        None => tape_info.entries,
+                    };
+
+                    if entries_since_fold >= fold_cfg.min_entries_between_folds {
+                        info!(
+                            pressure = format!("{:.2}", pressure),
+                            entries_since_fold,
+                            "auto-fold: context pressure exceeded threshold, folding"
+                        );
+
+                        // Retrieve prior anchor summary for hierarchical folding.
+                        let prior_summary = match tape.anchors(tape_name, 1).await {
+                            Ok(anchors) => anchors.into_iter().next().and_then(|a| {
+                                serde_json::from_value::<crate::memory::HandoffState>(a.state)
+                                    .ok()
+                                    .and_then(|hs| hs.summary)
+                            }),
+                            Err(_) => None,
+                        };
+
+                        // Build messages for the fold input.
+                        let fold_messages = tape
+                            .rebuild_messages_for_llm(tape_name, user_id, &effective_prompt)
+                            .await;
+
+                        match fold_messages {
+                            Ok(msgs) => {
+                                let timeout =
+                                    std::time::Duration::from_secs(fold_cfg.branch_timeout_secs);
+                                let fold_result = tokio::time::timeout(
+                                    timeout,
+                                    folder.fold_with_prior(
+                                        prior_summary.as_deref(),
+                                        &msgs,
+                                        tape_info.estimated_context_tokens as usize,
+                                    ),
+                                )
+                                .await;
+
+                                match fold_result {
+                                    Ok(Ok(fold_summary)) => {
+                                        let handoff_state = fold::ContextFolder::to_handoff_state(
+                                            &fold_summary,
+                                            pressure,
+                                        );
+                                        match tape
+                                            .handoff(tape_name, "auto-fold", handoff_state)
+                                            .await
+                                        {
+                                            Ok(entries) => {
+                                                let anchor_id =
+                                                    entries.last().map(|e| e.id).unwrap_or(0);
+                                                last_fold_entry_id = Some(anchor_id);
+                                                info!(anchor_id, "auto-fold: tape handoff created");
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    error = %e,
+                                                    "auto-fold: tape handoff failed, skipping"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Ok(Err(e)) => {
+                                        warn!(
+                                            error = %e,
+                                            "auto-fold: summarization failed, skipping"
+                                        );
+                                    }
+                                    Err(_) => {
+                                        warn!("auto-fold: summarization timed out, skipping");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    "auto-fold: failed to rebuild messages for fold, skipping"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ── Runtime context guard ──────────────────────────────────────

@@ -104,6 +104,28 @@ pub struct KernelConfig {
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
     pub event_queue:             ShardedEventQueueConfig,
+    /// Context folding (auto-summarization) configuration.
+    pub context_folding:         ContextFoldingConfig,
+}
+
+/// Configuration for automatic context folding (hierarchical summarization).
+#[derive(Debug, Clone, smart_default::SmartDefault)]
+pub struct ContextFoldingConfig {
+    /// Whether auto-fold is enabled.
+    #[default = true]
+    pub enabled:                   bool,
+    /// Context pressure fraction at which auto-fold triggers.
+    #[default = 0.60]
+    pub fold_threshold:            f64,
+    /// Minimum tape entries since last fold before another fold is allowed.
+    #[default = 15]
+    pub min_entries_between_folds: usize,
+    /// Override model for fold summarization calls. If `None`, the agent's
+    /// own model is used.
+    pub fold_model:                Option<String>,
+    /// Timeout in seconds for the fold LLM call.
+    #[default = 120]
+    pub branch_timeout_secs:       u64,
 }
 
 /// Shared reference to a
