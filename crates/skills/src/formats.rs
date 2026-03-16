@@ -302,6 +302,64 @@ impl ClaudeCodeAdapter {
 
         Ok(results)
     }
+
+    /// Scan a marketplace repo by reading `marketplace.json` and visiting each
+    /// plugin's `source` directory.
+    fn scan_marketplace_index(
+        &self,
+        repo_dir: &Path,
+        marketplace_json_path: &Path,
+    ) -> Vec<PluginSkillEntry> {
+        let content = match std::fs::read_to_string(marketplace_json_path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let index: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        let plugins = match index.get("plugins").and_then(|v| v.as_array()) {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+
+        let canonical_repo = match repo_dir.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut results = Vec::new();
+        for plugin in plugins {
+            let source = match plugin.get("source").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            let plugin_dir = repo_dir.join(source.strip_prefix("./").unwrap_or(source));
+
+            // Guard against path traversal (e.g. source: "../../escape").
+            let canonical_plugin = match plugin_dir.canonicalize() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if !canonical_plugin.starts_with(&canonical_repo) {
+                tracing::warn!(
+                    ?source,
+                    "marketplace plugin source escapes repo directory, skipping"
+                );
+                continue;
+            }
+
+            if plugin_dir.join(".claude-plugin/plugin.json").is_file() {
+                match self.scan_single_plugin(&plugin_dir, repo_dir) {
+                    Ok(skills) => results.extend(skills),
+                    Err(e) => {
+                        tracing::warn!(?plugin_dir, %e, "failed to scan marketplace plugin")
+                    }
+                }
+            }
+        }
+        results
+    }
 }
 
 impl FormatAdapter for ClaudeCodeAdapter {
@@ -322,46 +380,7 @@ impl FormatAdapter for ClaudeCodeAdapter {
         let marketplace_json_path = repo_dir.join(".claude-plugin/marketplace.json");
         let mut results = Vec::new();
         if marketplace_json_path.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&marketplace_json_path) {
-                if let Ok(index) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(plugins) = index.get("plugins").and_then(|v| v.as_array()) {
-                        for plugin in plugins {
-                            if let Some(source) = plugin.get("source").and_then(|v| v.as_str()) {
-                                let plugin_dir =
-                                    repo_dir.join(source.strip_prefix("./").unwrap_or(source));
-
-                                // Guard against path traversal (e.g. source: "../../escape").
-                                let canonical_repo = match repo_dir.canonicalize() {
-                                    Ok(p) => p,
-                                    Err(_) => continue,
-                                };
-                                let canonical_plugin = match plugin_dir.canonicalize() {
-                                    Ok(p) => p,
-                                    Err(_) => continue,
-                                };
-                                if !canonical_plugin.starts_with(&canonical_repo) {
-                                    tracing::warn!(
-                                        ?source,
-                                        "marketplace plugin source escapes repo directory, \
-                                         skipping"
-                                    );
-                                    continue;
-                                }
-
-                                if plugin_dir.join(".claude-plugin/plugin.json").is_file() {
-                                    match self.scan_single_plugin(&plugin_dir, repo_dir) {
-                                        Ok(skills) => results.extend(skills),
-                                        Err(e) => tracing::warn!(
-                                            ?plugin_dir, %e,
-                                            "failed to scan marketplace plugin"
-                                        ),
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            results = self.scan_marketplace_index(repo_dir, &marketplace_json_path);
             if !results.is_empty() {
                 return Ok(results);
             }
