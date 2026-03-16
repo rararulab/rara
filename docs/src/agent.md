@@ -133,6 +133,10 @@ The fold prompt instructs the LLM to:
 
 Summary length is dynamic: ~10% of source tokens, clamped to [256, 2048] tokens.
 
+## Background
+
+Rara's context folding is inspired by the [RLM (Reinforcement Learning for LLM Context Management)](https://www.primeintellect.ai/blog/rlm) research. See [Context Folding: From RLM to Rara](context-folding.md) for a detailed comparison of the two approaches, including what Rara borrows, what it adapts, and where it diverges.
+
 ## Key Files
 
 | File | Purpose |

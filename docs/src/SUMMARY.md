@@ -7,6 +7,7 @@
 - [Configuration](configuration.md)
 - [Identity & User System](identity-system.md)
 - [Agent Loop & Context Folding](agent.md)
+- [Context Folding: From RLM to Rara](context-folding.md)
 - [Agent Tools](agent-tools.md)
 - [Memory System](memory-system.md)
 - [Gateway Supervisor](gateway.md)
