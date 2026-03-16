@@ -900,15 +900,12 @@ mod tests {
     use super::{WebEvent, stream_event_to_web_event};
 
     #[test]
-    fn reasoning_deltas_are_forwarded_to_web_clients() {
+    fn reasoning_deltas_are_not_forwarded_to_web_clients() {
         let event = StreamEvent::ReasoningDelta {
             text: "internal".to_owned(),
         };
 
-        assert!(matches!(
-            stream_event_to_web_event(event),
-            Some(WebEvent::ReasoningDelta { text }) if text == "internal"
-        ));
+        assert!(stream_event_to_web_event(event).is_none());
     }
 
     #[test]

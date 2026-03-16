@@ -522,7 +522,7 @@ async fn create_plan_via_llm(
             })?;
 
         let tool_output = create_plan_tool
-            .execute(params, &tool_context)
+            .execute(params, tool_context)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("create_plan tool execution failed: {e}"),
@@ -651,7 +651,7 @@ async fn replan_via_llm(
             })?;
 
         let tool_output = create_plan_tool
-            .execute(params, &tool_context)
+            .execute(params, tool_context)
             .await
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("replan create_plan tool execution failed: {e}"),

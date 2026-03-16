@@ -1811,10 +1811,10 @@ mod tests {
         let prompt = build_runtime_contract_prompt("base", true, None);
         assert!(prompt.contains("<context_contract>"));
         assert!(prompt.contains("`tape`"));
-        assert!(prompt.contains("action: \"anchor\""));
-        assert!(prompt.contains("action: \"search\""));
-        assert!(prompt.contains("search the tape"));
-        assert!(prompt.contains("Never answer a pre-anchor factual question from memory alone"));
+        assert!(prompt.contains("- `anchor`: checkpoint + trim context."));
+        assert!(prompt.contains("- `search` / `entries`: recall details from before an anchor."));
+        assert!(prompt.contains("You need exact tokens, IDs, codes, names, or quoted details from earlier context"));
+        assert!(prompt.contains("Always include a detailed `summary` and concrete `next_steps`"));
         assert!(prompt.contains("<delegation_contract>"));
         assert!(prompt.contains("action: \"spawn\""));
         assert!(prompt.contains("action: \"spawn_parallel\""));

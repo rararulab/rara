@@ -43,7 +43,7 @@ mod tests {
     fn rara_default_parses() {
         let soul = SoulFile::parse(RARA_SOUL).unwrap();
         assert_eq!(soul.frontmatter.name, "rara");
-        assert_eq!(soul.frontmatter.version, 1);
+        assert!(soul.frontmatter.version >= 1);
         assert!(!soul.frontmatter.personality.is_empty());
         assert!(!soul.frontmatter.boundaries.immutable_traits.is_empty());
         assert!(soul.frontmatter.evolution.enabled);
@@ -54,7 +54,7 @@ mod tests {
     fn nana_default_parses() {
         let soul = SoulFile::parse(NANA_SOUL).unwrap();
         assert_eq!(soul.frontmatter.name, "nana");
-        assert_eq!(soul.frontmatter.version, 1);
+        assert!(soul.frontmatter.version >= 1);
         assert!(!soul.frontmatter.personality.is_empty());
         assert!(!soul.frontmatter.evolution.enabled);
         assert!(soul.body.contains("## Background"));

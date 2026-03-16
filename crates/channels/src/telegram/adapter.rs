@@ -2841,6 +2841,17 @@ fn contains_rara_keyword(text: &str) -> bool {
         || lower.contains("拉拉")
 }
 
+/// Strip the bot @mention from message text.
+///
+/// Removes the `@botname` substring and trims surrounding whitespace.
+fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
+    let Some(username) = bot_username else {
+        return text.trim().to_owned();
+    };
+    let mention = format!("@{username}");
+    text.replace(&mention, "").trim().to_owned()
+}
+
 #[cfg(test)]
 mod strip_tool_call_xml_tests {
     use super::strip_tool_call_xml;
@@ -2899,15 +2910,4 @@ mod strip_tool_call_xml_tests {
         assert!(result.contains("Before"));
         assert!(result.contains("after"));
     }
-}
-
-/// Strip the bot @mention from message text.
-///
-/// Removes the `@botname` substring and trims surrounding whitespace.
-fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
-    let Some(username) = bot_username else {
-        return text.trim().to_owned();
-    };
-    let mention = format!("@{username}");
-    text.replace(&mention, "").trim().to_owned()
 }

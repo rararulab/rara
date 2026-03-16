@@ -791,7 +791,6 @@ define_id!(
 ///
 /// These are ephemeral — not stored durably. Final results and errors
 /// are published through the `OutboundBus`.
-
 /// Terminal status of a background agent task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
