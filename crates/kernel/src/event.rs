@@ -295,8 +295,12 @@ pub enum KernelEvent {
     /// A child session completed its work.
     /// The parent session is in [`EventBase::session_key`].
     ChildSessionDone {
-        child_id: SessionKey,
-        result:   AgentRunLoopResult,
+        child_id:          SessionKey,
+        result:            AgentRunLoopResult,
+        /// When `true`, the child's result should NOT be appended to the
+        /// parent's tape as a system message.  Set for fold-branch children
+        /// whose output is already returned inline as a `ToolResult`.
+        skip_tape_persist: bool,
     },
 
     // === Output ===
@@ -499,10 +503,15 @@ impl KernelEventEnvelope {
         parent_id: SessionKey,
         child_id: SessionKey,
         result: AgentRunLoopResult,
+        skip_tape_persist: bool,
     ) -> Self {
         Self {
             base: EventBase::from(parent_id),
-            kind: KernelEvent::ChildSessionDone { child_id, result },
+            kind: KernelEvent::ChildSessionDone {
+                child_id,
+                result,
+                skip_tape_persist,
+            },
         }
     }
 
@@ -512,7 +521,7 @@ impl KernelEventEnvelope {
         child_id: SessionKey,
         result: AgentRunLoopResult,
     ) -> Self {
-        Self::child_session_done(parent_id, child_id, result)
+        Self::child_session_done(parent_id, child_id, result, false)
     }
 
     /// Create a `Deliver` event.

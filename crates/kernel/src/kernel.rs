@@ -617,8 +617,12 @@ impl Kernel {
                 )
                 .await;
             }
-            KernelEvent::ChildSessionDone { child_id, result } => {
-                self.handle_child_completed(base.session_key, child_id, result)
+            KernelEvent::ChildSessionDone {
+                child_id,
+                result,
+                skip_tape_persist,
+            } => {
+                self.handle_child_completed(base.session_key, child_id, result, skip_tape_persist)
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
@@ -881,6 +885,7 @@ impl Kernel {
         parent_id: SessionKey,
         child_id: SessionKey,
         result: AgentRunLoopResult,
+        skip_tape_persist: bool,
     ) {
         info!(
             parent_id = %parent_id,
@@ -888,18 +893,6 @@ impl Kernel {
             output_len = result.output.len(),
             "child result received"
         );
-
-        // Fold-branch children return results inline as a ToolResult; skip
-        // tape persistence to avoid duplicating the content in the parent's
-        // conversation history.
-        let is_fold_branch = self
-            .process_table
-            .with(&child_id, |p| {
-                p.manifest
-                    .name
-                    .starts_with(crate::tool::fold_branch::FOLD_BRANCH_NAME_PREFIX)
-            })
-            .unwrap_or(false);
 
         // Truncate for display / proactive turn directive.
         const CHILD_RESULT_MAX_CHARS: usize = 2000;
@@ -914,9 +907,11 @@ impl Kernel {
         };
 
         // Persist child result to parent's conversation history.
-        // Fold-branch children already return results as ToolResult — skip to
-        // avoid double-writing the same content into the parent tape.
-        if !is_fold_branch {
+        // Fold-branch children already return results as a ToolResult — the
+        // `skip_tape_persist` flag is set in cleanup_process based on the
+        // child's manifest name prefix, before the child is removed from the
+        // process table.
+        if !skip_tape_persist {
             let child_result_text = format!(
                 "[child_agent_result] child_id={child_id} iterations={} \
                  tool_calls={}\n\n{truncated_output}",
@@ -1081,7 +1076,17 @@ impl Kernel {
                     let _ = tx.send(crate::io::AgentEvent::Done(result.clone())).await;
                 }
 
-                let event = KernelEventEnvelope::child_session_done(parent_id, session_key, result);
+                // Fold-branch children return their output inline as a
+                // ToolResult, so we tell handle_child_completed to skip the
+                // tape append (otherwise the same content appears twice).
+                let skip_tape =
+                    manifest_name.starts_with(crate::tool::fold_branch::FOLD_BRANCH_NAME_PREFIX);
+                let event = KernelEventEnvelope::child_session_done(
+                    parent_id,
+                    session_key,
+                    result,
+                    skip_tape,
+                );
                 if let Err(e) = &self.event_queue.try_push(event) {
                     warn!(%e, "failed to push ChildSessionDone event");
                 }
