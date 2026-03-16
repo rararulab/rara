@@ -266,7 +266,14 @@ struct ToolTraceEntry {
 /// `ExecutionTrace` struct in the cache (which would be harder to manage).
 /// For typical traces this is negligible; if traces become very large,
 /// consider lazy rendering on first click.
-#[derive(Clone)]
+/// Pre-rendered trace cache entry, persisted to disk so old trace buttons
+/// remain functional after process restart.
+///
+/// Trade-off: detail_html is pre-rendered even if most users never click
+/// "详情". This costs ~4KB extra per trace but avoids needing the full
+/// `ExecutionTrace` struct in the cache. For typical traces this is
+/// negligible; if traces become very large, consider lazy rendering.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct TraceCacheEntry {
     compact_html: String,
     detail_html: String,
@@ -274,42 +281,34 @@ struct TraceCacheEntry {
 
 const TRACE_CACHE_CAPACITY: usize = 1000;
 
-/// Two-tier trace index, keyed by `"{chat_id}:{msg_id}"`.
+/// Persistent trace cache keyed by `"{chat_id}:{msg_id}"`.
 ///
-/// - `html_cache`: `trace_key → TraceCacheEntry` (pre-rendered HTML).
-///   Evicted when exceeding [`TRACE_CACHE_CAPACITY`].
-/// - `coord_index`: `trace_key → (tape_name, trace_id)`.
-///   Lightweight (~100 bytes/entry), never evicted, persisted to disk so
-///   old trace buttons remain functional after process restart.
+/// Pre-rendered HTML is loaded from disk on startup and written back after
+/// each insert. Entries are evicted when exceeding [`TRACE_CACHE_CAPACITY`].
 struct TraceStore {
     /// `"{chat_id}:{msg_id}"` → pre-rendered compact/detail HTML.
-    html_cache: DashMap<String, TraceCacheEntry>,
-    /// `"{chat_id}:{msg_id}"` → `(tape_name, trace_id)` for tape lookup.
-    coord_index: DashMap<String, (String, String)>,
+    cache: DashMap<String, TraceCacheEntry>,
 }
 
 impl TraceStore {
-    /// Load coord_index from disk, or create empty if file doesn't exist.
+    /// Load cache from disk, or create empty if file doesn't exist / is corrupt.
     fn load() -> Self {
-        let store = Self {
-            html_cache: DashMap::new(),
-            coord_index: DashMap::new(),
-        };
+        let store = Self { cache: DashMap::new() };
         let path = Self::persist_path();
         if let Ok(data) = std::fs::read_to_string(&path) {
-            if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, (String, String)>>(&data) {
+            if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, TraceCacheEntry>>(&data) {
                 for (k, v) in map {
-                    store.coord_index.insert(k, v);
+                    store.cache.insert(k, v);
                 }
             }
         }
         store
     }
 
-    /// Persist coord_index to disk. Best-effort, errors are logged.
+    /// Persist cache to disk. Best-effort, errors are logged.
     fn persist(&self) {
-        let map: std::collections::HashMap<String, (String, String)> = self
-            .coord_index
+        let map: std::collections::HashMap<String, TraceCacheEntry> = self
+            .cache
             .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
             .collect();
@@ -317,15 +316,15 @@ impl TraceStore {
         match serde_json::to_string(&map) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
-                    tracing::warn!(error = %e, "failed to persist trace coord index");
+                    tracing::warn!(error = %e, "failed to persist trace cache");
                 }
             }
-            Err(e) => tracing::warn!(error = %e, "failed to serialize trace coord index"),
+            Err(e) => tracing::warn!(error = %e, "failed to serialize trace cache"),
         }
     }
 
     fn persist_path() -> std::path::PathBuf {
-        rara_paths::data_dir().join("trace_coord_index.json")
+        rara_paths::data_dir().join("trace_cache.json")
     }
 }
 
@@ -1528,15 +1527,14 @@ async fn handle_guard_callback(
 ///   "详情"
 ///
 /// Pre-rendered HTML is read from [`TraceIndex`] cache (O(1), zero I/O).
-/// On cache miss (eviction or process restart), falls back to reading from
-/// tape — slower but still functional. The callback is always answered
-/// immediately to eliminate the Telegram spinner.
+/// Pre-rendered HTML is read from the persistent [`TraceStore`] cache.
+/// The callback is always answered immediately to eliminate the Telegram
+/// spinner. On cache miss the button silently does nothing.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
     trace_index: &TraceIndex,
-    tape: &rara_kernel::memory::TapeService,
 ) {
     // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
     let parts: Vec<&str> = data.splitn(3, ':').collect();
@@ -1549,27 +1547,8 @@ async fn handle_trace_callback(
     // Answer callback immediately — removes Telegram spinner.
     let _ = bot.answer_callback_query(callback.id.clone()).await;
 
-    // Hot path: read pre-rendered HTML from cache (O(1), zero I/O)
-    let entry = if let Some(cached) = trace_index.html_cache.get(trace_key).map(|r| r.value().clone()) {
-        cached
-    } else {
-        // Cold path: cache miss — fall back to tape read + render via coord_index
-        let coords = trace_index.coord_index.get(trace_key).map(|r| r.value().clone());
-        if let Some((tape_name, trace_id)) = coords {
-            if let Some(trace) = read_trace_from_tape(tape, &tape_name, &trace_id).await {
-                let rebuilt = TraceCacheEntry {
-                    compact_html: render_compact_summary(&trace),
-                    detail_html: render_trace_detail(&trace),
-                };
-                // Re-populate cache for subsequent clicks
-                trace_index.html_cache.insert(trace_key.to_owned(), rebuilt.clone());
-                rebuilt
-            } else {
-                return;
-            }
-        } else {
-            return;
-        }
+    let Some(entry) = trace_index.cache.get(trace_key).map(|r| r.value().clone()) else {
+        return;
     };
 
     let (text, button_text, next_action) = match action {
@@ -1604,34 +1583,6 @@ async fn handle_trace_callback(
     }
 }
 
-/// Read an execution trace from tape by scanning for a matching trace_id.
-async fn read_trace_from_tape(
-    tape: &rara_kernel::memory::TapeService,
-    tape_name: &str,
-    trace_id: &str,
-) -> Option<ExecutionTrace> {
-    let entries = tape.entries(tape_name).await.ok()?;
-
-    // Scan backwards (most recent first) for the matching trace event.
-    for entry in entries.iter().rev() {
-        if entry.kind == rara_kernel::memory::TapEntryKind::Event {
-            if let Some(name) = entry.payload.get("name").and_then(|v| v.as_str()) {
-                if name == "turn.execution_trace" {
-                    if let Some(data) = entry.payload.get("data") {
-                        if let Some(id) = data.get("trace_id").and_then(|v| v.as_str()) {
-                            if id == trace_id {
-                                let trace_data = data.get("data")?;
-                                return serde_json::from_value(trace_data.clone()).ok();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
 
 
 /// Listens for new approval requests and sends inline keyboard messages
@@ -1736,7 +1687,7 @@ async fn handle_update(
                 return;
             }
             if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, trace_index, tape).await;
+                handle_trace_callback(bot, callback, data, trace_index).await;
                 return;
             }
         }
@@ -2520,25 +2471,21 @@ fn spawn_stream_forwarder(
                                     warn!(error = %e, "failed to persist execution trace to tape");
                                 }
 
-                                // Store pre-rendered HTML for instant callback response.
                                 // Evict oldest entries when cache exceeds capacity.
-                                // Evict oldest HTML entries when cache exceeds capacity.
-                                // coord_index is never evicted (~100 bytes/entry).
-                                if trace_index.html_cache.len() >= TRACE_CACHE_CAPACITY {
-                                    let keys: Vec<String> = trace_index.html_cache
+                                if trace_index.cache.len() >= TRACE_CACHE_CAPACITY {
+                                    let keys: Vec<String> = trace_index.cache
                                         .iter()
                                         .take(TRACE_CACHE_CAPACITY / 2)
                                         .map(|r| r.key().clone())
                                         .collect();
                                     for k in keys {
-                                        trace_index.html_cache.remove(&k);
+                                        trace_index.cache.remove(&k);
                                     }
                                 }
-                                trace_index.html_cache.insert(trace_key.clone(), TraceCacheEntry {
+                                trace_index.cache.insert(trace_key, TraceCacheEntry {
                                     compact_html,
                                     detail_html,
                                 });
-                                trace_index.coord_index.insert(trace_key, (tape_name, trace_id));
                                 trace_index.persist();
                             }
 
