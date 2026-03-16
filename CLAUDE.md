@@ -58,9 +58,9 @@ prek install                   # Install git hooks into .git/hooks
 ```
 
 Hooks configured in `.pre-commit-config.yaml`:
+- `cargo check --all --all-targets`
 - `cargo +nightly fmt --all -- --check`
 - `cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings`
-- `cargo check --all --all-targets`
 
 Triggers on: `.rs`, `.toml`, `Cargo.lock`, `rust-toolchain.toml` changes.
 
