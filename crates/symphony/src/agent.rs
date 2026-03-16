@@ -175,10 +175,10 @@ impl RalphAgent {
             format!("ralph doctor exited with {}", output.status)
         };
 
-        Err(crate::error::SymphonyError::Workspace {
-            message:  format!("failed to validate Ralph workspace config: {details}"),
-            location: std::panic::Location::caller(),
-        })
+        crate::error::WorkspaceSnafu {
+            message: format!("failed to validate Ralph workspace config: {details}"),
+        }
+        .fail()
     }
 
     async fn init_workspace_config<P: AsRef<Path>>(&self, workspace: P) -> Result<()> {
@@ -221,10 +221,10 @@ impl RalphAgent {
             format!("ralph init exited with {}", output.status)
         };
 
-        Err(crate::error::SymphonyError::Workspace {
-            message:  format!("failed to initialize Ralph workspace config: {details}"),
-            location: std::panic::Location::caller(),
-        })
+        crate::error::WorkspaceSnafu {
+            message: format!("failed to initialize Ralph workspace config: {details}"),
+        }
+        .fail()
     }
 
     pub fn build_prompt(&self, task: &AgentTask) -> String {
