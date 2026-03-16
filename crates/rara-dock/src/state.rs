@@ -8,10 +8,10 @@ use crate::models::{
 pub fn build_dock_system_prompt(facts: &[DockFact]) -> String {
     let mut prompt = String::from(
         "<dock_context>\nYou are operating in Dock workbench mode.\nThe canvas is read-only for \
-         the user.\nMutate canvas blocks with dock_block_add, dock_block_update, and \
-         dock_block_remove tools.\nManage facts with dock_fact_add, dock_fact_update, and \
-         dock_fact_remove tools.\nManage annotations with dock_annotation_add, \
-         dock_annotation_update, and dock_annotation_remove tools.\nAlways respond with a brief \
+         the user.\nMutate canvas blocks with dock.block.add, dock.block.update, and \
+         dock.block.remove tools.\nManage facts with dock.fact.add, dock.fact.update, and \
+         dock.fact.remove tools.\nManage annotations with dock.annotation.add, \
+         dock.annotation.update, and dock.annotation.remove tools.\nAlways respond with a brief \
          text reply AND the appropriate mutations.\n</dock_context>",
     );
 
@@ -86,7 +86,13 @@ pub fn apply_mutation(snapshot: &mut DockCanvasSnapshot, mutation: &DockMutation
         MutationOp::BlockUpdate => {
             if let Some(block) = &mutation.block {
                 if let Some(existing) = snapshot.blocks.iter_mut().find(|b| b.id == block.id) {
-                    *existing = block.clone();
+                    existing.html = block.html.clone();
+                    if !block.block_type.is_empty() {
+                        existing.block_type = block.block_type.clone();
+                    }
+                    if block.diff.is_some() {
+                        existing.diff = block.diff.clone();
+                    }
                 }
             }
         }

@@ -235,7 +235,19 @@ fn apply_mutation_to_document(doc: &mut DockSessionDocument, mutation: &DockMuta
         MutationOp::AnnotationUpdate => {
             if let Some(ann) = &mutation.annotation {
                 if let Some(existing) = doc.annotations.iter_mut().find(|a| a.id == ann.id) {
-                    *existing = ann.clone();
+                    existing.content = ann.content.clone();
+                    if !ann.block_id.is_empty() {
+                        existing.block_id = ann.block_id.clone();
+                    }
+                    if ann.anchor_y != 0.0 {
+                        existing.anchor_y = ann.anchor_y;
+                    }
+                    if ann.selection.is_some() {
+                        existing.selection = ann.selection.clone();
+                    }
+                    if ann.timestamp != 0 {
+                        existing.timestamp = ann.timestamp;
+                    }
                 }
             }
         }
