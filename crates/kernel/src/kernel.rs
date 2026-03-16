@@ -889,7 +889,19 @@ impl Kernel {
             "child result received"
         );
 
-        // Persist child result to parent's conversation history.
+        // Fold-branch children return results inline as a ToolResult; skip
+        // tape persistence to avoid duplicating the content in the parent's
+        // conversation history.
+        let is_fold_branch = self
+            .process_table
+            .with(&child_id, |p| {
+                p.manifest
+                    .name
+                    .starts_with(crate::tool::fold_branch::FOLD_BRANCH_NAME_PREFIX)
+            })
+            .unwrap_or(false);
+
+        // Truncate for display / proactive turn directive.
         const CHILD_RESULT_MAX_CHARS: usize = 2000;
         let output = &result.output;
         let truncated_output = if output.len() > CHILD_RESULT_MAX_CHARS {
@@ -900,30 +912,36 @@ impl Kernel {
         } else {
             output.clone()
         };
-        let child_result_text = format!(
-            "[child_agent_result] child_id={child_id} iterations={} \
-             tool_calls={}\n\n{truncated_output}",
-            result.iterations, result.tool_calls,
-        );
-        let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
-            error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
-            return;
-        };
 
-        let tape_name = session_id.to_string();
-        if let Err(e) = &self
-            .tape_service
-            .append_message(
-                &tape_name,
-                serde_json::json!({
-                    "role": "system",
-                    "content": &child_result_text,
-                }),
-                None,
-            )
-            .await
-        {
-            warn!(%e, "failed to persist child result message to tape");
+        // Persist child result to parent's conversation history.
+        // Fold-branch children already return results as ToolResult — skip to
+        // avoid double-writing the same content into the parent tape.
+        if !is_fold_branch {
+            let child_result_text = format!(
+                "[child_agent_result] child_id={child_id} iterations={} \
+                 tool_calls={}\n\n{truncated_output}",
+                result.iterations, result.tool_calls,
+            );
+            let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
+                error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
+                return;
+            };
+
+            let tape_name = session_id.to_string();
+            if let Err(e) = &self
+                .tape_service
+                .append_message(
+                    &tape_name,
+                    serde_json::json!({
+                        "role": "system",
+                        "content": &child_result_text,
+                    }),
+                    None,
+                )
+                .await
+            {
+                warn!(%e, "failed to persist child result message to tape");
+            }
         }
 
         // If this child was a background task, trigger a proactive turn on the

@@ -23,18 +23,23 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     agent::{AgentManifest, fold::ContextFolder},
     handle::KernelHandle,
     io::AgentEvent,
-    session::SessionKey,
+    session::{SessionKey, Signal},
     tool::{AgentTool, ToolContext, ToolOutput},
 };
 
 /// Maximum character length for the compressed result returned to the caller.
 const COMPACT_TARGET_CHARS: usize = 2000;
+
+/// Name prefix for fold-branch child agents.  Used by
+/// `handle_child_completed` to skip tape persistence (the result is already
+/// returned inline as a ToolResult).
+pub(crate) const FOLD_BRANCH_NAME_PREFIX: &str = "fold-branch-";
 
 /// Builtin tool that spawns a child agent, waits for it to complete, and
 /// returns a compressed version of the result.
@@ -109,10 +114,17 @@ impl AgentTool for FoldBranchTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: instruction"))?
             .to_string();
-        let tools: Vec<String> = params
-            .get("tools")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        // When tools is omitted, inherit the parent's tool set rather than
+        // granting all tools (empty vec = all tools in the registry).
+        let tools: Vec<String> = match params.get("tools") {
+            Some(v) => serde_json::from_value(v.clone())
+                .map_err(|e| anyhow::anyhow!("invalid tools array: {e}"))?,
+            None => self
+                .handle
+                .process_table()
+                .with(&self.session_key, |p| p.manifest.tools.clone())
+                .unwrap_or_default(),
+        };
         let max_iterations = params
             .get("max_iterations")
             .and_then(|v| v.as_u64())
@@ -123,7 +135,7 @@ impl AgentTool for FoldBranchTool {
             .unwrap_or(120);
 
         let manifest = AgentManifest {
-            name: format!("fold-branch-{}", task),
+            name: format!("{}{}", FOLD_BRANCH_NAME_PREFIX, task),
             role: Default::default(),
             description: format!("Fold-branch child for: {task}"),
             model: None,
@@ -181,6 +193,15 @@ impl AgentTool for FoldBranchTool {
             Ok(Some(text)) => text,
             Ok(None) => "(child agent completed with no output)".to_string(),
             Err(_) => {
+                // Terminate the child to release its semaphore permit and
+                // prevent it from continuing to run or writing results.
+                if let Err(e) = self.handle.send_signal(child_key, Signal::Terminate) {
+                    warn!(
+                        error = %e,
+                        child = %child_key,
+                        "fold-branch: failed to terminate timed-out child"
+                    );
+                }
                 return Ok(serde_json::json!({
                     "task_id": child_key.to_string(),
                     "status": "timeout",
