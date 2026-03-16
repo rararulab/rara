@@ -18,6 +18,23 @@ import { X } from "lucide-react";
 import type { DockBlock } from "@/api/dock";
 import { Button } from "@/components/ui/button";
 
+/**
+ * Basic HTML sanitizer that strips dangerous patterns:
+ * - <script> and <iframe> tags
+ * - on* event handler attributes
+ * - javascript: URLs
+ */
+function sanitizeHtml(html: string): string {
+  return html
+    .replace(/<script[\s>][\s\S]*?<\/script>/gi, "")
+    .replace(/<iframe[\s>][\s\S]*?<\/iframe>/gi, "")
+    .replace(/<script[\s>]/gi, "&lt;script ")
+    .replace(/<iframe[\s>]/gi, "&lt;iframe ")
+    .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "")
+    .replace(/href\s*=\s*"javascript:[^"]*"/gi, 'href="#"')
+    .replace(/href\s*=\s*'javascript:[^']*'/gi, "href='#'");
+}
+
 interface DockDiffViewProps {
   original: string;
   modified: string;
@@ -93,7 +110,7 @@ export default function DockBlockRenderer({
   onDismissDiff,
 }: DockBlockRendererProps) {
   return (
-    <div className="dock-block group rounded-xl border border-border/50 bg-card/60 p-4 transition-colors hover:border-border">
+    <div className="dock-block-inner group rounded-xl border border-border/50 bg-card/60 p-4 transition-colors hover:border-border">
       <div
         className="prose prose-sm dark:prose-invert max-w-none"
         dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html) }}
