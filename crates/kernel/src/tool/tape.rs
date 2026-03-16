@@ -36,14 +36,14 @@ use crate::{
 /// and its description teaches the LLM how the tape memory model works so it
 /// can reason about its own context window, search past conversations, and
 /// create anchors to manage memory.
-pub struct TapeTool {
+pub(crate) struct TapeTool {
     tape_service: TapeService,
     tape_name:    String,
     sessions:     Arc<dyn SessionIndex>,
 }
 
 impl TapeTool {
-    pub const NAME: &str = "tape";
+    pub const NAME: &str = crate::tool_names::TAPE;
 
     pub fn new(
         tape_service: TapeService,

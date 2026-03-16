@@ -35,7 +35,7 @@ pub struct MemoryTool {
 }
 
 impl MemoryTool {
-    pub const NAME: &str = "memory";
+    pub const NAME: &str = crate::tool_names::MEMORY;
 
     pub fn new(pool: SqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
         Self {

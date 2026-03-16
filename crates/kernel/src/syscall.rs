@@ -516,7 +516,7 @@ pub struct SyscallTool {
 }
 
 impl SyscallTool {
-    pub const NAME: &str = "kernel";
+    pub const NAME: &str = crate::tool_names::KERNEL;
 
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
         Self {

@@ -29,7 +29,7 @@ use crate::plan::{ExecutionMode, Plan, PlanStatus, PlanStep};
 pub struct CreatePlanTool;
 
 impl CreatePlanTool {
-    pub const NAME: &str = "create_plan";
+    pub const NAME: &str = crate::tool_names::CREATE_PLAN;
 }
 
 // ============================================================================

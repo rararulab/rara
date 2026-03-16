@@ -80,6 +80,8 @@ use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
 pub fn rara_tool_names() -> Vec<String> {
+    use rara_kernel::tool_names;
+
     vec![
         BashTool::NAME,
         GrepTool::NAME,
@@ -92,18 +94,18 @@ pub fn rara_tool_names() -> Vec<String> {
         HttpFetchTool::NAME,
         SendEmailTool::NAME,
         SendImageTool::NAME,
-        rara_kernel::tool::tape::TapeTool::NAME,
+        tool_names::TAPE,
         TapeInfoTool::NAME,
         TapeHandoffTool::NAME,
         UserNoteTool::NAME,
-        rara_kernel::memory::knowledge::tool::MemoryTool::NAME,
-        rara_kernel::syscall::SyscallTool::NAME,
+        tool_names::MEMORY,
+        tool_names::KERNEL,
         SettingsTool::NAME,
-        rara_kernel::tool::schedule::ScheduleOnceTool::NAME,
-        rara_kernel::tool::schedule::ScheduleIntervalTool::NAME,
-        rara_kernel::tool::schedule::ScheduleCronTool::NAME,
-        rara_kernel::tool::schedule::ScheduleRemoveTool::NAME,
-        rara_kernel::tool::schedule::ScheduleListTool::NAME,
+        tool_names::SCHEDULE_ONCE,
+        tool_names::SCHEDULE_INTERVAL,
+        tool_names::SCHEDULE_CRON,
+        tool_names::SCHEDULE_REMOVE,
+        tool_names::SCHEDULE_LIST,
         ListSkillsTool::NAME,
         CreateSkillTool::NAME,
         DeleteSkillTool::NAME,
@@ -111,11 +113,24 @@ pub fn rara_tool_names() -> Vec<String> {
         InstallMcpServerTool::NAME,
         ListMcpServersTool::NAME,
         RemoveMcpServerTool::NAME,
-        rara_kernel::tool::create_plan::CreatePlanTool::NAME,
+        tool_names::CREATE_PLAN,
     ]
     .into_iter()
     .map(String::from)
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rara_tool_names_includes_key_tools() {
+        let names = rara_tool_names();
+        for expected in ["bash", "tape", "marketplace", "kernel"] {
+            assert!(names.iter().any(|n| n == expected), "missing: {expected}");
+        }
+    }
 }
 
 /// Dependencies required to construct all tools.

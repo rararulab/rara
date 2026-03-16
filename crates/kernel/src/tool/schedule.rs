@@ -80,7 +80,7 @@ async fn register_job(
 pub struct ScheduleOnceTool;
 
 impl ScheduleOnceTool {
-    pub const NAME: &str = "schedule-once";
+    pub const NAME: &str = crate::tool_names::SCHEDULE_ONCE;
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,7 +142,7 @@ impl AgentTool for ScheduleOnceTool {
 pub struct ScheduleIntervalTool;
 
 impl ScheduleIntervalTool {
-    pub const NAME: &str = "schedule-interval";
+    pub const NAME: &str = crate::tool_names::SCHEDULE_INTERVAL;
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,7 +210,7 @@ impl AgentTool for ScheduleIntervalTool {
 pub struct ScheduleCronTool;
 
 impl ScheduleCronTool {
-    pub const NAME: &str = "schedule-cron";
+    pub const NAME: &str = crate::tool_names::SCHEDULE_CRON;
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,7 +296,7 @@ impl AgentTool for ScheduleCronTool {
 pub struct ScheduleRemoveTool;
 
 impl ScheduleRemoveTool {
-    pub const NAME: &str = "schedule-remove";
+    pub const NAME: &str = crate::tool_names::SCHEDULE_REMOVE;
 }
 
 #[derive(Debug, Deserialize)]
@@ -367,7 +367,7 @@ impl AgentTool for ScheduleRemoveTool {
 pub struct ScheduleListTool;
 
 impl ScheduleListTool {
-    pub const NAME: &str = "schedule-list";
+    pub const NAME: &str = crate::tool_names::SCHEDULE_LIST;
 }
 
 #[async_trait]
