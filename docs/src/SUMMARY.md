@@ -6,6 +6,7 @@
 
 - [Configuration](configuration.md)
 - [Identity & User System](identity-system.md)
+- [Agent Loop & Context Folding](agent.md)
 - [Agent Tools](agent-tools.md)
 - [Memory System](memory-system.md)
 - [Gateway Supervisor](gateway.md)
