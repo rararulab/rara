@@ -4,6 +4,7 @@
 //! usage, tool calls, and plan steps. Traces are persisted to SQLite so that
 //! any channel adapter can retrieve them later (e.g. Telegram inline buttons).
 
+use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
 use sqlx::SqlitePool;
 
 /// Summary of a single agent turn execution.
@@ -36,15 +37,25 @@ pub struct ToolTraceEntry {
     pub error: Option<String>,
 }
 
+const TRACE_RETENTION_DAYS: u32 = 30;
+const CLEANUP_INTERVAL: u32 = 100;
+
 /// Persistent store for execution traces backed by SQLite.
+///
+/// Traces older than [`TRACE_RETENTION_DAYS`] are automatically cleaned up
+/// every [`CLEANUP_INTERVAL`] saves.
 #[derive(Debug, Clone)]
 pub struct TraceService {
     pool: SqlitePool,
+    save_count: Arc<AtomicU32>,
 }
 
 impl TraceService {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            save_count: Arc::new(AtomicU32::new(0)),
+        }
     }
 
     /// Save an execution trace. Returns the generated ULID.
@@ -66,6 +77,22 @@ impl TraceService {
         .execute(&self.pool)
         .await?;
 
+        // Periodically clean up old traces.
+        if self.save_count.fetch_add(1, Ordering::Relaxed) % CLEANUP_INTERVAL == 0 {
+            let pool = self.pool.clone();
+            tokio::spawn(async move {
+                if let Err(e) = sqlx::query(
+                    "DELETE FROM execution_traces WHERE created_at < datetime('now', ?)",
+                )
+                .bind(format!("-{TRACE_RETENTION_DAYS} days"))
+                .execute(&pool)
+                .await
+                {
+                    tracing::warn!(error = %e, "failed to clean up old execution traces");
+                }
+            });
+        }
+
         Ok(id)
     }
 
@@ -86,5 +113,16 @@ impl TraceService {
             }
             None => Ok(None),
         }
+    }
+
+    /// Delete traces older than `retention_days`. Returns the number of rows removed.
+    pub async fn cleanup(&self, retention_days: u32) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM execution_traces WHERE created_at < datetime('now', ?)",
+        )
+        .bind(format!("-{retention_days} days"))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }

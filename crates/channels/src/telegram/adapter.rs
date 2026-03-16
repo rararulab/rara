@@ -1410,17 +1410,29 @@ async fn handle_guard_callback(
 /// Trace data is fetched from [`rara_kernel::trace::TraceService`] (SQLite)
 /// and rendered into Telegram HTML on demand. The callback is always answered
 /// immediately to eliminate the Telegram spinner.
+///
+/// Callback data format: `"trace:{action}:{chat_id}:{msg_id}:{trace_id}"`
+///
+/// Legacy format `"trace:{action}:{chat_id}:{msg_id}"` (pre-v0.0.18) is also
+/// handled gracefully: the spinner is dismissed with a hint toast.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
     trace_service: &rara_kernel::trace::TraceService,
 ) {
-    // Parse: "trace:{action}:{chat_id}:{msg_id}:{trace_id}"
+    // Parse callback data. Always answer first to dismiss spinner.
     let parts: Vec<&str> = data.splitn(5, ':').collect();
+
+    // Legacy 3-segment format (no trace_id) — answer with hint and bail.
     if parts.len() != 5 {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Trace expired after update, please trigger a new one")
+            .await;
         return;
     }
+
     let action = parts[1];
     let chat_id_str = parts[2];
     let msg_id_str = parts[3];
