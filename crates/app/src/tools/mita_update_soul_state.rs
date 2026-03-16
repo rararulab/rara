@@ -40,12 +40,14 @@ const UPDATABLE_FIELDS: &[&str] = &[
 pub struct UpdateSoulStateTool;
 
 impl UpdateSoulStateTool {
+    pub const NAME: &str = "update-soul-state";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for UpdateSoulStateTool {
-    fn name(&self) -> &str { "update-soul-state" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Update a specific field in an agent's soul state. Fields:\n- relationship_stage: one of \

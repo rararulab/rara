@@ -10,12 +10,14 @@ pub(super) struct ComposioConnectTool {
 }
 
 impl ComposioConnectTool {
+    pub const NAME: &str = "composio_connect";
+
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
 }
 
 #[async_trait]
 impl AgentTool for ComposioConnectTool {
-    fn name(&self) -> &str { "composio_connect" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Get an OAuth connection URL to authorize a third-party app via Composio. Returns a \

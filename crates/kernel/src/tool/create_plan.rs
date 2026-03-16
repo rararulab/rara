@@ -26,7 +26,11 @@ use serde_json::json;
 use crate::plan::{ExecutionMode, Plan, PlanStatus, PlanStep};
 
 /// LLM-callable tool that creates a structured execution plan.
-pub(crate) struct CreatePlanTool;
+pub struct CreatePlanTool;
+
+impl CreatePlanTool {
+    pub const NAME: &str = "create_plan";
+}
 
 // ============================================================================
 // Parameter types
@@ -52,7 +56,7 @@ struct CreatePlanParams {
 
 #[async_trait]
 impl super::AgentTool for CreatePlanTool {
-    fn name(&self) -> &str { "create_plan" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Create a structured execution plan for complex tasks. The plan will be executed step by \

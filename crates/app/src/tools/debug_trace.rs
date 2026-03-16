@@ -29,12 +29,14 @@ pub struct DebugTraceTool {
 }
 
 impl DebugTraceTool {
+    pub const NAME: &str = "debug_trace";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for DebugTraceTool {
-    fn name(&self) -> &str { "debug_trace" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Look up all tape entries related to a specific rara_message_id in the current session. \

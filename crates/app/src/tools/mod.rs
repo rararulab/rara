@@ -78,6 +78,46 @@ use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
 use write_file::WriteFileTool;
 
+/// Tool names for the rara agent manifest — single source of truth.
+pub fn rara_tool_names() -> Vec<String> {
+    vec![
+        BashTool::NAME,
+        GrepTool::NAME,
+        ReadFileTool::NAME,
+        WriteFileTool::NAME,
+        EditFileTool::NAME,
+        ListDirectoryTool::NAME,
+        FindFilesTool::NAME,
+        ScreenshotTool::NAME,
+        HttpFetchTool::NAME,
+        SendEmailTool::NAME,
+        SendImageTool::NAME,
+        rara_kernel::tool::tape::TapeTool::NAME,
+        TapeInfoTool::NAME,
+        TapeHandoffTool::NAME,
+        UserNoteTool::NAME,
+        rara_kernel::memory::knowledge::tool::MemoryTool::NAME,
+        rara_kernel::syscall::SyscallTool::NAME,
+        SettingsTool::NAME,
+        rara_kernel::tool::schedule::ScheduleOnceTool::NAME,
+        rara_kernel::tool::schedule::ScheduleIntervalTool::NAME,
+        rara_kernel::tool::schedule::ScheduleCronTool::NAME,
+        rara_kernel::tool::schedule::ScheduleRemoveTool::NAME,
+        rara_kernel::tool::schedule::ScheduleListTool::NAME,
+        ListSkillsTool::NAME,
+        CreateSkillTool::NAME,
+        DeleteSkillTool::NAME,
+        MarketplaceTool::NAME,
+        InstallMcpServerTool::NAME,
+        ListMcpServersTool::NAME,
+        RemoveMcpServerTool::NAME,
+        rara_kernel::tool::create_plan::CreatePlanTool::NAME,
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
     pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,

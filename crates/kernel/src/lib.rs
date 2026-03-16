@@ -49,7 +49,7 @@ pub mod queue;
 pub mod schedule;
 pub mod security;
 pub mod session;
-pub(crate) mod syscall;
+pub mod syscall;
 pub mod tool;
 
 pub use error::{KernelError, Result};

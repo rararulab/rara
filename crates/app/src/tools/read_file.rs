@@ -38,12 +38,14 @@ const BINARY_CHECK_BYTES: usize = 1024;
 pub struct ReadFileTool;
 
 impl ReadFileTool {
+    pub const NAME: &str = "read-file";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for ReadFileTool {
-    fn name(&self) -> &str { "read-file" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Read a file from the filesystem. Returns content with line number prefixes (like cat -n). \

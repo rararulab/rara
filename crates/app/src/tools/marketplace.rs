@@ -31,6 +31,8 @@ pub struct MarketplaceTool {
 }
 
 impl MarketplaceTool {
+    pub const NAME: &str = "marketplace";
+
     pub fn new(service: Arc<MarketplaceService>, clawhub: Arc<ClawhubClient>) -> Self {
         Self { service, clawhub }
     }
@@ -38,7 +40,7 @@ impl MarketplaceTool {
 
 #[async_trait]
 impl AgentTool for MarketplaceTool {
-    fn name(&self) -> &str { "marketplace" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Browse, search, install, enable/disable plugins from Claude Code marketplace repos and \

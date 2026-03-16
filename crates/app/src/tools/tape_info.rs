@@ -27,12 +27,14 @@ pub struct TapeInfoTool {
 }
 
 impl TapeInfoTool {
+    pub const NAME: &str = "tape-info";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for TapeInfoTool {
-    fn name(&self) -> &str { "tape-info" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Return metadata about the current session tape: entry count, anchors, entries since last \

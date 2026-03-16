@@ -41,6 +41,8 @@ pub struct DispatchRaraTool {
 }
 
 impl DispatchRaraTool {
+    pub const NAME: &str = "dispatch-rara";
+
     pub fn new(tape_service: TapeService) -> Self {
         Self {
             kernel_handle: Arc::new(RwLock::new(None)),
@@ -59,7 +61,7 @@ impl DispatchRaraTool {
 
 #[async_trait]
 impl AgentTool for DispatchRaraTool {
-    fn name(&self) -> &str { "dispatch-rara" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Dispatch a proactive instruction to Rara for a specific session. Rara will receive the \

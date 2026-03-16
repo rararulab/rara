@@ -34,6 +34,8 @@ pub struct SettingsTool {
 }
 
 impl SettingsTool {
+    pub const NAME: &str = "settings";
+
     pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
 }
 
@@ -56,7 +58,7 @@ fn maybe_mask(key: &str, value: &str) -> String {
 
 #[async_trait]
 impl AgentTool for SettingsTool {
-    fn name(&self) -> &str { "settings" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Read and modify runtime settings. Use 'list' to see all settings, 'get' to read a \

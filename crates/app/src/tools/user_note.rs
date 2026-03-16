@@ -37,12 +37,14 @@ pub struct UserNoteTool {
 }
 
 impl UserNoteTool {
+    pub const NAME: &str = "user-note";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for UserNoteTool {
-    fn name(&self) -> &str { "user-note" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Record a note about the current user for future reference. The user is automatically \

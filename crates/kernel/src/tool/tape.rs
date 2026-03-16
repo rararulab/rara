@@ -36,13 +36,15 @@ use crate::{
 /// and its description teaches the LLM how the tape memory model works so it
 /// can reason about its own context window, search past conversations, and
 /// create anchors to manage memory.
-pub(crate) struct TapeTool {
+pub struct TapeTool {
     tape_service: TapeService,
     tape_name:    String,
     sessions:     Arc<dyn SessionIndex>,
 }
 
 impl TapeTool {
+    pub const NAME: &str = "tape";
+
     pub fn new(
         tape_service: TapeService,
         tape_name: String,
@@ -300,7 +302,7 @@ enum TapeParams {
 
 #[async_trait]
 impl super::AgentTool for TapeTool {
-    fn name(&self) -> &str { "tape" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Your memory is a tape — an append-only timeline that records every message, tool call, \
