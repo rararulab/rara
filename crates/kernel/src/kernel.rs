@@ -1035,22 +1035,6 @@ impl Kernel {
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
     async fn cleanup_process(&self, session_key: SessionKey) {
-        // Do not remove sessions that own active scheduled jobs — they must
-        // stay in the process table so that fired jobs can deliver results
-        // back via the background-task / child-completed path.
-        if let Ok(wheel) = self.syscall.job_wheel().lock() {
-            if wheel.has_jobs_for_session(&session_key) {
-                info!(
-                    session_key = %session_key,
-                    "skipping cleanup: session has active scheduled jobs"
-                );
-                let _ = self
-                    .process_table
-                    .set_state(session_key, SessionState::Ready);
-                return;
-            }
-        }
-
         self.guard_pipeline
             .taint_tracker()
             .clear_session(&session_key);
@@ -1366,8 +1350,20 @@ impl Kernel {
                     "scheduled job agent spawned with parent linkage"
                 );
 
-                // Register as background task so handle_child_completed triggers
-                // a proactive turn on the parent when the job finishes.
+                // Install result_tx so the child is treated as a one-shot
+                // agent: when its first turn completes, the has_result_tx
+                // check (line ~2553) triggers cleanup_process →
+                // ChildSessionDone → handle_child_completed on the parent.
+                // Without this, the child would just transition to Ready and
+                // never notify the parent.
+                let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
+                self.process_table.with_mut(&spawned_key, |session| {
+                    session.result_tx = Some(result_tx);
+                });
+
+                // Register as background task so handle_child_completed
+                // triggers a proactive turn on the parent when the job
+                // finishes.
                 self.handle().register_background_task(
                     &job.session_key,
                     crate::session::BackgroundTaskEntry {
@@ -1379,7 +1375,8 @@ impl Kernel {
                     },
                 );
 
-                // Emit BackgroundTaskStarted so clients show a status indicator.
+                // Emit BackgroundTaskStarted so clients show a status
+                // indicator.
                 self.io.stream_hub().emit_to_session(
                     &job.session_key,
                     crate::io::StreamEvent::BackgroundTaskStarted {
@@ -1388,6 +1385,17 @@ impl Kernel {
                         description: job.message.clone(),
                     },
                 );
+
+                // Drain result_rx in fire-and-forget task (same pattern as
+                // SpawnBackgroundTool).
+                tokio::spawn(async move {
+                    let mut rx = result_rx;
+                    while let Some(event) = rx.recv().await {
+                        if matches!(event, crate::io::AgentEvent::Done(_)) {
+                            break;
+                        }
+                    }
+                });
             }
             Err(e) => {
                 error!(
