@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-check
+        name: cargo check
+        entry: cargo check --all --all-targets
+        language: system
+        pass_filenames: false
+        types_or: [rust, toml]
+        files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
+
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo +nightly fmt --all -- --check
+        language: system
+        pass_filenames: false
+        types_or: [rust, toml]
+        files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
+        language: system
+        pass_filenames: false
+        types_or: [rust, toml]
+        files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$

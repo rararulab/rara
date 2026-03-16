@@ -47,6 +47,31 @@ cargo check -p {crate-name}   # Rust backend
 cd web && npm run build        # Frontend (if touched)
 ```
 
+#### Pre-commit Checks (prek)
+
+The project uses [prek](https://github.com/j178/prek) for pre-commit hooks. The **final commit** in any PR must pass all checks — intermediate commits during development don't need to pass.
+
+Setup (required once after clone):
+```bash
+brew install prek              # Install prek
+prek install                   # Install git hooks into .git/hooks
+```
+
+Hooks configured in `.pre-commit-config.yaml`:
+- `cargo check --all --all-targets`
+- `cargo +nightly fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings`
+
+Triggers on: `.rs`, `.toml`, `Cargo.lock`, `rust-toolchain.toml` changes.
+
+Run all checks manually:
+```bash
+prek run --all-files           # Run all hooks
+just pre-commit                # Alternative: fmt + clippy + check + test
+```
+
+If pre-commit hook blocks a commit during development, fix issues before the final commit. Do NOT use `--no-verify` to skip hooks.
+
 #### Step 5: Push & Create PR
 ```bash
 git push -u origin issue-{N}-{short-name}
