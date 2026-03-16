@@ -192,7 +192,7 @@ async fn find_anchor_snapshot(
 /// Ensure a kernel session and channel binding exist for a dock session.
 ///
 /// Dock session IDs are ULIDs, but the kernel uses UUID-based
-/// [`SessionKey`]s.  We derive a deterministic UUID so the dock handler
+/// `SessionKey`s.  We derive a deterministic UUID so the dock handler
 /// can predict the key and subscribe to streams after `ingest()`.
 async fn ensure_dock_kernel_session(
     kernel: &rara_kernel::handle::KernelHandle,
