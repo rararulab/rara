@@ -145,6 +145,17 @@ pub enum WebEvent {
         task_id: String,
         status:  rara_kernel::io::BackgroundTaskStatus,
     },
+    /// Dock turn completed with mutations and updated state.
+    DockTurnComplete {
+        session_id:      String,
+        reply:           String,
+        mutations:       Vec<rara_dock::DockMutation>,
+        blocks:          Vec<rara_dock::DockBlock>,
+        facts:           Vec<rara_dock::DockFact>,
+        annotations:     Vec<rara_dock::DockAnnotation>,
+        history:         Vec<rara_dock::DockHistoryEntry>,
+        selected_anchor: Option<String>,
+    },
     /// Stream completed (no more deltas).
     Done,
 }
