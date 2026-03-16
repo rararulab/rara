@@ -42,9 +42,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Start sccache
         run: sccache --start-server || true
 
@@ -64,9 +61,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Start sccache
         run: sccache --start-server || true
 
@@ -84,9 +78,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Start sccache
         run: sccache --start-server || true
 
@@ -102,9 +93,6 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Start sccache
         run: sccache --start-server || true
