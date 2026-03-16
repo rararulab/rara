@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	go run scripts/wt-clean.go [command]
+//	go run scripts/wt-clean.go <command>
 //
 // Commands:
 //
@@ -13,28 +13,49 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
-	cmd := "list"
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+	cmd := &cli.Command{
+		Name:  "wt-clean",
+		Usage: "Manage git worktree lifecycle",
+		Commands: []*cli.Command{
+			{
+				Name:    "list",
+				Aliases: []string{"ls"},
+				Usage:   "List all worktrees",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return runList()
+				},
+			},
+			{
+				Name:  "clean",
+				Usage: "Remove worktrees whose branches are merged into main",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return runClean()
+				},
+			},
+			{
+				Name:  "nuke",
+				Usage: "Force-remove ALL worktrees except the main checkout",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return runNuke()
+				},
+			},
+		},
+		DefaultCommand: "list",
 	}
 
-	switch cmd {
-	case "list":
-		runList()
-	case "clean":
-		runClean()
-	case "nuke":
-		runNuke()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
-		os.Exit(1)
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -101,42 +122,38 @@ func mergedBranches() (map[string]bool, error) {
 	return m, nil
 }
 
-func runList() {
+func runList() error {
 	out, err := exec.Command("git", "worktree", "list").CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "git worktree list: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("git worktree list: %w\n%s", err, out)
 	}
 	fmt.Print(string(out))
+	return nil
 }
 
-func runClean() {
+func runClean() error {
 	// Prune stale references first
 	if out, err := exec.Command("git", "worktree", "prune").CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "git worktree prune: %s\n%s", err, out)
-		os.Exit(1)
+		return fmt.Errorf("git worktree prune: %w\n%s", err, out)
 	}
 
 	mainPath, err := mainWorktree()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot determine main worktree: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cannot determine main worktree: %w", err)
 	}
 
 	merged, err := mergedBranches()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
+		return err
 	}
 	if len(merged) == 0 {
 		fmt.Println("✅ No merged branches to clean up.")
-		return
+		return nil
 	}
 
 	wts, err := parseWorktrees()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Track which merged branches have associated worktrees
@@ -177,19 +194,18 @@ func runClean() {
 	}
 
 	fmt.Printf("✅ Cleaned up %d merged worktree(s)/branch(es).\n", removed)
+	return nil
 }
 
-func runNuke() {
+func runNuke() error {
 	mainPath, err := mainWorktree()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot determine main worktree: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cannot determine main worktree: %w", err)
 	}
 
 	wts, err := parseWorktrees()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	removed := 0
@@ -210,4 +226,5 @@ func runNuke() {
 
 	exec.Command("git", "worktree", "prune").Run()
 	fmt.Printf("✅ Removed %d worktree(s).\n", removed)
+	return nil
 }

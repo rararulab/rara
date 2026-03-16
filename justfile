@@ -319,13 +319,13 @@ wt-list:
 [doc("clean up merged worktrees (removes worktrees whose branches are merged into main)")]
 [group("🌳 Worktree")]
 wt-clean:
-    @go run scripts/wt-clean.go clean
+    @cd scripts && go run wt-clean.go clean
 
 [doc("force-remove ALL worktrees except the main checkout (⚠️ destructive)")]
 [group("🌳 Worktree")]
 [confirm("⚠️ This will remove ALL worktrees and their local branches. Continue?")]
 wt-nuke:
-    @go run scripts/wt-clean.go nuke
+    @cd scripts && go run wt-clean.go nuke
 
 # ========================================================================================
 # Dependency Management
