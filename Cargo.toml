@@ -225,7 +225,7 @@ validator = "^0.20"
 # Testing
 git2 = "0.20"
 tempfile = "3"
-testcontainers = "0.26"
+testcontainers = "0.27"
 testcontainers-modules = { version = "0.14", features = ["postgres", "k3s"] }
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
