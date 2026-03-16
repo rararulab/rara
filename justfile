@@ -307,6 +307,30 @@ nuke:
 
 alias ma := migrate-add
 
+# ========================================================================================
+# Worktree Management
+# ========================================================================================
+
+[doc("list all git worktrees")]
+[group("🌳 Worktree")]
+wt-list:
+    @git worktree list
+
+[doc("clean up merged worktrees (removes worktrees whose branches are merged into main)")]
+[group("🌳 Worktree")]
+wt-clean:
+    @go run scripts/wt-clean.go clean
+
+[doc("force-remove ALL worktrees except the main checkout (⚠️ destructive)")]
+[group("🌳 Worktree")]
+[confirm("⚠️ This will remove ALL worktrees and their local branches. Continue?")]
+wt-nuke:
+    @go run scripts/wt-clean.go nuke
+
+# ========================================================================================
+# Dependency Management
+# ========================================================================================
+
 [doc("update dependencies interactively")]
 [group("🔧 Development")]
 deps-update:
