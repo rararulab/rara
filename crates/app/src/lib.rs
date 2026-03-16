@@ -361,6 +361,7 @@ pub async fn start_with_options(
         rara.knowledge_service.clone(),
         rara.output_interceptor.clone(),
         mcp_tool_provider,
+        rara_kernel::trace::TraceService::new(pool.clone()),
     );
 
     let cancellation_token = CancellationToken::new();

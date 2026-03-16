@@ -51,6 +51,7 @@ pub mod security;
 pub mod session;
 pub(crate) mod syscall;
 pub mod tool;
+pub mod trace;
 
 /// Tool name constants for kernel-provided tools.
 ///

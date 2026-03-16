@@ -222,45 +222,8 @@ impl ProgressMessage {
     }
 }
 
-/// Snapshot of a completed agent turn, persisted to tape for the inline
-/// "📊 详情" toggle.
-///
-/// Built from `ProgressMessage` fields when the stream closes. Written as a
-/// `turn.execution_trace` tape event keyed by session. The lightweight
-/// [`TraceIndex`] maps `"{chat_id}:{msg_id}"` to tape coordinates so the
-/// callback handler can read it back on demand.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ExecutionTrace {
-    duration_secs: u64,
-    iterations: usize,
-    model: String,
-    input_tokens: u32,
-    output_tokens: u32,
-    thinking_ms: u64,
-    /// Truncated reasoning text (first ~500 chars).
-    thinking_preview: String,
-    /// Plan steps with status.
-    plan_steps: Vec<String>,
-    /// Tool execution records.
-    tools: Vec<ToolTraceEntry>,
-    /// Rara internal message ID for end-to-end correlation.
-    rara_message_id: String,
-}
+use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ToolTraceEntry {
-    name: String,
-    /// Duration in milliseconds (serializable replacement for
-    /// `std::time::Duration`).
-    duration_ms: Option<u64>,
-    success: bool,
-    summary: String,
-    error: Option<String>,
-}
-
-/// Lightweight index mapping `"{chat_id}:{msg_id}"` → `(tape_name, trace_id)`
-/// for tape lookup. Replaces the former in-memory `TraceStore`.
-type TraceIndex = Arc<DashMap<String, (String, String)>>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -758,9 +721,6 @@ pub struct TelegramAdapter {
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
-    /// Lightweight index for tape-persisted execution traces, keyed by
-    /// "{chat_id}:{msg_id}" → (tape_name, trace_id).
-    trace_index: TraceIndex,
 }
 
 impl TelegramAdapter {
@@ -785,7 +745,6 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
-            trace_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -1120,8 +1079,6 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
-        let trace_index = Arc::clone(&self.trace_index);
-        let tape = handle.tape().clone();
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -1177,8 +1134,6 @@ impl ChannelAdapter for TelegramAdapter {
                 stream_hub,
                 active_streams,
                 command_handlers,
-                trace_index,
-                tape,
             )
             .await;
         });
@@ -1230,8 +1185,6 @@ async fn polling_loop(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
-    trace_index: TraceIndex,
-    tape: rara_kernel::memory::TapeService,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1287,8 +1240,6 @@ async fn polling_loop(
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
-                    let trace_index = Arc::clone(&trace_index);
-                    let tape = tape.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1300,8 +1251,6 @@ async fn polling_loop(
                             &stream_hub,
                             &active_streams,
                             &command_handlers,
-                            &trace_index,
-                            &tape,
                         )
                         .await;
                     });
@@ -1458,93 +1407,76 @@ async fn handle_guard_callback(
 /// - `action` = "hide" → collapse back to compact summary, button becomes
 ///   "详情"
 ///
-/// The trace is read from tape via [`TraceIndex`] coordinates. If the index
-/// entry is missing (process restarted) or the tape entry is gone, the button
-/// silently does nothing.
+/// Trace data is fetched from [`rara_kernel::trace::TraceService`] (SQLite)
+/// and rendered into Telegram HTML on demand. The callback is always answered
+/// immediately to eliminate the Telegram spinner.
+///
+/// Callback data format: `"trace:{action}:{chat_id}:{msg_id}:{trace_id}"`
+///
+/// Legacy format `"trace:{action}:{chat_id}:{msg_id}"` (pre-v0.0.18) is also
+/// handled gracefully: the spinner is dismissed with a hint toast.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
-    trace_index: &TraceIndex,
-    tape: &rara_kernel::memory::TapeService,
+    trace_service: &rara_kernel::trace::TraceService,
 ) {
-    // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
-    let parts: Vec<&str> = data.splitn(3, ':').collect();
-    if parts.len() == 3 {
-        let action = parts[1];
-        let trace_key = parts[2];
+    // Parse callback data. Always answer first to dismiss spinner.
+    let parts: Vec<&str> = data.splitn(5, ':').collect();
 
-        // Look up tape coordinates from index
-        let coords = trace_index.get(trace_key).map(|r| r.value().clone());
+    // Legacy 3-segment format (no trace_id) — answer with hint and bail.
+    if parts.len() != 5 {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Trace expired after update, please trigger a new one")
+            .await;
+        return;
+    }
 
-        if let Some((tape_name, trace_id)) = coords {
-            // Read trace from tape
-            if let Some(trace) = read_trace_from_tape(tape, &tape_name, &trace_id).await {
-                let (text, button_text, next_action) = match action {
-                    "show" => (
-                        render_trace_detail(&trace),
-                        "\u{1f4ca} \u{6536}\u{8d77}",
-                        format!("trace:hide:{trace_key}"),
-                    ),
-                    _ => (
-                        render_compact_summary(&trace),
-                        "\u{1f4ca} \u{8be6}\u{60c5}",
-                        format!("trace:show:{trace_key}"),
-                    ),
-                };
+    let action = parts[1];
+    let chat_id_str = parts[2];
+    let msg_id_str = parts[3];
+    let trace_id = parts[4];
 
-                // Parse chat_id and msg_id from trace_key
-                if let Some((chat_id_str, msg_id_str)) = trace_key.split_once(':') {
-                    if let (Ok(cid), Ok(mid)) =
-                        (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
-                    {
-                        let keyboard =
-                            InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-                                button_text,
-                                next_action,
-                            )]]);
-                        let _ = bot
-                            .edit_message_text(ChatId(cid), MessageId(mid), &text)
-                            .parse_mode(ParseMode::Html)
-                            .reply_markup(keyboard)
-                            .await;
-                    }
-                }
-            }
-        }
+    // Answer callback immediately — removes Telegram spinner.
+    let _ = bot.answer_callback_query(callback.id.clone()).await;
 
-        let _ = bot.answer_callback_query(callback.id.clone()).await;
+    let trace = match trace_service.get(trace_id).await {
+        Ok(Some(t)) => t,
+        _ => return,
+    };
+
+    let callback_prefix = format!("trace:{{}}:{chat_id_str}:{msg_id_str}:{trace_id}");
+    let (text, button_text, next_action) = match action {
+        "show" => (
+            render_trace_detail(&trace),
+            "\u{1f4ca} \u{6536}\u{8d77}",
+            callback_prefix.replace("{}", "hide"),
+        ),
+        _ => (
+            render_compact_summary(&trace),
+            "\u{1f4ca} \u{8be6}\u{60c5}",
+            callback_prefix.replace("{}", "show"),
+        ),
+    };
+
+    if let (Ok(cid), Ok(mid)) =
+        (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
+    {
+        let keyboard =
+            InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+                button_text,
+                next_action,
+            )]]);
+        let _ = bot
+            .edit_message_text(ChatId(cid), MessageId(mid), &text)
+            .parse_mode(ParseMode::Html)
+            .reply_markup(keyboard)
+            .await;
     }
 }
 
-/// Read an execution trace from tape by scanning for a matching trace_id.
-async fn read_trace_from_tape(
-    tape: &rara_kernel::memory::TapeService,
-    tape_name: &str,
-    trace_id: &str,
-) -> Option<ExecutionTrace> {
-    let entries = tape.entries(tape_name).await.ok()?;
 
-    // Scan backwards (most recent first) for the matching trace event.
-    for entry in entries.iter().rev() {
-        if entry.kind == rara_kernel::memory::TapEntryKind::Event {
-            if let Some(name) = entry.payload.get("name").and_then(|v| v.as_str()) {
-                if name == "turn.execution_trace" {
-                    if let Some(data) = entry.payload.get("data") {
-                        if let Some(id) = data.get("trace_id").and_then(|v| v.as_str()) {
-                            if id == trace_id {
-                                let trace_data = data.get("data")?;
-                                return serde_json::from_value(trace_data.clone()).ok();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
 
 /// Listens for new approval requests and sends inline keyboard messages
 /// to the primary Telegram chat so the user can approve or deny.
@@ -1628,8 +1560,6 @@ async fn handle_update(
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
-    trace_index: &TraceIndex,
-    tape: &rara_kernel::memory::TapeService,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1648,7 +1578,7 @@ async fn handle_update(
                 return;
             }
             if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, trace_index, tape).await;
+                handle_trace_callback(bot, callback, data, handle.trace_service()).await;
                 return;
             }
         }
@@ -1925,8 +1855,7 @@ async fn handle_update(
                     bot.clone(),
                     chat_id,
                     sid,
-                    Arc::clone(trace_index),
-                    tape.clone(),
+                    handle.trace_service().clone(),
                     rara_message_id.clone(),
                 );
             }
@@ -2022,8 +1951,7 @@ fn spawn_stream_forwarder(
     bot: teloxide::Bot,
     chat_id: i64,
     session_id: rara_kernel::session::SessionKey,
-    trace_index: TraceIndex,
-    tape: rara_kernel::memory::TapeService,
+    trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
 ) {
     use rara_kernel::io::StreamEvent;
@@ -2401,38 +2329,37 @@ fn spawn_stream_forwarder(
                                 };
 
                                 let compact = render_compact_summary(&trace);
-                                let trace_key = format!("{}:{}", chat_id, mid.0);
-                                let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                                    InlineKeyboardButton::callback(
-                                        "\u{1f4ca} \u{8be6}\u{60c5}",
-                                        format!("trace:show:{trace_key}"),
-                                    ),
-                                ]]);
+                                // Persist trace to SQLite, then show compact summary
+                                // with inline button containing the trace_id.
+                                let session_name = session_id.to_string();
+                                match trace_service.save(&session_name, &trace).await {
+                                    Ok(trace_id) => {
+                                        let callback_data = format!(
+                                            "trace:show:{}:{}:{trace_id}",
+                                            chat_id, mid.0,
+                                        );
+                                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                            InlineKeyboardButton::callback(
+                                                "\u{1f4ca} \u{8be6}\u{60c5}",
+                                                callback_data,
+                                            ),
+                                        ]]);
 
-                                let _ = bot
-                                    .edit_message_text(ChatId(chat_id), mid, &compact)
-                                    .parse_mode(ParseMode::Html)
-                                    .reply_markup(keyboard)
-                                    .await;
-
-                                // Persist trace to tape
-                                let trace_id = format!("trace_{}", chrono::Utc::now().timestamp_millis());
-                                let tape_name = session_id.to_string();
-                                let trace_json = serde_json::to_value(&trace).unwrap_or_default();
-
-                                if let Err(e) = tape.append_event(
-                                    &tape_name,
-                                    "turn.execution_trace",
-                                    serde_json::json!({
-                                        "trace_id": trace_id,
-                                        "data": trace_json,
-                                    }),
-                                ).await {
-                                    warn!(error = %e, "failed to persist execution trace to tape");
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &compact)
+                                            .parse_mode(ParseMode::Html)
+                                            .reply_markup(keyboard)
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to persist execution trace");
+                                        // Still show compact summary, just without the button.
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &compact)
+                                            .parse_mode(ParseMode::Html)
+                                            .await;
+                                    }
                                 }
-
-                                // Store lightweight index for callback lookup
-                                trace_index.insert(trace_key, (tape_name, trace_id));
                             }
 
                             break;

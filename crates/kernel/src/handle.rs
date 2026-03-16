@@ -86,6 +86,8 @@ pub struct KernelHandle {
     started_at:       Timestamp,
     /// Tape service for persistent session traces.
     tape:             crate::memory::TapeService,
+    /// Execution trace service for persisting turn-level traces.
+    trace_service:    crate::trace::TraceService,
 }
 
 impl KernelHandle {
@@ -104,6 +106,7 @@ impl KernelHandle {
         global_semaphore: Arc<Semaphore>,
         started_at: Timestamp,
         tape: crate::memory::TapeService,
+        trace_service: crate::trace::TraceService,
     ) -> Self {
         Self {
             event_queue,
@@ -118,6 +121,7 @@ impl KernelHandle {
             global_semaphore,
             started_at,
             tape,
+            trace_service,
         }
     }
 
@@ -303,6 +307,9 @@ impl KernelHandle {
 
     /// Access the tape service for persistent read/write.
     pub fn tape(&self) -> &crate::memory::TapeService { &self.tape }
+
+    /// Access the execution trace service.
+    pub fn trace_service(&self) -> &crate::trace::TraceService { &self.trace_service }
 
     // -- Query methods ------------------------------------------------------
 
