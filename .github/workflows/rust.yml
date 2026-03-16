@@ -2,9 +2,6 @@ name: Rust
 
 on:
   workflow_call:
-    secrets:
-      CODECOV_TOKEN:
-        required: false
 
 concurrency:
   group: rust-${{ github.event.pull_request.number || github.sha }}
@@ -83,38 +80,6 @@ jobs:
 
       - name: Run tests
         run: cargo nextest run --workspace
-
-  coverage:
-    name: Coverage
-    runs-on: arc-runner-set
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          persist-credentials: false
-
-      - name: Start sccache
-        run: sccache --start-server || true
-
-      - name: Generate coverage report
-        run: |
-          cargo tarpaulin \
-            --engine llvm \
-            --workspace \
-            --no-dead-code \
-            --skip-clean \
-            --out xml \
-            --output-dir ./coverage
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage/cobertura.xml
-          flags: rust
-          fail_ci_if_error: false
-          verbose: true
 
   rust-success:
     name: Rust Success
