@@ -45,10 +45,16 @@ impl AgentTool for DistillUserNotesTool {
     fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
-        "Distill accumulated user notes into a compact summary anchor. Use this when a user's tape \
-         has accumulated many notes that should be condensed. The summary should capture all \
-         important knowledge from previous notes plus the existing distilled summary. After \
-         distillation, only the summary and newer notes will appear in the user's context."
+        "Distill accumulated user notes into a compact summary anchor using the structured profile \
+         template below. Use this when a user's tape has accumulated many notes that should be \
+         condensed.\n\nThe summary MUST follow this template (omit empty sections):\n\n## \
+         Identity\nName, role, background, timezone\n\n## Communication Style\nLanguage \
+         preference, verbosity, tone, interaction patterns\n\n## Expertise & Interests\nTechnical \
+         domains, skill levels, current learning areas\n\n## Key Facts\nProjects, relationships, \
+         important context\n\n## Active Context\nCurrent goals, pending tasks, recent focus \
+         areas\n\nRules:\n- Preserve all valid information from the previous anchor summary\n- \
+         When information conflicts, prefer the most recent note and note the change\n- Remove \
+         completed TODOs and outdated information\n- Omit sections with no information"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
