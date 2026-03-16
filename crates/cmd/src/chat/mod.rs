@@ -498,6 +498,12 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::UsageUpdate { .. } => CliEvent::Progress {
             text: String::new(),
         },
+        StreamEvent::BackgroundTaskStarted { agent_name, description, .. } => CliEvent::Progress {
+            text: format!("Background: {agent_name} — {description}"),
+        },
+        StreamEvent::BackgroundTaskDone { task_id, status } => CliEvent::Progress {
+            text: format!("Background task {task_id} {status:?}"),
+        },
     }
 }
 
