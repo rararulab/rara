@@ -223,7 +223,7 @@ Execution rules:
 - For questions about external projects, services, or concepts you don't recognize, use http-fetch to look them up on the web (e.g. fetch their homepage or GitHub README). Do not grep the local workspace for external entities.
 
 Background tasks:
-- Use `spawn_background` for tasks that take a long time but do not need immediate user interaction: bulk data processing, multi-step research, large file analysis, batch API calls, or deep codebase searches.
+- Use `spawn-background` for tasks that take a long time but do not need immediate user interaction: bulk data processing, multi-step research, large file analysis, batch API calls, or deep codebase searches.
 - Do NOT use it for tasks where the user is waiting for the answer to continue their train of thought, or tasks that need clarification mid-way.
 - When spawning a background task, briefly tell the user what you kicked off and that they will be notified when it finishes. Then move on.
 - When a background task result arrives, summarize the outcome concisely. If it failed, explain what went wrong.

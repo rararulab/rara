@@ -906,7 +906,7 @@ pub(crate) async fn run_agent_loop(
                 "[Active Background Tasks]\n\
                  You have {} background task(s) running:\n{task_list}\n\
                  Results will be delivered automatically when complete. \
-                 Use cancel_background(task_id) to cancel if needed.",
+                 Use cancel-background(task_id) to cancel if needed.",
                 bg_tasks.len()
             )));
         }
