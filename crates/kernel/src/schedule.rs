@@ -166,8 +166,8 @@ const MAX_EVENT_FILE_LINES: usize = 1024;
 /// efficiently pop all entries whose time has passed.
 ///
 /// Job lifecycle events are persisted to a sibling `job_events.jsonl` file
-/// using append-only JSONL writes. On startup the most recent
-/// [`MAX_JOB_EVENTS`] entries are loaded into an in-memory ring buffer.
+/// using append-only JSONL writes. On startup the most recent 64 entries
+/// are loaded into an in-memory ring buffer.
 pub struct JobWheel {
     /// Jobs ordered by (next_fire_time_secs, job_uuid).
     jobs:        BTreeMap<WheelKey, JobEntry>,
@@ -195,9 +195,9 @@ impl JobWheel {
 
     /// Load jobs from the JSON persistence file, or create an empty wheel.
     ///
-    /// Also restores the most recent [`MAX_JOB_EVENTS`] entries from the
-    /// sibling `job_events.jsonl` file.  If the event file exceeds
-    /// [`MAX_EVENT_FILE_LINES`], it is truncated to the tail on load.
+    /// Also restores the most recent 64 entries from the sibling
+    /// `job_events.jsonl` file.  If the event file exceeds 1024 lines,
+    /// it is truncated to the tail on load.
     pub fn load(path: PathBuf) -> Self {
         let jobs = match std::fs::read_to_string(&path) {
             Ok(content) => {
