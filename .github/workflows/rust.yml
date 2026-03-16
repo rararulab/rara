@@ -111,13 +111,15 @@ jobs:
           tool: cargo-nextest
 
       - name: Verify Ollama connectivity
-        run: curl -sf ${{ secrets.OLLAMA_BASE_URL }}/models | head -c 200
+        run: curl -sf "${OLLAMA_BASE_URL}/api/tags" | head -c 200
+        env:
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
 
       - name: Prepare CI config
-        run: |
-          export OLLAMA_BASE_URL="${{ secrets.OLLAMA_BASE_URL }}"
-          export OLLAMA_MODEL="${{ secrets.OLLAMA_MODEL }}"
-          envsubst < config.ci.yaml > config.yaml
+        run: envsubst < config.ci.yaml > config.yaml
+        env:
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
 
       - name: Run integration tests
         run: cargo nextest run --workspace --all-features --run-ignored ignored-only
