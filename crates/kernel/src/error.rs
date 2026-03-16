@@ -92,6 +92,10 @@ pub enum KernelError {
     #[snafu(display("agent execution failed: {message}"))]
     AgentExecution { message: String },
 
+    /// Turn was interrupted by user (e.g. /stop command).
+    #[snafu(display("interrupted by user"))]
+    Interrupted,
+
     /// Process not found in process table.
     #[snafu(display("process not found: {id}"))]
     ProcessNotFound { id: String },

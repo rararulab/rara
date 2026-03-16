@@ -605,6 +605,7 @@ impl Kernel {
                 in_reply_to,
                 user,
                 origin_endpoint,
+                interrupted,
             } => {
                 self.handle_turn_completed(
                     base.session_key,
@@ -612,6 +613,7 @@ impl Kernel {
                     in_reply_to,
                     user,
                     origin_endpoint,
+                    interrupted,
                 )
                 .await;
             }
@@ -1731,6 +1733,7 @@ impl Kernel {
                         self.msg_id.clone(),
                         self.user.clone(),
                         self.origin_endpoint.clone(),
+                        false,
                     );
                     if let Err(e) = self.event_queue.try_push(event) {
                         error!(
@@ -2267,6 +2270,10 @@ impl Kernel {
                 // can deliver the reply, update metrics, and transition the process
                 // back to Ready state. KernelError -> String conversion happens
                 // here because KernelEvent requires Clone but KernelError doesn't.
+                let interrupted = matches!(
+                    turn_result,
+                    Err(KernelError::Interrupted)
+                );
                 let result = turn_result.map_err(|e| e.to_string());
                 let event = KernelEventEnvelope::turn_completed(
                     session_key,
@@ -2274,6 +2281,7 @@ impl Kernel {
                     msg_id,
                     user,
                     origin_endpoint,
+                    interrupted,
                 );
                 if let Err(e) = event_queue.try_push(event) {
                     error!(%e, session_key = %session_key, "failed to push TurnCompleted");
@@ -2315,6 +2323,7 @@ impl Kernel {
                         turn_guard.msg_id.clone(),
                         turn_guard.user.clone(),
                         turn_guard.origin_endpoint.clone(),
+                        false,
                     );
                     if let Err(e) = turn_guard.event_queue.try_push(event) {
                         error!(%e, "failed to push panic TurnCompleted");
@@ -2340,6 +2349,7 @@ impl Kernel {
         in_reply_to: MessageId,
         user: crate::identity::UserId,
         origin_endpoint: Option<crate::io::Endpoint>,
+        interrupted: bool,
     ) {
         let span = tracing::Span::current();
 
@@ -2471,7 +2481,7 @@ impl Kernel {
             }
             Err(err_msg) => {
                 span.record("success", false);
-                _turn_failed = err_msg != "interrupted by user";
+                _turn_failed = !interrupted;
                 if _turn_failed {
                     error!(session_key = %session_key, error = %err_msg, "turn failed");
                 } else {
@@ -2479,9 +2489,11 @@ impl Kernel {
                 }
 
                 // Deliver error — use egress session for routing.
-                // Skip when origin_endpoint is None (same rationale as reply
-                // delivery above).
-                if origin_endpoint.is_some() {
+                // Skip for user-initiated interrupts (the /stop handler
+                // already sent a confirmation message) and when
+                // origin_endpoint is None (same rationale as reply delivery
+                // above).
+                if _turn_failed && origin_endpoint.is_some() {
                     let envelope = OutboundEnvelope::error(
                         in_reply_to,
                         user.clone(),
