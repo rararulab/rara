@@ -1329,9 +1329,9 @@ impl Kernel {
         };
 
         // 3. Acquire a child permit from the parent's semaphore to enforce max_children
-        //    backpressure.  Use try_acquire (non-blocking) — if the parent is already
-        //    at capacity we skip this firing; the recurring job will retry on its next
-        //    interval.
+        //    backpressure.  If the parent is at capacity, re-add the job to the wheel
+        //    so it retries shortly — this is critical for Trigger::Once jobs which are
+        //    consumed by drain_expired and would be silently lost otherwise.
         let child_sem = self
             .process_table
             .with(&job.session_key, |p| p.child_semaphore.clone());
@@ -1342,8 +1342,9 @@ impl Kernel {
                     info!(
                         job_id = %job_id,
                         session_key = %session_key,
-                        "skipping scheduled job: parent at child limit, will retry next interval"
+                        "deferring scheduled job: parent at child limit"
                     );
+                    self.requeue_job(job);
                     return;
                 }
             },
@@ -1351,8 +1352,9 @@ impl Kernel {
                 warn!(
                     job_id = %job_id,
                     session_key = %session_key,
-                    "skipping scheduled job: parent session not in process table"
+                    "deferring scheduled job: parent session not in process table"
                 );
+                self.requeue_job(job);
                 return;
             }
         };
@@ -1433,6 +1435,35 @@ impl Kernel {
                 }
             }
         });
+    }
+
+    /// Re-add a job to the wheel with a short delay so it retries.
+    ///
+    /// This is used when a scheduled job cannot be spawned right now (e.g.
+    /// parent at child limit or not in process table).  Without this,
+    /// `Trigger::Once` jobs would be silently lost since `drain_expired`
+    /// already consumed them.
+    fn requeue_job(&self, mut job: crate::schedule::JobEntry) {
+        const RETRY_DELAY_SECS: i64 = 10;
+        let retry_at = jiff::Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_secs(RETRY_DELAY_SECS))
+            .unwrap_or_else(|_| jiff::Timestamp::now());
+
+        // Override the trigger to fire once at retry_at, regardless of the
+        // original trigger type.  Recurring jobs have already been
+        // rescheduled by drain_expired, so this extra one-shot retry is
+        // harmless — worst case it fires one extra time.
+        job.trigger = crate::schedule::Trigger::Once { run_at: retry_at };
+
+        if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+            info!(
+                job_id = %job.id,
+                retry_at = %retry_at,
+                "requeued scheduled job for retry"
+            );
+            wheel.add(job);
+            wheel.persist();
+        }
     }
 
     /// Handle a group-chat message where the bot was not directly mentioned.
