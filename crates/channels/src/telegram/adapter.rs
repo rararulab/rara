@@ -274,9 +274,21 @@ struct TraceCacheEntry {
 
 const TRACE_CACHE_CAPACITY: usize = 1000;
 
-/// Lightweight index mapping `"{chat_id}:{msg_id}"` → pre-rendered HTML.
-/// Entries are lost on process restart (acceptable — old buttons silently no-op).
-type TraceIndex = Arc<DashMap<String, TraceCacheEntry>>;
+/// Two-tier trace index, keyed by `"{chat_id}:{msg_id}"`.
+///
+/// - `html_cache`: `trace_key → TraceCacheEntry` (pre-rendered HTML).
+///   Evicted when exceeding [`TRACE_CACHE_CAPACITY`].
+/// - `coord_index`: `trace_key → (tape_name, trace_id)`.
+///   Lightweight (~100 bytes/entry), never evicted. Used as fallback to
+///   re-read from tape when `html_cache` misses.
+struct TraceStore {
+    /// `"{chat_id}:{msg_id}"` → pre-rendered compact/detail HTML.
+    html_cache: DashMap<String, TraceCacheEntry>,
+    /// `"{chat_id}:{msg_id}"` → `(tape_name, trace_id)` for tape lookup.
+    coord_index: DashMap<String, (String, String)>,
+}
+
+type TraceIndex = Arc<TraceStore>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -801,7 +813,10 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
-            trace_index: Arc::new(DashMap::new()),
+            trace_index: Arc::new(TraceStore {
+                html_cache: DashMap::new(),
+                coord_index: DashMap::new(),
+            }),
         }
     }
 
@@ -1475,13 +1490,15 @@ async fn handle_guard_callback(
 ///   "详情"
 ///
 /// Pre-rendered HTML is read from [`TraceIndex`] cache (O(1), zero I/O).
-/// On cache miss (process restarted), the callback is answered immediately
-/// but no edit is performed — the compact summary remains visible.
+/// On cache miss (eviction or process restart), falls back to reading from
+/// tape — slower but still functional. The callback is always answered
+/// immediately to eliminate the Telegram spinner.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
     trace_index: &TraceIndex,
+    tape: &rara_kernel::memory::TapeService,
 ) {
     // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
     let parts: Vec<&str> = data.splitn(3, ':').collect();
@@ -1491,20 +1508,31 @@ async fn handle_trace_callback(
     let action = parts[1];
     let trace_key = parts[2];
 
-    // Look up pre-rendered HTML from cache
-    let cached = trace_index.get(trace_key).map(|r| r.value().clone());
-
     // Answer callback immediately — removes Telegram spinner.
-    // On cache miss, show a hint so the user understands why nothing happened.
-    if cached.is_none() {
-        let _ = bot
-            .answer_callback_query(callback.id.clone())
-            .text("缓存已过期，请重新触发")
-            .await;
-        return;
-    }
     let _ = bot.answer_callback_query(callback.id.clone()).await;
-    let entry = cached.unwrap();
+
+    // Hot path: read pre-rendered HTML from cache (O(1), zero I/O)
+    let entry = if let Some(cached) = trace_index.html_cache.get(trace_key).map(|r| r.value().clone()) {
+        cached
+    } else {
+        // Cold path: cache miss — fall back to tape read + render via coord_index
+        let coords = trace_index.coord_index.get(trace_key).map(|r| r.value().clone());
+        if let Some((tape_name, trace_id)) = coords {
+            if let Some(trace) = read_trace_from_tape(tape, &tape_name, &trace_id).await {
+                let rebuilt = TraceCacheEntry {
+                    compact_html: render_compact_summary(&trace),
+                    detail_html: render_trace_detail(&trace),
+                };
+                // Re-populate cache for subsequent clicks
+                trace_index.html_cache.insert(trace_key.to_owned(), rebuilt.clone());
+                rebuilt
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+    };
 
     let (text, button_text, next_action) = match action {
         "show" => (
@@ -1536,6 +1564,35 @@ async fn handle_trace_callback(
                 .await;
         }
     }
+}
+
+/// Read an execution trace from tape by scanning for a matching trace_id.
+async fn read_trace_from_tape(
+    tape: &rara_kernel::memory::TapeService,
+    tape_name: &str,
+    trace_id: &str,
+) -> Option<ExecutionTrace> {
+    let entries = tape.entries(tape_name).await.ok()?;
+
+    // Scan backwards (most recent first) for the matching trace event.
+    for entry in entries.iter().rev() {
+        if entry.kind == rara_kernel::memory::TapEntryKind::Event {
+            if let Some(name) = entry.payload.get("name").and_then(|v| v.as_str()) {
+                if name == "turn.execution_trace" {
+                    if let Some(data) = entry.payload.get("data") {
+                        if let Some(id) = data.get("trace_id").and_then(|v| v.as_str()) {
+                            if id == trace_id {
+                                let trace_data = data.get("data")?;
+                                return serde_json::from_value(trace_data.clone()).ok();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 
@@ -1641,7 +1698,7 @@ async fn handle_update(
                 return;
             }
             if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, trace_index).await;
+                handle_trace_callback(bot, callback, data, trace_index, tape).await;
                 return;
             }
         }
@@ -2427,20 +2484,23 @@ fn spawn_stream_forwarder(
 
                                 // Store pre-rendered HTML for instant callback response.
                                 // Evict oldest entries when cache exceeds capacity.
-                                if trace_index.len() >= TRACE_CACHE_CAPACITY {
-                                    let keys: Vec<String> = trace_index
+                                // Evict oldest HTML entries when cache exceeds capacity.
+                                // coord_index is never evicted (~100 bytes/entry).
+                                if trace_index.html_cache.len() >= TRACE_CACHE_CAPACITY {
+                                    let keys: Vec<String> = trace_index.html_cache
                                         .iter()
                                         .take(TRACE_CACHE_CAPACITY / 2)
                                         .map(|r| r.key().clone())
                                         .collect();
                                     for k in keys {
-                                        trace_index.remove(&k);
+                                        trace_index.html_cache.remove(&k);
                                     }
                                 }
-                                trace_index.insert(trace_key, TraceCacheEntry {
+                                trace_index.html_cache.insert(trace_key.clone(), TraceCacheEntry {
                                     compact_html,
                                     detail_html,
                                 });
+                                trace_index.coord_index.insert(trace_key, (tape_name, trace_id));
                             }
 
                             break;
