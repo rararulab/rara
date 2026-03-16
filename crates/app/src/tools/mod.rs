@@ -212,6 +212,11 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         registry.register(tool);
     }
 
+    // Dock canvas tools (block, fact, annotation CRUD)
+    for tool in rara_dock::dock_tools() {
+        registry.register(tool);
+    }
+
     // Composio tool suite (4 focused tools)
     for tool in composio::build_tools(deps.composio_auth_provider) {
         registry.register(tool);
