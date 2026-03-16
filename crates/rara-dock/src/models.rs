@@ -134,6 +134,8 @@ pub struct DockSessionMeta {
 pub struct DockSessionDocument {
     pub session:     DockSessionMeta,
     #[serde(default)]
+    pub blocks:      Vec<DockBlock>,
+    #[serde(default)]
     pub annotations: Vec<DockAnnotation>,
     #[serde(default)]
     pub facts:       Vec<DockFact>,
