@@ -295,6 +295,12 @@ pub(crate) async fn run_plan_loop(
             status_text:  end_status,
         });
 
+        // If interrupted during step execution, exit immediately
+        // without replan or further processing.
+        if turn_cancel.is_cancelled() {
+            break;
+        }
+
         let needs_replan = matches!(
             outcome,
             StepOutcome::Failed { .. } | StepOutcome::NeedsReplan { .. }
@@ -399,6 +405,12 @@ pub(crate) async fn run_plan_loop(
         }
 
         step_idx += 1;
+    }
+
+    // If the loop exited due to user cancellation, propagate Interrupted
+    // so the kernel suppresses the duplicate message.
+    if turn_cancel.is_cancelled() {
+        return Err(KernelError::Interrupted);
     }
 
     // -- Phase 3: Completion --------------------------------------------------
