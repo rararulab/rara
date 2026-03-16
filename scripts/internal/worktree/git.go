@@ -8,30 +8,75 @@ import (
 	"strings"
 )
 
-// Entry holds parsed porcelain output for a single git worktree.
-type Entry struct {
-	Path   string
-	Branch string // empty for detached HEAD
+// Status describes the state of a worktree entry.
+type Status int
+
+const (
+	StatusActive   Status = iota // branch exists, not merged
+	StatusMerged                 // branch fully merged into main
+	StatusDetached               // detached HEAD (no branch)
+	StatusPrunable               // stale reference, can be pruned
+)
+
+// String returns a human-readable label for the status.
+func (s Status) String() string {
+	switch s {
+	case StatusMerged:
+		return "merged"
+	case StatusDetached:
+		return "detached"
+	case StatusPrunable:
+		return "prunable"
+	default:
+		return "active"
+	}
 }
 
-// List parses `git worktree list --porcelain` and returns all entries.
+// Entry holds parsed porcelain output for a single git worktree.
+type Entry struct {
+	Path     string
+	Branch   string // empty for detached HEAD
+	IsMain   bool
+	Prunable bool
+	Status   Status
+}
+
+// List parses `git worktree list --porcelain` and returns all entries,
+// enriched with merge status information.
 func List() ([]Entry, error) {
 	out, err := exec.Command("git", "worktree", "list", "--porcelain").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git worktree list: %w", err)
 	}
 
+	mainPath, err := MainPath()
+	if err != nil {
+		return nil, err
+	}
+
+	merged, err := MergedBranches()
+	if err != nil {
+		return nil, err
+	}
+
 	var entries []Entry
 	var cur Entry
+	prunable := false
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "worktree "):
 			cur = Entry{Path: strings.TrimPrefix(line, "worktree ")}
+			prunable = false
 		case strings.HasPrefix(line, "branch refs/heads/"):
 			cur.Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "prunable":
+			prunable = true
 		case line == "":
+			cur.IsMain = cur.Path == mainPath
+			cur.Prunable = prunable
+			cur.Status = classifyEntry(cur, merged)
 			if cur.Path != "" {
 				entries = append(entries, cur)
 			}
@@ -39,9 +84,25 @@ func List() ([]Entry, error) {
 		}
 	}
 	if cur.Path != "" {
+		cur.IsMain = cur.Path == mainPath
+		cur.Prunable = prunable
+		cur.Status = classifyEntry(cur, merged)
 		entries = append(entries, cur)
 	}
 	return entries, nil
+}
+
+func classifyEntry(e Entry, merged map[string]bool) Status {
+	if e.Prunable {
+		return StatusPrunable
+	}
+	if e.Branch == "" {
+		return StatusDetached
+	}
+	if merged[e.Branch] {
+		return StatusMerged
+	}
+	return StatusActive
 }
 
 // MainPath returns the top-level path of the main checkout.

@@ -318,21 +318,10 @@ DEVTOOL := "scripts/bin/devtool"
 devtool-build:
     @cd scripts && go build -o bin/devtool ./cmd/devtool/
 
-[doc("list all git worktrees")]
+[doc("interactive worktree manager (TUI)")]
 [group("🌳 Worktree")]
-wt-list: devtool-build
-    @{{DEVTOOL}} wt list
-
-[doc("clean up merged worktrees (removes worktrees whose branches are merged into main)")]
-[group("🌳 Worktree")]
-wt-clean: devtool-build
-    @{{DEVTOOL}} wt clean
-
-[doc("force-remove ALL worktrees except the main checkout (⚠️ destructive)")]
-[group("🌳 Worktree")]
-[confirm("⚠️ This will remove ALL worktrees and their local branches. Continue?")]
-wt-nuke: devtool-build
-    @{{DEVTOOL}} wt nuke
+wt: devtool-build
+    @{{DEVTOOL}} wt
 
 # ========================================================================================
 # Dependency Management
