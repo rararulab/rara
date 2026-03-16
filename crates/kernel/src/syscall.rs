@@ -310,8 +310,8 @@ impl SyscallDispatcher {
                 if message.is_empty() {
                     tracing::warn!(
                         event_type = %event_type,
-                        ?payload,
                         sender = %syscall_sender,
+                        payload_keys = ?payload.as_object().map(|o| o.keys().collect::<Vec<_>>()),
                         "PublishEvent dropped: payload.message is missing or blank"
                     );
                 } else {
