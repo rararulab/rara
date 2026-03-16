@@ -279,13 +279,54 @@ const TRACE_CACHE_CAPACITY: usize = 1000;
 /// - `html_cache`: `trace_key → TraceCacheEntry` (pre-rendered HTML).
 ///   Evicted when exceeding [`TRACE_CACHE_CAPACITY`].
 /// - `coord_index`: `trace_key → (tape_name, trace_id)`.
-///   Lightweight (~100 bytes/entry), never evicted. Used as fallback to
-///   re-read from tape when `html_cache` misses.
+///   Lightweight (~100 bytes/entry), never evicted, persisted to disk so
+///   old trace buttons remain functional after process restart.
 struct TraceStore {
     /// `"{chat_id}:{msg_id}"` → pre-rendered compact/detail HTML.
     html_cache: DashMap<String, TraceCacheEntry>,
     /// `"{chat_id}:{msg_id}"` → `(tape_name, trace_id)` for tape lookup.
     coord_index: DashMap<String, (String, String)>,
+}
+
+impl TraceStore {
+    /// Load coord_index from disk, or create empty if file doesn't exist.
+    fn load() -> Self {
+        let store = Self {
+            html_cache: DashMap::new(),
+            coord_index: DashMap::new(),
+        };
+        let path = Self::persist_path();
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, (String, String)>>(&data) {
+                for (k, v) in map {
+                    store.coord_index.insert(k, v);
+                }
+            }
+        }
+        store
+    }
+
+    /// Persist coord_index to disk. Best-effort, errors are logged.
+    fn persist(&self) {
+        let map: std::collections::HashMap<String, (String, String)> = self
+            .coord_index
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
+        let path = Self::persist_path();
+        match serde_json::to_string(&map) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::warn!(error = %e, "failed to persist trace coord index");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to serialize trace coord index"),
+        }
+    }
+
+    fn persist_path() -> std::path::PathBuf {
+        rara_paths::data_dir().join("trace_coord_index.json")
+    }
 }
 
 type TraceIndex = Arc<TraceStore>;
@@ -813,10 +854,7 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
-            trace_index: Arc::new(TraceStore {
-                html_cache: DashMap::new(),
-                coord_index: DashMap::new(),
-            }),
+            trace_index: Arc::new(TraceStore::load()),
         }
     }
 
@@ -2501,6 +2539,7 @@ fn spawn_stream_forwarder(
                                     detail_html,
                                 });
                                 trace_index.coord_index.insert(trace_key, (tape_name, trace_id));
+                                trace_index.persist();
                             }
 
                             break;
