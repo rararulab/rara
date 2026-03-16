@@ -913,10 +913,11 @@ pub(crate) async fn run_agent_loop(
                                                 )
                                                 .await
                                             {
+                                                fold_failed_this_turn = true;
                                                 warn!(
                                                     error = %e,
                                                     "auto-fold: failed to persist \
-                                                     anchor"
+                                                     anchor, disabling for this turn"
                                                 );
                                             } else {
                                                 last_fold_entry_id = tape
@@ -1934,11 +1935,15 @@ mod tests {
         assert!(prompt.contains("<context_contract>"));
         assert!(prompt.contains("`tape`"));
         assert!(prompt.contains("- `anchor`: checkpoint + trim context."));
-        assert!(prompt.contains("- `search` / `entries`: recall details from before an anchor."));
+        assert!(prompt.contains(
+            "- `search` / `entries`: recall details from before an anchor."
+        ));
         assert!(prompt.contains(
             "You need exact tokens, IDs, codes, names, or quoted details from earlier context"
         ));
-        assert!(prompt.contains("Always include a detailed `summary` and concrete `next_steps`"));
+        assert!(prompt.contains(
+            "Always include a detailed `summary` and concrete `next_steps`"
+        ));
         assert!(prompt.contains("<delegation_contract>"));
         assert!(prompt.contains("action: \"spawn\""));
         assert!(prompt.contains("action: \"spawn_parallel\""));
