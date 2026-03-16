@@ -39,4 +39,7 @@ pub enum DockError {
 
     #[snafu(display("Session already exists: {id}"))]
     SessionAlreadyExists { id: String },
+
+    #[snafu(display("Kernel error: {message}"))]
+    Kernel { message: String },
 }

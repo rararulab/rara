@@ -168,6 +168,118 @@ export function dockMutateSession(
   );
 }
 
+/** SSE event received during a dock turn. */
+export type DockTurnEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "tool_call_start"; name: string; id: string; arguments: unknown }
+  | {
+      type: "tool_call_end";
+      id: string;
+      result_preview: string;
+      success: boolean;
+      error?: string | null;
+    }
+  | { type: "dock_turn_complete"; data: DockTurnResponse }
+  | { type: "error"; error: string }
+  | { type: "done" };
+
+/**
+ * Execute a dock turn via SSE streaming.
+ *
+ * The endpoint returns an SSE stream of events.  The `onEvent` callback is
+ * invoked for each event.  Returns a promise that resolves when the stream
+ * ends.
+ */
+export async function dockTurnStream(
+  request: DockTurnRequest,
+  onEvent: (event: DockTurnEvent) => void,
+): Promise<void> {
+  const response = await fetch("/api/dock/turn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Dock turn failed (${response.status}): ${text}`);
+  }
+
+  // If the response is not SSE (e.g. test mode returns JSON), handle it.
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const data = (await response.json()) as DockTurnResponse;
+    onEvent({ type: "dock_turn_complete", data });
+    onEvent({ type: "done" });
+    return;
+  }
+
+  // Parse the SSE stream.
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    let currentEvent = "";
+    let currentData = "";
+
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        currentEvent = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        currentData += line.slice(6);
+      } else if (line === "" && currentEvent) {
+        // Empty line = end of SSE event
+        try {
+          if (currentEvent === "done") {
+            onEvent({ type: "done" });
+          } else if (currentEvent === "text_delta") {
+            const parsed = JSON.parse(currentData);
+            onEvent({ type: "text_delta", text: parsed.text });
+          } else if (currentEvent === "tool_call_start") {
+            const parsed = JSON.parse(currentData);
+            onEvent({
+              type: "tool_call_start",
+              name: parsed.name,
+              id: parsed.id,
+              arguments: parsed.arguments,
+            });
+          } else if (currentEvent === "tool_call_end") {
+            const parsed = JSON.parse(currentData);
+            onEvent({
+              type: "tool_call_end",
+              id: parsed.id,
+              result_preview: parsed.result_preview,
+              success: parsed.success,
+              error: parsed.error,
+            });
+          } else if (currentEvent === "dock_turn_complete") {
+            const parsed = JSON.parse(currentData) as DockTurnResponse;
+            onEvent({ type: "dock_turn_complete", data: parsed });
+          } else if (currentEvent === "error") {
+            const parsed = JSON.parse(currentData);
+            onEvent({ type: "error", error: parsed.error ?? "unknown error" });
+          }
+        } catch {
+          // Skip malformed events
+        }
+        currentEvent = "";
+        currentData = "";
+      }
+    }
+  }
+}
+
+/** Non-streaming dock turn (kept for backwards compatibility in tests). */
 export function dockTurn(
   request: DockTurnRequest,
 ): Promise<DockTurnResponse> {

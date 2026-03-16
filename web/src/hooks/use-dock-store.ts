@@ -30,7 +30,7 @@ import {
   dockCreateSession,
   dockGetSession,
   dockMutateSession,
-  dockTurn,
+  dockTurnStream,
   dockUpdateWorkspace,
 } from "@/api/dock";
 
@@ -336,16 +336,30 @@ export function useDockStore(): DockStore {
       setError(null);
 
       try {
-        const resp = await dockTurn({
-          session_id: sid,
-          content: text,
-          is_command: isCommand,
-          blocks: blocksRef.current,
-          facts: factsRef.current,
-          annotations: annotationsRef.current,
-          selected_anchor: selectedAnchorRef.current ?? undefined,
-        });
-        applyDockPayload(resp);
+        await dockTurnStream(
+          {
+            session_id: sid,
+            content: text,
+            is_command: isCommand,
+            blocks: blocksRef.current,
+            facts: factsRef.current,
+            annotations: annotationsRef.current,
+            selected_anchor: selectedAnchorRef.current ?? undefined,
+          },
+          (event) => {
+            switch (event.type) {
+              case "dock_turn_complete":
+                applyDockPayload(event.data);
+                break;
+              case "error":
+                setError(event.error);
+                break;
+              case "done":
+                setIsRunning(false);
+                break;
+            }
+          },
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Turn failed");
       } finally {
