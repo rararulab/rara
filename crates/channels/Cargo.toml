@@ -15,6 +15,7 @@ futures = { workspace = true }
 image = { workspace = true }
 jiff = { workspace = true }
 rand = { workspace = true }
+rara-dock = { workspace = true }
 rara-kernel = { workspace = true }
 rara-paths = { workspace = true }
 regex = { workspace = true }
