@@ -165,6 +165,8 @@ pub struct Kernel {
     output_interceptor: crate::tool::DynamicOutputInterceptor,
     /// Security guard pipeline (taint tracking + pattern scanning).
     guard_pipeline:     Arc<crate::guard::pipeline::GuardPipeline>,
+    /// Execution trace service for persisting turn-level traces.
+    trace_service:      crate::trace::TraceService,
 }
 
 impl Kernel {
@@ -184,6 +186,7 @@ impl Kernel {
         knowledge: crate::memory::knowledge::KnowledgeServiceRef,
         output_interceptor: crate::tool::DynamicOutputInterceptor,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
+        trace_service: crate::trace::TraceService,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
 
@@ -234,6 +237,7 @@ impl Kernel {
             knowledge,
             output_interceptor,
             guard_pipeline,
+            trace_service,
         }
     }
 
@@ -287,6 +291,7 @@ impl Kernel {
             Arc::clone(&self.global_semaphore),
             self.started_at,
             self.tape_service.clone(),
+            self.trace_service.clone(),
         )
     }
 

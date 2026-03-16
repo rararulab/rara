@@ -222,113 +222,12 @@ impl ProgressMessage {
     }
 }
 
-/// Snapshot of a completed agent turn, persisted to tape for the inline
-/// "📊 详情" toggle.
-///
-/// Built from `ProgressMessage` fields when the stream closes. Written as a
-/// `turn.execution_trace` tape event keyed by session. The lightweight
-/// [`TraceIndex`] maps `"{chat_id}:{msg_id}"` to tape coordinates so the
-/// callback handler can read it back on demand.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ExecutionTrace {
-    duration_secs: u64,
-    iterations: usize,
-    model: String,
-    input_tokens: u32,
-    output_tokens: u32,
-    thinking_ms: u64,
-    /// Truncated reasoning text (first ~500 chars).
-    thinking_preview: String,
-    /// Plan steps with status.
-    plan_steps: Vec<String>,
-    /// Tool execution records.
-    tools: Vec<ToolTraceEntry>,
-    /// Rara internal message ID for end-to-end correlation.
-    rara_message_id: String,
-}
+use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ToolTraceEntry {
-    name: String,
-    /// Duration in milliseconds (serializable replacement for
-    /// `std::time::Duration`).
-    duration_ms: Option<u64>,
-    success: bool,
-    summary: String,
-    error: Option<String>,
-}
-
-/// Pre-rendered trace cache entry. Both views are rendered at trace-write time
-/// so that callback handlers need zero I/O and zero computation.
-///
-/// Trade-off: detail_html is pre-rendered even if most users never click
-/// "详情". This costs ~4KB extra per trace but avoids needing the full
-/// `ExecutionTrace` struct in the cache (which would be harder to manage).
-/// For typical traces this is negligible; if traces become very large,
-/// consider lazy rendering on first click.
-/// Pre-rendered trace cache entry, persisted to disk so old trace buttons
-/// remain functional after process restart.
-///
-/// Trade-off: detail_html is pre-rendered even if most users never click
-/// "详情". This costs ~4KB extra per trace but avoids needing the full
-/// `ExecutionTrace` struct in the cache. For typical traces this is
-/// negligible; if traces become very large, consider lazy rendering.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct TraceCacheEntry {
-    compact_html: String,
-    detail_html: String,
-}
-
-const TRACE_CACHE_CAPACITY: usize = 1000;
-
-/// Persistent trace cache keyed by `"{chat_id}:{msg_id}"`.
-///
-/// Pre-rendered HTML is loaded from disk on startup and written back after
-/// each insert. Entries are evicted when exceeding [`TRACE_CACHE_CAPACITY`].
-struct TraceStore {
-    /// `"{chat_id}:{msg_id}"` → pre-rendered compact/detail HTML.
-    cache: DashMap<String, TraceCacheEntry>,
-}
-
-impl TraceStore {
-    /// Load cache from disk, or create empty if file doesn't exist / is corrupt.
-    fn load() -> Self {
-        let store = Self { cache: DashMap::new() };
-        let path = Self::persist_path();
-        if let Ok(data) = std::fs::read_to_string(&path) {
-            if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, TraceCacheEntry>>(&data) {
-                for (k, v) in map {
-                    store.cache.insert(k, v);
-                }
-            }
-        }
-        store
-    }
-
-    /// Persist cache to disk. Best-effort, errors are logged.
-    fn persist(&self) {
-        let map: std::collections::HashMap<String, TraceCacheEntry> = self
-            .cache
-            .iter()
-            .map(|r| (r.key().clone(), r.value().clone()))
-            .collect();
-        let path = Self::persist_path();
-        match serde_json::to_string(&map) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    tracing::warn!(error = %e, "failed to persist trace cache");
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "failed to serialize trace cache"),
-        }
-    }
-
-    fn persist_path() -> std::path::PathBuf {
-        rara_paths::data_dir().join("trace_cache.json")
-    }
-}
-
-type TraceIndex = Arc<TraceStore>;
+/// Maps Telegram-specific `"{chat_id}:{msg_id}"` → `trace_id` (ULID).
+/// This is UI routing state — the actual trace data lives in SQLite
+/// via [`rara_kernel::trace::TraceService`].
+type TraceIndex = Arc<DashMap<String, String>>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -826,8 +725,7 @@ pub struct TelegramAdapter {
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
-    /// Lightweight index for tape-persisted execution traces, keyed by
-    /// "{chat_id}:{msg_id}" → (tape_name, trace_id).
+    /// Maps `"{chat_id}:{msg_id}"` → trace ULID for callback routing.
     trace_index: TraceIndex,
 }
 
@@ -853,7 +751,7 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
-            trace_index: Arc::new(TraceStore::load()),
+            trace_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -1189,7 +1087,6 @@ impl ChannelAdapter for TelegramAdapter {
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
         let trace_index = Arc::clone(&self.trace_index);
-        let tape = handle.tape().clone();
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -1246,7 +1143,6 @@ impl ChannelAdapter for TelegramAdapter {
                 active_streams,
                 command_handlers,
                 trace_index,
-                tape,
             )
             .await;
         });
@@ -1299,7 +1195,6 @@ async fn polling_loop(
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
     trace_index: TraceIndex,
-    tape: rara_kernel::memory::TapeService,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1356,7 +1251,6 @@ async fn polling_loop(
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
                     let trace_index = Arc::clone(&trace_index);
-                    let tape = tape.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1369,7 +1263,6 @@ async fn polling_loop(
                             &active_streams,
                             &command_handlers,
                             &trace_index,
-                            &tape,
                         )
                         .await;
                     });
@@ -1526,15 +1419,15 @@ async fn handle_guard_callback(
 /// - `action` = "hide" → collapse back to compact summary, button becomes
 ///   "详情"
 ///
-/// Pre-rendered HTML is read from [`TraceIndex`] cache (O(1), zero I/O).
-/// Pre-rendered HTML is read from the persistent [`TraceStore`] cache.
-/// The callback is always answered immediately to eliminate the Telegram
-/// spinner. On cache miss the button silently does nothing.
+/// Trace data is fetched from [`rara_kernel::trace::TraceService`] (SQLite)
+/// and rendered into Telegram HTML on demand. The callback is always answered
+/// immediately to eliminate the Telegram spinner.
 async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
     trace_index: &TraceIndex,
+    trace_service: &rara_kernel::trace::TraceService,
 ) {
     // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
     let parts: Vec<&str> = data.splitn(3, ':').collect();
@@ -1547,18 +1440,23 @@ async fn handle_trace_callback(
     // Answer callback immediately — removes Telegram spinner.
     let _ = bot.answer_callback_query(callback.id.clone()).await;
 
-    let Some(entry) = trace_index.cache.get(trace_key).map(|r| r.value().clone()) else {
+    // Look up trace_id from UI routing index, then fetch from SQLite.
+    let Some(trace_id) = trace_index.get(trace_key).map(|r| r.value().clone()) else {
         return;
+    };
+    let trace = match trace_service.get(&trace_id).await {
+        Ok(Some(t)) => t,
+        _ => return,
     };
 
     let (text, button_text, next_action) = match action {
         "show" => (
-            &entry.detail_html,
+            render_trace_detail(&trace),
             "\u{1f4ca} \u{6536}\u{8d77}",
             format!("trace:hide:{trace_key}"),
         ),
         _ => (
-            &entry.compact_html,
+            render_compact_summary(&trace),
             "\u{1f4ca} \u{8be6}\u{60c5}",
             format!("trace:show:{trace_key}"),
         ),
@@ -1575,7 +1473,7 @@ async fn handle_trace_callback(
                     next_action,
                 )]]);
             let _ = bot
-                .edit_message_text(ChatId(cid), MessageId(mid), text)
+                .edit_message_text(ChatId(cid), MessageId(mid), &text)
                 .parse_mode(ParseMode::Html)
                 .reply_markup(keyboard)
                 .await;
@@ -1668,7 +1566,6 @@ async fn handle_update(
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
     trace_index: &TraceIndex,
-    tape: &rara_kernel::memory::TapeService,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1687,7 +1584,7 @@ async fn handle_update(
                 return;
             }
             if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, trace_index).await;
+                handle_trace_callback(bot, callback, data, trace_index, handle.trace_service()).await;
                 return;
             }
         }
@@ -1965,7 +1862,7 @@ async fn handle_update(
                     chat_id,
                     sid,
                     Arc::clone(trace_index),
-                    tape.clone(),
+                    handle.trace_service().clone(),
                     rara_message_id.clone(),
                 );
             }
@@ -2062,7 +1959,7 @@ fn spawn_stream_forwarder(
     chat_id: i64,
     session_id: rara_kernel::session::SessionKey,
     trace_index: TraceIndex,
-    tape: rara_kernel::memory::TapeService,
+    trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
 ) {
     use rara_kernel::io::StreamEvent;
@@ -2439,8 +2336,7 @@ fn spawn_stream_forwarder(
                                     rara_message_id:  progress.rara_message_id.clone(),
                                 };
 
-                                let compact_html = render_compact_summary(&trace);
-                                let detail_html = render_trace_detail(&trace);
+                                let compact = render_compact_summary(&trace);
                                 let trace_key = format!("{}:{}", chat_id, mid.0);
                                 let keyboard = InlineKeyboardMarkup::new(vec![vec![
                                     InlineKeyboardButton::callback(
@@ -2450,43 +2346,21 @@ fn spawn_stream_forwarder(
                                 ]]);
 
                                 let _ = bot
-                                    .edit_message_text(ChatId(chat_id), mid, &compact_html)
+                                    .edit_message_text(ChatId(chat_id), mid, &compact)
                                     .parse_mode(ParseMode::Html)
                                     .reply_markup(keyboard)
                                     .await;
 
-                                // Persist trace to tape
-                                let trace_id = ulid::Ulid::new().to_string();
+                                // Persist trace to SQLite via kernel TraceService
                                 let tape_name = session_id.to_string();
-                                let trace_json = serde_json::to_value(&trace).unwrap_or_default();
-
-                                if let Err(e) = tape.append_event(
-                                    &tape_name,
-                                    "turn.execution_trace",
-                                    serde_json::json!({
-                                        "trace_id": trace_id,
-                                        "data": trace_json,
-                                    }),
-                                ).await {
-                                    warn!(error = %e, "failed to persist execution trace to tape");
-                                }
-
-                                // Evict oldest entries when cache exceeds capacity.
-                                if trace_index.cache.len() >= TRACE_CACHE_CAPACITY {
-                                    let keys: Vec<String> = trace_index.cache
-                                        .iter()
-                                        .take(TRACE_CACHE_CAPACITY / 2)
-                                        .map(|r| r.key().clone())
-                                        .collect();
-                                    for k in keys {
-                                        trace_index.cache.remove(&k);
+                                match trace_service.save(&tape_name, &trace).await {
+                                    Ok(trace_id) => {
+                                        trace_index.insert(trace_key, trace_id);
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to persist execution trace");
                                     }
                                 }
-                                trace_index.cache.insert(trace_key, TraceCacheEntry {
-                                    compact_html,
-                                    detail_html,
-                                });
-                                trace_index.persist();
                             }
 
                             break;
