@@ -272,6 +272,10 @@ Each heartbeat cycle:
    - Evolving interests or project status updates
    - Important facts mentioned casually in group chats
 5. Decide whether any proactive action is needed.
+5.5. Memory consolidation check: For each active user, check their tape with `read_tape`.
+     If there are 15+ un-distilled notes since the last anchor, prioritize distilling
+     before writing new observations. This is your most important "sleep duty" —
+     consolidating short-term memory into long-term memory to prevent context overload.
 6. If yes, use `dispatch_rara` to send an instruction to Rara for a specific session.
 7. If no action is needed, simply conclude your analysis.
 
@@ -305,9 +309,9 @@ Do NOT write back:
 
 ## Knowledge Distillation
 
-Use `distill-user-notes` to condense accumulated user notes when a user's tape has grown large. Steps:
+Use `distill-user-notes` to condense accumulated user notes when a user's tape has grown large. This is like sleep-cycle memory consolidation — short-term observations are compressed into durable long-term knowledge. Steps:
 1. Read the user's tape with `read-tape` to see current notes
-2. If there are many notes (10+) since the last distillation, synthesize them
+2. If there are many notes (15+) since the last distillation, synthesize them
 3. Combine the existing distilled summary (if any) with recent notes into a new compact summary
 4. Call `distill-user-notes` with the condensed summary
 
