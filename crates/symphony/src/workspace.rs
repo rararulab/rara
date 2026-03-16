@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::{Location, ensure};
+use snafu::ensure;
 use tracing::{info, warn};
 
 use crate::{
@@ -49,7 +49,7 @@ impl WorkspaceManager {
             let checkout =
                 git2::Repository::open(&repo_path).map_err(|source| SymphonyError::Git {
                     source,
-                    location: Location::new(file!(), line!(), column!()),
+                    location: std::panic::Location::caller(),
                 })?;
             return Ok((checkout, repo_path));
         }
@@ -57,7 +57,7 @@ impl WorkspaceManager {
         if let Some(parent) = repo_path.parent() {
             fs::create_dir_all(parent).map_err(|source| SymphonyError::Io {
                 source,
-                location: Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             })?;
         }
 
@@ -71,7 +71,7 @@ impl WorkspaceManager {
         let checkout = git2::Repository::clone(&repo.url, &repo_path).map_err(|source| {
             SymphonyError::Git {
                 source,
-                location: Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             }
         })?;
 
@@ -124,7 +124,7 @@ impl WorkspaceManager {
                         branch
                     ),
                     source,
-                    location: Location::new(file!(), line!(), column!()),
+                    location: std::panic::Location::caller(),
                 })?;
                 if let Ok(wt) = checkout.find_worktree(&branch) {
                     let _ = wt.prune(Some(
@@ -142,17 +142,17 @@ impl WorkspaceManager {
 
         fs::create_dir_all(&workspace_root).map_err(|source| SymphonyError::Io {
             source,
-            location: Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         })?;
         let head_ref = checkout.head().map_err(|source| SymphonyError::Git {
             source,
-            location: Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         })?;
         let head = head_ref
             .peel_to_commit()
             .map_err(|source| SymphonyError::Git {
                 source,
-                location: Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             })?;
 
         let branch_ref = match checkout.branch(&branch, &head, false) {
@@ -161,12 +161,12 @@ impl WorkspaceManager {
                 .find_branch(&branch, git2::BranchType::Local)
                 .map_err(|source| SymphonyError::Git {
                     source,
-                    location: Location::new(file!(), line!(), column!()),
+                    location: std::panic::Location::caller(),
                 })?,
             Err(err) => {
                 return Err(SymphonyError::Git {
                     source:   err,
-                    location: Location::new(file!(), line!(), column!()),
+                    location: std::panic::Location::caller(),
                 });
             }
         };
@@ -178,7 +178,7 @@ impl WorkspaceManager {
             .worktree(&branch, &path, Some(&options))
             .map_err(|source| SymphonyError::Git {
                 source,
-                location: Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             })?;
 
         Ok(WorkspaceInfo {
@@ -201,7 +201,7 @@ impl WorkspaceManager {
         if workspace.path.exists() {
             fs::remove_dir_all(&workspace.path).map_err(|source| SymphonyError::Io {
                 source,
-                location: Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             })?;
         }
 
@@ -214,7 +214,7 @@ impl WorkspaceManager {
         if let Ok(mut branch) = repo.find_branch(&workspace.branch, git2::BranchType::Local) {
             branch.delete().map_err(|source| SymphonyError::Git {
                 source,
-                location: Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             })?;
         }
 

@@ -15,7 +15,8 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use rara_keyring_store::{KeyringStore, Result};
+use rara_keyring_store::{KeyringStore, PgSnafu, Result};
+use snafu::ResultExt;
 use sqlx::SqlitePool;
 
 #[derive(Clone)]
@@ -44,10 +45,7 @@ impl KeyringStore for PgKeyringStore {
         .bind(account)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| rara_keyring_store::Error::Pg {
-            source:   e,
-            location: snafu::Location::default(),
-        })?;
+        .context(PgSnafu)?;
         Ok(row.map(|(v,)| v))
     }
 
@@ -63,10 +61,7 @@ impl KeyringStore for PgKeyringStore {
         .bind(value)
         .execute(&self.pool)
         .await
-        .map_err(|e| rara_keyring_store::Error::Pg {
-            source:   e,
-            location: snafu::Location::default(),
-        })?;
+        .context(PgSnafu)?;
         Ok(())
     }
 
@@ -78,10 +73,7 @@ impl KeyringStore for PgKeyringStore {
                 .bind(account)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| rara_keyring_store::Error::Pg {
-                    source:   e,
-                    location: snafu::Location::default(),
-                })?;
+                .context(PgSnafu)?;
         Ok(result.rows_affected() > 0)
     }
 }
