@@ -611,7 +611,7 @@ impl AgentTool for DockAnnotationRemoveTool {
 // Convenience: collect all dock tools
 // ---------------------------------------------------------------------------
 
-/// Return all 9 dock tools as a vec of [`AgentToolRef`].
+/// Return all 9 dock tools as a vec of `AgentToolRef`.
 pub fn dock_tools() -> Vec<rara_kernel::tool::AgentToolRef> {
     use std::sync::Arc;
     vec![
