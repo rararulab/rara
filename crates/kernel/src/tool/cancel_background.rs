@@ -30,6 +30,8 @@ pub struct CancelBackgroundTool {
 }
 
 impl CancelBackgroundTool {
+    pub const NAME: &str = crate::tool_names::CANCEL_BACKGROUND;
+
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
         Self { handle, session_key }
     }
@@ -37,7 +39,7 @@ impl CancelBackgroundTool {
 
 #[async_trait]
 impl AgentTool for CancelBackgroundTool {
-    fn name(&self) -> &str { "cancel_background" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Cancel a running background task by task_id."

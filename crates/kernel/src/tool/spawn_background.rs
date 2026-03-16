@@ -35,6 +35,8 @@ pub struct SpawnBackgroundTool {
 }
 
 impl SpawnBackgroundTool {
+    pub const NAME: &str = crate::tool_names::SPAWN_BACKGROUND;
+
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
         Self { handle, session_key }
     }
@@ -42,7 +44,7 @@ impl SpawnBackgroundTool {
 
 #[async_trait]
 impl AgentTool for SpawnBackgroundTool {
-    fn name(&self) -> &str { "spawn_background" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Spawn a background agent to handle a long-running task. The agent runs \
