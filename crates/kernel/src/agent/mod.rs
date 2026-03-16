@@ -1106,9 +1106,7 @@ pub(crate) async fn run_agent_loop(
                 _ = turn_cancel.cancelled() => {
                     stream_task.abort();
                     info!("LLM turn cancelled during streaming");
-                    return Err(KernelError::AgentExecution {
-                        message: "interrupted by user".into(),
-                    });
+                    return Err(KernelError::Interrupted);
                 }
             };
 
@@ -1224,9 +1222,7 @@ pub(crate) async fn run_agent_loop(
         let driver_result = match stream_task.await {
             Ok(result) => result,
             Err(join_err) if join_err.is_cancelled() => {
-                return Err(KernelError::AgentExecution {
-                    message: "interrupted by user".into(),
-                });
+                return Err(KernelError::Interrupted);
             }
             Err(join_err) => {
                 return Err(KernelError::AgentExecution {
@@ -1671,9 +1667,7 @@ pub(crate) async fn run_agent_loop(
                 }
             }
             _ = turn_cancel.cancelled() => {
-                return Err(KernelError::AgentExecution {
-                    message: "interrupted by user".into(),
-                });
+                return Err(KernelError::Interrupted);
             }
         };
 

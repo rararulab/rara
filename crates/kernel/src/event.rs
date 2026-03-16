@@ -288,6 +288,8 @@ pub enum KernelEvent {
         user:            UserId,
         /// Origin endpoint from the inbound message for session-scoped routing.
         origin_endpoint: Option<crate::io::Endpoint>,
+        /// Whether this turn was interrupted by a user /stop command.
+        interrupted:     bool,
     },
 
     /// A child session completed its work.
@@ -478,6 +480,7 @@ impl KernelEventEnvelope {
         in_reply_to: MessageId,
         user: UserId,
         origin_endpoint: Option<crate::io::Endpoint>,
+        interrupted: bool,
     ) -> Self {
         Self {
             base: EventBase::from(session_key),
@@ -486,6 +489,7 @@ impl KernelEventEnvelope {
                 in_reply_to,
                 user,
                 origin_endpoint,
+                interrupted,
             },
         }
     }
