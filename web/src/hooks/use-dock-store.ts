@@ -224,16 +224,16 @@ export function useDockStore(): DockStore {
       }
 
       // Then set authoritative state from response
-      if (payload.blocks.length > 0) {
+      if (Array.isArray(payload.blocks)) {
         setBlocks(payload.blocks);
       }
-      if (payload.facts.length > 0) {
+      if (Array.isArray(payload.facts)) {
         setFacts(payload.facts);
       }
-      if (payload.annotations.length > 0) {
+      if (Array.isArray(payload.annotations)) {
         setAnnotations(payload.annotations);
       }
-      if (payload.history.length > 0) {
+      if (Array.isArray(payload.history)) {
         setHistory(payload.history);
       }
       if (payload.selected_anchor !== undefined) {

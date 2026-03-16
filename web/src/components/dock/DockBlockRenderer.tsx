@@ -65,6 +65,24 @@ function DockDiffView({ original, modified, onDismiss }: DockDiffViewProps) {
   );
 }
 
+/**
+ * Sanitize HTML to prevent XSS from agent-controlled content.
+ * Strips script/iframe tags, event handler attributes, and javascript: URLs.
+ */
+function sanitizeHtml(html: string): string {
+  // Remove <script> tags and their contents
+  let sanitized = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+  // Remove <iframe> tags and their contents
+  sanitized = sanitized.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "");
+  // Remove self-closing script/iframe tags
+  sanitized = sanitized.replace(/<(?:script|iframe)\b[^>]*\/?\s*>/gi, "");
+  // Remove event handler attributes (on*)
+  sanitized = sanitized.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  // Remove javascript: URLs from href and src attributes
+  sanitized = sanitized.replace(/(href|src)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, '$1=""');
+  return sanitized;
+}
+
 interface DockBlockRendererProps {
   block: DockBlock;
   onDismissDiff: (id: string) => void;
@@ -78,7 +96,7 @@ export default function DockBlockRenderer({
     <div className="dock-block group rounded-xl border border-border/50 bg-card/60 p-4 transition-colors hover:border-border">
       <div
         className="prose prose-sm dark:prose-invert max-w-none"
-        dangerouslySetInnerHTML={{ __html: block.html }}
+        dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html) }}
       />
       {block.diff && (
         <DockDiffView
