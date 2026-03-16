@@ -24,3 +24,10 @@ repos:
         pass_filenames: false
         types_or: [rust, toml]
         files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
+
+      - id: conventional-commit
+        name: conventional commit message
+        entry: scripts/check-conventional-commit.sh
+        language: script
+        stages: [commit-msg]
+        always_run: true
