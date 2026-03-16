@@ -17,10 +17,18 @@ llm:
   default_provider: ollama
   providers:
     ollama:
-      base_url: ${OLLAMA_BASE_URL}
+      base_url: ${OLLAMA_BASE_URL}/v1
       api_key: ollama
       default_model: ${OLLAMA_MODEL}
+knowledge:
+  embedding_model: ${OLLAMA_EMBEDDING_MODEL}
+  embedding_dimensions: 768
+  search_top_k: 10
+  similarity_threshold: 0.85
+  extractor_model: ${OLLAMA_MODEL}
+mita:
+  heartbeat_interval: "30m"
 users:
-- name: ci-bot
+- name: ryan
   role: root
   platforms: []
