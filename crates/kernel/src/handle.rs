@@ -453,6 +453,56 @@ impl KernelHandle {
         self.process_table.children_of(session_key)
     }
 
+    /// Register a background task entry on the parent session.
+    pub fn register_background_task(
+        &self,
+        session_key: &SessionKey,
+        entry: crate::session::BackgroundTaskEntry,
+    ) {
+        self.process_table.with_mut(session_key, |session| {
+            session.background_tasks.push(entry);
+        });
+    }
+
+    /// Remove a background task entry from the parent session.
+    /// Returns `true` if the task was found and removed.
+    pub fn remove_background_task(
+        &self,
+        session_key: &SessionKey,
+        child_key: &SessionKey,
+    ) -> bool {
+        self.process_table
+            .with_mut(session_key, |session| {
+                let before = session.background_tasks.len();
+                session.background_tasks.retain(|t| &t.child_key != child_key);
+                session.background_tasks.len() < before
+            })
+            .unwrap_or(false)
+    }
+
+    /// Check if a child session is a background task of the given parent.
+    pub fn is_background_task(
+        &self,
+        parent_key: &SessionKey,
+        child_key: &SessionKey,
+    ) -> bool {
+        self.process_table
+            .with(parent_key, |session| {
+                session.background_tasks.iter().any(|t| &t.child_key == child_key)
+            })
+            .unwrap_or(false)
+    }
+
+    /// List active background tasks for a session.
+    pub fn background_tasks(
+        &self,
+        session_key: &SessionKey,
+    ) -> Vec<crate::session::BackgroundTaskEntry> {
+        self.process_table
+            .with(session_key, |session| session.background_tasks.clone())
+            .unwrap_or_default()
+    }
+
     // -- Memory operations --
 
     /// Store a value in a session's private namespace.

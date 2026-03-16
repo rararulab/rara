@@ -286,6 +286,19 @@ impl SyscallDispatcher {
                     registry.register(Arc::new(crate::tool::schedule::ScheduleCronTool));
                     registry.register(Arc::new(crate::tool::schedule::ScheduleRemoveTool));
                     registry.register(Arc::new(crate::tool::schedule::ScheduleListTool));
+                    // Background agent tools
+                    registry.register(Arc::new(
+                        crate::tool::spawn_background::SpawnBackgroundTool::new(
+                            kernel_handle.clone(),
+                            syscall_sender,
+                        ),
+                    ));
+                    registry.register(Arc::new(
+                        crate::tool::cancel_background::CancelBackgroundTool::new(
+                            kernel_handle.clone(),
+                            syscall_sender,
+                        ),
+                    ));
                     // Plan tools
                     registry.register(Arc::new(crate::tool::create_plan::CreatePlanTool));
                 }

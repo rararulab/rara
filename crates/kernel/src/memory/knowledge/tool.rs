@@ -80,7 +80,7 @@ impl AgentTool for MemoryTool {
     async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let action = params.get("action").and_then(Value::as_str).unwrap_or("");
 
-        let username = context.user_id.as_deref().unwrap_or("default");
+        let username = context.user_id.as_str();
 
         match action {
             "search" => {

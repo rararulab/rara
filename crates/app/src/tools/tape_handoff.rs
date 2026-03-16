@@ -68,11 +68,7 @@ impl AgentTool for TapeHandoffTool {
         params: serde_json::Value,
         context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let tape_name = context
-            .session_key
-            .as_ref()
-            .map(|k| k.to_string())
-            .ok_or_else(|| anyhow::anyhow!("no session context"))?;
+        let tape_name = context.session_key.to_string();
 
         let anchor_name = params
             .get("name")

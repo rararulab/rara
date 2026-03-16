@@ -82,10 +82,7 @@ impl AgentTool for UserNoteTool {
         params: serde_json::Value,
         context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let user_id = context
-            .user_id
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("no authenticated user in session context"))?;
+        let user_id = context.user_id.as_str();
         let category = params
             .get("category")
             .and_then(|v| v.as_str())

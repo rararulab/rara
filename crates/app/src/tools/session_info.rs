@@ -54,10 +54,7 @@ impl AgentTool for SessionInfoTool {
         _params: serde_json::Value,
         context: &rara_kernel::tool::ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let session_key = context
-            .session_key
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no active session"))?;
+        let session_key = &context.session_key;
 
         let entry = self
             .session_index

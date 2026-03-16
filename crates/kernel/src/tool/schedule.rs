@@ -41,13 +41,8 @@ async fn register_job(
 ) -> anyhow::Result<ToolOutput> {
     let next_at = trigger.next_at();
 
-    let event_queue = context
-        .event_queue
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no event queue in tool context"))?;
-    let session_key = context
-        .session_key
-        .ok_or_else(|| anyhow::anyhow!("no session key in tool context"))?;
+    let event_queue = &context.event_queue;
+    let session_key = context.session_key;
 
     let (tx, rx) = oneshot::channel();
     let _ = event_queue.push(KernelEventEnvelope::session_command(
@@ -331,13 +326,8 @@ impl AgentTool for ScheduleRemoveTool {
         let p: ScheduleRemoveParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid schedule-remove params: {e}"))?;
 
-        let event_queue = context
-            .event_queue
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no event queue in tool context"))?;
-        let session_key = context
-            .session_key
-            .ok_or_else(|| anyhow::anyhow!("no session key in tool context"))?;
+        let event_queue = &context.event_queue;
+        let session_key = context.session_key;
 
         let job_id = JobId::try_from_raw(&p.job_id)
             .map_err(|e| anyhow::anyhow!("invalid job_id '{}': {e}", p.job_id))?;
@@ -388,13 +378,8 @@ impl AgentTool for ScheduleListTool {
         _params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let event_queue = context
-            .event_queue
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no event queue in tool context"))?;
-        let session_key = context
-            .session_key
-            .ok_or_else(|| anyhow::anyhow!("no session key in tool context"))?;
+        let event_queue = &context.event_queue;
+        let session_key = context.session_key;
 
         let (tx, rx) = oneshot::channel();
         let _ = event_queue.push(KernelEventEnvelope::session_command(

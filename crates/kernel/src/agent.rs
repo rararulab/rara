@@ -746,7 +746,8 @@ pub(crate) async fn run_agent_loop(
     // Filter tools by user permissions — users can only see tools they are
     // authorized to use.  This prevents the LLM from even attempting to call
     // tools the user lacks permission for.
-    let tools = if let Some(ref user_id) = tool_context.user_id {
+    let tools = {
+        let user_id = &tool_context.user_id;
         match handle.security().user_store().get_by_name(user_id).await {
             Ok(Some(user)) => {
                 let filtered = manifest_filtered.filtered_by_user(&user);
@@ -756,14 +757,12 @@ pub(crate) async fn run_agent_loop(
                         .filter(|(name, _)| !user.can_use_tool(name))
                         .map(|(name, _)| name.to_string())
                         .collect();
-                    info!(user_id, ?denied, "filtered tools by user permissions");
+                    info!(user_id = user_id.as_str(), ?denied, "filtered tools by user permissions");
                 }
                 Arc::new(filtered)
             }
             _ => Arc::new(manifest_filtered),
         }
-    } else {
-        Arc::new(manifest_filtered)
     };
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
@@ -826,7 +825,7 @@ pub(crate) async fn run_agent_loop(
     // each iteration re-sends the full context.
     let mut cumulative_output_tokens: u32 = 0;
     let mut cumulative_thinking_ms: u64 = 0;
-    let user_id = tool_context.user_id.as_deref();
+    let user_id = Some(tool_context.user_id.as_str());
 
     for iteration in 0..max_iterations {
         // ── Rebuild messages from tape each iteration (single source of truth) ──
@@ -864,6 +863,52 @@ pub(crate) async fn run_agent_loop(
         // Inject LLM error recovery message from previous iteration
         if let Some(recovery_msg) = llm_error_recovery_message.take() {
             messages.push(llm::Message::user(recovery_msg));
+        }
+
+        // Inject active background tasks status (first iteration only to
+        // avoid repeated token cost in multi-iteration turns).
+        let bg_tasks = if iteration == 0 {
+            handle.background_tasks(&session_key)
+        } else {
+            Vec::new()
+        };
+        if !bg_tasks.is_empty() {
+            let task_list: String = bg_tasks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let elapsed = jiff::Timestamp::now()
+                        .since(t.created_at)
+                        .ok()
+                        .map(|d| {
+                            let secs = d.get_seconds();
+                            if secs < 60 {
+                                format!("{secs}s ago")
+                            } else {
+                                format!("{}m ago", secs / 60)
+                            }
+                        })
+                        .unwrap_or_else(|| "just now".to_string());
+                    format!(
+                        "  {}. task_id={} name={} — {} (started {}, triggered_by={})",
+                        i + 1,
+                        t.child_key,
+                        t.agent_name,
+                        t.description,
+                        elapsed,
+                        t.trigger_message_id,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            messages.push(crate::llm::Message::user(format!(
+                "[Active Background Tasks]\n\
+                 You have {} background task(s) running:\n{task_list}\n\
+                 Results will be delivered automatically when complete. \
+                 Use cancel-background(task_id) to cancel if needed.",
+                bg_tasks.len()
+            )));
         }
 
         messages = sanitize_messages_for_llm(&messages);
@@ -1316,17 +1361,13 @@ pub(crate) async fn run_agent_loop(
         iter_span.record("tool_count", valid_tool_calls.len());
 
         // Resolve user for runtime permission guard (defense in depth).
-        let runtime_user = if let Some(ref uid) = tool_context.user_id {
-            handle
-                .security()
-                .user_store()
-                .get_by_name(uid)
-                .await
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
+        let runtime_user = handle
+            .security()
+            .user_store()
+            .get_by_name(&tool_context.user_id)
+            .await
+            .ok()
+            .flatten();
 
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls

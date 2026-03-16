@@ -722,6 +722,7 @@ impl Kernel {
             paused: false,
             origin_endpoint,
             pause_buffer: Vec::new(),
+            background_tasks: Vec::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _parent_child_permit: None,
             _global_permit: global_permit,
@@ -899,6 +900,118 @@ impl Kernel {
             .await
         {
             warn!(%e, "failed to persist child result message to tape");
+        }
+
+        // If this child was a background task, trigger a proactive turn on the
+        // parent to deliver the result.
+        let is_background = self
+            .handle()
+            .is_background_task(&parent_id, &child_id);
+
+        if is_background {
+            // Capture trigger_message_id before removing from active list.
+            let trigger_message_id = self
+                .handle()
+                .process_table()
+                .with(&parent_id, |p| {
+                    p.background_tasks
+                        .iter()
+                        .find(|t| t.child_key == child_id)
+                        .map(|t| t.trigger_message_id.clone())
+                })
+                .flatten();
+
+            // Remove from active list.
+            self.handle()
+                .remove_background_task(&parent_id, &child_id);
+
+            // TODO: AgentRunLoopResult has no explicit success/error field.
+            // This heuristic is fragile — consider adding a status field to
+            // AgentRunLoopResult in a follow-up.
+            use crate::io::BackgroundTaskStatus;
+            let status = if result.output.starts_with("error:")
+                || result.output.starts_with("Error:")
+                || result.iterations == 0
+            {
+                BackgroundTaskStatus::Failed
+            } else {
+                BackgroundTaskStatus::Completed
+            };
+
+            // NOTE: The child session may already be removed from the
+            // process table by cleanup_process() before this event is
+            // handled. In that case turn_traces is unavailable and the
+            // debug trace section will be empty. The child's tape file
+            // (~/.config/rara/tapes/{child_id}.jsonl) still contains the
+            // full history for post-mortem analysis.
+            let trace_section = if status == BackgroundTaskStatus::Failed {
+                self.process_table
+                    .with(&child_id, |p| {
+                        p.turn_traces
+                            .last()
+                            .and_then(|t| serde_json::to_string_pretty(t).ok())
+                    })
+                    .flatten()
+                    .map(|trace| format!("\n\n[Debug Trace]\n{trace}"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            let status_label = match status {
+                BackgroundTaskStatus::Failed => "failed",
+                BackgroundTaskStatus::Completed => "completed",
+                BackgroundTaskStatus::Cancelled => "cancelled",
+            };
+            let trigger_info = trigger_message_id
+                .as_ref()
+                .map(|id| format!("trigger_message_id={id}\n"))
+                .unwrap_or_default();
+            let directive = format!(
+                "[Background Task {status_label}]\n\
+                 task_id={child_id}\n\
+                 {trigger_info}\
+                 iterations={}, tool_calls={}\n\n\
+                 Result:\n{truncated_output}{trace_section}\n\n\
+                 Proactively inform the user of the outcome. Be concise. \
+                 If the task failed, explain what went wrong.",
+                result.iterations, result.tool_calls,
+            );
+
+            let system_user = crate::identity::UserId("system".to_string());
+            let mut msg = crate::io::InboundMessage::synthetic(
+                directive,
+                system_user,
+                parent_id,
+            );
+            msg.metadata.insert(
+                "background_task_done".to_string(),
+                serde_json::json!(child_id.to_string()),
+            );
+            if let Some(ref mid) = trigger_message_id {
+                msg.metadata.insert(
+                    "trigger_message_id".to_string(),
+                    serde_json::json!(mid.to_string()),
+                );
+            }
+
+            // Emit BackgroundTaskDone so clients remove the status indicator.
+            self.io.stream_hub().emit_to_session(
+                &parent_id,
+                crate::io::StreamEvent::BackgroundTaskDone {
+                    task_id: child_id.to_string(),
+                    status,
+                },
+            );
+
+            info!(
+                parent_id = %parent_id,
+                child_id = %child_id,
+                status = ?status,
+                "triggering proactive turn for background task result"
+            );
+
+            self.deliver_to_session(parent_id, msg).await;
         }
     }
 
@@ -2038,10 +2151,11 @@ impl Kernel {
                 // etc.). The ToolContext carries the authenticated user_id so
                 // tools can access it without relying on LLM-supplied identity.
                 let tool_context = crate::tool::ToolContext {
-                    user_id: Some(user.0.clone()),
-                    session_key: Some(session_key.clone()),
+                    user_id: user.0.clone(),
+                    session_key: session_key.clone(),
                     origin_endpoint: origin_endpoint.clone(),
-                    event_queue: Some(event_queue.clone()),
+                    event_queue: event_queue.clone(),
+                    rara_message_id: msg_id.clone(),
                 };
 
                 // Route to v1 (reactive) or v2 (plan-execute) based on the
