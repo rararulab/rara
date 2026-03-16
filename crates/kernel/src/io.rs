@@ -882,6 +882,17 @@ pub enum StreamEvent {
     PlanReplan { reason: String },
     /// The plan has completed successfully.
     PlanCompleted { summary: String },
+    /// A dock turn has completed with mutations and updated canvas state.
+    DockTurnComplete {
+        session_id:      String,
+        reply:           String,
+        mutations:       Vec<serde_json::Value>,
+        blocks:          Vec<serde_json::Value>,
+        facts:           Vec<serde_json::Value>,
+        annotations:     Vec<serde_json::Value>,
+        history:         Vec<serde_json::Value>,
+        selected_anchor: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
