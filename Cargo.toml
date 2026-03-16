@@ -169,7 +169,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "hostname",
 ] }
-lineark-sdk = "1.1"
+lineark-sdk = "2.0"
 md5 = "0.7"
 moka = { version = "0.12", features = ["future"] }
 notify = "7"
