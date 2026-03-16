@@ -35,6 +35,99 @@ function sanitizeHtml(html: string): string {
     .replace(/href\s*=\s*'javascript:[^']*'/gi, "href='#'");
 }
 
+// ── Chart block parsing & rendering ──────────────────────────────────
+
+interface ChartData {
+  title: string;
+  labels: string[];
+  values: number[];
+  type: string;
+}
+
+/**
+ * Extract attribute value from an HTML tag string.
+ */
+function extractAttr(tag: string, name: string): string {
+  const re = new RegExp(`${name}\\s*=\\s*"([^"]*)"`, "i");
+  const match = tag.match(re);
+  return match?.[1] ?? "";
+}
+
+/**
+ * Detect whether a block contains a `<chart>` tag and parse its attributes.
+ * Returns `null` when no chart data is found.
+ */
+function parseChart(block: DockBlock): ChartData | null {
+  if (block.block_type === "chart" || /<chart[\s>]/i.test(block.html)) {
+    const tagMatch = block.html.match(/<chart[^>]*>/i);
+    if (!tagMatch) return null;
+    const tag = tagMatch[0];
+
+    const title = extractAttr(tag, "title");
+    const labelsRaw = extractAttr(tag, "labels");
+    const valuesRaw = extractAttr(tag, "values");
+    const type = extractAttr(tag, "type") || "bar";
+
+    const labels = labelsRaw ? labelsRaw.split(",").map((s) => s.trim()) : [];
+    const values = valuesRaw
+      ? valuesRaw.split(",").map((s) => Number(s.trim()))
+      : [];
+
+    return { title, labels, values, type };
+  }
+  return null;
+}
+
+function DockChart({ data }: { data: ChartData }) {
+  const maxValue = Math.max(...data.values, 1);
+
+  if (data.labels.length === 0 || data.values.length === 0) {
+    return (
+      <div className="rounded-lg bg-muted/30 p-4 text-xs text-muted-foreground">
+        {data.title && (
+          <h6 className="mb-1 font-semibold text-foreground">{data.title}</h6>
+        )}
+        <span>n/a</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg bg-muted/30 p-4 text-xs">
+      {data.title && (
+        <h6 className="mb-1 font-semibold text-foreground">{data.title}</h6>
+      )}
+      {data.type !== "bar" && (
+        <p className="mb-2 text-[11px] text-muted-foreground">
+          Displayed as bar ({data.type} not supported)
+        </p>
+      )}
+      <div className="space-y-1">
+        {data.labels.map((label, i) => {
+          const value = data.values[i] ?? 0;
+          const pct = Math.max((value / maxValue) * 100, 2);
+          return (
+            <div key={i} className="flex items-center gap-2">
+              <span className="w-16 shrink-0 truncate text-right text-muted-foreground">
+                {label}
+              </span>
+              <div className="relative flex-1">
+                <div
+                  className="h-5 rounded bg-primary/80 transition-all"
+                  style={{ width: `${pct}%` }}
+                />
+                <span className="absolute inset-y-0 left-1.5 flex items-center text-[11px] font-medium text-primary-foreground">
+                  {value}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface DockDiffViewProps {
   original: string;
   modified: string;
@@ -109,12 +202,18 @@ export default function DockBlockRenderer({
   block,
   onDismissDiff,
 }: DockBlockRendererProps) {
+  const chartData = parseChart(block);
+
   return (
     <div className="dock-block-inner group rounded-xl border border-border/50 bg-card/60 p-4 transition-colors hover:border-border">
-      <div
-        className="prose prose-sm dark:prose-invert max-w-none"
-        dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html) }}
-      />
+      {chartData ? (
+        <DockChart data={chartData} />
+      ) : (
+        <div
+          className="prose prose-sm dark:prose-invert max-w-none"
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html) }}
+        />
+      )}
       {block.diff && (
         <DockDiffView
           original={block.diff.original}
