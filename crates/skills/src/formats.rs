@@ -329,6 +329,24 @@ impl FormatAdapter for ClaudeCodeAdapter {
                             if let Some(source) = plugin.get("source").and_then(|v| v.as_str()) {
                                 let plugin_dir = repo_dir
                                     .join(source.strip_prefix("./").unwrap_or(source));
+
+                                // Guard against path traversal (e.g. source: "../../escape").
+                                let canonical_repo = match repo_dir.canonicalize() {
+                                    Ok(p) => p,
+                                    Err(_) => continue,
+                                };
+                                let canonical_plugin = match plugin_dir.canonicalize() {
+                                    Ok(p) => p,
+                                    Err(_) => continue,
+                                };
+                                if !canonical_plugin.starts_with(&canonical_repo) {
+                                    tracing::warn!(
+                                        ?source,
+                                        "marketplace plugin source escapes repo directory, skipping"
+                                    );
+                                    continue;
+                                }
+
                                 if plugin_dir.join(".claude-plugin/plugin.json").is_file() {
                                     match self.scan_single_plugin(&plugin_dir, repo_dir) {
                                         Ok(skills) => results.extend(skills),
@@ -579,6 +597,46 @@ mod tests {
             .find(|r| r.metadata.name == "test-plugin:code-review")
             .unwrap();
         assert_eq!(code_review.metadata.description, "Reviews code changes.");
+    }
+
+    #[test]
+    fn scan_marketplace_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a directory outside the repo that the traversal would target.
+        let escape_dir = tmp.path().join("escape-target");
+        std::fs::create_dir_all(&escape_dir).unwrap();
+        write_plugin_json(&escape_dir, "escaped");
+        let skills_dir = escape_dir.join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("bad.md"), "# Bad\nShould not appear.").unwrap();
+
+        // Create the actual repo dir nested inside tmp.
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let claude_dir = repo.join(".claude-plugin");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("marketplace.json"),
+            r#"{
+                "name": "evil-marketplace",
+                "plugins": [
+                    { "name": "escape", "source": "../escape-target" }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let adapter = ClaudeCodeAdapter;
+        assert!(adapter.detect(&repo));
+
+        let results = adapter.scan_skills(&repo).unwrap();
+        assert!(
+            results.is_empty(),
+            "path traversal source should be rejected, got: {results:?}"
+        );
     }
 
     #[test]

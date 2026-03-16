@@ -163,34 +163,62 @@ impl MarketplaceService {
         let url =
             format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json");
         let client = reqwest::Client::new();
-        let resp: serde_json::Value = client
+        let raw_resp = client
             .get(&url)
             .header("User-Agent", "rara-marketplace")
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await
-            .context(crate::error::RequestSnafu)?
-            .json()
-            .await
             .context(crate::error::RequestSnafu)?;
+
+        let status = raw_resp.status();
+        let is_not_found = status == reqwest::StatusCode::NOT_FOUND;
+
+        // For non-404 errors (rate limit, auth failure, server error), propagate immediately.
+        if !status.is_success() && !is_not_found {
+            return Err(crate::error::SkillError::HttpStatus {
+                status: status.as_u16(),
+                url,
+            });
+        }
+
+        let resp: serde_json::Value = raw_resp.json().await.context(crate::error::RequestSnafu)?;
 
         let content_b64 = match resp.get("content").and_then(|v| v.as_str()) {
             Some(c) => c.to_string(),
             None => {
+                // Only fall back to plugin.json when marketplace.json is genuinely absent (404).
+                if !is_not_found {
+                    return Err(crate::error::SkillError::InvalidInput {
+                        message: format!(
+                            "marketplace.json for '{repo}' returned HTTP {status} but has no \
+                             'content' field"
+                        ),
+                    });
+                }
+
                 // Fallback: try .claude-plugin/plugin.json for single-plugin repos.
                 let fallback_url = format!(
                     "https://api.github.com/repos/{repo}/contents/.claude-plugin/plugin.json"
                 );
-                let fallback_resp: serde_json::Value = client
+                let fallback_raw = client
                     .get(&fallback_url)
                     .header("User-Agent", "rara-marketplace")
                     .header("Accept", "application/vnd.github.v3+json")
                     .send()
                     .await
-                    .context(crate::error::RequestSnafu)?
-                    .json()
-                    .await
                     .context(crate::error::RequestSnafu)?;
+
+                let fallback_status = fallback_raw.status();
+                if !fallback_status.is_success() {
+                    return Err(crate::error::SkillError::HttpStatus {
+                        status: fallback_status.as_u16(),
+                        url:    fallback_url,
+                    });
+                }
+
+                let fallback_resp: serde_json::Value =
+                    fallback_raw.json().await.context(crate::error::RequestSnafu)?;
 
                 let fallback_b64 = fallback_resp
                     .get("content")
@@ -361,11 +389,12 @@ impl MarketplaceService {
     /// Adds the repo as a marketplace source, downloads it, scans for skills,
     /// and enables all discovered skills.
     pub async fn install_repo(&self, repo: &str) -> Result<PluginInstallResult> {
-        // Ensure this repo is registered as a source.
-        self.add_source(repo)?;
-
+        // Install first; only register the source after a successful download
+        // so a failed install does not leave a stale source entry.
         let install_dir = crate::install::default_install_dir()?;
         crate::install::install_skill(repo, &install_dir).await?;
+
+        self.add_source(repo)?;
 
         // Load manifest, enable all skills from this repo, and save.
         let manifest_path = crate::manifest::ManifestStore::default_path()?;

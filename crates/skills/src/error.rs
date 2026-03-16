@@ -54,6 +54,9 @@ pub enum SkillError {
     #[snafu(display("request error: {source}"))]
     Request { source: reqwest::Error },
 
+    #[snafu(display("GitHub API returned HTTP {status} for {url}"))]
+    HttpStatus { status: u16, url: String },
+
     #[snafu(display("{message}"))]
     InvalidInput { message: String },
 
