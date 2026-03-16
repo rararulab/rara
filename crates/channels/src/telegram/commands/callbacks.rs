@@ -16,6 +16,8 @@
 //!
 //! - [`SessionSwitchCallbackHandler`] — handles `switch:{session_key}`
 //!   callbacks.
+//! - [`SessionDetailCallbackHandler`] — handles `detail:{session_key}`
+//!   callbacks.
 //! - Search pagination callbacks handle `search_more:{count}:{params}`.
 
 use std::sync::Arc;
@@ -69,6 +71,51 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
 }
 
 // ---------------------------------------------------------------------------
+// SessionDetailCallbackHandler
+// ---------------------------------------------------------------------------
+
+/// Handles `detail:{session_key}` callback queries from the `/sessions`
+/// inline keyboard — shows session details for the currently active session.
+pub struct SessionDetailCallbackHandler {
+    client: Arc<dyn BotServiceClient>,
+}
+
+impl SessionDetailCallbackHandler {
+    /// Create a new handler backed by the given service client.
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
+}
+
+#[async_trait]
+impl CallbackHandler for SessionDetailCallbackHandler {
+    fn prefix(&self) -> &str { "detail:" }
+
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
+        let session_key = &context.data["detail:".len()..];
+
+        match self.client.get_session(session_key).await {
+            Ok(detail) => {
+                let title = detail.title.as_deref().unwrap_or("Untitled");
+                let model = detail.model.as_deref().unwrap_or("(default)");
+                let text = format!(
+                    "<b>{}</b>\nKey: <code>{}</code>\nModel: {}\nMessages: {}\nCreated: {}\nLast \
+                     active: {}",
+                    html_escape(title),
+                    html_escape(&detail.key),
+                    html_escape(model),
+                    detail.message_count,
+                    format_timestamp(&detail.created_at),
+                    format_timestamp(&detail.updated_at),
+                );
+                Ok(CallbackResult::SendMessage { text })
+            }
+            Err(e) => Ok(CallbackResult::SendMessage {
+                text: format!("Failed to get session details: {e}"),
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -76,4 +123,16 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// Format an ISO-8601 timestamp into a compact `YYYY-MM-DD HH:MM` form.
+fn format_timestamp(raw: &str) -> String {
+    if raw.len() >= 16 {
+        let date_part = &raw[..10];
+        let time_part = &raw[11..16];
+        if !time_part.is_empty() {
+            return format!("{date_part} {time_part}");
+        }
+    }
+    raw.to_owned()
 }

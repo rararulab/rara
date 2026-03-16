@@ -132,14 +132,16 @@ impl SessionCommandHandler {
         }
     }
 
-    /// `/sessions` — list sessions with inline keyboard for switching.
+    /// `/sessions` — list sessions as a pure inline keyboard.
+    ///
+    /// Active session shows a checkmark and triggers `detail:` callback;
+    /// inactive sessions trigger `switch:` callback.
     async fn handle_sessions(
         &self,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
         let (channel_type, chat_id) = extract_channel_info(context);
 
-        // Find the currently active session key.
         let active_key = match self
             .client
             .get_channel_session(channel_type, &chat_id)
@@ -167,42 +169,36 @@ impl SessionCommandHandler {
             ));
         }
 
-        let mut text = String::from("<b>Your sessions:</b>\n\n");
+        let header = format!("\u{1f4cb} Sessions ({} total)", sessions.len());
         let mut keyboard_rows: Vec<Vec<InlineButton>> = Vec::new();
 
-        for (i, s) in sessions.iter().enumerate() {
-            let title = s.title.as_deref().unwrap_or(&s.key);
+        for s in &sessions {
+            let display_name = session_display_name(s);
             let is_active = active_key.as_deref() == Some(s.key.as_str());
-            let marker = if is_active { " \u{2705}" } else { "" };
 
-            let _ = writeln!(
-                text,
-                "{}. <b>{}</b>{marker}\n   <code>{}</code> ({} msgs)",
-                i + 1,
-                html_escape(title),
-                html_escape(&s.key),
-                s.message_count,
-            );
+            let (label, cb_data) = if is_active {
+                (
+                    format!("\u{2705} {} ({} msgs)", display_name, s.message_count),
+                    format!("detail:{}", truncate_str(&s.key, 56)),
+                )
+            } else {
+                (
+                    format!("{} ({} msgs)", display_name, s.message_count),
+                    format!("switch:{}", truncate_str(&s.key, 56)),
+                )
+            };
 
-            if !is_active {
-                let label = format!("Switch to: {}", truncate_str(title, 30));
-                let cb_data = format!("switch:{}", truncate_str(&s.key, 56));
-                keyboard_rows.push(vec![InlineButton {
-                    text:          label,
-                    callback_data: Some(cb_data),
-                    url:           None,
-                }]);
-            }
+            keyboard_rows.push(vec![InlineButton {
+                text:          label,
+                callback_data: Some(cb_data),
+                url:           None,
+            }]);
         }
 
-        if keyboard_rows.is_empty() {
-            Ok(CommandResult::Html(text))
-        } else {
-            Ok(CommandResult::HtmlWithKeyboard {
-                html:     text,
-                keyboard: keyboard_rows,
-            })
-        }
+        Ok(CommandResult::HtmlWithKeyboard {
+            html:     header,
+            keyboard: keyboard_rows,
+        })
     }
 
     /// `/usage` — show details about the current session.
@@ -458,4 +454,14 @@ fn format_timestamp(raw: &str) -> String {
         }
     }
     raw.to_owned()
+}
+
+/// Resolve a human-readable display name for a session.
+///
+/// Priority: title -> "Untitled".
+fn session_display_name(s: &super::client::SessionListItem) -> String {
+    if let Some(ref title) = s.title {
+        return truncate_str(title, 30).to_owned();
+    }
+    "Untitled".to_owned()
 }
