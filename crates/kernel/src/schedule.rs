@@ -243,6 +243,11 @@ impl JobWheel {
             .collect()
     }
 
+    /// Returns `true` if any active jobs are bound to the given session.
+    pub fn has_jobs_for_session(&self, session_key: &SessionKey) -> bool {
+        self.jobs.values().any(|e| e.session_key == *session_key)
+    }
+
     /// Persist the current state to the JSON file.
     pub fn persist(&self) {
         let entries: Vec<&JobEntry> = self.jobs.values().collect();

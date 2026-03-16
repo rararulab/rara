@@ -1035,6 +1035,22 @@ impl Kernel {
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
     async fn cleanup_process(&self, session_key: SessionKey) {
+        // Do not remove sessions that own active scheduled jobs — they must
+        // stay in the process table so that fired jobs can deliver results
+        // back via the background-task / child-completed path.
+        if let Ok(wheel) = self.syscall.job_wheel().lock() {
+            if wheel.has_jobs_for_session(&session_key) {
+                info!(
+                    session_key = %session_key,
+                    "skipping cleanup: session has active scheduled jobs"
+                );
+                let _ = self
+                    .process_table
+                    .set_state(session_key, SessionState::Ready);
+                return;
+            }
+        }
+
         self.guard_pipeline
             .taint_tracker()
             .clear_session(&session_key);
@@ -1313,10 +1329,7 @@ impl Kernel {
                 "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
                  {trigger_summary}\nTask: {message}\n\n## Instructions\n1. Execute the task \
                  described above using available tools.\n2. After completion, provide a brief \
-                 summary of what you did and the outcome.\n\n## After Completion\nWhen you finish \
-                 the task, call the `kernel` tool with:\n- action: \"publish\"\n- event_type: \
-                 \"scheduled_task_done\"\n- payload: {{ \"message\": \"<your summary of what was \
-                 done and the outcome>\" }}\n",
+                 summary of what you did and the outcome.\n",
                 message = job.message,
             ),
             soul_prompt:            None,
@@ -1338,10 +1351,10 @@ impl Kernel {
                 manifest,
                 job.message.clone(),
                 principal,
-                None, // no parent
-                None, // no resume
-                None, // independent session, don't pollute the original tape
-                None, // no origin endpoint
+                Some(job.session_key), // link to parent session
+                None,                  // no resume
+                None,                  // let kernel generate session key
+                None,                  // no origin endpoint
             )
             .await
         {
@@ -1349,10 +1362,32 @@ impl Kernel {
                 info!(
                     job_id = %job_id,
                     session_key = %spawned_key,
-                    "scheduled job agent spawned"
+                    parent_key = %job.session_key,
+                    "scheduled job agent spawned with parent linkage"
                 );
-                // The agent will send a notification via PublishEvent
-                // (SendNotification) when it completes.
+
+                // Register as background task so handle_child_completed triggers
+                // a proactive turn on the parent when the job finishes.
+                self.handle().register_background_task(
+                    &job.session_key,
+                    crate::session::BackgroundTaskEntry {
+                        child_key:          spawned_key,
+                        agent_name:         "scheduled_job".to_string(),
+                        description:        job.message.clone(),
+                        created_at:         jiff::Timestamp::now(),
+                        trigger_message_id: crate::io::MessageId::new(),
+                    },
+                );
+
+                // Emit BackgroundTaskStarted so clients show a status indicator.
+                self.io.stream_hub().emit_to_session(
+                    &job.session_key,
+                    crate::io::StreamEvent::BackgroundTaskStarted {
+                        task_id:     spawned_key.to_string(),
+                        agent_name:  "scheduled_job".to_string(),
+                        description: job.message.clone(),
+                    },
+                );
             }
             Err(e) => {
                 error!(
