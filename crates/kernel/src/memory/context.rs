@@ -30,6 +30,12 @@ use crate::llm::{Message, ToolCallRequest};
 /// hint is appended to the system message suggesting memory consolidation.
 const CONSOLIDATION_HINT_THRESHOLD: usize = 15;
 
+/// Hard safety cap on notes injected into LLM context.  When notes exceed this
+/// limit the most recent entries are kept and a prominent overflow warning is
+/// prepended.  This prevents unbounded context growth when distillation is
+/// delayed.
+const MAX_USER_NOTES_HARD_CAP: usize = 50;
+
 /// Reconstruct LLM messages from persisted tape entries.
 ///
 /// The reconstruction mirrors Bub's behavior:
@@ -241,15 +247,31 @@ pub fn anchor_summary_from_entries(entries: &[TapEntry]) -> Option<String> {
 /// system message.  Returns `None` when the user tape has no notes, so the
 /// caller can skip injection entirely.
 pub fn user_tape_context(entries: &[TapEntry], anchor_summary: Option<&str>) -> Option<Message> {
-    let notes: Vec<&TapEntry> = entries
+    let all_notes: Vec<&TapEntry> = entries
         .iter()
         .filter(|e| e.kind == TapEntryKind::Note)
         .collect();
 
-    let note_count = notes.len();
+    let total_notes = all_notes.len();
+
+    // Apply hard safety cap — keep the most recent entries when the note count
+    // exceeds the limit so we never blow up the model context window.
+    let (notes, overflowed) = if total_notes > MAX_USER_NOTES_HARD_CAP {
+        (&all_notes[total_notes - MAX_USER_NOTES_HARD_CAP..], true)
+    } else {
+        (&all_notes[..], false)
+    };
+
     let mut sections: Vec<String> = Vec::new();
 
-    for entry in &notes {
+    if overflowed {
+        sections.push(format!(
+            "[Memory overflow: {total_notes} notes since last consolidation, showing most recent \
+             {MAX_USER_NOTES_HARD_CAP}. Urgent distillation needed.]"
+        ));
+    }
+
+    for entry in notes {
         let category = entry
             .payload
             .get("category")
@@ -291,9 +313,9 @@ pub fn user_tape_context(entries: &[TapEntry], anchor_summary: Option<&str>) -> 
         body.push_str(&sections.join("\n"));
     }
 
-    if note_count > CONSOLIDATION_HINT_THRESHOLD {
+    if total_notes > CONSOLIDATION_HINT_THRESHOLD {
         body.push_str(&format!(
-            "\n[Memory Status: {note_count} notes since last consolidation. Memory consolidation \
+            "\n[Memory Status: {total_notes} notes since last consolidation. Memory consolidation \
              may be needed soon.]"
         ));
     }
@@ -407,6 +429,53 @@ mod tests {
             _ => panic!("expected text content"),
         };
         assert!(text.contains("[Memory Status: 16 notes since last consolidation"));
+    }
+
+    #[test]
+    fn user_tape_context_hard_cap_truncates_at_50() {
+        let entries: Vec<TapEntry> = (0..60)
+            .map(|i| note_entry("fact", &format!("note {i}"), "2026-03-06"))
+            .collect();
+        let msg = user_tape_context(&entries, None).expect("should produce a message");
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        // Overflow warning should be present.
+        assert!(text.contains("Memory overflow: 60 notes"));
+        assert!(text.contains("Urgent distillation needed"));
+        // Oldest 10 notes (0..10) should be truncated.
+        for i in 0..10 {
+            // "note 0" through "note 9" must not appear — but careful: "note 0"
+            // is a substring of "note 50" etc. Use the exact formatted line.
+            assert!(
+                !text.contains(&format!("fact] (2026-03-06) note {i}\n")),
+                "note {i} should have been truncated"
+            );
+        }
+        // Most recent 50 notes (10..60) should be present.
+        for i in 10..60 {
+            assert!(text.contains(&format!("note {i}")), "missing note {i}");
+        }
+        // Consolidation hint should also appear (60 > 15).
+        assert!(text.contains("[Memory Status: 60 notes since last consolidation"));
+    }
+
+    #[test]
+    fn user_tape_context_no_overflow_at_exactly_50() {
+        let entries: Vec<TapEntry> = (0..50)
+            .map(|i| note_entry("fact", &format!("note {i}"), "2026-03-06"))
+            .collect();
+        let msg = user_tape_context(&entries, None).expect("should produce a message");
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => panic!("expected text content"),
+        };
+        assert!(!text.contains("Memory overflow"));
+        // All 50 notes present.
+        for i in 0..50 {
+            assert!(text.contains(&format!("note {i}")), "missing note {i}");
+        }
     }
 
     #[test]
