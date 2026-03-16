@@ -55,7 +55,8 @@ impl AgentTool for MarketplaceTool {
                 "action": {
                     "type": "string",
                     "enum": [
-                        "browse", "search", "install", "enable", "disable",
+                        "browse", "search", "install", "install_repo",
+                        "enable", "disable",
                         "add_source", "refresh",
                         "clawhub_search", "clawhub_browse", "clawhub_install"
                     ],
@@ -143,6 +144,20 @@ impl AgentTool for MarketplaceTool {
                 let result = self
                     .service
                     .install_plugin(name, marketplace)
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                Ok(json!(result).into())
+            }
+            "install_repo" => {
+                let source = params
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("'install_repo' requires 'source' parameter (owner/repo)")
+                    })?;
+                let result = self
+                    .service
+                    .install_repo(source)
                     .await
                     .map_err(anyhow::Error::from)?;
                 Ok(json!(result).into())
