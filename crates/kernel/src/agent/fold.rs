@@ -22,10 +22,14 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::error::{KernelError, Result};
-use crate::llm::driver::LlmDriver;
-use crate::llm::types::{CompletionRequest, Message, ToolChoice};
-use crate::memory::HandoffState;
+use crate::{
+    error::{KernelError, Result},
+    llm::{
+        driver::LlmDriver,
+        types::{CompletionRequest, Message, ToolChoice},
+    },
+    memory::HandoffState,
+};
 
 // ---------------------------------------------------------------------------
 // FoldSummary
@@ -35,7 +39,7 @@ use crate::memory::HandoffState;
 #[derive(Debug, Clone)]
 pub struct FoldSummary {
     /// Key information summary of the current context.
-    pub summary: String,
+    pub summary:    String,
     /// Actionable next steps.
     pub next_steps: String,
 }
@@ -43,7 +47,7 @@ pub struct FoldSummary {
 /// Raw JSON shape expected from the fold LLM call.
 #[derive(Deserialize)]
 struct FoldResponse {
-    summary: String,
+    summary:    String,
     next_steps: String,
 }
 
@@ -59,14 +63,12 @@ pub struct ContextFolder {
     /// LLM driver used for summarization.
     driver: Arc<dyn LlmDriver>,
     /// Model identifier for the fold call.
-    model: String,
+    model:  String,
 }
 
 impl ContextFolder {
     /// Create a new folder backed by the given driver and model.
-    pub fn new(driver: Arc<dyn LlmDriver>, model: String) -> Self {
-        Self { driver, model }
-    }
+    pub fn new(driver: Arc<dyn LlmDriver>, model: String) -> Self { Self { driver, model } }
 
     /// Fold a sequence of messages into a compact summary.
     ///
@@ -115,13 +117,11 @@ impl ContextFolder {
     /// needs compression before being written back as a ToolResult.
     pub async fn fold_text(&self, text: &str, target_chars: usize) -> Result<String> {
         let prompt = Message::system(
-            "Compress the following text to be concise while preserving all key facts, \
-             decisions, and actionable information. Use the same language as the input. \
-             Output ONLY the compressed text, no wrapper.",
+            "Compress the following text to be concise while preserving all key facts, decisions, \
+             and actionable information. Use the same language as the input. Output ONLY the \
+             compressed text, no wrapper.",
         );
-        let user_msg = Message::user(format!(
-            "Compress to ~{target_chars} characters:\n\n{text}"
-        ));
+        let user_msg = Message::user(format!("Compress to ~{target_chars} characters:\n\n{text}"));
 
         let max_tokens = (target_chars / 3).clamp(128, 2048) as u32;
 
@@ -281,7 +281,8 @@ mod tests {
 
     #[test]
     fn parse_fold_response_json_in_code_fence() {
-        let input = "```json\n{\"summary\": \"fenced summary\", \"next_steps\": \"fenced steps\"}\n```";
+        let input =
+            "```json\n{\"summary\": \"fenced summary\", \"next_steps\": \"fenced steps\"}\n```";
         let result = parse_fold_response(input).unwrap();
         assert_eq!(result.summary, "fenced summary");
         assert_eq!(result.next_steps, "fenced steps");

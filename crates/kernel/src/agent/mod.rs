@@ -880,16 +880,11 @@ pub(crate) async fn run_agent_loop(
                             );
 
                             // Fetch current LLM messages and prior anchor summary.
-                            let fold_messages =
-                                tape.build_llm_context(tape_name).await;
-                            let prior_entries =
-                                tape.from_last_anchor(tape_name, None).await;
-                            let prior_summary = prior_entries
-                                .as_ref()
-                                .ok()
-                                .and_then(|entries| {
-                                    crate::memory::anchor_summary_from_entries(entries)
-                                });
+                            let fold_messages = tape.build_llm_context(tape_name).await;
+                            let prior_entries = tape.from_last_anchor(tape_name, None).await;
+                            let prior_summary = prior_entries.as_ref().ok().and_then(|entries| {
+                                crate::memory::anchor_summary_from_entries(entries)
+                            });
 
                             match fold_messages {
                                 Ok(msgs) => {
@@ -897,21 +892,16 @@ pub(crate) async fn run_agent_loop(
                                         .fold_with_prior(
                                             prior_summary.as_deref(),
                                             &msgs,
-                                            tape_info.estimated_context_tokens
-                                                as usize,
+                                            tape_info.estimated_context_tokens as usize,
                                         )
                                         .await
                                     {
                                         Ok(summary) => {
-                                            let handoff =
-                                                fold::ContextFolder::to_handoff_state(
-                                                    &summary, pressure,
-                                                );
-                                            if let Err(e) = tape
-                                                .handoff(
-                                                    tape_name, "auto-fold", handoff,
-                                                )
-                                                .await
+                                            let handoff = fold::ContextFolder::to_handoff_state(
+                                                &summary, pressure,
+                                            );
+                                            if let Err(e) =
+                                                tape.handoff(tape_name, "auto-fold", handoff).await
                                             {
                                                 fold_failed_this_turn = true;
                                                 warn!(
@@ -920,10 +910,8 @@ pub(crate) async fn run_agent_loop(
                                                      anchor, disabling for this turn"
                                                 );
                                             } else {
-                                                last_fold_entry_id = tape
-                                                    .last_entry_id(tape_name)
-                                                    .await
-                                                    .ok();
+                                                last_fold_entry_id =
+                                                    tape.last_entry_id(tape_name).await.ok();
                                             }
                                         }
                                         Err(e) => {
@@ -1935,15 +1923,11 @@ mod tests {
         assert!(prompt.contains("<context_contract>"));
         assert!(prompt.contains("`tape`"));
         assert!(prompt.contains("- `anchor`: checkpoint + trim context."));
-        assert!(prompt.contains(
-            "- `search` / `entries`: recall details from before an anchor."
-        ));
+        assert!(prompt.contains("- `search` / `entries`: recall details from before an anchor."));
         assert!(prompt.contains(
             "You need exact tokens, IDs, codes, names, or quoted details from earlier context"
         ));
-        assert!(prompt.contains(
-            "Always include a detailed `summary` and concrete `next_steps`"
-        ));
+        assert!(prompt.contains("Always include a detailed `summary` and concrete `next_steps`"));
         assert!(prompt.contains("<delegation_contract>"));
         assert!(prompt.contains("action: \"spawn\""));
         assert!(prompt.contains("action: \"spawn_parallel\""));

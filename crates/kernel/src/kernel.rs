@@ -80,11 +80,11 @@ use crate::{
 pub struct ContextFoldingConfig {
     /// Whether automatic context folding is enabled.
     #[default = true]
-    pub enabled: bool,
+    pub enabled:                   bool,
     /// Context pressure ratio at which auto-fold triggers (below the 0.70
     /// warning threshold).
     #[default = 0.60]
-    pub fold_threshold: f64,
+    pub fold_threshold:            f64,
     /// Minimum number of new tape entries since the last auto-fold before
     /// another fold is allowed (cooldown).
     #[default = 15]
@@ -92,7 +92,7 @@ pub struct ContextFoldingConfig {
     /// Model to use for fold summarization.  `None` falls back to the
     /// session's current model.
     #[default(_code = "None")]
-    pub fold_model: Option<String>,
+    pub fold_model:                Option<String>,
 }
 
 /// Kernel configuration.
