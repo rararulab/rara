@@ -1924,6 +1924,22 @@ impl Kernel {
         // the LLM turn, the message is already durably stored and won't be
         // lost. The tape is the source of truth for conversation history.
         let user_text = msg.content.as_text();
+
+        // -- Phase 4a: Populate session preview (first message only) --------
+        {
+            let session_index = self.io.session_index();
+            if let Ok(Some(mut entry)) = session_index.get_session(&session_key).await {
+                if entry.preview.is_none() && !user_text.is_empty() {
+                    let preview: String = user_text.chars().take(50).collect();
+                    entry.preview = Some(preview);
+                    entry.updated_at = chrono::Utc::now();
+                    if let Err(e) = session_index.update_session(&entry).await {
+                        tracing::warn!(%e, "failed to write session preview");
+                    }
+                }
+            }
+        }
+
         let turn_data = self
             .process_table
             .with(&session_key, |rt| (rt.session_key, rt.turn_cancel.clone()));
