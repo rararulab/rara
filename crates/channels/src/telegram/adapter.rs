@@ -224,10 +224,6 @@ impl ProgressMessage {
 
 use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
 
-/// Maps Telegram-specific `"{chat_id}:{msg_id}"` → `trace_id` (ULID).
-/// This is UI routing state — the actual trace data lives in SQLite
-/// via [`rara_kernel::trace::TraceService`].
-type TraceIndex = Arc<DashMap<String, String>>;
 
 /// Display tier for plan messages in Telegram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -725,8 +721,6 @@ pub struct TelegramAdapter {
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
-    /// Maps `"{chat_id}:{msg_id}"` → trace ULID for callback routing.
-    trace_index: TraceIndex,
 }
 
 impl TelegramAdapter {
@@ -751,7 +745,6 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
-            trace_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -1086,7 +1079,6 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
-        let trace_index = Arc::clone(&self.trace_index);
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -1142,7 +1134,6 @@ impl ChannelAdapter for TelegramAdapter {
                 stream_hub,
                 active_streams,
                 command_handlers,
-                trace_index,
             )
             .await;
         });
@@ -1194,7 +1185,6 @@ async fn polling_loop(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
-    trace_index: TraceIndex,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1250,7 +1240,6 @@ async fn polling_loop(
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
-                    let trace_index = Arc::clone(&trace_index);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1262,7 +1251,6 @@ async fn polling_loop(
                             &stream_hub,
                             &active_streams,
                             &command_handlers,
-                            &trace_index,
                         )
                         .await;
                     });
@@ -1426,58 +1414,53 @@ async fn handle_trace_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
-    trace_index: &TraceIndex,
     trace_service: &rara_kernel::trace::TraceService,
 ) {
-    // Parse: "trace:show:{chat_id}:{msg_id}" or "trace:hide:{chat_id}:{msg_id}"
-    let parts: Vec<&str> = data.splitn(3, ':').collect();
-    if parts.len() != 3 {
+    // Parse: "trace:{action}:{chat_id}:{msg_id}:{trace_id}"
+    let parts: Vec<&str> = data.splitn(5, ':').collect();
+    if parts.len() != 5 {
         return;
     }
     let action = parts[1];
-    let trace_key = parts[2];
+    let chat_id_str = parts[2];
+    let msg_id_str = parts[3];
+    let trace_id = parts[4];
 
     // Answer callback immediately — removes Telegram spinner.
     let _ = bot.answer_callback_query(callback.id.clone()).await;
 
-    // Look up trace_id from UI routing index, then fetch from SQLite.
-    let Some(trace_id) = trace_index.get(trace_key).map(|r| r.value().clone()) else {
-        return;
-    };
-    let trace = match trace_service.get(&trace_id).await {
+    let trace = match trace_service.get(trace_id).await {
         Ok(Some(t)) => t,
         _ => return,
     };
 
+    let callback_prefix = format!("trace:{{}}:{chat_id_str}:{msg_id_str}:{trace_id}");
     let (text, button_text, next_action) = match action {
         "show" => (
             render_trace_detail(&trace),
             "\u{1f4ca} \u{6536}\u{8d77}",
-            format!("trace:hide:{trace_key}"),
+            callback_prefix.replace("{}", "hide"),
         ),
         _ => (
             render_compact_summary(&trace),
             "\u{1f4ca} \u{8be6}\u{60c5}",
-            format!("trace:show:{trace_key}"),
+            callback_prefix.replace("{}", "show"),
         ),
     };
 
-    // Parse chat_id and msg_id from trace_key
-    if let Some((chat_id_str, msg_id_str)) = trace_key.split_once(':') {
-        if let (Ok(cid), Ok(mid)) =
-            (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
-        {
-            let keyboard =
-                InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-                    button_text,
-                    next_action,
-                )]]);
-            let _ = bot
-                .edit_message_text(ChatId(cid), MessageId(mid), &text)
-                .parse_mode(ParseMode::Html)
-                .reply_markup(keyboard)
-                .await;
-        }
+    if let (Ok(cid), Ok(mid)) =
+        (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>())
+    {
+        let keyboard =
+            InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+                button_text,
+                next_action,
+            )]]);
+        let _ = bot
+            .edit_message_text(ChatId(cid), MessageId(mid), &text)
+            .parse_mode(ParseMode::Html)
+            .reply_markup(keyboard)
+            .await;
     }
 }
 
@@ -1565,7 +1548,6 @@ async fn handle_update(
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
-    trace_index: &TraceIndex,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1584,7 +1566,7 @@ async fn handle_update(
                 return;
             }
             if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, trace_index, handle.trace_service()).await;
+                handle_trace_callback(bot, callback, data, handle.trace_service()).await;
                 return;
             }
         }
@@ -1861,7 +1843,6 @@ async fn handle_update(
                     bot.clone(),
                     chat_id,
                     sid,
-                    Arc::clone(trace_index),
                     handle.trace_service().clone(),
                     rara_message_id.clone(),
                 );
@@ -1958,7 +1939,6 @@ fn spawn_stream_forwarder(
     bot: teloxide::Bot,
     chat_id: i64,
     session_id: rara_kernel::session::SessionKey,
-    trace_index: TraceIndex,
     trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
 ) {
@@ -2337,28 +2317,35 @@ fn spawn_stream_forwarder(
                                 };
 
                                 let compact = render_compact_summary(&trace);
-                                let trace_key = format!("{}:{}", chat_id, mid.0);
-                                let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                                    InlineKeyboardButton::callback(
-                                        "\u{1f4ca} \u{8be6}\u{60c5}",
-                                        format!("trace:show:{trace_key}"),
-                                    ),
-                                ]]);
-
-                                let _ = bot
-                                    .edit_message_text(ChatId(chat_id), mid, &compact)
-                                    .parse_mode(ParseMode::Html)
-                                    .reply_markup(keyboard)
-                                    .await;
-
-                                // Persist trace to SQLite via kernel TraceService
-                                let tape_name = session_id.to_string();
-                                match trace_service.save(&tape_name, &trace).await {
+                                // Persist trace to SQLite, then show compact summary
+                                // with inline button containing the trace_id.
+                                let session_name = session_id.to_string();
+                                match trace_service.save(&session_name, &trace).await {
                                     Ok(trace_id) => {
-                                        trace_index.insert(trace_key, trace_id);
+                                        let callback_data = format!(
+                                            "trace:show:{}:{}:{trace_id}",
+                                            chat_id, mid.0,
+                                        );
+                                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                            InlineKeyboardButton::callback(
+                                                "\u{1f4ca} \u{8be6}\u{60c5}",
+                                                callback_data,
+                                            ),
+                                        ]]);
+
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &compact)
+                                            .parse_mode(ParseMode::Html)
+                                            .reply_markup(keyboard)
+                                            .await;
                                     }
                                     Err(e) => {
                                         warn!(error = %e, "failed to persist execution trace");
+                                        // Still show compact summary, just without the button.
+                                        let _ = bot
+                                            .edit_message_text(ChatId(chat_id), mid, &compact)
+                                            .parse_mode(ParseMode::Html)
+                                            .await;
                                     }
                                 }
                             }
