@@ -27,12 +27,14 @@ pub struct ScreenshotTool {
 }
 
 impl ScreenshotTool {
+    pub const NAME: &str = "screenshot";
+
     pub fn new(project_root: PathBuf) -> Self { Self { project_root } }
 }
 
 #[async_trait]
 impl AgentTool for ScreenshotTool {
-    fn name(&self) -> &str { "screenshot" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Take a screenshot of a web page using Playwright. Useful for previewing frontend work, \

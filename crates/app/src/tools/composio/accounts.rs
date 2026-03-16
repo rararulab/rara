@@ -10,12 +10,14 @@ pub(super) struct ComposioAccountsTool {
 }
 
 impl ComposioAccountsTool {
+    pub const NAME: &str = "composio_accounts";
+
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
 }
 
 #[async_trait]
 impl AgentTool for ComposioAccountsTool {
-    fn name(&self) -> &str { "composio_accounts" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "List connected OAuth accounts on Composio. Shows which third-party apps (Gmail, Notion, \

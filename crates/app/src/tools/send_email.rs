@@ -34,12 +34,14 @@ pub struct SendEmailTool {
 }
 
 impl SendEmailTool {
+    pub const NAME: &str = "send-email";
+
     pub fn new(settings: std::sync::Arc<dyn SettingsProvider>) -> Self { Self { settings } }
 }
 
 #[async_trait]
 impl AgentTool for SendEmailTool {
-    fn name(&self) -> &str { "send-email" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Send an email via Gmail SMTP. Requires Gmail address and App Password to be configured in \

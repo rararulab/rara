@@ -32,12 +32,14 @@ use super::notify::push_notification;
 pub struct EvolveSoulTool;
 
 impl EvolveSoulTool {
+    pub const NAME: &str = "evolve-soul";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for EvolveSoulTool {
-    fn name(&self) -> &str { "evolve-soul" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Write an evolved soul.md for an agent. You (Mita) must generate the full proposed soul \

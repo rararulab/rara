@@ -35,12 +35,14 @@ pub struct DistillUserNotesTool {
 }
 
 impl DistillUserNotesTool {
+    pub const NAME: &str = "distill-user-notes";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for DistillUserNotesTool {
-    fn name(&self) -> &str { "distill-user-notes" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Distill accumulated user notes into a compact summary anchor. Use this when a user's tape \

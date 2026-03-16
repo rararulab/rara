@@ -516,6 +516,8 @@ pub struct SyscallTool {
 }
 
 impl SyscallTool {
+    pub const NAME: &str = crate::tool_names::KERNEL;
+
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
         Self {
             handle,
@@ -908,7 +910,7 @@ fn parse_scope(scope: &str) -> anyhow::Result<KvScope> {
 
 #[async_trait]
 impl crate::tool::AgentTool for SyscallTool {
-    fn name(&self) -> &str { "kernel" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Interact with the kernel: spawn agents, query process status, send signals, manage memory \

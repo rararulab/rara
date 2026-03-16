@@ -28,12 +28,14 @@ const MAX_ENTRIES: usize = 1000;
 pub struct ListDirectoryTool;
 
 impl ListDirectoryTool {
+    pub const NAME: &str = "list-directory";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for ListDirectoryTool {
-    fn name(&self) -> &str { "list-directory" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "List the contents of a directory. Returns each entry's name, type (file/dir/symlink), and \

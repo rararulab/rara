@@ -30,6 +30,8 @@ pub struct HttpFetchTool {
 }
 
 impl HttpFetchTool {
+    pub const NAME: &str = "http-fetch";
+
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
@@ -42,7 +44,7 @@ impl HttpFetchTool {
 
 #[async_trait]
 impl AgentTool for HttpFetchTool {
-    fn name(&self) -> &str { "http-fetch" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body (truncated \

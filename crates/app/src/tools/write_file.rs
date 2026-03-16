@@ -26,12 +26,14 @@ use serde_json::json;
 pub struct WriteFileTool;
 
 impl WriteFileTool {
+    pub const NAME: &str = "write-file";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for WriteFileTool {
-    fn name(&self) -> &str { "write-file" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Write content to a file on the filesystem. Automatically creates parent directories if \

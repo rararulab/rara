@@ -34,12 +34,14 @@ pub struct InstallMcpServerTool {
 }
 
 impl InstallMcpServerTool {
+    pub const NAME: &str = "install-mcp-server";
+
     pub fn new(manager: McpManager) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for InstallMcpServerTool {
-    fn name(&self) -> &str { "install-mcp-server" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Install and start an MCP server. The server's tools become available immediately for \
@@ -160,12 +162,14 @@ pub struct ListMcpServersTool {
 }
 
 impl ListMcpServersTool {
+    pub const NAME: &str = "list-mcp-servers";
+
     pub fn new(manager: McpManager) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for ListMcpServersTool {
-    fn name(&self) -> &str { "list-mcp-servers" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "List all registered MCP servers with their status (enabled, connected) and available \
@@ -255,12 +259,14 @@ pub struct RemoveMcpServerTool {
 }
 
 impl RemoveMcpServerTool {
+    pub const NAME: &str = "remove-mcp-server";
+
     pub fn new(manager: McpManager) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for RemoveMcpServerTool {
-    fn name(&self) -> &str { "remove-mcp-server" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Remove an MCP server from the registry and stop it. Its tools will no longer be available."

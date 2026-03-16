@@ -29,12 +29,14 @@ const DEFAULT_LIMIT: usize = 500;
 pub struct FindFilesTool;
 
 impl FindFilesTool {
+    pub const NAME: &str = "find-files";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for FindFilesTool {
-    fn name(&self) -> &str { "find-files" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Find files matching a glob pattern (e.g. '*.rs', '**/*.toml'). Results are sorted by \

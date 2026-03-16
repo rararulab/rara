@@ -52,4 +52,20 @@ pub mod session;
 pub(crate) mod syscall;
 pub mod tool;
 
+/// Tool name constants for kernel-provided tools.
+///
+/// External crates use these for manifest construction without
+/// accessing internal tool modules or structs.
+pub mod tool_names {
+    pub const TAPE: &str = "tape";
+    pub const CREATE_PLAN: &str = "create-plan";
+    pub const KERNEL: &str = "kernel";
+    pub const MEMORY: &str = "memory";
+    pub const SCHEDULE_ONCE: &str = "schedule-once";
+    pub const SCHEDULE_INTERVAL: &str = "schedule-interval";
+    pub const SCHEDULE_CRON: &str = "schedule-cron";
+    pub const SCHEDULE_REMOVE: &str = "schedule-remove";
+    pub const SCHEDULE_LIST: &str = "schedule-list";
+}
+
 pub use error::{KernelError, Result};

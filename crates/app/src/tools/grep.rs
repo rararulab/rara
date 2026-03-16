@@ -33,12 +33,14 @@ const MAX_MATCHES: usize = 100;
 pub struct GrepTool;
 
 impl GrepTool {
+    pub const NAME: &str = "grep";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for GrepTool {
-    fn name(&self) -> &str { "grep" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Search file contents using a regex pattern via ripgrep (rg). Supports file type filtering \

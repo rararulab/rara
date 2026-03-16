@@ -33,6 +33,8 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 pub struct SendImageTool;
 
 impl SendImageTool {
+    pub const NAME: &str = "send-image";
+
     pub fn new() -> Self { Self }
 }
 
@@ -49,7 +51,7 @@ fn mime_from_extension(ext: &str) -> Option<&'static str> {
 
 #[async_trait]
 impl AgentTool for SendImageTool {
-    fn name(&self) -> &str { "send-image" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Send an image file to the user in the current conversation. Supports PNG, JPEG, WebP, and \

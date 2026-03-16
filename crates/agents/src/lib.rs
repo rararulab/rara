@@ -42,38 +42,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     soul_prompt: None,
     provider_hint: None,
     max_iterations: Some(25),
-    tools: vec![
-        "bash".to_string(),
-        "grep".to_string(),
-        "read-file".to_string(),
-        "write-file".to_string(),
-        "edit-file".to_string(),
-        "list-directory".to_string(),
-        "find-files".to_string(),
-        "screenshot".to_string(),
-        "http-fetch".to_string(),
-        "send-email".to_string(),
-        "send-image".to_string(),
-        "tape".to_string(),
-        "tape-info".to_string(),
-        "tape-handoff".to_string(),
-        "user-note".to_string(),
-        "memory".to_string(),
-        "kernel".to_string(),
-        "settings".to_string(),
-        "schedule-once".to_string(),
-        "schedule-interval".to_string(),
-        "schedule-cron".to_string(),
-        "schedule-remove".to_string(),
-        "schedule-list".to_string(),
-        "list-skills".to_string(),
-        "create-skill".to_string(),
-        "delete-skill".to_string(),
-        "install-mcp-server".to_string(),
-        "list-mcp-servers".to_string(),
-        "remove-mcp-server".to_string(),
-        "create_plan".to_string(),
-    ],
+    tools: vec![],
     max_children: None,
     max_context_tokens: None,
     priority: Priority::default(),
@@ -426,14 +395,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rara_manifest_uses_explicit_tool_allowlist() {
+    fn rara_manifest_tools_are_empty_before_boot_injection() {
         let m = rara();
-        assert!(!m.tools.is_empty(), "rara manifest tools must not be empty");
-        for expected in &["bash", "tape", "kernel"] {
-            assert!(
-                m.tools.iter().any(|t| t == expected),
-                "rara manifest missing expected tool: {expected}"
-            );
-        }
+        assert!(
+            m.tools.is_empty(),
+            "rara manifest tools should be empty — rara-app injects them at boot"
+        );
     }
 }

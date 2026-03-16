@@ -79,6 +79,10 @@ async fn register_job(
 
 pub struct ScheduleOnceTool;
 
+impl ScheduleOnceTool {
+    pub const NAME: &str = crate::tool_names::SCHEDULE_ONCE;
+}
+
 #[derive(Debug, Deserialize)]
 struct ScheduleOnceParams {
     after_seconds: u64,
@@ -87,7 +91,7 @@ struct ScheduleOnceParams {
 
 #[async_trait]
 impl AgentTool for ScheduleOnceTool {
-    fn name(&self) -> &str { "schedule-once" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Schedule a one-shot task. It fires once after the specified delay in seconds."
@@ -137,6 +141,10 @@ impl AgentTool for ScheduleOnceTool {
 
 pub struct ScheduleIntervalTool;
 
+impl ScheduleIntervalTool {
+    pub const NAME: &str = crate::tool_names::SCHEDULE_INTERVAL;
+}
+
 #[derive(Debug, Deserialize)]
 struct ScheduleIntervalParams {
     interval_seconds: u64,
@@ -145,7 +153,7 @@ struct ScheduleIntervalParams {
 
 #[async_trait]
 impl AgentTool for ScheduleIntervalTool {
-    fn name(&self) -> &str { "schedule-interval" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str { "Schedule a repeating task. It fires every N seconds." }
 
@@ -201,6 +209,10 @@ impl AgentTool for ScheduleIntervalTool {
 
 pub struct ScheduleCronTool;
 
+impl ScheduleCronTool {
+    pub const NAME: &str = crate::tool_names::SCHEDULE_CRON;
+}
+
 #[derive(Debug, Deserialize)]
 struct ScheduleCronParams {
     cron:    String,
@@ -209,7 +221,7 @@ struct ScheduleCronParams {
 
 #[async_trait]
 impl AgentTool for ScheduleCronTool {
-    fn name(&self) -> &str { "schedule-cron" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Schedule a task using a 6-field cron expression: 'sec min hour day month weekday' (e.g. \
@@ -283,6 +295,10 @@ impl AgentTool for ScheduleCronTool {
 /// Tool for removing a scheduled task by ID.
 pub struct ScheduleRemoveTool;
 
+impl ScheduleRemoveTool {
+    pub const NAME: &str = crate::tool_names::SCHEDULE_REMOVE;
+}
+
 #[derive(Debug, Deserialize)]
 struct ScheduleRemoveParams {
     job_id: String,
@@ -290,7 +306,7 @@ struct ScheduleRemoveParams {
 
 #[async_trait]
 impl AgentTool for ScheduleRemoveTool {
-    fn name(&self) -> &str { "schedule-remove" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str { "Remove a previously scheduled task by its job ID." }
 
@@ -350,9 +366,13 @@ impl AgentTool for ScheduleRemoveTool {
 /// Tool for listing all scheduled tasks in the current session.
 pub struct ScheduleListTool;
 
+impl ScheduleListTool {
+    pub const NAME: &str = crate::tool_names::SCHEDULE_LIST;
+}
+
 #[async_trait]
 impl AgentTool for ScheduleListTool {
-    fn name(&self) -> &str { "schedule-list" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str { "List all scheduled tasks for the current session." }
 

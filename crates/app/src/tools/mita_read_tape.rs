@@ -30,12 +30,14 @@ pub struct ReadTapeTool {
 }
 
 impl ReadTapeTool {
+    pub const NAME: &str = "read-tape";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for ReadTapeTool {
-    fn name(&self) -> &str { "read-tape" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Read tape entries from a session or user tape. Returns message history including user \

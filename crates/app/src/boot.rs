@@ -512,9 +512,12 @@ impl IdentityResolver for PlatformIdentityResolver {
 fn load_default_registry() -> rara_kernel::agent::AgentRegistry {
     use rara_kernel::agent::{AgentRegistry, ManifestLoader};
 
+    let mut rara_manifest = rara_agents::rara().clone();
+    rara_manifest.tools = crate::tools::rara_tool_names();
+
     let builtin = vec![
-        (rara_agents::rara().clone(), Role::Root),
-        (rara_agents::rara().clone(), Role::Admin),
+        (rara_manifest.clone(), Role::Root),
+        (rara_manifest, Role::Admin),
         (rara_agents::nana().clone(), Role::User),
         (rara_agents::worker().clone(), Role::User),
         (rara_agents::mita().clone(), Role::Root),

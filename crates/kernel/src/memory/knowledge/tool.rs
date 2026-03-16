@@ -35,6 +35,8 @@ pub struct MemoryTool {
 }
 
 impl MemoryTool {
+    pub const NAME: &str = crate::tool_names::MEMORY;
+
     pub fn new(pool: SqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
         Self {
             pool,
@@ -45,7 +47,7 @@ impl MemoryTool {
 
 #[async_trait]
 impl AgentTool for MemoryTool {
-    fn name(&self) -> &str { "memory" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Search and read the user's long-term memory. Supports three actions:\n- search: semantic \

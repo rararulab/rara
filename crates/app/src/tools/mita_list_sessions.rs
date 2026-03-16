@@ -34,6 +34,8 @@ pub struct ListSessionsTool {
 }
 
 impl ListSessionsTool {
+    pub const NAME: &str = "list-sessions";
+
     pub fn new() -> Self {
         Self {
             kernel_handle: Arc::new(RwLock::new(None)),
@@ -49,7 +51,7 @@ impl ListSessionsTool {
 
 #[async_trait]
 impl AgentTool for ListSessionsTool {
-    fn name(&self) -> &str { "list-sessions" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "List all live sessions currently running in the kernel process table. Returns session \

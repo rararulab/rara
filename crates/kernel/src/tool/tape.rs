@@ -43,6 +43,8 @@ pub(crate) struct TapeTool {
 }
 
 impl TapeTool {
+    pub const NAME: &str = crate::tool_names::TAPE;
+
     pub fn new(
         tape_service: TapeService,
         tape_name: String,
@@ -300,7 +302,7 @@ enum TapeParams {
 
 #[async_trait]
 impl super::AgentTool for TapeTool {
-    fn name(&self) -> &str { "tape" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Your memory is a tape — an append-only timeline that records every message, tool call, \

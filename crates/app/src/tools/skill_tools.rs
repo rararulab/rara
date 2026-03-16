@@ -54,12 +54,14 @@ pub struct ListSkillsTool {
 }
 
 impl ListSkillsTool {
+    pub const NAME: &str = "list-skills";
+
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
 }
 
 #[async_trait]
 impl AgentTool for ListSkillsTool {
-    fn name(&self) -> &str { "list-skills" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "List all available skills with their metadata (name, description, allowed_tools, source, \
@@ -112,12 +114,14 @@ pub struct CreateSkillTool {
 }
 
 impl CreateSkillTool {
+    pub const NAME: &str = "create-skill";
+
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
 }
 
 #[async_trait]
 impl AgentTool for CreateSkillTool {
-    fn name(&self) -> &str { "create-skill" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Create a new skill by writing a SKILL.md file with frontmatter and prompt body."
@@ -219,12 +223,14 @@ pub struct DeleteSkillTool {
 }
 
 impl DeleteSkillTool {
+    pub const NAME: &str = "delete-skill";
+
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
 }
 
 #[async_trait]
 impl AgentTool for DeleteSkillTool {
-    fn name(&self) -> &str { "delete-skill" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Delete a skill by removing its directory and unregistering it."

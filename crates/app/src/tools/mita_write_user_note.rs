@@ -39,12 +39,14 @@ pub struct MitaWriteUserNoteTool {
 }
 
 impl MitaWriteUserNoteTool {
+    pub const NAME: &str = "write-user-note";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for MitaWriteUserNoteTool {
-    fn name(&self) -> &str { "write-user-note" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Write a structured note into a specific user's tape. This is a system-level tool for \

@@ -27,12 +27,14 @@ pub struct TapeHandoffTool {
 }
 
 impl TapeHandoffTool {
+    pub const NAME: &str = "tape-handoff";
+
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
 impl AgentTool for TapeHandoffTool {
-    fn name(&self) -> &str { "tape-handoff" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Create a handoff anchor to checkpoint progress and truncate context history. This is a \

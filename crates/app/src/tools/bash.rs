@@ -34,12 +34,14 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 pub struct BashTool;
 
 impl BashTool {
+    pub const NAME: &str = "bash";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for BashTool {
-    fn name(&self) -> &str { "bash" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Execute a shell command via /bin/bash -c. Returns exit code, combined stdout/stderr, and \

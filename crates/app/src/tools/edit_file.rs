@@ -26,12 +26,14 @@ use serde_json::json;
 pub struct EditFileTool;
 
 impl EditFileTool {
+    pub const NAME: &str = "edit-file";
+
     pub fn new() -> Self { Self }
 }
 
 #[async_trait]
 impl AgentTool for EditFileTool {
-    fn name(&self) -> &str { "edit-file" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Edit a file by replacing an exact string with a new string. By default, the old_string \

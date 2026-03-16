@@ -10,12 +10,14 @@ pub(super) struct ComposioExecuteTool {
 }
 
 impl ComposioExecuteTool {
+    pub const NAME: &str = "composio_execute";
+
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
 }
 
 #[async_trait]
 impl AgentTool for ComposioExecuteTool {
-    fn name(&self) -> &str { "composio_execute" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Execute an action on a connected app via Composio. Requires the tool_slug (from \

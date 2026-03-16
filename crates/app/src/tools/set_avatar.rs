@@ -27,12 +27,14 @@ pub struct SetAvatarTool {
 }
 
 impl SetAvatarTool {
+    pub const NAME: &str = "set-avatar";
+
     pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
 }
 
 #[async_trait]
 impl AgentTool for SetAvatarTool {
-    fn name(&self) -> &str { "set-avatar" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Change the Telegram bot's profile photo. The image file must be placed in the images \

@@ -78,6 +78,61 @@ use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
 use write_file::WriteFileTool;
 
+/// Tool names for the rara agent manifest — single source of truth.
+pub fn rara_tool_names() -> Vec<String> {
+    use rara_kernel::tool_names;
+
+    vec![
+        BashTool::NAME,
+        GrepTool::NAME,
+        ReadFileTool::NAME,
+        WriteFileTool::NAME,
+        EditFileTool::NAME,
+        ListDirectoryTool::NAME,
+        FindFilesTool::NAME,
+        ScreenshotTool::NAME,
+        HttpFetchTool::NAME,
+        SendEmailTool::NAME,
+        SendImageTool::NAME,
+        tool_names::TAPE,
+        TapeInfoTool::NAME,
+        TapeHandoffTool::NAME,
+        UserNoteTool::NAME,
+        tool_names::MEMORY,
+        tool_names::KERNEL,
+        SettingsTool::NAME,
+        tool_names::SCHEDULE_ONCE,
+        tool_names::SCHEDULE_INTERVAL,
+        tool_names::SCHEDULE_CRON,
+        tool_names::SCHEDULE_REMOVE,
+        tool_names::SCHEDULE_LIST,
+        ListSkillsTool::NAME,
+        CreateSkillTool::NAME,
+        DeleteSkillTool::NAME,
+        MarketplaceTool::NAME,
+        InstallMcpServerTool::NAME,
+        ListMcpServersTool::NAME,
+        RemoveMcpServerTool::NAME,
+        tool_names::CREATE_PLAN,
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rara_tool_names_includes_key_tools() {
+        let names = rara_tool_names();
+        for expected in ["bash", "tape", "marketplace", "kernel"] {
+            assert!(names.iter().any(|n| n == expected), "missing: {expected}");
+        }
+    }
+}
+
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
     pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,

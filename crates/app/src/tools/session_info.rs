@@ -27,12 +27,14 @@ pub struct SessionInfoTool {
 }
 
 impl SessionInfoTool {
+    pub const NAME: &str = "get-session-info";
+
     pub fn new(session_index: SessionIndexRef) -> Self { Self { session_index } }
 }
 
 #[async_trait]
 impl AgentTool for SessionInfoTool {
-    fn name(&self) -> &str { "get-session-info" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "Get metadata for the current session, including uploaded image paths and other \

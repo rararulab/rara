@@ -11,12 +11,14 @@ pub(super) struct ComposioListTool {
 }
 
 impl ComposioListTool {
+    pub const NAME: &str = "composio_list";
+
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
 }
 
 #[async_trait]
 impl AgentTool for ComposioListTool {
-    fn name(&self) -> &str { "composio_list" }
+    fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
         "List available actions/tools on Composio. Filter by app name (e.g. 'gmail', 'notion', \
