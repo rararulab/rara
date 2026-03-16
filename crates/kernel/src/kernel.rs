@@ -617,8 +617,12 @@ impl Kernel {
                 )
                 .await;
             }
-            KernelEvent::ChildSessionDone { child_id, result } => {
-                self.handle_child_completed(base.session_key, child_id, result)
+            KernelEvent::ChildSessionDone {
+                child_id,
+                result,
+                skip_tape_persist,
+            } => {
+                self.handle_child_completed(base.session_key, child_id, result, skip_tape_persist)
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
@@ -881,6 +885,7 @@ impl Kernel {
         parent_id: SessionKey,
         child_id: SessionKey,
         result: AgentRunLoopResult,
+        skip_tape_persist: bool,
     ) {
         info!(
             parent_id = %parent_id,
@@ -889,7 +894,7 @@ impl Kernel {
             "child result received"
         );
 
-        // Persist child result to parent's conversation history.
+        // Truncate for display / proactive turn directive.
         const CHILD_RESULT_MAX_CHARS: usize = 2000;
         let output = &result.output;
         let truncated_output = if output.len() > CHILD_RESULT_MAX_CHARS {
@@ -900,30 +905,38 @@ impl Kernel {
         } else {
             output.clone()
         };
-        let child_result_text = format!(
-            "[child_agent_result] child_id={child_id} iterations={} \
-             tool_calls={}\n\n{truncated_output}",
-            result.iterations, result.tool_calls,
-        );
-        let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
-            error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
-            return;
-        };
 
-        let tape_name = session_id.to_string();
-        if let Err(e) = &self
-            .tape_service
-            .append_message(
-                &tape_name,
-                serde_json::json!({
-                    "role": "system",
-                    "content": &child_result_text,
-                }),
-                None,
-            )
-            .await
-        {
-            warn!(%e, "failed to persist child result message to tape");
+        // Persist child result to parent's conversation history.
+        // Fold-branch children already return results as a ToolResult — the
+        // `skip_tape_persist` flag is set in cleanup_process based on the
+        // child's manifest name prefix, before the child is removed from the
+        // process table.
+        if !skip_tape_persist {
+            let child_result_text = format!(
+                "[child_agent_result] child_id={child_id} iterations={} \
+                 tool_calls={}\n\n{truncated_output}",
+                result.iterations, result.tool_calls,
+            );
+            let Some(session_id) = self.process_table.with(&parent_id, |p| p.session_key) else {
+                error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
+                return;
+            };
+
+            let tape_name = session_id.to_string();
+            if let Err(e) = &self
+                .tape_service
+                .append_message(
+                    &tape_name,
+                    serde_json::json!({
+                        "role": "system",
+                        "content": &child_result_text,
+                    }),
+                    None,
+                )
+                .await
+            {
+                warn!(%e, "failed to persist child result message to tape");
+            }
         }
 
         // If this child was a background task, trigger a proactive turn on the
@@ -1063,7 +1076,17 @@ impl Kernel {
                     let _ = tx.send(crate::io::AgentEvent::Done(result.clone())).await;
                 }
 
-                let event = KernelEventEnvelope::child_session_done(parent_id, session_key, result);
+                // Fold-branch children return their output inline as a
+                // ToolResult, so we tell handle_child_completed to skip the
+                // tape append (otherwise the same content appears twice).
+                let skip_tape =
+                    manifest_name.starts_with(crate::tool::fold_branch::FOLD_BRANCH_NAME_PREFIX);
+                let event = KernelEventEnvelope::child_session_done(
+                    parent_id,
+                    session_key,
+                    result,
+                    skip_tape,
+                );
                 if let Err(e) = &self.event_queue.try_push(event) {
                     warn!(%e, "failed to push ChildSessionDone event");
                 }

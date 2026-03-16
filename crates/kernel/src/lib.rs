@@ -69,6 +69,7 @@ pub mod tool_names {
     pub const SCHEDULE_LIST: &str = "schedule-list";
     pub const SPAWN_BACKGROUND: &str = "spawn-background";
     pub const CANCEL_BACKGROUND: &str = "cancel-background";
+    pub const FOLD_BRANCH: &str = "fold-branch";
 }
 
 pub use error::{KernelError, Result};

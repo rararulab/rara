@@ -299,6 +299,22 @@ impl SyscallDispatcher {
                             syscall_sender,
                         ),
                     ));
+                    // Fold-branch tool (synchronous child with result compression)
+                    if let Ok((fold_driver, fold_model)) = self.driver_registry.resolve(
+                        "fold-branch",
+                        None,
+                        self.config.context_folding.fold_model.as_deref(),
+                    ) {
+                        let context_folder = Arc::new(crate::agent::fold::ContextFolder::new(
+                            fold_driver,
+                            fold_model,
+                        ));
+                        registry.register(Arc::new(crate::tool::fold_branch::FoldBranchTool::new(
+                            kernel_handle.clone(),
+                            syscall_sender,
+                            context_folder,
+                        )));
+                    }
                     // Plan tools
                     registry.register(Arc::new(crate::tool::create_plan::CreatePlanTool));
                 }
