@@ -481,11 +481,7 @@ impl IssueRuntime {
 
         let mut resolved = repo;
         if resolved.repo_path.is_none() {
-            let cwd =
-                std::env::current_dir().map_err(|source| crate::error::SymphonyError::Io {
-                    source,
-                    location: std::panic::Location::caller(),
-                })?;
+            let cwd = std::env::current_dir().context(crate::error::IoSnafu)?;
             resolved.repo_path = Some(cwd.clone());
         }
         Ok(resolved)
@@ -563,13 +559,12 @@ struct IssueLogWriter {
 impl IssueLogWriter {
     async fn record(&self, stream_name: &'static str, line: &str) -> Result<()> {
         let entry = format!("{} [{}] {}\n", Utc::now().to_rfc3339(), stream_name, line);
-        self.sender
-            .send(entry)
-            .await
-            .map_err(|_| crate::error::SymphonyError::Workspace {
-                message:  String::from("issue log writer closed unexpectedly"),
-                location: std::panic::Location::caller(),
-            })
+        self.sender.send(entry).await.map_err(|_| {
+            crate::error::WorkspaceSnafu {
+                message: String::from("issue log writer closed unexpectedly"),
+            }
+            .build()
+        })
     }
 }
 
@@ -579,24 +574,22 @@ async fn spawn_issue_log_writer(
     issue: &TrackedIssue,
     workspace: &WorkspaceInfo,
 ) -> Result<IssueLogWriter> {
-    let parent = log_path
-        .parent()
-        .ok_or_else(|| crate::error::SymphonyError::Workspace {
-            message:  format!("issue log path has no parent: {}", log_path.display()),
-            location: std::panic::Location::caller(),
-        })?;
-    tokio::fs::create_dir_all(parent).await.map_err(|source| {
-        crate::error::SymphonyError::WorkspaceIo {
+    let parent = log_path.parent().ok_or_else(|| {
+        crate::error::WorkspaceSnafu {
+            message: format!("issue log path has no parent: {}", log_path.display()),
+        }
+        .build()
+    })?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .context(crate::error::WorkspaceIoSnafu {
             message: format!(
                 "failed to create issue log directory {} for issue {} in repo {}",
                 parent.display(),
                 issue.identifier,
                 issue.repo
             ),
-            source,
-            location: std::panic::Location::caller(),
-        }
-    })?;
+        })?;
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -604,15 +597,13 @@ async fn spawn_issue_log_writer(
         .truncate(true)
         .open(log_path)
         .await
-        .map_err(|source| crate::error::SymphonyError::WorkspaceIo {
+        .context(crate::error::WorkspaceIoSnafu {
             message: format!(
                 "failed to open issue log file {} for issue {} in repo {}",
                 log_path.display(),
                 issue.identifier,
                 issue.repo
             ),
-            source,
-            location: std::panic::Location::caller(),
         })?;
     let header = format!(
         "{} [meta] issue={} repo={} branch={} workspace={}\n",
@@ -622,18 +613,16 @@ async fn spawn_issue_log_writer(
         workspace.branch,
         workspace.path.display(),
     );
-    file.write_all(header.as_bytes()).await.map_err(|source| {
-        crate::error::SymphonyError::WorkspaceIo {
+    file.write_all(header.as_bytes())
+        .await
+        .context(crate::error::WorkspaceIoSnafu {
             message: format!(
                 "failed to write issue log header to {} for issue {} in repo {}",
                 log_path.display(),
                 issue.identifier,
                 issue.repo
             ),
-            source,
-            location: std::panic::Location::caller(),
-        }
-    })?;
+        })?;
 
     let (sender, mut receiver) = mpsc::channel::<String>(256);
     let log_path = log_path.to_path_buf();
