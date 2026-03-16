@@ -16,7 +16,7 @@
 //!
 //! This crate declares built-in agent manifests. Each public function returns
 //! an [`AgentManifest`] ready to be loaded by the boot crate into the kernel's
-//! [`ManifestLoader`].
+//! manifest loader.
 //!
 //! Soul prompts are resolved at runtime by the kernel via `rara_soul`.
 //! Agent manifests set `soul_prompt: None`; the kernel loads and renders

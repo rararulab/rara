@@ -16,8 +16,7 @@
 //!
 //! - [`SessionSwitchCallbackHandler`] — handles `switch:{session_key}`
 //!   callbacks.
-//! - [`SearchPaginationCallbackHandler`] — handles
-//!   `search_more:{count}:{params}` callbacks.
+//! - Search pagination callbacks handle `search_more:{count}:{params}`.
 
 use std::sync::Arc;
 

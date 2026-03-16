@@ -15,7 +15,7 @@
 //! HTTP API routes for the chat domain.
 //!
 //! All endpoints live under `/api/v1/chat/` and use JSON request/response
-//! bodies. The router is constructed via [`routes`] and expects a
+//! bodies. The router is constructed via [`routes()`] and expects a
 //! [`SessionService`] as shared axum state.
 //!
 //! ## Route table

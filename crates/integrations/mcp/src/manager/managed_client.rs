@@ -112,7 +112,7 @@ impl AsyncManagedClient {
     /// `tools/list`) begins only when someone first calls
     /// [`.client().await`](Self::client).
     ///
-    /// This lets [`McpManager`] store the handle in its clients map
+    /// This lets the MCP manager store the handle in its clients map
     /// *immediately* (no `.await` needed), so concurrent callers that
     /// arrive during startup can share the same in-flight future
     /// instead of racing to create duplicate connections.
@@ -226,7 +226,7 @@ impl AsyncManagedClient {
 
 /// A fully initialized MCP server connection.
 ///
-/// Produced by [`start_server_task`] after a successful handshake.
+/// Produced after a successful handshake.
 /// Holds the underlying [`RmcpClient`], the tool catalogue, and the
 /// per-server tool filter / timeout configuration.
 #[derive(Clone)]

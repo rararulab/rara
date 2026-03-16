@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Update pipeline — wires [`UpdateDetector`] state changes to
+//! Update pipeline — wires [`super::detector::UpdateDetector`] state changes to
 //! [`UpdateExecutor`] and [`SupervisorHandle`] for automatic updates.
 
 use std::sync::{

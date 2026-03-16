@@ -138,7 +138,7 @@ pub struct GatewayConfig {
     /// Bind address for the gateway admin HTTP API.
     #[serde(default = "gateway_defaults::bind_address")]
     pub bind_address:         String,
-    /// Repository URL for commit links in notifications (e.g. "https://github.com/rararulab/rara").
+    /// Repository URL for commit links in notifications (e.g. "<https://github.com/rararulab/rara>").
     pub repo_url:             String,
     /// Telegram bot token for the gateway management bot (separate from rara's
     /// bot).

@@ -384,7 +384,7 @@ fn verify_owner_token(expected: &str, provided: &str) -> bool { expected == prov
 
 /// Build a Web endpoint and its associated UserId for endpoint registration.
 ///
-/// The `UserId` format matches [`AppIdentityResolver`] (`"web:{user_id}"`).
+/// The `UserId` format matches the app identity resolver (`"web:{user_id}"`).
 fn web_endpoint_for(session_key: &str) -> Endpoint {
     Endpoint {
         channel_type: ChannelType::Web,

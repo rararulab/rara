@@ -46,8 +46,7 @@ const CLEANUP_INTERVAL: u32 = 100;
 
 /// Persistent store for execution traces backed by SQLite.
 ///
-/// Traces older than [`TRACE_RETENTION_DAYS`] are automatically cleaned up
-/// every [`CLEANUP_INTERVAL`] saves.
+/// Traces older than 30 days are automatically cleaned up every 100 saves.
 #[derive(Debug, Clone)]
 pub struct TraceService {
     pool:       SqlitePool,

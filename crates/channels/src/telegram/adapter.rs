@@ -1935,7 +1935,7 @@ fn strip_tool_call_xml(text: &str) -> String {
     pass2.into_owned()
 }
 
-/// Spawn a background task that subscribes to [`StreamHub`] for the given
+/// Spawn a background task that subscribes to the stream hub for the given
 /// session and progressively updates a Telegram message via `editMessageText`.
 fn spawn_stream_forwarder(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,

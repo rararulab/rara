@@ -604,8 +604,8 @@ async fn ensure_context_mode_builtin(registry: &rara_mcp::manager::registry::FSM
 // =========================================================================
 
 /// Bridges [`McpManager`](rara_mcp::manager::mgr::McpManager) into the
-/// kernel's [`DynamicToolProvider`] trait so that MCP tools are injected
-/// into every `GetToolRegistry` syscall at runtime.
+/// kernel's [`rara_kernel::tool::DynamicToolProvider`] trait so that MCP tools
+/// are injected into every `GetToolRegistry` syscall at runtime.
 pub(crate) struct McpDynamicToolProvider {
     manager: rara_mcp::manager::mgr::McpManager,
 }

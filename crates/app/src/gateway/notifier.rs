@@ -37,7 +37,7 @@ pub struct UpdateNotifier {
     /// Version/revision of the currently running agent binary.
     /// Initially same as gateway version; updated after each successful update.
     agent_version:    std::sync::Mutex<String>,
-    /// Repository URL for building commit links (e.g. "https://github.com/rararulab/rara").
+    /// Repository URL for building commit links (e.g. "<https://github.com/rararulab/rara>").
     repo_url:         String,
 }
 
