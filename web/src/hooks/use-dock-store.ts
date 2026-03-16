@@ -58,6 +58,10 @@ export interface DockStore {
   rightPanelOpen: boolean;
   activeTab: "annotations" | "facts" | "history";
 
+  // UI actions
+  setActiveTab(tab: "annotations" | "facts" | "history"): void;
+  setActiveAnnotation(id: string | null): void;
+
   // Actions
   bootstrap(): Promise<void>;
   selectSession(id: string): Promise<void>;
@@ -135,7 +139,7 @@ export function useDockStore(): DockStore {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rightPanelOpen] = useState(false);
-  const [activeTab] = useState<"annotations" | "facts" | "history">("annotations");
+  const [activeTab, setActiveTab] = useState<"annotations" | "facts" | "history">("annotations");
 
   // Refs to provide stable access to latest state inside callbacks
   const blocksRef = useRef(blocks);
@@ -469,6 +473,9 @@ export function useDockStore(): DockStore {
     error,
     rightPanelOpen,
     activeTab,
+
+    setActiveTab,
+    setActiveAnnotation,
 
     bootstrap,
     selectSession,

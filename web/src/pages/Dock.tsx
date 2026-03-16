@@ -51,7 +51,7 @@ export default function Dock() {
         </div>
 
         {/* Right sidebar */}
-        {rightPanelOpen && <DockSidebar />}
+        {rightPanelOpen && <DockSidebar store={store} />}
       </div>
     </div>
   );
