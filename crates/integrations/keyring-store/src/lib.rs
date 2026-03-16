@@ -30,7 +30,7 @@ pub enum Error {
     },
 
     /// Database error from the PostgreSQL credential store.
-    #[snafu(display("database error: {source}"))]
+    #[snafu(display("database error: {source}"), visibility(pub))]
     Pg {
         source:   sqlx::Error,
         #[snafu(implicit)]

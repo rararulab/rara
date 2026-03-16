@@ -177,7 +177,7 @@ impl RalphAgent {
 
         Err(crate::error::SymphonyError::Workspace {
             message:  format!("failed to validate Ralph workspace config: {details}"),
-            location: snafu::Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         })
     }
 
@@ -223,7 +223,7 @@ impl RalphAgent {
 
         Err(crate::error::SymphonyError::Workspace {
             message:  format!("failed to initialize Ralph workspace config: {details}"),
-            location: snafu::Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         })
     }
 

@@ -484,7 +484,7 @@ impl IssueRuntime {
             let cwd =
                 std::env::current_dir().map_err(|source| crate::error::SymphonyError::Io {
                     source,
-                    location: snafu::Location::new(file!(), line!(), column!()),
+                    location: std::panic::Location::caller(),
                 })?;
             resolved.repo_path = Some(cwd.clone());
         }
@@ -568,7 +568,7 @@ impl IssueLogWriter {
             .await
             .map_err(|_| crate::error::SymphonyError::Workspace {
                 message:  String::from("issue log writer closed unexpectedly"),
-                location: snafu::Location::new(file!(), line!(), column!()),
+                location: std::panic::Location::caller(),
             })
     }
 }
@@ -583,7 +583,7 @@ async fn spawn_issue_log_writer(
         .parent()
         .ok_or_else(|| crate::error::SymphonyError::Workspace {
             message:  format!("issue log path has no parent: {}", log_path.display()),
-            location: snafu::Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         })?;
     tokio::fs::create_dir_all(parent).await.map_err(|source| {
         crate::error::SymphonyError::WorkspaceIo {
@@ -594,7 +594,7 @@ async fn spawn_issue_log_writer(
                 issue.repo
             ),
             source,
-            location: snafu::Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         }
     })?;
 
@@ -612,7 +612,7 @@ async fn spawn_issue_log_writer(
                 issue.repo
             ),
             source,
-            location: snafu::Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         })?;
     let header = format!(
         "{} [meta] issue={} repo={} branch={} workspace={}\n",
@@ -631,7 +631,7 @@ async fn spawn_issue_log_writer(
                 issue.repo
             ),
             source,
-            location: snafu::Location::new(file!(), line!(), column!()),
+            location: std::panic::Location::caller(),
         }
     })?;
 
