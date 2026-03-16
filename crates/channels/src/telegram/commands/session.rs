@@ -458,10 +458,13 @@ fn format_timestamp(raw: &str) -> String {
 
 /// Resolve a human-readable display name for a session.
 ///
-/// Priority: title -> "Untitled".
+/// Priority: title -> preview (truncated 20 chars) -> "Untitled".
 fn session_display_name(s: &super::client::SessionListItem) -> String {
     if let Some(ref title) = s.title {
         return truncate_str(title, 30).to_owned();
+    }
+    if let Some(ref preview) = s.preview {
+        return truncate_str(preview, 20).to_owned();
     }
     "Untitled".to_owned()
 }

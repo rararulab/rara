@@ -47,6 +47,7 @@ fn entry_to_list_item(e: &ks::SessionEntry) -> SessionListItem {
     SessionListItem {
         key:           e.key.to_string(),
         title:         e.title.clone(),
+        preview:       e.preview.clone(),
         message_count: e.message_count,
         updated_at:    e.updated_at.to_rfc3339(),
     }
