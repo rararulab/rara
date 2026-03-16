@@ -423,8 +423,9 @@ pub async fn start_with_options(
 
     let dock_store_path = rara_paths::data_dir().join("dock");
     let dock_state = rara_dock::DockRouterState {
-        store:        std::sync::Arc::new(rara_dock::DockSessionStore::new(dock_store_path)),
-        tape_service: Some(rara.tape_service.clone()),
+        store:         std::sync::Arc::new(rara_dock::DockSessionStore::new(dock_store_path)),
+        tape_service:  Some(rara.tape_service.clone()),
+        kernel_handle: Some(kernel_handle.clone()),
     };
     let dock_routes = rara_dock::dock_router(dock_state);
 

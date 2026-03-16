@@ -3,7 +3,7 @@
 //! These handlers expose the dock session store over HTTP for the frontend
 //! canvas workbench.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -14,7 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     DockBootstrapResponse, DockCanvasSnapshot, DockHistoryEntry, DockMutationBatch,
@@ -31,10 +31,13 @@ use crate::{
 /// Shared state for dock route handlers.
 #[derive(Clone)]
 pub struct DockRouterState {
-    pub store:        Arc<DockSessionStore>,
+    pub store:         Arc<DockSessionStore>,
     /// Optional tape service for writing anchors and reading history.
     /// `None` during unit tests or when the kernel is not available.
-    pub tape_service: Option<rara_kernel::memory::TapeService>,
+    pub tape_service:  Option<rara_kernel::memory::TapeService>,
+    /// Optional kernel handle for dispatching agent turns via `ingest()`.
+    /// `None` during unit tests or standalone mode.
+    pub kernel_handle: Option<rara_kernel::handle::KernelHandle>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,32 +126,32 @@ async fn read_dock_history(
     anchors
         .into_iter()
         .filter(|a| {
-            // Only include dock turn anchors.
+            // Dock metadata is stored in HandoffState.extra, which serializes
+            // as a nested "extra" object inside the anchor state.
             a.state
-                .get("dock_turn")
+                .get("extra")
+                .and_then(|e| e.get("dock_turn"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
         })
         .map(|a| {
+            let extra = a.state.get("extra");
             let is_selected = selected_anchor.is_some_and(|sel| sel == a.name);
             DockHistoryEntry {
                 id: a.name.clone(),
                 anchor_name: a.name,
-                timestamp: a
-                    .state
-                    .get("input_preview")
+                timestamp: extra
+                    .and_then(|e| e.get("input_preview"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                label: a
-                    .state
-                    .get("input_preview")
+                label: extra
+                    .and_then(|e| e.get("input_preview"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("turn")
                     .to_string(),
-                preview: a
-                    .state
-                    .get("reply_preview")
+                preview: extra
+                    .and_then(|e| e.get("reply_preview"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
@@ -201,7 +204,7 @@ async fn session_handler(
         annotations: doc.annotations,
         history,
         selected_anchor: query.selected_anchor,
-        blocks: Vec::new(),
+        blocks: doc.blocks,
         facts: doc.facts,
     })
     .into_response())
@@ -232,7 +235,7 @@ async fn mutate_handler(
         annotations:     doc.annotations,
         history:         Vec::new(),
         selected_anchor: None,
-        blocks:          Vec::new(),
+        blocks:          doc.blocks,
         facts:           doc.facts,
     })
     .into_response())
@@ -240,88 +243,112 @@ async fn mutate_handler(
 
 /// `POST /api/dock/turn` — agent turn.
 ///
-/// Builds dock system/user prompts from the request, collects dock mutations
-/// from tool calls, applies them to the session, writes a tape anchor, and
-/// returns the updated state.
+/// Builds dock system/user prompts from the request and dispatches the turn
+/// to the kernel via `ingest()`.  The kernel runs the agent loop
+/// asynchronously — dock tool calls produce `DockMutation`s that are emitted
+/// as `StreamEvent::DockTurnComplete` and forwarded to the frontend via SSE.
 ///
-/// Full kernel LLM integration (ingest → stream → collect tool outputs) is
-/// not yet wired; the handler currently processes the request locally by
-/// recording the turn in tape and returning the current session state. The
-/// TODO below marks where `kernel_handle.ingest()` should be called to route
-/// through the full agent loop.
+/// The handler returns immediately with `202 Accepted` and current session
+/// state.  The authoritative post-turn state arrives via SSE once the agent
+/// loop completes.
 async fn turn_handler(
     State(state): State<DockRouterState>,
     Json(body): Json<DockTurnRequest>,
 ) -> DockResult<Response> {
     let doc = state.store.ensure_session(&body.session_id)?;
 
-    // Build prompts (used by LLM integration).
-    let _system_prompt = build_dock_system_prompt(&body.facts);
-    let _user_prompt = build_dock_user_prompt(
+    // Build prompts — the user prompt embeds canvas context so the agent
+    // sees the current dock state.
+    let system_prompt = build_dock_system_prompt(&body.facts);
+    let user_prompt = build_dock_user_prompt(
         &body.content,
         &body.blocks,
         &body.annotations,
         body.selected_anchor.as_deref(),
     );
 
-    // TODO(#413): Wire kernel integration here.
-    //
-    // The full flow should be:
-    // 1. Build a RawPlatformMessage with the dock user prompt
-    // 2. Call kernel_handle.ingest(raw) to dispatch to the agent loop
-    // 3. Subscribe to StreamHub for the session to collect StreamEvents
-    // 4. Filter ToolCallEnd events for dock.* tool names
-    // 5. Parse DockMutation from each tool result
-    // 6. Apply mutations and collect the reply text
-    //
-    // For now, we record the turn in tape and return current state.
-
     let input_preview = body.content.chars().take(80).collect::<String>();
-    let reply_preview = String::new();
 
-    // Build a canvas snapshot from current blocks + facts for the anchor.
+    // Dispatch to the kernel agent loop if available.
+    if let Some(ref kernel) = state.kernel_handle {
+        // Combine dock system prompt and user prompt into the message
+        // content so the agent sees full canvas context.
+        let combined_content = format!("{system_prompt}\n\n{user_prompt}");
+
+        let raw = rara_kernel::io::RawPlatformMessage {
+            channel_type:        rara_kernel::channel::types::ChannelType::Web,
+            platform_message_id: Some(ulid::Ulid::new().to_string()),
+            platform_user_id:    "dock".to_owned(),
+            platform_chat_id:    Some(body.session_id.clone()),
+            content:             rara_kernel::channel::types::MessageContent::Text(
+                combined_content,
+            ),
+            reply_context:       Some(rara_kernel::io::ReplyContext {
+                thread_id:                None,
+                reply_to_platform_msg_id: None,
+                interaction_type:         rara_kernel::io::InteractionType::Message,
+            }),
+            metadata:            HashMap::new(),
+        };
+
+        if let Err(e) = kernel.ingest(raw).await {
+            error!(
+                session_id = %body.session_id,
+                error = %e,
+                "failed to ingest dock turn into kernel"
+            );
+            return Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("kernel ingest failed: {e}") })),
+            )
+                .into_response());
+        }
+
+        debug!(
+            session_id = %body.session_id,
+            input_len = body.content.len(),
+            "dock turn dispatched to kernel"
+        );
+    } else {
+        debug!(
+            session_id = %body.session_id,
+            "dock turn recorded (no kernel — test mode)"
+        );
+    }
+
+    // Write tape anchor capturing the turn input.
     let snapshot = DockCanvasSnapshot {
         blocks: body.blocks.clone(),
         facts:  doc.facts.clone(),
     };
-
-    // Write tape anchor if tape service is available.
     if let Some(ref tape_svc) = state.tape_service {
-        write_dock_anchor(
-            tape_svc,
-            &body.session_id,
-            &input_preview,
-            &reply_preview,
-            &snapshot,
-        )
-        .await;
+        write_dock_anchor(tape_svc, &body.session_id, &input_preview, "", &snapshot).await;
     }
 
-    // Read updated history.
+    // Read history for the response.
     let history = if let Some(ref tape_svc) = state.tape_service {
         read_dock_history(tape_svc, &body.session_id, body.selected_anchor.as_deref()).await
     } else {
         Vec::new()
     };
 
-    debug!(
-        session_id = %body.session_id,
-        input_len = body.content.len(),
-        "dock turn recorded"
-    );
-
-    Ok(Json(DockTurnResponse {
-        session_id: body.session_id,
-        reply: reply_preview,
-        mutations: Vec::new(),
-        history,
-        selected_anchor: body.selected_anchor,
-        session: Some(doc.session),
-        annotations: doc.annotations,
-        blocks: body.blocks,
-        facts: doc.facts,
-    })
-    .into_response())
+    // Return 202 Accepted with current state — the authoritative post-turn
+    // state will arrive via SSE when the agent loop completes.
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(DockTurnResponse {
+            session_id: body.session_id,
+            reply: String::new(),
+            mutations: Vec::new(),
+            history,
+            selected_anchor: body.selected_anchor,
+            session: Some(doc.session),
+            annotations: doc.annotations,
+            blocks: doc.blocks,
+            facts: doc.facts,
+        }),
+    )
+        .into_response())
 }
 
 /// `PATCH /api/dock/workspace` — update the active session.
