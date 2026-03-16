@@ -9,14 +9,14 @@ Rara is a self-evolving, developer-first personal proactive agent built in Rust.
 
 ## Development Workflow
 
-### Issue → Worktree → PR → Merge
+### Issue → Worktree → PR → Merge (MANDATORY)
 
-This is the standard workflow for all feature/refactor work. All changes go through GitHub PRs — never merge locally on main.
+**Every code change — no matter how small — MUST follow this workflow.** There are zero exceptions: single-line fixes, typo corrections, config tweaks, doc updates, and refactors all go through issue + worktree + PR. The main agent must NEVER directly edit source files on the `main` branch.
 
 ```
 1. CREATE ISSUE    →  gh issue create + labels
 2. CREATE WORKTREE →  git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
-3. DISPATCH        →  Task subagent works in the worktree
+3. WORK            →  All edits happen inside the worktree
 4. VERIFY          →  cargo check + npm run build on worktree
 5. PUSH & PR       →  git push -u origin + gh pr create
 6. CLEANUP         →  git worktree remove + git branch -d (after PR merged)
@@ -34,10 +34,11 @@ Labels: `created-by:claude` (required) + category (`enhancement`, `refactor`, `u
 git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
 ```
 
-#### Step 3: Dispatch Subagent
-- Subagent works **exclusively** in its worktree directory
-- Independent issues can be dispatched **in parallel**
-- Subagent should commit its work before finishing
+#### Step 3: Work in Worktree
+- **All code edits happen exclusively inside the worktree directory** — never in the main checkout
+- The main agent may dispatch a subagent to the worktree, or work there directly
+- Independent issues can be dispatched **in parallel** (each in its own worktree)
+- All work should be committed before moving to the next step
 
 #### Step 4: Verify Builds
 After subagent completes, verify in the worktree:
@@ -86,8 +87,9 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT put repository impls or routes in `yunara-store` — business logic stays in its own crates
 - Do NOT use manual `impl Display` + `impl Error` — use `snafu`
 - Do NOT use mock repositories in tests — use `testcontainers`
-- Do NOT work directly on `main` — always use worktrees for subagent work
-- Do NOT merge locally on `main` — all merges go through GitHub PRs
+- Do NOT work directly on `main` — ALL changes (code, docs, config) require a worktree + PR, no exceptions
+- Do NOT merge locally on `main` — all merges go through GitHub PRs; never `git merge` or `git commit` on main
+- Do NOT edit files in the main checkout for 'quick fixes' — even one-line changes must go through the full issue → worktree → PR flow
 - Do NOT create issues without `created-by:claude` label
 - Do NOT leave stale worktrees — clean up after PR is merged
 - Do NOT modify already-applied migration files — create a new migration instead
