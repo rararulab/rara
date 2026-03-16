@@ -96,6 +96,9 @@ pub struct AppConfig {
     /// Symphony autonomous coding agent orchestrator (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symphony:               Option<rara_symphony::SymphonyConfig>,
+    /// Context folding (auto-anchor) configuration for the kernel.
+    #[serde(default)]
+    pub context_folding:        rara_kernel::kernel::ContextFoldingConfig,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -340,6 +343,7 @@ pub async fn start_with_options(
 
     let kernel_config = rara_kernel::kernel::KernelConfig {
         mita_heartbeat_interval: Some(config.mita.heartbeat_interval),
+        context_folding: config.context_folding.clone(),
         ..Default::default()
     };
 

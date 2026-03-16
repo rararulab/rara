@@ -835,7 +835,11 @@ pub(crate) async fn run_agent_loop(
 
     // ── Context folding state ────────────────────────────────────────
     let fold_config = &handle.config().context_folding;
-    let mut last_fold_entry_id: Option<u64> = None;
+    // Recover last auto-fold anchor's entry ID from tape so the cooldown
+    // survives across turns (not just within a single run_agent_loop call).
+    let mut last_fold_entry_id: Option<u64> =
+        fold::find_last_auto_fold_entry_id(&tape, tape_name).await;
+    let mut fold_failed_this_turn = false;
     let context_folder = if fold_config.enabled {
         let fold_model = fold_config
             .fold_model
@@ -849,79 +853,98 @@ pub(crate) async fn run_agent_loop(
     for iteration in 0..max_iterations {
         // ── Auto-fold: pressure-driven context compression ───────────
         // Runs BEFORE rebuild so the new anchor (if created) takes effect
-        // in this iteration's context.
+        // in this iteration's context.  Disabled for the remainder of this
+        // turn after any fold failure to avoid repeated failing LLM calls.
         if let Some(folder) = &context_folder {
-            if let Ok(tape_info) = tape.info(tape_name).await {
-                let pressure = tape_info.estimated_context_tokens as f64
-                    / capabilities.context_window_tokens as f64;
+            if !fold_failed_this_turn {
+                if let Ok(tape_info) = tape.info(tape_name).await {
+                    let pressure = tape_info.estimated_context_tokens as f64
+                        / capabilities.context_window_tokens as f64;
 
-                if pressure > fold_config.fold_threshold {
-                    let entries_since_fold = match last_fold_entry_id {
-                        Some(id) => tape
-                            .entries_after(tape_name, id)
-                            .await
-                            .map(|e| e.len())
-                            .unwrap_or(0),
-                        None => tape_info.entries,
-                    };
+                    if pressure > fold_config.fold_threshold {
+                        let entries_since_fold = match last_fold_entry_id {
+                            Some(id) => tape
+                                .entries_after(tape_name, id)
+                                .await
+                                .map(|e| e.len())
+                                .unwrap_or(0),
+                            None => tape_info.entries,
+                        };
 
-                    if entries_since_fold >= fold_config.min_entries_between_folds {
-                        info!(
-                            pressure = %format!("{:.0}%", pressure * 100.0),
-                            entries_since_fold,
-                            "auto-fold: context pressure exceeded threshold, creating anchor",
-                        );
+                        if entries_since_fold >= fold_config.min_entries_between_folds {
+                            info!(
+                                pressure = %format!("{:.0}%", pressure * 100.0),
+                                entries_since_fold,
+                                "auto-fold: context pressure exceeded threshold, \
+                                 creating anchor",
+                            );
 
-                        // Fetch current LLM messages and prior anchor summary.
-                        let fold_messages = tape.build_llm_context(tape_name).await;
-                        let prior_entries = tape.from_last_anchor(tape_name, None).await;
-                        let prior_summary = prior_entries
-                            .as_ref()
-                            .ok()
-                            .and_then(|entries| {
-                                crate::memory::anchor_summary_from_entries(entries)
-                            });
+                            // Fetch current LLM messages and prior anchor summary.
+                            let fold_messages =
+                                tape.build_llm_context(tape_name).await;
+                            let prior_entries =
+                                tape.from_last_anchor(tape_name, None).await;
+                            let prior_summary = prior_entries
+                                .as_ref()
+                                .ok()
+                                .and_then(|entries| {
+                                    crate::memory::anchor_summary_from_entries(entries)
+                                });
 
-                        match fold_messages {
-                            Ok(msgs) => {
-                                match folder
-                                    .fold_with_prior(
-                                        prior_summary.as_deref(),
-                                        &msgs,
-                                        tape_info.estimated_context_tokens as usize,
-                                    )
-                                    .await
-                                {
-                                    Ok(summary) => {
-                                        let handoff = fold::ContextFolder::to_handoff_state(
-                                            &summary, pressure,
-                                        );
-                                        if let Err(e) =
-                                            tape.handoff(tape_name, "auto-fold", handoff).await
-                                        {
+                            match fold_messages {
+                                Ok(msgs) => {
+                                    match folder
+                                        .fold_with_prior(
+                                            prior_summary.as_deref(),
+                                            &msgs,
+                                            tape_info.estimated_context_tokens
+                                                as usize,
+                                        )
+                                        .await
+                                    {
+                                        Ok(summary) => {
+                                            let handoff =
+                                                fold::ContextFolder::to_handoff_state(
+                                                    &summary, pressure,
+                                                );
+                                            if let Err(e) = tape
+                                                .handoff(
+                                                    tape_name, "auto-fold", handoff,
+                                                )
+                                                .await
+                                            {
+                                                warn!(
+                                                    error = %e,
+                                                    "auto-fold: failed to persist \
+                                                     anchor"
+                                                );
+                                            } else {
+                                                last_fold_entry_id = tape
+                                                    .last_entry_id(tape_name)
+                                                    .await
+                                                    .ok();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            fold_failed_this_turn = true;
                                             warn!(
                                                 error = %e,
-                                                "auto-fold: failed to persist anchor"
+                                                "auto-fold: LLM summarization \
+                                                 failed, disabling for this turn; \
+                                                 0.70/0.85 pressure warnings remain \
+                                                 as fallback"
                                             );
-                                        } else {
-                                            last_fold_entry_id =
-                                                tape.last_entry_id(tape_name).await.ok();
                                         }
                                     }
-                                    Err(e) => {
-                                        warn!(
-                                            error = %e,
-                                            "auto-fold: LLM summarization failed, skipping; \
-                                             0.70/0.85 pressure warnings remain as fallback"
-                                        );
-                                    }
                                 }
-                            }
-                            Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    "auto-fold: failed to build LLM context for folding, skipping"
-                                );
+                                Err(e) => {
+                                    fold_failed_this_turn = true;
+                                    warn!(
+                                        error = %e,
+                                        "auto-fold: failed to build LLM context \
+                                         for folding, disabling for this turn"
+                                    );
+                                }
                             }
                         }
                     }

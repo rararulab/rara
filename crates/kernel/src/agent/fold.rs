@@ -234,6 +234,33 @@ Output JSON: {"summary": "...", "next_steps": "..."}
 IMPORTANT: Generate the summary in the SAME LANGUAGE as the conversation being summarized."#;
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Scan the tape for the most recent `auto-fold` anchor and return its entry
+/// ID.  This allows the cooldown counter to survive across turns — without it,
+/// `last_fold_entry_id` would reset to `None` on every `run_agent_loop` call.
+pub(crate) async fn find_last_auto_fold_entry_id(
+    tape: &crate::memory::TapeService,
+    tape_name: &str,
+) -> Option<u64> {
+    let entries = tape.entries(tape_name).await.ok()?;
+    entries
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == crate::memory::TapEntryKind::Anchor
+                && e.payload
+                    .get("state")
+                    .and_then(|s| s.get("phase"))
+                    .and_then(|p| p.as_str())
+                    == Some("auto-fold")
+        })
+        .map(|e| e.id)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -76,7 +76,7 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// Context folding configuration.
-#[derive(Debug, Clone, smart_default::SmartDefault, serde::Deserialize)]
+#[derive(Debug, Clone, smart_default::SmartDefault, serde::Serialize, serde::Deserialize)]
 pub struct ContextFoldingConfig {
     /// Whether automatic context folding is enabled.
     #[default = true]
