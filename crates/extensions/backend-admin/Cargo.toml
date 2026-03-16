@@ -19,7 +19,6 @@ futures = { workspace = true }
 git2 = { workspace = true }
 jiff = { workspace = true }
 
-llmfit-core = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 rara-channels = { workspace = true }
 rara-codex-oauth = { workspace = true }
