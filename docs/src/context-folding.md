@@ -202,9 +202,10 @@ graph TB
 
 | Layer | Status | What it does |
 |-------|--------|-------------|
-| **P0: Auto-Anchor** | Shipped | Automatic conversation-level folding at 0.60 pressure with cooldown |
+| **P0: Auto-Anchor** | Shipped | Automatic conversation-level folding at 0.60 pressure with cooldown. Hierarchical summarization (P2) is built directly into `fold_with_prior` — each fold receives the prior anchor's summary, so P2 is not a separate implementation step. |
 | **P1: Branch-Return** | Shipped | `fold_branch` tool for subtask isolation with result compression |
-| **P2: Hierarchical** | Shipped | `fold_with_prior` passes prior summary to each fold, built into P0 |
+
+> **Note:** P2 (Hierarchical Summarization) is not a separate implementation phase. The `fold_with_prior` method in P0 already accepts an optional prior summary, so hierarchical chaining is an emergent property of the auto-anchor mechanism rather than an add-on.
 
 ## Invariants
 
