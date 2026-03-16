@@ -51,10 +51,18 @@ cd web && npm run build        # Frontend (if touched)
 
 The project uses [prek](https://github.com/j178/prek) for pre-commit hooks. The **final commit** in any PR must pass all checks — intermediate commits during development don't need to pass.
 
+Setup (required once after clone):
+```bash
+brew install prek              # Install prek
+prek install                   # Install git hooks into .git/hooks
+```
+
 Hooks configured in `.pre-commit-config.yaml`:
 - `cargo +nightly fmt --all -- --check`
-- `cargo clippy --workspace --all-targets --no-deps -- -D warnings`
+- `cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings`
 - `cargo check --all --all-targets`
+
+Triggers on: `.rs`, `.toml`, `Cargo.lock`, `rust-toolchain.toml` changes.
 
 Run all checks manually:
 ```bash

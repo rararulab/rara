@@ -6,18 +6,21 @@ repos:
         entry: cargo +nightly fmt --all -- --check
         language: system
         pass_filenames: false
-        types: [rust]
+        types_or: [rust, toml]
+        files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+        entry: cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
         language: system
         pass_filenames: false
-        types: [rust]
+        types_or: [rust, toml]
+        files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
 
       - id: cargo-check
         name: cargo check
         entry: cargo check --all --all-targets
         language: system
         pass_filenames: false
-        types: [rust]
+        types_or: [rust, toml]
+        files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$

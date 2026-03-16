@@ -102,6 +102,13 @@ lint:
 pre-commit: fmt clippy check test
     @echo "✅ All pre-commit checks passed!"
 
+[doc("install prek pre-commit hooks into .git/hooks")]
+[group("👆 Code Quality")]
+setup-hooks:
+    @command -v prek >/dev/null 2>&1 || (echo "❌ prek is required. Install with: brew install prek" && exit 1)
+    prek install
+    @echo "✅ Pre-commit hooks installed!"
+
 [doc("clean build artifacts")]
 [group("👆 Code Quality")]
 clean:
