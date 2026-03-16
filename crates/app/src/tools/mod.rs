@@ -114,6 +114,8 @@ pub fn rara_tool_names() -> Vec<String> {
         ListMcpServersTool::NAME,
         RemoveMcpServerTool::NAME,
         tool_names::CREATE_PLAN,
+        tool_names::SPAWN_BACKGROUND,
+        tool_names::CANCEL_BACKGROUND,
     ]
     .into_iter()
     .map(String::from)

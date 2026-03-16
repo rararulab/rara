@@ -79,7 +79,18 @@ impl AgentTool for CancelBackgroundTool {
             "cancelling background agent"
         );
 
-        // Remove from active list first so ChildSessionDone won't trigger proactive turn.
+        // Send Terminate signal first — if this fails the task is still tracked
+        // and the caller can retry.
+        if let Err(e) = self.handle.send_signal(task_id, Signal::Terminate) {
+            return Ok(serde_json::json!({
+                "error": format!("failed to send terminate signal: {e}"),
+                "task_id": task_id_str,
+            })
+            .into());
+        }
+
+        // Signal succeeded — now safe to remove from active list so
+        // ChildSessionDone won't trigger a proactive turn.
         self.handle.remove_background_task(&self.session_key, &task_id);
 
         // Emit BackgroundTaskDone so clients remove the status indicator.
@@ -90,15 +101,6 @@ impl AgentTool for CancelBackgroundTool {
                 status:  BackgroundTaskStatus::Cancelled,
             },
         );
-
-        // Send Terminate signal to child session.
-        if let Err(e) = self.handle.send_signal(task_id, Signal::Terminate) {
-            return Ok(serde_json::json!({
-                "error": format!("failed to send terminate signal: {e}"),
-                "task_id": task_id_str,
-            })
-            .into());
-        }
 
         Ok(serde_json::json!({
             "task_id": task_id_str,

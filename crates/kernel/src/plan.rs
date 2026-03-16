@@ -128,7 +128,7 @@ const MAX_REPLAN_ATTEMPTS: usize = 3;
 /// System prompt for the planning LLM call.
 const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner. Analyze the user's request and decompose it into a structured execution plan.
 
-You MUST call the `create_plan` tool with:
+You MUST call the `create-plan` tool with:
 - `goal`: A concise summary of the overall objective
 - `steps`: An ordered list of steps, each with:
   - `task`: Clear description of what this step should accomplish
@@ -151,13 +151,13 @@ You will be given:
 - The failure reason
 - Remaining steps that were not executed
 
-Based on this context, create a REVISED plan using the `create_plan` tool. The new plan should:
+Based on this context, create a REVISED plan using the `create-plan` tool. The new plan should:
 - Keep the same overall goal
 - Account for work already done (do not repeat completed steps)
 - Address the failure reason
 - Include only the remaining work needed
 
-You MUST call the `create_plan` tool with the revised plan."#;
+You MUST call the `create-plan` tool with the revised plan."#;
 
 // ---------------------------------------------------------------------------
 // Plan executor
@@ -171,7 +171,7 @@ You MUST call the `create_plan` tool with the revised plan."#;
 /// # Execution phases
 ///
 /// 1. **Plan phase** — call the LLM to produce a `Plan` from the user message
-///    via the `create_plan` tool.
+///    via the `create-plan` tool.
 /// 2. **Execute loop** — for each step, run an inline agent sub-turn or spawn a
 ///    worker child session.
 /// 3. **Replan** — if a step fails or requests replan, call the LLM to revise
@@ -459,7 +459,7 @@ pub(crate) async fn run_plan_loop(
 // LLM-driven plan creation
 // ---------------------------------------------------------------------------
 
-/// Call the LLM with the `create_plan` tool to produce a structured plan.
+/// Call the LLM with the `create-plan` tool to produce a structured plan.
 ///
 /// Falls back to a single-step inline plan if the LLM doesn't call the tool.
 async fn create_plan_via_llm(
