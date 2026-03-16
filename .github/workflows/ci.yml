@@ -53,8 +53,6 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   release-pr:
     name: Release PR
