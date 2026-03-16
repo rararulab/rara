@@ -163,27 +163,107 @@ impl MarketplaceService {
         let url =
             format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json");
         let client = reqwest::Client::new();
-        let resp: serde_json::Value = client
+        let raw_resp = client
             .get(&url)
             .header("User-Agent", "rara-marketplace")
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await
-            .context(crate::error::RequestSnafu)?
-            .json()
-            .await
             .context(crate::error::RequestSnafu)?;
 
-        let content_b64 = resp
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::error::SkillError::InvalidInput {
-                message: format!("no 'content' field in GitHub API response for {repo}"),
-            })?;
+        let status = raw_resp.status();
+        let is_not_found = status == reqwest::StatusCode::NOT_FOUND;
+
+        // For non-404 errors (rate limit, auth failure, server error), propagate
+        // immediately.
+        if !status.is_success() && !is_not_found {
+            return Err(crate::error::SkillError::HttpStatus {
+                status: status.as_u16(),
+                url,
+            });
+        }
+
+        let resp: serde_json::Value = raw_resp.json().await.context(crate::error::RequestSnafu)?;
+
+        let content_b64 = match resp.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c.to_string(),
+            None => {
+                // Only fall back to plugin.json when marketplace.json is genuinely absent
+                // (404).
+                if !is_not_found {
+                    return Err(crate::error::SkillError::InvalidInput {
+                        message: format!(
+                            "marketplace.json for '{repo}' returned HTTP {status} but has no \
+                             'content' field"
+                        ),
+                    });
+                }
+
+                // Fallback: try .claude-plugin/plugin.json for single-plugin repos.
+                let fallback_url = format!(
+                    "https://api.github.com/repos/{repo}/contents/.claude-plugin/plugin.json"
+                );
+                let fallback_raw = client
+                    .get(&fallback_url)
+                    .header("User-Agent", "rara-marketplace")
+                    .header("Accept", "application/vnd.github.v3+json")
+                    .send()
+                    .await
+                    .context(crate::error::RequestSnafu)?;
+
+                let fallback_status = fallback_raw.status();
+                if !fallback_status.is_success() {
+                    return Err(crate::error::SkillError::HttpStatus {
+                        status: fallback_status.as_u16(),
+                        url:    fallback_url,
+                    });
+                }
+
+                let fallback_resp: serde_json::Value = fallback_raw
+                    .json()
+                    .await
+                    .context(crate::error::RequestSnafu)?;
+
+                let fallback_b64 = fallback_resp
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| crate::error::SkillError::InvalidInput {
+                        message: format!(
+                            "repo '{repo}' has neither marketplace.json nor plugin.json"
+                        ),
+                    })?;
+
+                use base64::Engine;
+                let cleaned: String = fallback_b64
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&cleaned)
+                    .map_err(|e| crate::error::SkillError::InvalidInput {
+                        message: format!("base64 decode failed: {e}"),
+                    })?;
+                let json_str = String::from_utf8(bytes).map_err(|e| {
+                    crate::error::SkillError::InvalidInput {
+                        message: format!("plugin.json is not valid UTF-8: {e}"),
+                    }
+                })?;
+
+                let index = synthetic_index_from_plugin_json(repo, &json_str)?;
+                self.cache
+                    .write()
+                    .unwrap()
+                    .insert(repo.to_string(), index.clone());
+                return Ok(index);
+            }
+        };
 
         // GitHub returns base64 with newlines.
         use base64::Engine;
-        let cleaned: String = content_b64.chars().filter(|c| !c.is_whitespace()).collect();
+        let cleaned: String = content_b64
+            .chars()
+            .filter(|c: &char| !c.is_whitespace())
+            .collect();
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&cleaned)
             .map_err(|e| crate::error::SkillError::InvalidInput {
@@ -314,6 +394,41 @@ impl MarketplaceService {
         })
     }
 
+    /// Install all plugins from a GitHub repo directly by `owner/repo`.
+    ///
+    /// Adds the repo as a marketplace source, downloads it, scans for skills,
+    /// and enables all discovered skills.
+    pub async fn install_repo(&self, repo: &str) -> Result<PluginInstallResult> {
+        // Install first; only register the source after a successful download
+        // so a failed install does not leave a stale source entry.
+        let install_dir = crate::install::default_install_dir()?;
+        crate::install::install_skill(repo, &install_dir).await?;
+
+        self.add_source(repo)?;
+
+        // Load manifest, enable all skills from this repo, and save.
+        let manifest_path = crate::manifest::ManifestStore::default_path()?;
+        let store = crate::manifest::ManifestStore::new(manifest_path);
+        let mut manifest = store.load()?;
+
+        let mut enabled_skills = Vec::new();
+        if let Some(repo_entry) = manifest.find_repo_mut(repo) {
+            for skill in &mut repo_entry.skills {
+                skill.enabled = true;
+                skill.trusted = true;
+                enabled_skills.push(skill.name.clone());
+            }
+        }
+        store.save(&manifest)?;
+
+        let repo_name = repo.split('/').next_back().unwrap_or(repo);
+        Ok(PluginInstallResult {
+            plugin:       repo_name.to_string(),
+            skills_count: enabled_skills.len(),
+            skills:       enabled_skills,
+        })
+    }
+
     /// Enable a previously installed plugin.
     pub fn enable_plugin(&self, plugin_name: &str) -> Result<()> {
         self.set_plugin_state(plugin_name, true)
@@ -398,6 +513,33 @@ fn load_sources(path: &PathBuf) -> Vec<MarketplaceSource> {
     sources
 }
 
+/// Build a synthetic [`MarketplaceIndex`] from a single-plugin repo's
+/// `.claude-plugin/plugin.json` content. Used as a fallback when the repo has
+/// no `marketplace.json`.
+fn synthetic_index_from_plugin_json(repo: &str, json_str: &str) -> Result<MarketplaceIndex> {
+    #[derive(Deserialize)]
+    struct PluginJson {
+        name:        String,
+        #[serde(default)]
+        description: Option<String>,
+    }
+    let pj: PluginJson = serde_json::from_str(json_str).context(SerdeJsonSnafu)?;
+    let repo_name = repo.split('/').next_back().unwrap_or(repo);
+    Ok(MarketplaceIndex {
+        name:        repo_name.to_string(),
+        description: pj.description.clone(),
+        owner:       None,
+        plugins:     vec![MarketplacePlugin {
+            name:        pj.name,
+            description: pj.description,
+            version:     None,
+            category:    None,
+            source:      Some(".".to_string()),
+            skills:      Vec::new(),
+        }],
+    })
+}
+
 /// Persist sources to JSON.
 fn save_sources(path: &PathBuf, sources: &[MarketplaceSource]) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -448,6 +590,25 @@ mod tests {
         assert_eq!(index.plugins.len(), 1);
         assert_eq!(index.plugins[0].name, "code-review");
         assert_eq!(index.plugins[0].category.as_deref(), Some("development"));
+    }
+
+    #[test]
+    fn synthetic_index_from_single_plugin_json() {
+        let json = r#"{ "name": "my-cool-plugin", "description": "Does cool things" }"#;
+        let index = super::synthetic_index_from_plugin_json("acme/cool-repo", json).unwrap();
+        assert_eq!(index.name, "cool-repo");
+        assert_eq!(index.description.as_deref(), Some("Does cool things"));
+        assert_eq!(index.plugins.len(), 1);
+        assert_eq!(index.plugins[0].name, "my-cool-plugin");
+        assert_eq!(index.plugins[0].source.as_deref(), Some("."));
+    }
+
+    #[test]
+    fn synthetic_index_without_description() {
+        let json = r#"{ "name": "minimal" }"#;
+        let index = super::synthetic_index_from_plugin_json("org/repo", json).unwrap();
+        assert_eq!(index.plugins[0].name, "minimal");
+        assert!(index.plugins[0].description.is_none());
     }
 
     #[test]
