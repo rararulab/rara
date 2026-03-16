@@ -311,21 +311,28 @@ alias ma := migrate-add
 # Worktree Management
 # ========================================================================================
 
+WT_CLEAN := "scripts/bin/wtclean"
+
+[doc("build wt-clean binary")]
+[group("🌳 Worktree")]
+wt-build:
+    @cd scripts && go build -o bin/wtclean ./cmd/wtclean/
+
 [doc("list all git worktrees")]
 [group("🌳 Worktree")]
-wt-list:
-    @git worktree list
+wt-list: wt-build
+    @{{WT_CLEAN}} list
 
 [doc("clean up merged worktrees (removes worktrees whose branches are merged into main)")]
 [group("🌳 Worktree")]
-wt-clean:
-    @cd scripts && go run wt-clean.go clean
+wt-clean: wt-build
+    @{{WT_CLEAN}} clean
 
 [doc("force-remove ALL worktrees except the main checkout (⚠️ destructive)")]
 [group("🌳 Worktree")]
 [confirm("⚠️ This will remove ALL worktrees and their local branches. Continue?")]
-wt-nuke:
-    @cd scripts && go run wt-clean.go nuke
+wt-nuke: wt-build
+    @{{WT_CLEAN}} nuke
 
 # ========================================================================================
 # Dependency Management
