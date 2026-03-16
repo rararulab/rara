@@ -1363,6 +1363,15 @@ impl Kernel {
             .with_label_values(&[trigger_type])
             .inc();
 
+        if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+            wheel.push_event(crate::schedule::JobEvent {
+                job_id,
+                timestamp: jiff::Timestamp::now(),
+                kind: crate::schedule::JobEventKind::Fired,
+                message: job.message.clone(),
+            });
+        }
+
         info!(
             job_id = %job_id,
             session_key = %session_key,
@@ -1411,6 +1420,16 @@ impl Kernel {
                     crate::metrics::SCHEDULED_JOB_OUTCOME
                         .with_label_values(&["deferred"])
                         .inc();
+                    if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+                        wheel.push_event(crate::schedule::JobEvent {
+                            job_id,
+                            timestamp: jiff::Timestamp::now(),
+                            kind: crate::schedule::JobEventKind::Deferred {
+                                reason: "parent at child limit".to_string(),
+                            },
+                            message: job.message.clone(),
+                        });
+                    }
                     info!(
                         job_id = %job_id,
                         session_key = %session_key,
@@ -1424,6 +1443,16 @@ impl Kernel {
                 crate::metrics::SCHEDULED_JOB_OUTCOME
                     .with_label_values(&["deferred"])
                     .inc();
+                if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+                    wheel.push_event(crate::schedule::JobEvent {
+                        job_id,
+                        timestamp: jiff::Timestamp::now(),
+                        kind: crate::schedule::JobEventKind::Deferred {
+                            reason: "parent session not in process table".to_string(),
+                        },
+                        message: job.message.clone(),
+                    });
+                }
                 warn!(
                     job_id = %job_id,
                     session_key = %session_key,
@@ -1459,6 +1488,16 @@ impl Kernel {
                 crate::metrics::SCHEDULED_JOB_OUTCOME
                     .with_label_values(&["failed"])
                     .inc();
+                if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+                    wheel.push_event(crate::schedule::JobEvent {
+                        job_id,
+                        timestamp: jiff::Timestamp::now(),
+                        kind: crate::schedule::JobEventKind::Failed {
+                            error: e.to_string(),
+                        },
+                        message: job.message.clone(),
+                    });
+                }
                 error!(
                     job_id = %job_id,
                     error = %e,
@@ -1471,6 +1510,17 @@ impl Kernel {
         crate::metrics::SCHEDULED_JOB_OUTCOME
             .with_label_values(&["spawned"])
             .inc();
+
+        if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+            wheel.push_event(crate::schedule::JobEvent {
+                job_id,
+                timestamp: jiff::Timestamp::now(),
+                kind: crate::schedule::JobEventKind::Spawned {
+                    child_key: spawned_key.to_string(),
+                },
+                message: job.message.clone(),
+            });
+        }
 
         info!(
             job_id = %job_id,
@@ -1558,6 +1608,12 @@ impl Kernel {
 
         if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
             crate::metrics::SCHEDULED_JOB_REQUEUED.inc();
+            wheel.push_event(crate::schedule::JobEvent {
+                job_id:    job.id,
+                timestamp: jiff::Timestamp::now(),
+                kind:      crate::schedule::JobEventKind::Requeued { retry_at },
+                message:   job.message.clone(),
+            });
             info!(
                 job_id = %job.id,
                 retry_at = %retry_at,

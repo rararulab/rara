@@ -18,7 +18,10 @@
 //! and [`JobWheel`] (the scheduling data structure backed by a `BTreeMap`).
 //! Jobs are persisted as JSON and restored on startup.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    path::PathBuf,
+};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,39 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{identity::Principal, session::SessionKey};
+
+// ---------------------------------------------------------------------------
+// JobEvent — observable history for debugging
+// ---------------------------------------------------------------------------
+
+/// What happened to a scheduled job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JobEventKind {
+    /// Job was drained from the wheel and entered handle_scheduled_task.
+    Fired,
+    /// Child agent was successfully spawned.
+    Spawned { child_key: String },
+    /// Child agent failed to spawn.
+    Failed { error: String },
+    /// Job was deferred (parent at child limit or not in process table).
+    Deferred { reason: String },
+    /// One-shot job was requeued for retry after deferral.
+    Requeued { retry_at: Timestamp },
+}
+
+/// A single recorded event in the job lifecycle history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobEvent {
+    pub job_id:    JobId,
+    pub timestamp: Timestamp,
+    pub kind:      JobEventKind,
+    /// The job's task description, for context.
+    pub message:   String,
+}
+
+/// Maximum number of events kept in the ring buffer.
+const MAX_JOB_EVENTS: usize = 64;
 
 base::define_id!(
     /// Unique identifier for a scheduled job.
@@ -123,9 +159,11 @@ type WheelKey = (i64, Uuid);
 /// efficiently pop all entries whose time has passed.
 pub struct JobWheel {
     /// Jobs ordered by (next_fire_time_secs, job_uuid).
-    jobs: BTreeMap<WheelKey, JobEntry>,
+    jobs:   BTreeMap<WheelKey, JobEntry>,
     /// Path to the JSON persistence file.
-    path: PathBuf,
+    path:   PathBuf,
+    /// Ring buffer of recent job lifecycle events for observability.
+    events: VecDeque<JobEvent>,
 }
 
 impl JobWheel {
@@ -156,7 +194,11 @@ impl JobWheel {
                 BTreeMap::new()
             }
         };
-        Self { jobs, path }
+        Self {
+            jobs,
+            path,
+            events: VecDeque::new(),
+        }
     }
 
     /// Return the next fire time, or `None` if the wheel is empty.
@@ -243,6 +285,17 @@ impl JobWheel {
             .collect()
     }
 
+    /// Record a job lifecycle event in the ring buffer.
+    pub fn push_event(&mut self, event: JobEvent) {
+        if self.events.len() >= MAX_JOB_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+
+    /// Return recent job lifecycle events (most recent last).
+    pub fn recent_events(&self) -> &VecDeque<JobEvent> { &self.events }
+
     /// Persist the current state to the JSON file.
     pub fn persist(&self) {
         let entries: Vec<&JobEntry> = self.jobs.values().collect();
@@ -301,6 +354,7 @@ mod tests {
         JobWheel {
             jobs: BTreeMap::new(),
             path,
+            events: VecDeque::new(),
         }
     }
 

@@ -216,6 +216,13 @@ pub enum Syscall {
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
     },
+
+    /// Return recent job lifecycle events for observability.
+    JobHistory {
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEvent>>>,
+    },
 }
 
 impl Syscall {

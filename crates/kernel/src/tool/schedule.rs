@@ -364,7 +364,10 @@ impl ScheduleListTool {
 impl AgentTool for ScheduleListTool {
     fn name(&self) -> &str { Self::NAME }
 
-    fn description(&self) -> &str { "List all scheduled tasks for the current session." }
+    fn description(&self) -> &str {
+        "List all scheduled tasks for the current session, including recent execution history \
+         (fired, spawned, failed, deferred, requeued events)."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -381,16 +384,27 @@ impl AgentTool for ScheduleListTool {
         let event_queue = &context.event_queue;
         let session_key = context.session_key;
 
+        // Fetch pending jobs.
         let (tx, rx) = oneshot::channel();
         let _ = event_queue.push(KernelEventEnvelope::session_command(
             session_key,
             Syscall::ListJobs { reply_tx: tx },
         ));
-
         let jobs = rx
             .await
             .map_err(|_| anyhow::anyhow!("kernel dropped reply channel"))?
             .map_err(|e| anyhow::anyhow!("list jobs failed: {e}"))?;
+
+        // Fetch recent job lifecycle events.
+        let (tx2, rx2) = oneshot::channel();
+        let _ = event_queue.push(KernelEventEnvelope::session_command(
+            session_key,
+            Syscall::JobHistory { reply_tx: tx2 },
+        ));
+        let events = rx2
+            .await
+            .map_err(|_| anyhow::anyhow!("kernel dropped reply channel"))?
+            .map_err(|e| anyhow::anyhow!("job history failed: {e}"))?;
 
         let list: Vec<serde_json::Value> = jobs
             .iter()
@@ -404,9 +418,22 @@ impl AgentTool for ScheduleListTool {
             })
             .collect();
 
+        let event_list: Vec<serde_json::Value> = events
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "job_id": e.job_id.to_string(),
+                    "timestamp": e.timestamp.to_string(),
+                    "kind": e.kind,
+                    "message": e.message,
+                })
+            })
+            .collect();
+
         Ok(serde_json::json!({
             "jobs": list,
             "count": list.len(),
+            "recent_events": event_list,
         })
         .into())
     }

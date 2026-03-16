@@ -402,6 +402,11 @@ impl SyscallDispatcher {
                 let jobs = wheel.list(Some(&syscall_sender));
                 let _ = reply_tx.send(Ok(jobs));
             }
+            Syscall::JobHistory { reply_tx } => {
+                let wheel = self.job_wheel.lock().unwrap();
+                let events: Vec<_> = wheel.recent_events().iter().cloned().collect();
+                let _ = reply_tx.send(Ok(events));
+            }
         }
     }
 
