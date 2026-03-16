@@ -276,3 +276,196 @@ impl JobWheel {
         Some(next_ts)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::Principal;
+
+    /// Helper to create a job entry with the given trigger.
+    fn make_job(trigger: Trigger) -> JobEntry {
+        JobEntry {
+            id: JobId::default(),
+            trigger,
+            message: "test task".to_string(),
+            session_key: SessionKey::default(),
+            principal: Principal::lookup("test-user".to_string()),
+            created_at: Timestamp::now(),
+        }
+    }
+
+    /// Helper to create a JobWheel backed by a temp file.
+    fn temp_wheel() -> JobWheel {
+        let path =
+            std::env::temp_dir().join(format!("rara-test-jobs-{}.json", uuid::Uuid::new_v4()));
+        JobWheel {
+            jobs: BTreeMap::new(),
+            path,
+        }
+    }
+
+    #[test]
+    fn drain_expired_removes_once_jobs() {
+        let mut wheel = temp_wheel();
+        let past = Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_secs(10))
+            .unwrap();
+        let job = make_job(Trigger::Once { run_at: past });
+        let job_id = job.id;
+        wheel.add(job);
+
+        let expired = wheel.drain_expired(Timestamp::now());
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].id, job_id);
+
+        // Once job should NOT be re-inserted.
+        assert!(wheel.list(None).is_empty());
+    }
+
+    #[test]
+    fn drain_expired_reschedules_interval_jobs() {
+        let mut wheel = temp_wheel();
+        let past = Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_secs(10))
+            .unwrap();
+        let job = make_job(Trigger::Interval {
+            every_secs: 60,
+            next_at:    past,
+        });
+        let job_id = job.id;
+        wheel.add(job);
+
+        let expired = wheel.drain_expired(Timestamp::now());
+        assert_eq!(expired.len(), 1);
+
+        // Interval job should be re-inserted with updated next_at.
+        let remaining = wheel.list(None);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, job_id);
+        assert!(remaining[0].trigger.next_at() > Timestamp::now());
+    }
+
+    #[test]
+    fn requeue_once_job_after_drain() {
+        // Simulate the scenario where a Once job is drained but cannot be
+        // spawned (parent at child limit).  The job should be requeued with
+        // a short delay so it is not lost.
+        let mut wheel = temp_wheel();
+        let past = Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_secs(10))
+            .unwrap();
+        let job = make_job(Trigger::Once { run_at: past });
+        let job_id = job.id;
+        wheel.add(job);
+
+        // drain_expired consumes the Once job.
+        let expired = wheel.drain_expired(Timestamp::now());
+        assert_eq!(expired.len(), 1);
+        assert!(wheel.list(None).is_empty(), "Once job should be consumed");
+
+        // Requeue: simulate what requeue_job() does.
+        let mut requeued = expired.into_iter().next().unwrap();
+        let retry_at = Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_secs(10))
+            .unwrap();
+        requeued.trigger = Trigger::Once { run_at: retry_at };
+        wheel.add(requeued);
+
+        // The job should be back in the wheel.
+        let remaining = wheel.list(None);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, job_id);
+        assert!(
+            remaining[0].trigger.next_at() > Timestamp::now(),
+            "requeued job should fire in the future"
+        );
+    }
+
+    #[test]
+    fn recurring_job_not_requeued_after_drain() {
+        // Interval/Cron jobs are already rescheduled by drain_expired.
+        // Requeueing them would create an extra duplicate run.
+        let mut wheel = temp_wheel();
+        let past = Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_secs(10))
+            .unwrap();
+        let job = make_job(Trigger::Interval {
+            every_secs: 60,
+            next_at:    past,
+        });
+        wheel.add(job);
+
+        let expired = wheel.drain_expired(Timestamp::now());
+        assert_eq!(expired.len(), 1);
+
+        // drain_expired already rescheduled the interval job.
+        assert_eq!(
+            wheel.list(None).len(),
+            1,
+            "interval job should be rescheduled"
+        );
+
+        // Verify that the expired entry is an Interval trigger — the
+        // requeue_job() method should NOT requeue it (early return).
+        assert!(
+            matches!(expired[0].trigger, Trigger::Interval { .. }),
+            "expired entry should retain Interval trigger"
+        );
+    }
+
+    #[test]
+    fn add_and_remove_job() {
+        let mut wheel = temp_wheel();
+        let job = make_job(Trigger::Once {
+            run_at: Timestamp::now(),
+        });
+        let job_id = job.id;
+        wheel.add(job);
+
+        assert_eq!(wheel.list(None).len(), 1);
+        let removed = wheel.remove(&job_id);
+        assert!(removed.is_some());
+        assert!(wheel.list(None).is_empty());
+    }
+
+    #[test]
+    fn next_deadline_returns_earliest() {
+        let mut wheel = temp_wheel();
+        let t1 = Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_secs(100))
+            .unwrap();
+        let t2 = Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_secs(200))
+            .unwrap();
+
+        wheel.add(make_job(Trigger::Once { run_at: t2 }));
+        wheel.add(make_job(Trigger::Once { run_at: t1 }));
+
+        let deadline = wheel.next_deadline().unwrap();
+        // next_deadline truncates to seconds, so compare at second granularity.
+        assert_eq!(deadline.as_second(), t1.as_second());
+    }
+
+    #[test]
+    fn list_filters_by_session() {
+        let mut wheel = temp_wheel();
+        let sk1 = SessionKey::default();
+        let sk2 = SessionKey::default();
+
+        let mut job1 = make_job(Trigger::Once {
+            run_at: Timestamp::now(),
+        });
+        job1.session_key = sk1;
+        let mut job2 = make_job(Trigger::Once {
+            run_at: Timestamp::now(),
+        });
+        job2.session_key = sk2;
+
+        wheel.add(job1);
+        wheel.add(job2);
+
+        assert_eq!(wheel.list(Some(&sk1)).len(), 1);
+        assert_eq!(wheel.list(Some(&sk2)).len(), 1);
+        assert_eq!(wheel.list(None).len(), 2);
+    }
+}

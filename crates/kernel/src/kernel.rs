@@ -1290,6 +1290,64 @@ impl Kernel {
             session_key = %job.session_key,
         )
     )]
+    /// Spawn a one-shot child agent to execute a scheduled task.
+    ///
+    /// # Lifecycle
+    ///
+    /// ```text
+    /// ┌─────────────────────────────────────────────────────────────┐
+    /// │ Scheduler (processor 0)                                     │
+    /// │   drain_expired()                                           │
+    /// │     ├─ Once  → removed permanently from wheel               │
+    /// │     ├─ Interval → next_at += every_secs, re-inserted        │
+    /// │     └─ Cron → next_at = next_cron_time(), re-inserted       │
+    /// │   for each expired job → push ScheduledTask event           │
+    /// └─────────────────────────────────────────────────────────────┘
+    ///                          │
+    ///                          ▼
+    /// ┌─────────────────────────────────────────────────────────────┐
+    /// │ handle_scheduled_task(job)                                   │
+    /// │  1. Acquire child_semaphore permit from parent               │
+    /// │     └─ fail → requeue_job() for Once, skip for recurring    │
+    /// │  2. handle_spawn_agent(parent=job.session_key)               │
+    /// │  3. Install result_tx + child_permit on child session        │
+    /// │     (replicates spawn_child semantics without deadlock)      │
+    /// │  4. Register as BackgroundTaskEntry on parent                │
+    /// │  5. Emit BackgroundTaskStarted to client streams             │
+    /// │  6. Spawn fire-and-forget drain task for result_rx           │
+    /// └─────────────────────────────────────────────────────────────┘
+    ///                          │
+    ///                          ▼ (child agent runs, completes)
+    /// ┌─────────────────────────────────────────────────────────────┐
+    /// │ Turn completion (has_result_tx = true)                       │
+    /// │  → cleanup_process(child)                                   │
+    /// │    → ChildSessionDone event to parent                       │
+    /// │      → handle_child_completed(parent, child, result)        │
+    /// │        1. Write [child_agent_result] to parent tape          │
+    /// │        2. Remove from background_tasks                      │
+    /// │        3. Inject proactive InboundMessage → parent turn      │
+    /// │        4. Emit BackgroundTaskDone to client streams          │
+    /// └─────────────────────────────────────────────────────────────┘
+    /// ```
+    ///
+    /// # Why not `spawn_child()` directly?
+    ///
+    /// `spawn_child()` pushes a `CreateSession` event and awaits the
+    /// reply.  Both `ScheduledTask` and `CreateSession` are global
+    /// events processed by processor 0, so awaiting `spawn_child()`
+    /// from `handle_scheduled_task()` would deadlock (processor 0
+    /// waiting on itself).  Instead we call `handle_spawn_agent()`
+    /// (which is already inside the processor) and manually install
+    /// `result_tx` + `_parent_child_permit` afterwards.
+    ///
+    /// # Backpressure
+    ///
+    /// The parent's `child_semaphore` is respected via
+    /// `try_acquire_owned()`.  If the parent is at capacity:
+    /// - **Once jobs**: requeued with a 10-second delay (they were already
+    ///   consumed by `drain_expired`).
+    /// - **Recurring jobs**: silently skipped — `drain_expired` has already
+    ///   inserted the next firing, so nothing is lost.
     async fn handle_scheduled_task(&self, job: crate::schedule::JobEntry) {
         let session_key = job.session_key;
         let job_id = job.id;
@@ -1301,8 +1359,6 @@ impl Kernel {
             "scheduled task fired"
         );
 
-        // Build a dedicated ScheduledJobAgent manifest with job context
-        // baked into the system prompt.
         let manifest = AgentManifest {
             name:                   "scheduled_job".to_string(),
             role:                   AgentRole::Worker,
@@ -1328,10 +1384,12 @@ impl Kernel {
             default_execution_mode: None,
         };
 
-        // 3. Acquire a child permit from the parent's semaphore to enforce max_children
-        //    backpressure.  If the parent is at capacity, re-add the job to the wheel
-        //    so it retries shortly — this is critical for Trigger::Once jobs which are
-        //    consumed by drain_expired and would be silently lost otherwise.
+        // Step 1: Acquire child_semaphore permit.
+        //
+        // try_acquire_owned is non-blocking.  If the parent is at max_children,
+        // requeue_job() preserves Once jobs (they were already consumed by
+        // drain_expired); recurring jobs are safe to skip since drain_expired
+        // already re-inserted their next firing.
         let child_sem = self
             .process_table
             .with(&job.session_key, |p| p.child_semaphore.clone());
@@ -1359,6 +1417,12 @@ impl Kernel {
             }
         };
 
+        // Step 2: Spawn the child via handle_spawn_agent with parent linkage.
+        //
+        // We pass Some(job.session_key) as parent_id so that
+        // cleanup_process → ChildSessionDone routes the result back to the
+        // parent.  The child inherits its process_cancel token from the
+        // parent (kernel.rs handle_spawn_agent line ~711).
         let principal = crate::identity::Principal::lookup(job.principal.user_id.0.clone());
         let spawn_result = self
             .handle_spawn_agent(
@@ -1391,19 +1455,27 @@ impl Kernel {
             "scheduled job agent spawned with parent linkage"
         );
 
-        // Install result_tx so the child is treated as a one-shot agent:
-        // when its first turn completes, the has_result_tx check triggers
-        // cleanup_process → ChildSessionDone → handle_child_completed on
-        // the parent.  Also store the child_permit so it is released when
-        // the child session is dropped (same as spawn_child).
+        // Step 3: Install result_tx + child_permit on the child session.
+        //
+        // handle_spawn_agent sets result_tx = None by default.  Without
+        // result_tx, the turn-completion code (line ~2553) would NOT call
+        // cleanup_process — the child would just transition to Ready and
+        // never emit ChildSessionDone, so the parent would never get the
+        // result.
+        //
+        // _parent_child_permit is released when the child session drops,
+        // freeing the parent's child_semaphore slot.
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
         self.process_table.with_mut(&spawned_key, |session| {
             session.result_tx = Some(result_tx);
             session._parent_child_permit = Some(child_permit);
         });
 
-        // Register as background task so handle_child_completed triggers
-        // a proactive turn on the parent when the job finishes.
+        // Step 4: Register as background task on the parent.
+        //
+        // This makes handle_child_completed's is_background check return
+        // true, which triggers the proactive InboundMessage injection into
+        // the parent session (delivering the result to the user).
         self.handle().register_background_task(
             &job.session_key,
             crate::session::BackgroundTaskEntry {
@@ -1415,7 +1487,8 @@ impl Kernel {
             },
         );
 
-        // Emit BackgroundTaskStarted so clients show a status indicator.
+        // Step 5: Emit BackgroundTaskStarted so clients show a status
+        // indicator with elapsed timer.
         self.io.stream_hub().emit_to_session(
             &job.session_key,
             crate::io::StreamEvent::BackgroundTaskStarted {
@@ -1425,8 +1498,12 @@ impl Kernel {
             },
         );
 
-        // Drain result_rx in fire-and-forget task (same pattern as
-        // SpawnBackgroundTool).
+        // Step 6: Drain result_rx in a fire-and-forget tokio task.
+        //
+        // cleanup_process sends AgentEvent::Done through result_tx.  If
+        // nobody drains result_rx the channel fills up and the send blocks
+        // indefinitely, stalling cleanup_process.  This mirrors the same
+        // pattern used by SpawnBackgroundTool.
         tokio::spawn(async move {
             let mut rx = result_rx;
             while let Some(event) = rx.recv().await {
