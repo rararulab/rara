@@ -327,8 +327,8 @@ impl FormatAdapter for ClaudeCodeAdapter {
                     if let Some(plugins) = index.get("plugins").and_then(|v| v.as_array()) {
                         for plugin in plugins {
                             if let Some(source) = plugin.get("source").and_then(|v| v.as_str()) {
-                                let plugin_dir = repo_dir
-                                    .join(source.strip_prefix("./").unwrap_or(source));
+                                let plugin_dir =
+                                    repo_dir.join(source.strip_prefix("./").unwrap_or(source));
 
                                 // Guard against path traversal (e.g. source: "../../escape").
                                 let canonical_repo = match repo_dir.canonicalize() {
@@ -342,7 +342,8 @@ impl FormatAdapter for ClaudeCodeAdapter {
                                 if !canonical_plugin.starts_with(&canonical_repo) {
                                     tracing::warn!(
                                         ?source,
-                                        "marketplace plugin source escapes repo directory, skipping"
+                                        "marketplace plugin source escapes repo directory, \
+                                         skipping"
                                     );
                                     continue;
                                 }
@@ -530,7 +531,11 @@ mod tests {
         write_plugin_json(&alpha, "alpha");
         let skills_dir = alpha.join("skills");
         std::fs::create_dir_all(&skills_dir).unwrap();
-        std::fs::write(skills_dir.join("do-thing.md"), "# Do Thing\nDoes the thing.").unwrap();
+        std::fs::write(
+            skills_dir.join("do-thing.md"),
+            "# Do Thing\nDoes the thing.",
+        )
+        .unwrap();
 
         // Create beta-plugin with a subdirectory skill.
         let beta = root.join("beta-plugin");
@@ -546,8 +551,14 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         let names: Vec<&str> = results.iter().map(|r| r.metadata.name.as_str()).collect();
-        assert!(names.contains(&"alpha:do-thing"), "missing alpha:do-thing in {names:?}");
-        assert!(names.contains(&"beta:my-skill"), "missing beta:my-skill in {names:?}");
+        assert!(
+            names.contains(&"alpha:do-thing"),
+            "missing alpha:do-thing in {names:?}"
+        );
+        assert!(
+            names.contains(&"beta:my-skill"),
+            "missing beta:my-skill in {names:?}"
+        );
     }
 
     #[test]
@@ -642,7 +653,10 @@ mod tests {
     #[test]
     fn extract_description_skips_frontmatter_and_headings() {
         let body = "---\ntitle: Foo\n---\n# Heading\n\nActual description here.";
-        assert_eq!(extract_description_from_body(body), "Actual description here.");
+        assert_eq!(
+            extract_description_from_body(body),
+            "Actual description here."
+        );
 
         let body_no_fm = "# Heading\nSome text.";
         assert_eq!(extract_description_from_body(body_no_fm), "Some text.");

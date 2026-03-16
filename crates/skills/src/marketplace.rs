@@ -174,7 +174,8 @@ impl MarketplaceService {
         let status = raw_resp.status();
         let is_not_found = status == reqwest::StatusCode::NOT_FOUND;
 
-        // For non-404 errors (rate limit, auth failure, server error), propagate immediately.
+        // For non-404 errors (rate limit, auth failure, server error), propagate
+        // immediately.
         if !status.is_success() && !is_not_found {
             return Err(crate::error::SkillError::HttpStatus {
                 status: status.as_u16(),
@@ -187,7 +188,8 @@ impl MarketplaceService {
         let content_b64 = match resp.get("content").and_then(|v| v.as_str()) {
             Some(c) => c.to_string(),
             None => {
-                // Only fall back to plugin.json when marketplace.json is genuinely absent (404).
+                // Only fall back to plugin.json when marketplace.json is genuinely absent
+                // (404).
                 if !is_not_found {
                     return Err(crate::error::SkillError::InvalidInput {
                         message: format!(
@@ -217,8 +219,10 @@ impl MarketplaceService {
                     });
                 }
 
-                let fallback_resp: serde_json::Value =
-                    fallback_raw.json().await.context(crate::error::RequestSnafu)?;
+                let fallback_resp: serde_json::Value = fallback_raw
+                    .json()
+                    .await
+                    .context(crate::error::RequestSnafu)?;
 
                 let fallback_b64 = fallback_resp
                     .get("content")
@@ -230,17 +234,20 @@ impl MarketplaceService {
                     })?;
 
                 use base64::Engine;
-                let cleaned: String =
-                    fallback_b64.chars().filter(|c| !c.is_whitespace()).collect();
+                let cleaned: String = fallback_b64
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
                     .map_err(|e| crate::error::SkillError::InvalidInput {
                         message: format!("base64 decode failed: {e}"),
                     })?;
-                let json_str =
-                    String::from_utf8(bytes).map_err(|e| crate::error::SkillError::InvalidInput {
+                let json_str = String::from_utf8(bytes).map_err(|e| {
+                    crate::error::SkillError::InvalidInput {
                         message: format!("plugin.json is not valid UTF-8: {e}"),
-                    })?;
+                    }
+                })?;
 
                 let index = synthetic_index_from_plugin_json(repo, &json_str)?;
                 self.cache
@@ -253,7 +260,10 @@ impl MarketplaceService {
 
         // GitHub returns base64 with newlines.
         use base64::Engine;
-        let cleaned: String = content_b64.chars().filter(|c: &char| !c.is_whitespace()).collect();
+        let cleaned: String = content_b64
+            .chars()
+            .filter(|c: &char| !c.is_whitespace())
+            .collect();
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&cleaned)
             .map_err(|e| crate::error::SkillError::InvalidInput {
