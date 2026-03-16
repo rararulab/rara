@@ -4,12 +4,22 @@
 
 ## Type of change
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Breaking change
-- [ ] Refactor
-- [ ] CI / Infrastructure
-- [ ] Documentation
+<!-- Check the one that applies and add the matching label to this PR -->
+
+| Type | Label |
+|------|-------|
+| Bug fix | `bug` |
+| New feature | `enhancement` |
+| Breaking change | `breaking-change` |
+| Refactor | `refactor` |
+| CI / Infrastructure | `ci` |
+| Maintenance | `chore` |
+| Documentation | `documentation` |
+
+## Component
+
+<!-- Add the component label that best matches the area you changed -->
+<!-- `core` · `backend` · `ui` · `extension` -->
 
 ## Closes
 

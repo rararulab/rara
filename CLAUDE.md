@@ -27,7 +27,11 @@ Rara is a self-evolving, developer-first personal proactive agent built in Rust.
 gh issue create --title "feat(kernel): event queue sharding" \
   --label "created-by:claude" --label "enhancement" --label "core"
 ```
-Labels: `created-by:claude` (required) + category (`enhancement`, `refactor`, `ui`, `backend`, `core`, `extension`).
+
+**Issue Labels** (all issues MUST have proper labels):
+- `created-by:claude` — required for all agent-created issues
+- **Type** (pick one): `bug`, `enhancement`, `refactor`, `chore`, `documentation`
+- **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
 
 #### Step 2: Create Worktree
 ```bash
@@ -75,10 +79,15 @@ If pre-commit hook blocks a commit during development, fix issues before the fin
 #### Step 5: Push & Create PR
 ```bash
 git push -u origin issue-{N}-{short-name}
-gh pr create --title "fix(scope): description" --body "Closes #{N}"
+gh pr create --title "fix(scope): description" --body "Closes #{N}" \
+  --label "bug" --label "core"
 ```
 - Commit message must include `Closes #N` so the issue is auto-closed when PR merges
 - Never merge locally — all merges happen through GitHub PR
+- **PR Labels** (all PRs MUST have proper labels):
+  - **Type** (pick one): `bug`, `enhancement`, `refactor`, `chore`, `documentation`
+  - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
+  - Note: a `labeler.yml` workflow auto-labels PRs by file path, but agents must still add type + component labels explicitly via `--label` flags
 
 #### Step 5.5: Wait for CI Green (MANDATORY)
 
@@ -128,6 +137,7 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT merge locally on `main` — all merges go through GitHub PRs; never `git merge` or `git commit` on main
 - Do NOT edit files in the main checkout for 'quick fixes' — even one-line changes must go through the full issue → worktree → PR flow
 - Do NOT create issues without `created-by:claude` label
+- Do NOT create PRs or issues without type + component labels — every PR and issue must have a type label (`bug`, `enhancement`, `refactor`, `chore`, `documentation`) and a component label (`core`, `backend`, `ui`, `extension`, `ci`)
 - Do NOT leave stale worktrees — clean up after PR is merged
 - Do NOT modify already-applied migration files — create a new migration instead
 - Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file
