@@ -148,11 +148,23 @@ impl BotServiceClient for KernelBotServiceClient {
     }
 
     async fn list_sessions(&self, limit: u32) -> Result<Vec<SessionListItem>, BotServiceError> {
-        self.sessions
+        let entries = self
+            .sessions
             .list_sessions(limit as i64, 0)
             .await
-            .map(|v| v.iter().map(entry_to_list_item).collect())
-            .context(SessionSnafu)
+            .context(SessionSnafu)?;
+
+        let mut items = Vec::with_capacity(entries.len());
+        for e in &entries {
+            let mut item = entry_to_list_item(e);
+            // The persisted message_count on SessionEntry is not maintained;
+            // derive the real count from the tape at read time.
+            if let Ok(count) = self.tape.message_count(&e.key.to_string()).await {
+                item.message_count = count as i64;
+            }
+            items.push(item);
+        }
+        Ok(items)
     }
 
     async fn get_session(&self, key: &str) -> Result<SessionDetail, BotServiceError> {
@@ -160,7 +172,13 @@ impl BotServiceClient for KernelBotServiceClient {
             message: format!("invalid session key: {e}"),
         })?;
         match self.sessions.get_session(&sk).await.context(SessionSnafu)? {
-            Some(entry) => Ok(entry_to_detail(&entry)),
+            Some(entry) => {
+                let mut detail = entry_to_detail(&entry);
+                if let Ok(count) = self.tape.message_count(key).await {
+                    detail.message_count = count as i64;
+                }
+                Ok(detail)
+            }
             None => Err(BotServiceError::Service {
                 message: format!("session not found: {key}"),
             }),
