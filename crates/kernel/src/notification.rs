@@ -188,17 +188,38 @@ pub struct Subscription {
 
 /// In-memory registry of tag-based notification subscriptions.
 ///
+/// Uses an inverted index `(UserId, tag) → {sub_id}` so that `match_tags`
+/// is O(M) hash lookups (M = number of report tags) instead of a full scan
+/// over all subscriptions.
+///
 /// Thread-safe: guarded by a tokio `RwLock` for concurrent read access
 /// during notification fan-out.
 pub struct SubscriptionRegistry {
-    subs: tokio::sync::RwLock<std::collections::HashMap<Uuid, Subscription>>,
+    inner: tokio::sync::RwLock<RegistryInner>,
+}
+
+/// Interior state behind the `RwLock`.
+struct RegistryInner {
+    /// Primary store: sub_id → Subscription.
+    subs:      std::collections::HashMap<Uuid, Subscription>,
+    /// Inverted index: (owner, tag) → set of sub_ids.
+    tag_index: std::collections::HashMap<(UserId, String), std::collections::HashSet<Uuid>>,
+}
+
+impl RegistryInner {
+    fn new() -> Self {
+        Self {
+            subs:      std::collections::HashMap::new(),
+            tag_index: std::collections::HashMap::new(),
+        }
+    }
 }
 
 impl SubscriptionRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
         Self {
-            subs: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            inner: tokio::sync::RwLock::new(RegistryInner::new()),
         }
     }
 
@@ -221,32 +242,79 @@ impl SubscriptionRegistry {
             match_tags,
             on_receive,
         };
-        self.subs.write().await.insert(id, sub);
+        let mut inner = self.inner.write().await;
+        for tag in &sub.match_tags {
+            inner
+                .tag_index
+                .entry((sub.owner.clone(), tag.clone()))
+                .or_default()
+                .insert(id);
+        }
+        inner.subs.insert(id, sub);
         id
     }
 
     /// Remove a subscription by ID. Returns true if it existed.
     pub async fn unsubscribe(&self, subscription_id: Uuid) -> bool {
-        self.subs.write().await.remove(&subscription_id).is_some()
+        let mut inner = self.inner.write().await;
+        if let Some(sub) = inner.subs.remove(&subscription_id) {
+            for tag in &sub.match_tags {
+                let key = (sub.owner.clone(), tag.clone());
+                if let Some(set) = inner.tag_index.get_mut(&key) {
+                    set.remove(&subscription_id);
+                    if set.is_empty() {
+                        inner.tag_index.remove(&key);
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Find all subscriptions matching any of the given tags, scoped to the
-    /// publisher's owner. Only subscriptions belonging to the same user are
-    /// returned, preventing cross-user data leakage.
+    /// publisher's owner. O(M) hash lookups where M = number of report tags.
     pub async fn match_tags(&self, tags: &[String], publisher: &UserId) -> Vec<Subscription> {
-        let subs = self.subs.read().await;
-        subs.values()
-            .filter(|sub| {
-                sub.owner == *publisher && sub.match_tags.iter().any(|t| tags.contains(t))
-            })
-            .cloned()
-            .collect()
+        let inner = self.inner.read().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        for tag in tags {
+            if let Some(ids) = inner.tag_index.get(&(publisher.clone(), tag.clone())) {
+                for id in ids {
+                    if seen.insert(*id) {
+                        if let Some(sub) = inner.subs.get(id) {
+                            result.push(sub.clone());
+                        }
+                    }
+                }
+            }
+        }
+        result
     }
 
     /// Remove all subscriptions for a given session (cleanup on session end).
     pub async fn remove_session(&self, session_key: &SessionKey) {
-        let mut subs = self.subs.write().await;
-        subs.retain(|_, sub| &sub.subscriber != session_key);
+        let mut inner = self.inner.write().await;
+        let to_remove: Vec<Uuid> = inner
+            .subs
+            .values()
+            .filter(|sub| &sub.subscriber == session_key)
+            .map(|sub| sub.id)
+            .collect();
+        for id in to_remove {
+            if let Some(sub) = inner.subs.remove(&id) {
+                for tag in &sub.match_tags {
+                    let key = (sub.owner.clone(), tag.clone());
+                    if let Some(set) = inner.tag_index.get_mut(&key) {
+                        set.remove(&id);
+                        if set.is_empty() {
+                            inner.tag_index.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
