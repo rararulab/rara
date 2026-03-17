@@ -220,6 +220,10 @@ export async function dockTurnStream(
 
   const decoder = new TextDecoder();
   let buffer = "";
+  // SSE parse state persisted across read() chunks so that events
+  // spanning multiple chunks are not silently dropped.
+  let currentEvent = "";
+  let currentData = "";
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -228,9 +232,6 @@ export async function dockTurnStream(
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
-
-    let currentEvent = "";
-    let currentData = "";
 
     for (const line of lines) {
       if (line.startsWith("event: ")) {

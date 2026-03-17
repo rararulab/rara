@@ -542,6 +542,8 @@ async fn turn_handler(
         };
 
         // Emit the final dock_turn_complete event with authoritative state.
+        // Always reset selected_anchor to null so the frontend exits
+        // history-viewing mode after a live turn completes.
         let _ = tx
             .send(Ok(Event::default()
                 .event("dock_turn_complete")
@@ -553,6 +555,7 @@ async fn turn_handler(
                     "facts": doc.facts,
                     "annotations": doc.annotations,
                     "history": history,
+                    "selected_anchor": null,
                     "session": doc.session,
                 }))
                 .unwrap()))

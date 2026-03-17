@@ -14,25 +14,35 @@
  * limitations under the License.
  */
 
+import DOMPurify from "dompurify";
 import { X } from "lucide-react";
 import type { DockBlock } from "@/api/dock";
 import { Button } from "@/components/ui/button";
 
 /**
- * Basic HTML sanitizer that strips dangerous patterns:
- * - <script> and <iframe> tags
- * - on* event handler attributes
- * - javascript: URLs
+ * Sanitize HTML using DOMPurify with an explicit allowlist.
+ * Dock block content originates from the agent and is untrusted input.
  */
 function sanitizeHtml(html: string): string {
-  return html
-    .replace(/<script[\s>][\s\S]*?<\/script>/gi, "")
-    .replace(/<iframe[\s>][\s\S]*?<\/iframe>/gi, "")
-    .replace(/<script[\s>]/gi, "&lt;script ")
-    .replace(/<iframe[\s>]/gi, "&lt;iframe ")
-    .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "")
-    .replace(/href\s*=\s*"javascript:[^"]*"/gi, 'href="#"')
-    .replace(/href\s*=\s*'javascript:[^']*'/gi, "href='#'");
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      "h1", "h2", "h3", "h4", "h5", "h6",
+      "p", "br", "hr", "blockquote",
+      "ul", "ol", "li",
+      "strong", "em", "b", "i", "u", "s", "del", "ins",
+      "code", "pre", "kbd", "var", "samp",
+      "a", "img",
+      "table", "thead", "tbody", "tr", "th", "td",
+      "div", "span", "figure", "figcaption",
+      "chart",
+    ],
+    ALLOWED_ATTR: [
+      "href", "src", "alt", "title", "class", "id",
+      "width", "height", "colspan", "rowspan",
+      // chart-specific attributes
+      "type", "labels", "values",
+    ],
+  });
 }
 
 // ── Chart block parsing & rendering ──────────────────────────────────
