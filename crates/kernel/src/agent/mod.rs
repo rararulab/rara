@@ -640,23 +640,11 @@ fn resolve_soul_prompt(agent_name: &str) -> Option<String> {
     }
 }
 
-/// Default seed content for a newly created agent.md file.
-const AGENT_MD_SEED: &str = "\
-# Rara Operational Knowledge
-
-This file contains tool usage guides and operational notes that persist across sessions.
-Rara updates this file automatically when learning new tools or workflows.
-
-## Tools & CLIs
-
-<!-- Add tool usage notes below as you learn new tools -->
-";
-
 /// Load the external agent.md operational knowledge file.
 ///
 /// Reads from `{config_dir}/agents/{agent_name}/agent.md`.
-/// If the file doesn't exist, creates it with a seed template
-/// and returns `None` (the seed is just a skeleton, not real content).
+/// If the file doesn't exist, creates an empty placeholder so rara
+/// can later populate it via `write-file`. Empty files are not injected.
 fn load_agent_md(agent_name: &str) -> Option<String> {
     let agent_path = rara_paths::config_dir()
         .join("agents")
@@ -689,9 +677,9 @@ fn ensure_agent_md(path: &Path, agent_name: &str) {
             return;
         }
     }
-    match std::fs::write(path, AGENT_MD_SEED) {
-        Ok(()) => info!(agent = agent_name, path = %path.display(), "created seed agent.md"),
-        Err(e) => warn!(agent = agent_name, error = %e, "failed to create seed agent.md"),
+    match std::fs::write(path, "") {
+        Ok(()) => info!(agent = agent_name, path = %path.display(), "created empty agent.md"),
+        Err(e) => warn!(agent = agent_name, error = %e, "failed to create agent.md"),
     }
 }
 
