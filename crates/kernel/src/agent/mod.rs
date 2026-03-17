@@ -759,7 +759,7 @@ pub(crate) async fn run_agent_loop(
     turn_cancel: &CancellationToken,
     tape: crate::memory::TapeService,
     tape_name: &str,
-    tool_context: crate::tool::ToolContext,
+    mut tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     output_interceptor: crate::tool::DynamicOutputInterceptor,
     guard_pipeline: Arc<GuardPipeline>,
@@ -849,6 +849,7 @@ pub(crate) async fn run_agent_loop(
     tracing::Span::current().record("model", model.as_str());
 
     let capabilities = ModelCapabilities::detect(provider_hint, &model);
+    tool_context.context_window_tokens = capabilities.context_window_tokens;
     let input_text = user_text.clone();
     let tool_execution_timeout = handle.config().tool_execution_timeout;
 
