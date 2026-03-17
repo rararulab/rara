@@ -15,7 +15,7 @@
 //! `/status` command — show session metadata, runtime metrics, scheduled
 //! jobs, and system stats in a single view.
 //!
-//! When the session has more than [`INLINE_JOB_LIMIT`] scheduled jobs, the
+//! When the session has more than `INLINE_JOB_LIMIT` scheduled jobs, the
 //! command returns an inline "All jobs" button.
 //! [`StatusJobsCallbackHandler`] handles the callback and sends the full
 //! list.
