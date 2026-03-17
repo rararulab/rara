@@ -669,12 +669,17 @@ fn load_agent_md(agent_name: &str) -> Option<String> {
     None
 }
 
-/// Create the agent.md file with seed content if it doesn't exist.
+/// Create the agent.md file and knowledge directory if they don't exist.
 fn ensure_agent_md(path: &Path, agent_name: &str) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             warn!(agent = agent_name, error = %e, "failed to create agent.md parent directory");
             return;
+        }
+        // Create knowledge/ subdirectory for per-tool knowledge files
+        let knowledge_dir = parent.join("knowledge");
+        if let Err(e) = std::fs::create_dir_all(&knowledge_dir) {
+            warn!(agent = agent_name, error = %e, "failed to create knowledge directory");
         }
     }
     match std::fs::write(path, "") {
