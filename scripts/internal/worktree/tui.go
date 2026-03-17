@@ -82,8 +82,11 @@ type reloadResultMsg struct {
 	err     error
 }
 
-// dismissToastMsg is sent by tea.Tick to auto-dismiss the toast.
+// dismissToastMsg is sent by tea.Tick to auto-dismiss a toast.
 type dismissToastMsg struct{ id int }
+
+// dismissMessageMsg clears the status bar message after a delay.
+type dismissMessageMsg struct{ seq int }
 
 // toast represents a floating notification that auto-dismisses.
 type toast struct {
@@ -95,11 +98,12 @@ type tuiModel struct {
 	table    table.Model
 	entries  []Entry
 	selected map[int]bool
-	message  string // status message after an action
-	busy     bool   // true while an async operation is running
-	quitting bool
-	toasts   []toast  // active toast notifications (errors)
-	toastSeq int      // auto-incrementing toast ID
+	message    string // status message after an action
+	messageSeq int    // incremented on each new message, used for auto-dismiss
+	busy       bool   // true while an async operation is running
+	quitting   bool
+	toasts     []toast // active toast notifications (errors)
+	toastSeq   int     // auto-incrementing toast ID
 }
 
 // RunTUI launches the interactive worktree manager.
@@ -220,6 +224,16 @@ func shortenPath(p string) string {
 	return p
 }
 
+// setMessage sets the status bar message and returns a Cmd to auto-dismiss it.
+func (m *tuiModel) setMessage(text string) tea.Cmd {
+	m.messageSeq++
+	seq := m.messageSeq
+	m.message = text
+	return tea.Tick(toastDuration, func(time.Time) tea.Msg {
+		return dismissMessageMsg{seq: seq}
+	})
+}
+
 // pushToast adds an error toast and returns a Cmd to auto-dismiss it.
 func (m *tuiModel) pushToast(text string) tea.Cmd {
 	m.toastSeq++
@@ -236,7 +250,7 @@ func (m tuiModel) Init() tea.Cmd {
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	// Toast auto-dismiss
+	// Auto-dismiss handlers
 	case dismissToastMsg:
 		for i, t := range m.toasts {
 			if t.id == msg.id {
@@ -246,11 +260,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case dismissMessageMsg:
+		if msg.seq == m.messageSeq {
+			m.message = ""
+		}
+		return m, nil
+
 	// Async result handlers
 	case deleteResultMsg:
 		m.busy = false
-		m.message = fmt.Sprintf("Removed %d worktree(s)", msg.removed)
 		var cmds []tea.Cmd
+		cmds = append(cmds, m.setMessage(fmt.Sprintf("Removed %d worktree(s)", msg.removed)))
 		for _, errText := range msg.errors {
 			cmds = append(cmds, m.pushToast(errText))
 		}
@@ -262,8 +282,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.pushToast(msg.err.Error())
 		}
-		m.message = "Pruned stale worktree references"
-		return m, m.reloadCmd()
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.setMessage("Pruned stale worktree references"))
+		cmds = append(cmds, m.reloadCmd())
+		return m, tea.Batch(cmds...)
 
 	case reloadResultMsg:
 		m.busy = false
@@ -274,6 +296,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selected = make(map[int]bool)
 		m.refreshRows()
 		m.table.SetHeight(min(len(msg.entries)+1, 25))
+		// If no message was set by a prior handler (e.g. deleteResultMsg),
+		// show a brief "Refreshed" note
+		if m.message == "Refreshing..." {
+			return m, m.setMessage("Refreshed")
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
