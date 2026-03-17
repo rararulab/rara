@@ -91,7 +91,6 @@ pub struct DiscoveryJob {
     pub salary_max:      Option<i32>,
     pub salary_currency: Option<String>,
 }
-
 /// Information about a configured MCP server.
 
 #[derive(Debug, Clone, Deserialize)]

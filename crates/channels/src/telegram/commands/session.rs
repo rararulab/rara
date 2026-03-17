@@ -388,7 +388,7 @@ impl CommandHandler for StopCommandHandler {
 /// For Telegram contexts the chat_id comes from the `telegram_chat_id`
 /// metadata entry.  For CLI contexts the chat_id comes from `cli_chat_id`.
 /// Falls back to `"unknown"` / `"0"` when the expected key is missing.
-fn extract_channel_info(context: &CommandContext) -> (&'static str, String) {
+pub(crate) fn extract_channel_info(context: &CommandContext) -> (&'static str, String) {
     use rara_kernel::channel::types::ChannelType;
 
     match context.channel_type {
@@ -423,7 +423,7 @@ fn extract_channel_info(context: &CommandContext) -> (&'static str, String) {
     }
 }
 
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -442,7 +442,7 @@ fn truncate_str(s: &str, max_len: usize) -> &str {
     &s[..end]
 }
 
-fn format_timestamp(raw: &str) -> String {
+pub(crate) fn format_timestamp(raw: &str) -> String {
     if raw.len() >= 16 {
         let date_part = &raw[..10];
         let time_part = &raw[11..16];
