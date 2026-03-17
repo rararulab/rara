@@ -18,4 +18,4 @@ pub use state::{
     text_of_html,
 };
 pub use store::DockSessionStore;
-pub use tools::{dock_tool_names, dock_tools};
+pub use tools::{DockMutationSink, dock_tool_names, dock_tools};

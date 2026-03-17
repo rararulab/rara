@@ -55,6 +55,8 @@ pub(crate) struct BootResult {
         std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
     /// Knowledge layer service for long-term memory.
     pub knowledge_service:    rara_kernel::memory::knowledge::KnowledgeServiceRef,
+    /// Shared mutation sink for dock tools — passed to both tools and routes.
+    pub dock_mutation_sink:   rara_dock::DockMutationSink,
 }
 
 /// A user entry in the YAML configuration file.
@@ -178,6 +180,8 @@ pub(crate) async fn boot(
 
     // -- tools -------------------------------------------------------------
 
+    let dock_mutation_sink = rara_dock::DockMutationSink::new();
+
     let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
     let tool_result = crate::tools::register_all(
         &mut tool_registry,
@@ -190,6 +194,7 @@ pub(crate) async fn boot(
             session_index: session_index.clone(),
             marketplace_service: marketplace_service.clone(),
             clawhub_client: clawhub_client.clone(),
+            dock_mutation_sink: dock_mutation_sink.clone(),
         },
     );
 
@@ -233,6 +238,7 @@ pub(crate) async fn boot(
         dispatch_rara_handle: tool_result.dispatch_rara_handle,
         list_sessions_handle: tool_result.list_sessions_handle,
         knowledge_service,
+        dock_mutation_sink,
     })
 }
 

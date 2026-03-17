@@ -41,6 +41,9 @@ pub struct DockRouterState {
     /// Optional kernel handle for dispatching agent turns via `ingest()`.
     /// `None` during unit tests or standalone mode.
     pub kernel_handle: Option<rara_kernel::handle::KernelHandle>,
+    /// Shared mutation sink — dock tools push mutations here during
+    /// execution; the turn handler drains them after the agent loop.
+    pub mutation_sink: crate::tools::DockMutationSink,
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +99,8 @@ async fn write_dock_anchor(
         .as_millis();
     let anchor_name = format!("dock/turn/{now_ms}");
 
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
     let state = rara_kernel::memory::HandoffState {
         summary: Some(format!("{input_preview} → {reply_preview}")),
         owner: Some("agent".into()),
@@ -103,6 +108,7 @@ async fn write_dock_anchor(
             "dock_turn": true,
             "input_preview": input_preview,
             "reply_preview": reply_preview,
+            "timestamp": timestamp,
             "snapshot": snapshot,
         })),
         ..Default::default()
@@ -144,7 +150,7 @@ async fn read_dock_history(
                 id: a.name.clone(),
                 anchor_name: a.name,
                 timestamp: extra
-                    .and_then(|e| e.get("input_preview"))
+                    .and_then(|e| e.get("timestamp"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
@@ -418,6 +424,7 @@ async fn turn_handler(
     let hub = Arc::clone(kernel.stream_hub());
     let store = state.store.clone();
     let tape_service = state.tape_service.clone();
+    let mutation_sink = state.mutation_sink.clone();
     let session_id = body.session_id.clone();
 
     tokio::spawn(async move {
@@ -443,8 +450,6 @@ async fn turn_handler(
             return;
         }
 
-        let mut tool_names: HashMap<String, String> = HashMap::new();
-        let mut mutations: Vec<crate::DockMutation> = Vec::new();
         let mut reply_text = String::new();
 
         for (_, mut rx_stream) in subs {
@@ -464,7 +469,6 @@ async fn turn_handler(
                         id,
                         arguments,
                     } => {
-                        tool_names.insert(id.clone(), name.clone());
                         let _ = tx
                             .send(Ok(Event::default()
                                 .event("tool_call_start")
@@ -478,16 +482,6 @@ async fn turn_handler(
                         success,
                         error,
                     } => {
-                        // Collect mutations from dock tool results.
-                        if let Some(name) = tool_names.get(id) {
-                            if name.starts_with("dock.") && *success {
-                                if let Ok(m) =
-                                    serde_json::from_str::<crate::DockMutation>(result_preview)
-                                {
-                                    mutations.push(m);
-                                }
-                            }
-                        }
                         let _ = tx
                             .send(Ok(Event::default()
                                 .event("tool_call_end")
@@ -505,7 +499,10 @@ async fn turn_handler(
             }
         }
 
-        // Stream closed — agent turn complete.  Apply collected mutations.
+        // Stream closed — agent turn complete.
+        // Drain full mutations from the shared sink (tools push here
+        // during execute, bypassing the truncated result_preview).
+        let mutations = mutation_sink.drain(&session_key);
         if !mutations.is_empty() {
             if let Err(e) = store.apply_mutations(&session_id, &mutations) {
                 warn!(error = %e, "failed to apply dock mutations after turn");
