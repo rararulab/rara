@@ -257,3 +257,143 @@ impl AgentTool for ReadFileTool {
         .into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── compute_budget ───────────────────────────────────────────────
+
+    #[test]
+    fn budget_clamps_to_min() {
+        // Very small context window → floor at 50 KB.
+        assert_eq!(compute_budget(1_000), MIN_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn budget_clamps_to_max() {
+        // Huge context window → ceiling at 512 KB.
+        assert_eq!(compute_budget(10_000_000), MAX_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn budget_200k_model() {
+        // 200_000 * 4 * 0.15 = 120_000
+        assert_eq!(compute_budget(200_000), 120_000);
+    }
+
+    #[test]
+    fn budget_128k_model() {
+        // 128_000 * 4 * 0.15 = 76_800
+        assert_eq!(compute_budget(128_000), 76_800);
+    }
+
+    #[test]
+    fn budget_zero_tokens_clamps_to_min() {
+        assert_eq!(compute_budget(0), MIN_BUDGET_BYTES);
+    }
+
+    // ── read_page basics ─────────────────────────────────────────────
+
+    fn sample_lines(n: usize) -> Vec<String> { (0..n).map(|i| format!("line {i}")).collect() }
+
+    fn as_str_slice(v: &[String]) -> Vec<&str> { v.iter().map(|s| s.as_str()).collect() }
+
+    #[test]
+    fn read_page_small_file() {
+        let lines = sample_lines(5);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 1, 2000);
+
+        assert_eq!(page.lines_read, 5);
+        assert_eq!(page.total_lines, 5);
+        assert!(!page.has_more_lines);
+        assert!(!page.content_truncated);
+    }
+
+    #[test]
+    fn read_page_with_offset() {
+        let lines = sample_lines(10);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 4, 3);
+
+        assert_eq!(page.lines_read, 3);
+        assert_eq!(page.total_lines, 10);
+        assert!(page.has_more_lines);
+        // Output should start at line 4.
+        assert!(page.output.contains("     4\t"));
+    }
+
+    #[test]
+    fn read_page_offset_beyond_eof() {
+        let lines = sample_lines(5);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 100, 10);
+
+        assert_eq!(page.lines_read, 0);
+        assert!(!page.has_more_lines);
+        assert!(page.output.is_empty());
+    }
+
+    #[test]
+    fn read_page_limit_exceeds_remaining() {
+        let lines = sample_lines(5);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 3, 100);
+
+        assert_eq!(page.lines_read, 3); // lines 3, 4, 5
+        assert!(!page.has_more_lines);
+    }
+
+    // ── truncation flag separation ───────────────────────────────────
+
+    #[test]
+    fn long_line_sets_content_truncated_not_has_more() {
+        // A single line longer than MAX_LINE_CHARS in a 1-line file.
+        let long = "x".repeat(MAX_LINE_CHARS + 500);
+        let refs = vec![long.as_str()];
+        let page = read_page(&refs, 1, 2000);
+
+        assert_eq!(page.lines_read, 1);
+        assert!(!page.has_more_lines, "file fully read, no more lines");
+        assert!(page.content_truncated, "long line was clipped");
+        assert!(page.output.contains("... [truncated]"));
+    }
+
+    #[test]
+    fn has_more_lines_true_when_limit_reached() {
+        let lines = sample_lines(100);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 1, 10);
+
+        assert_eq!(page.lines_read, 10);
+        assert!(page.has_more_lines);
+        assert!(!page.content_truncated);
+    }
+
+    #[test]
+    fn both_flags_independent() {
+        // File with a long line and more lines beyond the limit.
+        let mut lines: Vec<String> = sample_lines(20);
+        lines[5] = "y".repeat(MAX_LINE_CHARS + 100);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 1, 10);
+
+        assert!(page.has_more_lines, "20 lines, limit 10");
+        assert!(page.content_truncated, "line 5 exceeds MAX_LINE_CHARS");
+    }
+
+    // ── line number formatting ───────────────────────────────────────
+
+    #[test]
+    fn output_has_cat_n_format() {
+        let lines = sample_lines(3);
+        let refs = as_str_slice(&lines);
+        let page = read_page(&refs, 1, 10);
+
+        let output_lines: Vec<&str> = page.output.lines().collect();
+        assert_eq!(output_lines.len(), 3);
+        assert!(output_lines[0].starts_with("     1\t"));
+        assert!(output_lines[2].starts_with("     3\t"));
+    }
+}
