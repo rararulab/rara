@@ -38,7 +38,8 @@ pub struct TaskReport {
     /// Action already taken by the task agent, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_taken:   Option<String>,
-    /// Session that produced this report.
+    /// Session that produced this report (set automatically by the kernel).
+    #[serde(default)]
     pub source_session: SessionKey,
 }
 

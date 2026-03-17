@@ -224,12 +224,14 @@ async fn test_publish_report_silent_append_e2e() {
 
     // 2b. Build notification.
     let notification = TaskNotification {
-        task_id:    report.task_id,
-        task_type:  report.task_type.clone(),
-        tags:       report.tags.clone(),
-        status:     report.status,
-        summary:    report.summary.clone(),
-        report_ref: TapeEntryRef {
+        task_id:      report.task_id,
+        task_type:    report.task_type.clone(),
+        tags:         report.tags.clone(),
+        status:       report.status,
+        summary:      report.summary.clone(),
+        result:       report.result.clone(),
+        action_taken: report.action_taken.clone(),
+        report_ref:   TapeEntryRef {
             session_key: source_session,
             entry_id,
         },
@@ -268,6 +270,14 @@ async fn test_publish_report_silent_append_e2e() {
         serde_json::from_value(sub_a_entries[0].payload.clone()).unwrap();
     assert_eq!(delivered_notif.task_type, "pr_review");
     assert_eq!(delivered_notif.summary, "PR #42 approved");
+    assert_eq!(
+        delivered_notif.result,
+        serde_json::json!({"verdict": "approved", "confidence": 9})
+    );
+    assert_eq!(
+        delivered_notif.action_taken.as_deref(),
+        Some("left approval comment")
+    );
     assert_eq!(delivered_notif.report_ref.session_key, source_session);
     assert_eq!(delivered_notif.report_ref.entry_id, entry_id);
 
@@ -323,12 +333,14 @@ async fn test_publish_report_multiple_subscribers() {
         .unwrap();
 
     let notification = TaskNotification {
-        task_id:    report.task_id,
-        task_type:  report.task_type.clone(),
-        tags:       report.tags.clone(),
-        status:     report.status,
-        summary:    report.summary.clone(),
-        report_ref: TapeEntryRef {
+        task_id:      report.task_id,
+        task_type:    report.task_type.clone(),
+        tags:         report.tags.clone(),
+        status:       report.status,
+        summary:      report.summary.clone(),
+        result:       report.result.clone(),
+        action_taken: report.action_taken.clone(),
+        report_ref:   TapeEntryRef {
             session_key: source,
             entry_id:    entry.id,
         },

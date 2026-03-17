@@ -594,6 +594,8 @@ impl SyscallDispatcher {
         let summary = report.summary.clone();
         let status = report.status;
         let task_type = report.task_type.clone();
+        let result = report.result.clone();
+        let action_taken = report.action_taken.clone();
 
         // 1. Write TaskReport to source session's tape.
         let tape_name = source_session.to_string();
@@ -619,13 +621,15 @@ impl SyscallDispatcher {
             }
         };
 
-        // 2. Build notification with tape entry ref.
+        // 2. Build notification with tape entry ref and full report data.
         let notification = TaskNotification {
             task_id,
             task_type: task_type.clone(),
             tags: tags.clone(),
             status,
             summary: summary.clone(),
+            result: result.clone(),
+            action_taken: action_taken.clone(),
             report_ref: TapeEntryRef {
                 session_key: source_session,
                 entry_id,
@@ -640,9 +644,14 @@ impl SyscallDispatcher {
             match sub.on_receive {
                 NotifyAction::ProactiveTurn => {
                     // Deliver as a synthetic user message to trigger an LLM turn.
+                    let result_str = serde_json::to_string(&result).unwrap_or_default();
+                    let action_str = action_taken
+                        .as_deref()
+                        .map(|a| format!("\naction_taken: {a}"))
+                        .unwrap_or_default();
                     let directive = format!(
-                        "[TaskNotification] {}: {}\nref: {}/entry_{}",
-                        task_type, summary, source_session, entry_id
+                        "[TaskNotification] {task_type}: {summary}\nstatus: {status:?}\nresult: \
+                         {result_str}{action_str}\nref: {source_session}/entry_{entry_id}"
                     );
                     let msg = crate::io::InboundMessage::synthetic(
                         directive,

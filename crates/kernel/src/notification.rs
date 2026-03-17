@@ -129,17 +129,22 @@ use crate::{session::SessionKey, task_report::TaskReportStatus};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskNotification {
     /// Unique task identifier.
-    pub task_id:    Uuid,
+    pub task_id:      Uuid,
     /// Fixed category (e.g. "pr_review").
-    pub task_type:  String,
+    pub task_type:    String,
     /// Routing tags for subscription matching.
-    pub tags:       Vec<String>,
+    pub tags:         Vec<String>,
     /// Completion status.
-    pub status:     TaskReportStatus,
+    pub status:       TaskReportStatus,
     /// Human-readable one-line summary.
-    pub summary:    String,
+    pub summary:      String,
+    /// Task-type-specific structured result from the report.
+    pub result:       serde_json::Value,
+    /// Action already taken by the task agent, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_taken: Option<String>,
     /// Pointer to the full TaskReport in the source session's tape.
-    pub report_ref: TapeEntryRef,
+    pub report_ref:   TapeEntryRef,
 }
 
 /// Pointer to a specific tape entry in a session.
