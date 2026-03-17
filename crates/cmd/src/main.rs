@@ -281,9 +281,6 @@ impl GatewayArgs {
                 Ok(())
             }
             Err(e) => {
-                notifier
-                    .gateway_shutdown(&format!("Supervisor error: {e}"))
-                    .await;
                 tracing::error!(error = %e, "Gateway supervisor stopped with error");
                 // Gateway stays alive for manual intervention — don't propagate
                 // the error as a hard failure.
@@ -291,6 +288,9 @@ impl GatewayArgs {
                     "Gateway will remain alive for manual intervention. Press Ctrl+C to exit."
                 );
                 tokio::signal::ctrl_c().await.ok();
+                notifier
+                    .gateway_shutdown(&format!("Supervisor error: {e}"))
+                    .await;
                 cancel.cancel();
                 Ok(())
             }
