@@ -55,13 +55,16 @@ const MAX_PAGES: usize = 8;
 /// Result of reading a single page from already-loaded file content.
 struct PageResult {
     /// Formatted output with line number prefixes.
-    output:      String,
+    output:            String,
     /// Number of lines included in this page.
-    lines_read:  usize,
-    /// Whether the page was truncated (by byte limit, line limit, or EOF).
-    truncated:   bool,
+    lines_read:        usize,
+    /// Whether there are unread lines beyond this page.
+    has_more_lines:    bool,
+    /// Whether any line content was truncated (long lines) or the page
+    /// hit the byte limit before exhausting `limit` lines.
+    content_truncated: bool,
     /// Total number of lines in the file.
-    total_lines: usize,
+    total_lines:       usize,
 }
 
 /// Compute the adaptive paging budget from the model's context window size.
@@ -82,13 +85,13 @@ fn read_page(all_lines: &[&str], offset: usize, limit: usize) -> PageResult {
     let selected = &all_lines[start_idx..end_idx];
 
     let mut output = String::new();
-    let mut truncated = false;
+    let mut content_truncated = false;
     let mut lines_read = 0;
 
     for (i, line) in selected.iter().enumerate() {
         let line_no = start_idx + i + 1;
         let display_line = if line.len() > MAX_LINE_CHARS {
-            truncated = true;
+            content_truncated = true;
             format!("{}... [truncated]", &line[..MAX_LINE_CHARS])
         } else {
             (*line).to_owned()
@@ -97,21 +100,20 @@ fn read_page(all_lines: &[&str], offset: usize, limit: usize) -> PageResult {
         let formatted = format!("{line_no:>6}\t{display_line}\n");
 
         if output.len() + formatted.len() > MAX_OUTPUT_BYTES {
-            truncated = true;
+            content_truncated = true;
             break;
         }
         output.push_str(&formatted);
         lines_read += 1;
     }
 
-    if end_idx < total_lines {
-        truncated = true;
-    }
+    let has_more_lines = (start_idx + lines_read) < total_lines;
 
     PageResult {
         output,
         lines_read,
-        truncated,
+        has_more_lines,
+        content_truncated,
         total_lines,
     }
 }
@@ -200,7 +202,7 @@ impl AgentTool for ReadFileTool {
             return Ok(json!({
                 "content": page.output,
                 "total_lines": page.total_lines,
-                "truncated": page.truncated,
+                "truncated": page.has_more_lines || page.content_truncated,
             })
             .into());
         }
@@ -217,8 +219,8 @@ impl AgentTool for ReadFileTool {
             total_lines = page.total_lines;
             accumulated.push_str(&page.output);
 
-            if !page.truncated {
-                // Entire file has been read.
+            if !page.has_more_lines {
+                // All lines in the file have been read.
                 file_fully_read = true;
                 break;
             }
