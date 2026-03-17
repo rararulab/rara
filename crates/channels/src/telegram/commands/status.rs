@@ -121,8 +121,9 @@ impl CommandHandler for StatusCommandHandler {
             if jobs.is_empty() {
                 let _ = writeln!(text, "<b>Scheduled jobs</b>: none");
             } else {
+                const MAX_DISPLAY_JOBS: usize = 10;
                 let _ = writeln!(text, "<b>Scheduled jobs</b> ({})", jobs.len());
-                for job in &jobs {
+                for job in jobs.iter().take(MAX_DISPLAY_JOBS) {
                     let msg = truncate_msg(&job.message, 40);
                     let schedule = job.trigger.summary();
                     let next = job.trigger.next_at().to_string();
@@ -134,6 +135,9 @@ impl CommandHandler for StatusCommandHandler {
                         html_escape(&schedule),
                         next_fmt,
                     );
+                }
+                if jobs.len() > MAX_DISPLAY_JOBS {
+                    let _ = writeln!(text, "  ... and {} more", jobs.len() - MAX_DISPLAY_JOBS);
                 }
             }
         }

@@ -268,7 +268,6 @@ async fn handle_slash_command(
         "/help" => {
             let mut lines = vec![
                 "/help         — show this help".to_owned(),
-                "/status       — connection & agent info".to_owned(),
                 "/exit         — end chat session".to_owned(),
             ];
             // Append registered handler commands to help text.
@@ -279,20 +278,6 @@ async fn handle_slash_command(
                 }
             }
             state.push_message(Role::System, lines.join("\n"));
-            return false;
-        }
-        "/status" => {
-            state.push_message(
-                Role::System,
-                format!(
-                    "Mode: {}\nSession: {}\nUser: {}\nAgent: {}\nModel: {}",
-                    state.mode_label,
-                    state.session_label,
-                    state.user_label,
-                    state.agent_name,
-                    state.model_label
-                ),
-            );
             return false;
         }
         "/exit" | "/quit" => return true,
