@@ -297,12 +297,29 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     }
 }
 
+/// Parsed inbound WebSocket text frame.
+#[derive(Debug, Deserialize)]
+struct InboundPayload {
+    content: MessageContent,
+}
+
+fn parse_inbound_text_frame(text: &str) -> InboundPayload {
+    serde_json::from_str(text).unwrap_or_else(|err| {
+        if text.starts_with('{') {
+            tracing::debug!(error = %err, "WebSocket frame looks like JSON but failed to parse; treating as plain text");
+        }
+        InboundPayload {
+            content: MessageContent::Text(text.to_owned()),
+        }
+    })
+}
+
 /// JSON body for POST /messages.
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub session_key: String,
     pub user_id:     String,
-    pub content:     String,
+    pub content:     MessageContent,
 }
 
 /// JSON response for POST /messages.
@@ -486,20 +503,20 @@ async fn unregister_endpoint(
 fn build_raw_platform_message(
     session_key: &str,
     user_id: &str,
-    content: &str,
+    content: MessageContent,
 ) -> RawPlatformMessage {
     RawPlatformMessage {
-        channel_type:        ChannelType::Web,
+        channel_type: ChannelType::Web,
         platform_message_id: Some(ulid::Ulid::new().to_string()),
-        platform_user_id:    user_id.to_owned(),
-        platform_chat_id:    Some(session_key.to_owned()),
-        content:             MessageContent::Text(content.to_owned()),
-        reply_context:       Some(ReplyContext {
+        platform_user_id: user_id.to_owned(),
+        platform_chat_id: Some(session_key.to_owned()),
+        content,
+        reply_context: Some(ReplyContext {
             thread_id:                None,
             reply_to_platform_msg_id: None,
             interaction_type:         InteractionType::Message,
         }),
-        metadata:            HashMap::new(),
+        metadata: HashMap::new(),
     }
 }
 
@@ -606,7 +623,8 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                     continue;
                 }
 
-                let raw = build_raw_platform_message(&session_key, &user_id, &text);
+                let payload = parse_inbound_text_frame(&text);
+                let raw = build_raw_platform_message(&session_key, &user_id, payload.content);
 
                 let guard = sink.read().await;
                 if let Some(ref s) = *guard {
@@ -828,28 +846,34 @@ async fn send_message_handler(
         "POST /messages"
     );
 
-    // Ensure session broadcast exists.
-    WebAdapter::get_or_create_session(&state.sessions, &body.session_key);
+    let SendMessageRequest {
+        session_key,
+        user_id,
+        content,
+    } = body;
 
-    let raw = build_raw_platform_message(&body.session_key, &body.user_id, &body.content);
+    // Ensure session broadcast exists.
+    WebAdapter::get_or_create_session(&state.sessions, &session_key);
+
+    let raw = build_raw_platform_message(&session_key, &user_id, content);
 
     let guard = state.sink.read().await;
     match &*guard {
         Some(sink) => {
             // Broadcast typing indicator.
-            WebAdapter::broadcast_event(&state.sessions, &body.session_key, &WebEvent::Typing);
+            WebAdapter::broadcast_event(&state.sessions, &session_key, &WebEvent::Typing);
 
             match sink.ingest(raw).await {
                 Ok(()) => {
                     spawn_stream_forwarder(
                         Arc::clone(&state.stream_hub),
                         Arc::clone(&state.sessions),
-                        body.session_key.clone(),
+                        session_key.clone(),
                     );
                     axum::Json(SendMessageResponse { accepted: true }).into_response()
                 }
                 Err(e) => {
-                    error!(session_key = %body.session_key, error = %e, "ingest failed");
+                    error!(session_key = %session_key, error = %e, "ingest failed");
                     let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
                     (status, e.to_string()).into_response()
                 }
@@ -956,9 +980,14 @@ impl ChannelAdapter for WebAdapter {
 
 #[cfg(test)]
 mod tests {
-    use rara_kernel::io::StreamEvent;
+    use rara_kernel::{
+        channel::types::{ContentBlock, MessageContent},
+        io::StreamEvent,
+    };
 
-    use super::{WebEvent, stream_event_to_web_event};
+    use super::{
+        SendMessageRequest, WebEvent, parse_inbound_text_frame, stream_event_to_web_event,
+    };
 
     #[test]
     fn reasoning_deltas_are_not_forwarded_to_web_clients() {
@@ -979,5 +1008,55 @@ mod tests {
             stream_event_to_web_event(event),
             Some(WebEvent::TextDelta { text }) if text == "hello"
         ));
+    }
+
+    #[test]
+    fn parses_legacy_text_frame_as_plain_text_message() {
+        let payload = parse_inbound_text_frame("hello world");
+
+        assert!(matches!(payload.content, MessageContent::Text(text) if text == "hello world"));
+    }
+
+    #[test]
+    fn parses_multimodal_json_frame() {
+        let raw = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "look at this" },
+                {
+                    "type": "image_base64",
+                    "media_type": "image/png",
+                    "data": "AAAA"
+                }
+            ]
+        })
+        .to_string();
+
+        let payload = parse_inbound_text_frame(&raw);
+
+        assert!(matches!(
+            payload.content,
+            MessageContent::Multimodal(blocks)
+                if matches!(
+                    blocks.as_slice(),
+                    [
+                        ContentBlock::Text { text },
+                        ContentBlock::ImageBase64 { media_type, data }
+                    ] if text == "look at this"
+                        && media_type == "image/png"
+                        && data == "AAAA"
+                )
+        ));
+    }
+
+    #[test]
+    fn deserializes_legacy_post_body_with_plain_string_content() {
+        let request: SendMessageRequest = serde_json::from_value(serde_json::json!({
+            "session_key": "session-123",
+            "user_id": "user-123",
+            "content": "hello world"
+        }))
+        .expect("request");
+
+        assert!(matches!(request.content, MessageContent::Text(text) if text == "hello world"));
     }
 }

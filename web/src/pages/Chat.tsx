@@ -23,6 +23,7 @@ import {
   ChevronDown,
   Ellipsis,
   ImagePlus,
+  Link2,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -37,7 +38,6 @@ import {
 } from "lucide-react";
 import { api } from "@/api/client";
 import type {
-  ChatContentBlock,
   ChatMessageData,
   ChatModel,
   ChatSession,
@@ -61,6 +61,12 @@ import {
   formatLiveReasoning,
   formatToolCallSummary,
 } from "@/lib/chat-progress";
+import {
+  buildOutboundChatContent,
+  fileToImageBlock,
+  imageBlockSrc,
+  type ImageChatContentBlock,
+} from "@/lib/chat-attachments";
 import { useServerStatus } from "@/hooks/use-server-status";
 
 // ---------------------------------------------------------------------------
@@ -536,7 +542,7 @@ function SessionList({
 // MessageBubble
 // ---------------------------------------------------------------------------
 
-function ImageBlock({ url }: { url: string }) {
+function ImageBlock({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
 
   if (failed) {
@@ -549,7 +555,7 @@ function ImageBlock({ url }: { url: string }) {
 
   return (
     <img
-      src={url}
+      src={src}
       alt=""
       className="max-h-64 max-w-xs rounded-lg object-contain"
       onError={() => setFailed(true)}
@@ -616,8 +622,8 @@ function MessageBubble({ msg, metrics }: { msg: ChatMessageData; metrics?: TurnM
                     </div>
                   );
                 }
-                if (block.type === "image_url") {
-                  return <ImageBlock key={i} url={block.url} />;
+                if (block.type === "image_url" || block.type === "image_base64") {
+                  return <ImageBlock key={i} src={imageBlockSrc(block)} />;
                 }
                 return null;
               },
@@ -1188,13 +1194,14 @@ function ChatThread({
   const queryClient = useQueryClient();
   const { isOnline } = useServerStatus();
   const [input, setInput] = useState("");
-  const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<ImageChatContentBlock[]>([]);
   const [imageInputVisible, setImageInputVisible] = useState(false);
   const [imageInputValue, setImageInputValue] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [stream, setStream] = useState<StreamState>(INITIAL_STREAM_STATE);
   const [latestMetrics, setLatestMetrics] = useState<TurnMetrics | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1209,14 +1216,35 @@ function ChatThread({
   const handleAddImageUrl = useCallback(() => {
     const url = imageInputValue.trim();
     if (!url) return;
-    setImageUrls((prev) => [...prev, url]);
+    setAttachments((prev) => [...prev, { type: "image_url", url }]);
     setImageInputValue("");
     setImageInputVisible(false);
   }, [imageInputValue]);
 
   const handleRemoveImageUrl = useCallback((index: number) => {
-    setImageUrls((prev) => prev.filter((_, i) => i !== index));
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
   }, []);
+
+  const handleFileSelection = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const inputEl = e.target;
+      const files = Array.from(inputEl.files ?? []);
+      inputEl.value = "";
+
+      if (files.length === 0) return;
+
+      try {
+        const blocks = await Promise.all(files.map((file) => fileToImageBlock(file)));
+        setAttachments((prev) => [...prev, ...blocks]);
+      } catch {
+        setStream((current) => ({
+          ...current,
+          error: "Failed to read image attachment",
+        }));
+      }
+    },
+    [],
+  );
 
   const changeModelMutation = useMutation({
     mutationFn: (model: string) => updateSession(sessionKey, { model }),
@@ -1383,23 +1411,18 @@ function ChatThread({
 
   // WebSocket send
   const sendMessage = useCallback(
-    (text: string, urls?: string[]) => {
+    (text: string, nextAttachments: ImageChatContentBlock[] = []) => {
       const trimmed = text.trim();
-      if (!trimmed || stream.isStreaming || !isOnline) return;
+      if ((!trimmed && nextAttachments.length === 0) || stream.isStreaming || !isOnline) return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
       setInput("");
-      setImageUrls([]);
+      setAttachments([]);
       setImageInputVisible(false);
       setImageInputValue("");
 
       // Optimistically add user message to the cache
-      const content: ChatContentBlock[] | string = urls?.length
-        ? [
-            { type: "text" as const, text: trimmed },
-            ...urls.map((url) => ({ type: "image_url" as const, url })),
-          ]
-        : trimmed;
+      const content = buildOutboundChatContent(trimmed, nextAttachments);
       const previous = queryClient.getQueryData<ChatMessageData[]>([
         "chat-messages",
         sessionKey,
@@ -1417,15 +1440,16 @@ function ChatThread({
 
       // Reset streaming state and send
       setStream({ ...INITIAL_STREAM_STATE, isStreaming: true });
-      wsRef.current.send(trimmed);
+      wsRef.current.send(
+        typeof content === "string" ? content : JSON.stringify({ content }),
+      );
     },
     [stream.isStreaming, isOnline, sessionKey, queryClient],
   );
 
   const handleSend = useCallback(() => {
-    const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
-    sendMessage(input, urls);
-  }, [imageUrls, input, sendMessage]);
+    sendMessage(input, attachments);
+  }, [attachments, input, sendMessage]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1596,16 +1620,27 @@ function ChatThread({
 
       {/* Input area */}
       <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void handleFileSelection(e);
+          }}
+        />
+
         {/* Attached image previews */}
-        {imageUrls.length > 0 && (
+        {attachments.length > 0 && (
           <div className="pointer-events-auto mb-2 flex flex-wrap gap-2">
-            {imageUrls.map((url, i) => (
+            {attachments.map((block, i) => (
               <div
                 key={i}
                 className="group relative h-16 w-16 overflow-hidden rounded-xl border border-input bg-muted shadow-sm"
               >
                 <img
-                  src={url}
+                  src={imageBlockSrc(block)}
                   alt=""
                   className="h-full w-full object-cover"
                   onError={(e) => {
@@ -1665,11 +1700,21 @@ function ChatThread({
             variant="ghost"
             size="icon"
             className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:bg-background/70 hover:text-foreground"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isBusy || !isOnline}
+            title="Upload image"
+          >
+            <ImagePlus className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:bg-background/70 hover:text-foreground"
             onClick={() => setImageInputVisible((v) => !v)}
             disabled={isBusy || !isOnline}
             title="Attach image URL"
           >
-            <ImagePlus className="h-4 w-4" />
+            <Link2 className="h-4 w-4" />
           </Button>
           <textarea
             ref={textareaRef}
@@ -1686,7 +1731,7 @@ function ChatThread({
             size="icon"
             className="h-10 w-10 shrink-0 rounded-xl shadow-sm"
             onClick={handleSend}
-            disabled={!input.trim() || isBusy || !isOnline}
+            disabled={(!input.trim() && attachments.length === 0) || isBusy || !isOnline}
             title={isOnline ? "Send message" : "Server offline"}
           >
             {isBusy ? (
