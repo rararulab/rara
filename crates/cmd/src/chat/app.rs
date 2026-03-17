@@ -62,6 +62,9 @@ pub struct ChatState {
     pub status_msg:      Option<String>,
     pub staged_messages: Vec<String>,
     pub tool_input_buf:  String,
+    /// Cached loading hint, sampled once when entering thinking state to avoid
+    /// flicker on every render tick.
+    pub loading_hint:    String,
 }
 
 pub enum ChatAction {
@@ -94,6 +97,7 @@ impl ChatState {
             status_msg:      None,
             staged_messages: Vec::new(),
             tool_input_buf:  String::new(),
+            loading_hint:    String::new(),
         };
         state.push_message(Role::System, CHAT_BANNER.to_owned());
         state
@@ -114,6 +118,7 @@ impl ChatState {
         self.status_msg = None;
         self.staged_messages.clear();
         self.tool_input_buf.clear();
+        self.loading_hint.clear();
     }
 
     pub fn push_message(&mut self, role: Role, text: String) {
@@ -219,6 +224,9 @@ impl ChatState {
             }
             CliEvent::ReasoningDelta { text } => {
                 self.is_streaming = true;
+                if !self.thinking {
+                    self.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
+                }
                 self.thinking = true;
                 self.append_stream(&text);
             }

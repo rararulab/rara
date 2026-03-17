@@ -204,6 +204,9 @@ struct ProgressMessage {
     /// None`. If we don't save them before that, the trace loses all plan
     /// information.
     saved_plan_steps:  Vec<String>,
+    /// Cached loading hint, sampled once per turn to avoid flicker on
+    /// re-render.
+    loading_hint:      String,
 }
 
 impl ProgressMessage {
@@ -223,6 +226,7 @@ impl ProgressMessage {
             iterations: 0,
             rara_message_id,
             saved_plan_steps: Vec::new(),
+            loading_hint: rara_kernel::io::loading_hints::random_hint().to_string(),
         }
     }
 }
@@ -316,7 +320,7 @@ fn format_duration_compact(d: std::time::Duration) -> String {
     }
 }
 
-fn format_tool_line(t: &ToolProgress) -> String {
+fn format_tool_line(t: &ToolProgress, loading_hint: &str) -> String {
     if t.finished {
         let time = t
             .duration
@@ -334,7 +338,7 @@ fn format_tool_line(t: &ToolProgress) -> String {
             }
         }
     } else if t.activity == rara_kernel::io::stages::THINKING {
-        rara_kernel::io::loading_hints::random_hint().to_string()
+        loading_hint.to_string()
     } else {
         format!("正在{}…", t.activity)
     }
@@ -388,7 +392,7 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
 }
 
 /// Format a single phase line.
-fn format_phase_line(phase: &Phase) -> String {
+fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
     if phase.all_finished {
         let time = phase
             .total_duration
@@ -406,7 +410,7 @@ fn format_phase_line(phase: &Phase) -> String {
             }
         }
     } else if phase.activity == rara_kernel::io::stages::THINKING {
-        rara_kernel::io::loading_hints::random_hint().to_string()
+        loading_hint.to_string()
     } else {
         format!("正在{}…", phase.activity)
     }
@@ -438,7 +442,7 @@ fn render_progress(
     let total_phases = phases.len();
     if total_phases <= 5 {
         for phase in &phases {
-            lines.push(format_phase_line(phase));
+            lines.push(format_phase_line(phase, &progress.loading_hint));
         }
     } else {
         // Compact: collapse older finished phases.
@@ -462,12 +466,12 @@ fn render_progress(
 
         // Last N finished phases.
         for phase in finished_phases.iter().skip(collapsed) {
-            lines.push(format_phase_line(phase));
+            lines.push(format_phase_line(phase, &progress.loading_hint));
         }
 
         // In-progress phases.
         for phase in &in_progress_phases {
-            lines.push(format_phase_line(phase));
+            lines.push(format_phase_line(phase, &progress.loading_hint));
         }
     }
 
