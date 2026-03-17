@@ -14,6 +14,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use base64::Engine;
 use chrono::Utc;
 use clap::Args;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -25,7 +26,7 @@ use rara_channels::{
 use rara_kernel::{
     channel::{
         command::{CommandContext, CommandHandler, CommandInfo, CommandResult as CmdResult},
-        types::{ChannelType, ChannelUser, MessageContent},
+        types::{ChannelType, ChannelUser, ContentBlock, MessageContent},
     },
     handle::KernelHandle,
     identity::UserId,
@@ -208,19 +209,16 @@ async fn run_chat_tui(
                             }
                         }
                         ChatAction::SendMessage(text) => {
-                            state.is_streaming = true;
-                            state.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
-                            state.thinking = true;
-                            state.streaming_chars = 0;
-                            state.last_tokens = None;
-                            state.last_cost_usd = None;
-                            state.status_msg = None;
-                            let raw = build_cli_raw_message(&session_key, &user_id, &text);
-                            if let Err(error) = kernel_handle.ingest(raw).await {
-                                state.handle_cli_event(CliEvent::Error {
-                                    message: error.to_string(),
-                                });
-                            }
+                            let image_paths = std::mem::take(&mut state.staged_images);
+                            send_cli_message(
+                                state,
+                                &kernel_handle,
+                                &session_key,
+                                &user_id,
+                                text,
+                                image_paths,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -229,20 +227,16 @@ async fn run_chat_tui(
                 match event {
                     Some(CliEvent::Done) => {
                         state.handle_cli_event(CliEvent::Done);
-                        if let Some(text) = state.take_staged() {
-                            state.is_streaming = true;
-                            state.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
-                            state.thinking = true;
-                            state.streaming_chars = 0;
-                            state.last_tokens = None;
-                            state.last_cost_usd = None;
-                            state.status_msg = None;
-                            let raw = build_cli_raw_message(&session_key, &user_id, &text);
-                            if let Err(error) = kernel_handle.ingest(raw).await {
-                                state.handle_cli_event(CliEvent::Error {
-                                    message: error.to_string(),
-                                });
-                            }
+                        if let Some((text, image_paths)) = state.take_staged() {
+                            send_cli_message(
+                                state,
+                                &kernel_handle,
+                                &session_key,
+                                &user_id,
+                                text,
+                                image_paths,
+                            )
+                            .await;
                         }
                     }
                     Some(event) => state.handle_cli_event(event),
@@ -271,6 +265,9 @@ async fn handle_slash_command(
             let mut lines = vec![
                 "/help         — show this help".to_owned(),
                 "/exit         — end chat session".to_owned(),
+                "/image <path> — stage a local image for the next turn".to_owned(),
+                "/images       — list staged images".to_owned(),
+                "/clear-images — clear staged images".to_owned(),
             ];
             // Append registered handler commands to help text.
             for handler in handlers {
@@ -283,6 +280,46 @@ async fn handle_slash_command(
             return false;
         }
         "/exit" | "/quit" => return true,
+        "/image" => {
+            let Some(raw_path) = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+                state.push_message(
+                    Role::System,
+                    "Usage: /image /abs/path/to/file.png".to_owned(),
+                );
+                return false;
+            };
+            match tokio::fs::canonicalize(raw_path).await {
+                Ok(path) => {
+                    let path = path.to_string_lossy().into_owned();
+                    state.staged_images.push(path.clone());
+                    state.push_message(Role::System, format!("Staged image: {path}"));
+                }
+                Err(e) => {
+                    state.push_message(Role::System, format!("Failed to stage image: {e}"));
+                }
+            }
+            return false;
+        }
+        "/images" => {
+            if state.staged_images.is_empty() {
+                state.push_message(Role::System, "No staged images.".to_owned());
+            } else {
+                let lines = state
+                    .staged_images
+                    .iter()
+                    .enumerate()
+                    .map(|(index, path)| format!("{}. {}", index + 1, path))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                state.push_message(Role::System, format!("Staged images:\n{lines}"));
+            }
+            return false;
+        }
+        "/clear-images" => {
+            state.staged_images.clear();
+            state.push_message(Role::System, "Cleared staged images.".to_owned());
+            return false;
+        }
         _ => {}
     }
 
@@ -501,19 +538,94 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
     }
 }
 
-fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
+async fn send_cli_message(
+    state: &mut ChatState,
+    kernel_handle: &KernelHandle,
+    session_key: &str,
+    user_id: &str,
+    text: String,
+    image_paths: Vec<String>,
+) {
+    state.is_streaming = true;
+    state.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
+    state.thinking = true;
+    state.streaming_chars = 0;
+    state.last_tokens = None;
+    state.last_cost_usd = None;
+    state.status_msg = None;
+
+    let attachments = match load_image_blocks(&image_paths).await {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            state.staged_images = image_paths;
+            state.handle_cli_event(CliEvent::Error {
+                message: error.to_string(),
+            });
+            return;
+        }
+    };
+
+    let raw = build_cli_raw_message(session_key, user_id, &text, attachments);
+    if let Err(error) = kernel_handle.ingest(raw).await {
+        state.handle_cli_event(CliEvent::Error {
+            message: error.to_string(),
+        });
+    }
+}
+
+async fn load_image_blocks(image_paths: &[String]) -> Result<Vec<ContentBlock>, Whatever> {
+    let mut blocks = Vec::with_capacity(image_paths.len());
+
+    for path in image_paths {
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_whatever_context(|_| format!("Failed to read image: {path}"))?;
+        let (compressed, media_type) = rara_kernel::llm::image::compress_image(
+            &bytes,
+            rara_kernel::llm::image::DEFAULT_MAX_EDGE,
+            rara_kernel::llm::image::DEFAULT_QUALITY,
+        )
+        .with_whatever_context(|_| format!("Failed to compress image: {path}"))?;
+        blocks.push(ContentBlock::ImageBase64 {
+            media_type,
+            data: base64::engine::general_purpose::STANDARD.encode(&compressed),
+        });
+    }
+
+    Ok(blocks)
+}
+
+fn build_cli_raw_message(
+    session_key: &str,
+    user_id: &str,
+    content: &str,
+    attachments: Vec<ContentBlock>,
+) -> RawPlatformMessage {
+    let content = if attachments.is_empty() {
+        MessageContent::Text(content.to_owned())
+    } else {
+        let mut blocks = Vec::with_capacity(attachments.len() + usize::from(!content.is_empty()));
+        if !content.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: content.to_owned(),
+            });
+        }
+        blocks.extend(attachments);
+        MessageContent::Multimodal(blocks)
+    };
+
     RawPlatformMessage {
-        channel_type:        ChannelType::Cli,
+        channel_type: ChannelType::Cli,
         platform_message_id: Some(ulid::Ulid::new().to_string()),
-        platform_user_id:    format!("cli:{user_id}"),
-        platform_chat_id:    Some(session_key.to_owned()),
-        content:             MessageContent::Text(content.to_owned()),
-        reply_context:       Some(IoReplyContext {
+        platform_user_id: format!("cli:{user_id}"),
+        platform_chat_id: Some(session_key.to_owned()),
+        content,
+        reply_context: Some(IoReplyContext {
             thread_id:                None,
             reply_to_platform_msg_id: None,
             interaction_type:         InteractionType::Message,
         }),
-        metadata:            HashMap::new(),
+        metadata: HashMap::new(),
     }
 }
 
@@ -536,11 +648,16 @@ async fn poll_crossterm_event() -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use rara_channels::terminal::CliEvent;
-    use rara_kernel::{identity::UserId, io::StreamEvent, session::SessionIndex};
+    use rara_kernel::{
+        channel::types::{ContentBlock, MessageContent},
+        identity::UserId,
+        io::StreamEvent,
+        session::SessionIndex,
+    };
     use rara_sessions::file_index::FileSessionIndex;
 
     use super::{
-        cli_kernel_user_id, get_or_create_cli_session, handle_slash_command,
+        build_cli_raw_message, cli_kernel_user_id, get_or_create_cli_session, handle_slash_command,
         stream_event_to_cli_event,
     };
     use crate::chat::app::{CHAT_BANNER, ChatState};
@@ -605,5 +722,23 @@ mod tests {
         assert!(handle_slash_command(&mut state, "/exit", &handlers, "default", "local").await);
         assert_eq!(state.messages.len(), 1);
         assert_eq!(state.messages[0].text, CHAT_BANNER);
+    }
+
+    #[test]
+    fn cli_raw_message_is_multimodal_when_image_paths_are_present() {
+        let raw = build_cli_raw_message(
+            "default",
+            "local",
+            "describe",
+            vec![ContentBlock::ImageBase64 {
+                media_type: "image/png".to_owned(),
+                data:       "AAAA".to_owned(),
+            }],
+        );
+
+        assert!(matches!(
+            raw.content,
+            MessageContent::Multimodal(blocks) if blocks.len() == 2
+        ));
     }
 }

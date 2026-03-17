@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import path from "node:path";
 import { test, expect, type APIRequestContext } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
@@ -241,6 +242,30 @@ test.describe('Chat E2E (real backend)', () => {
     // Clear it.
     await textarea.fill('');
     await expect(sendButton).toBeDisabled();
+  });
+
+  test("web chat accepts local image attachments", async ({ page }) => {
+    await page.goto("/agent?tab=chat");
+
+    const textarea = page.getByRole("textbox");
+    await expect(textarea).toBeVisible({ timeout: 15_000 });
+    await expect(textarea).not.toHaveAttribute("placeholder", /offline/i, {
+      timeout: 15_000,
+    });
+
+    const fileInput = page.locator('input[type="file"][accept*="image"]');
+    await expect(fileInput).toHaveCount(1);
+
+    await fileInput.setInputFiles(
+      path.join(process.cwd(), "e2e/fixtures/test-image.svg"),
+    );
+
+    await expect(
+      page.locator('img[src^="data:image/svg+xml;base64,"]'),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Send message" }),
+    ).toBeEnabled();
   });
 
   // -----------------------------------------------------------------------
