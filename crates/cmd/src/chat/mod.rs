@@ -209,6 +209,7 @@ async fn run_chat_tui(
                         }
                         ChatAction::SendMessage(text) => {
                             state.is_streaming = true;
+                            state.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
                             state.thinking = true;
                             state.streaming_chars = 0;
                             state.last_tokens = None;
@@ -230,6 +231,7 @@ async fn run_chat_tui(
                         state.handle_cli_event(CliEvent::Done);
                         if let Some(text) = state.take_staged() {
                             state.is_streaming = true;
+                            state.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
                             state.thinking = true;
                             state.streaming_chars = 0;
                             state.last_tokens = None;

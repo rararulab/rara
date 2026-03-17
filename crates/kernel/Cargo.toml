@@ -35,6 +35,7 @@ md5.workspace = true
 opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 prometheus.workspace = true
+rand.workspace = true
 rapidfuzz.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
