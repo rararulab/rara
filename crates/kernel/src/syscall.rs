@@ -429,7 +429,7 @@ impl SyscallDispatcher {
             }
             Syscall::ListJobs { reply_tx } => {
                 let wheel = self.job_wheel.lock().unwrap();
-                let jobs = wheel.list(Some(&syscall_sender));
+                let jobs = wheel.list(None);
                 let _ = reply_tx.send(Ok(jobs));
             }
             Syscall::Subscribe {

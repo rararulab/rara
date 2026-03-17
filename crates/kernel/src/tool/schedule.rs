@@ -19,7 +19,7 @@
 //! - `schedule-interval` — fire every N seconds (repeating)
 //! - `schedule-cron` — fire according to a cron expression
 //! - `schedule-remove` — remove a scheduled job by ID
-//! - `schedule-list` — list all scheduled jobs for the current session
+//! - `schedule-list` — list all scheduled jobs across sessions
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -378,7 +378,7 @@ impl AgentTool for ScheduleRemoveTool {
 // ScheduleListTool
 // ============================================================================
 
-/// Tool for listing all scheduled tasks in the current session.
+/// Tool for listing all scheduled tasks across sessions.
 pub struct ScheduleListTool;
 
 impl ScheduleListTool {
@@ -389,7 +389,7 @@ impl ScheduleListTool {
 impl AgentTool for ScheduleListTool {
     fn name(&self) -> &str { Self::NAME }
 
-    fn description(&self) -> &str { "List all scheduled tasks for the current session." }
+    fn description(&self) -> &str { "List all scheduled tasks across sessions." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({

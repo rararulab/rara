@@ -211,7 +211,7 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<crate::error::Result<()>>,
     },
 
-    /// List all scheduled jobs for the current session.
+    /// List all scheduled jobs across sessions.
     ListJobs {
         #[debug(skip)]
         #[serde(skip_serializing)]
