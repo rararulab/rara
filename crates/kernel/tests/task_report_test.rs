@@ -63,7 +63,7 @@ async fn test_subscription_registry_tag_matching() {
     assert_eq!(matched[0].subscriber, session_a);
 
     // Unsubscribe session_a.
-    assert!(registry.unsubscribe(sub_a).await);
+    assert!(registry.unsubscribe(sub_a, &user).await);
     let matched = registry.match_tags(&["pr_review".into()], &user).await;
     assert!(matched.is_empty());
 
@@ -98,7 +98,11 @@ async fn test_subscription_no_match() {
 #[tokio::test]
 async fn test_unsubscribe_nonexistent() {
     let registry = SubscriptionRegistry::new();
-    assert!(!registry.unsubscribe(uuid::Uuid::new_v4()).await);
+    assert!(
+        !registry
+            .unsubscribe(uuid::Uuid::new_v4(), &UserId("nobody".into()))
+            .await
+    );
 }
 
 #[test]
@@ -422,7 +426,7 @@ async fn test_unsubscribe_before_publish_no_delivery() {
         .await;
 
     // Unsubscribe before publish.
-    assert!(registry.unsubscribe(sub_id).await);
+    assert!(registry.unsubscribe(sub_id, &user).await);
 
     // Publish — no subscribers should match.
     let matched = registry.match_tags(&["pr_review".into()], &user).await;
@@ -468,4 +472,36 @@ async fn test_cross_user_isolation() {
     let matched = registry.match_tags(&["pr_review".into()], &alice).await;
     assert_eq!(matched.len(), 1);
     assert_eq!(matched[0].subscriber, alice_session);
+}
+
+/// Another user cannot unsubscribe a subscription they don't own.
+#[tokio::test]
+async fn test_cross_user_unsubscribe_rejected() {
+    let registry = SubscriptionRegistry::new();
+    let alice = UserId("alice".into());
+    let bob = UserId("bob".into());
+
+    let sub_id = registry
+        .subscribe(
+            SessionKey::new(),
+            alice.clone(),
+            vec!["pr_review".into()],
+            NotifyAction::SilentAppend,
+        )
+        .await;
+
+    // Bob tries to unsubscribe Alice's subscription — must fail.
+    assert!(
+        !registry.unsubscribe(sub_id, &bob).await,
+        "bob must not be able to cancel alice's subscription"
+    );
+
+    // Alice's subscription should still be active.
+    let matched = registry.match_tags(&["pr_review".into()], &alice).await;
+    assert_eq!(matched.len(), 1);
+
+    // Alice can unsubscribe her own.
+    assert!(registry.unsubscribe(sub_id, &alice).await);
+    let matched = registry.match_tags(&["pr_review".into()], &alice).await;
+    assert!(matched.is_empty());
 }

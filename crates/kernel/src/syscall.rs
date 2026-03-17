@@ -454,10 +454,15 @@ impl SyscallDispatcher {
                 subscription_id,
                 reply_tx,
             } => {
-                let removed = self
-                    .subscription_registry
-                    .unsubscribe(subscription_id)
-                    .await;
+                let caller = process_table.with(&syscall_sender, |p| p.principal.user_id.clone());
+                let removed = match caller {
+                    Some(user_id) => {
+                        self.subscription_registry
+                            .unsubscribe(subscription_id, &user_id)
+                            .await
+                    }
+                    None => false,
+                };
                 info!(
                     subscription_id = %subscription_id,
                     removed,

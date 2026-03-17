@@ -162,9 +162,18 @@ impl SubscriptionRegistry {
         id
     }
 
-    /// Remove a subscription by ID. Returns true if it existed.
-    pub async fn unsubscribe(&self, subscription_id: Uuid) -> bool {
+    /// Remove a subscription by ID, only if owned by `caller`.
+    /// Returns true if it existed and was removed.
+    pub async fn unsubscribe(&self, subscription_id: Uuid, caller: &UserId) -> bool {
         let mut inner = self.inner.write().await;
+        // Check ownership before removing.
+        let owned = inner
+            .subs
+            .get(&subscription_id)
+            .is_some_and(|sub| sub.owner == *caller);
+        if !owned {
+            return false;
+        }
         if let Some(sub) = inner.subs.remove(&subscription_id) {
             for tag in &sub.match_tags {
                 let key = (sub.owner.clone(), tag.clone());
