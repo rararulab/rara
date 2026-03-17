@@ -122,20 +122,11 @@ struct RegistryInner {
     subs:      HashMap<Uuid, Subscription>,
     /// Inverted index: (owner, tag) → set of sub_ids.
     tag_index: HashMap<(UserId, String), HashSet<Uuid>>,
-    /// Path to the JSON persistence file. `None` for in-memory only (tests).
-    path:      Option<PathBuf>,
+    /// Path to the JSON persistence file.
+    path:      PathBuf,
 }
 
 impl RegistryInner {
-    /// Build an empty registry (in-memory only).
-    fn new() -> Self {
-        Self {
-            subs:      HashMap::new(),
-            tag_index: HashMap::new(),
-            path:      None,
-        }
-    }
-
     /// Build a registry from a list of subscriptions loaded from disk.
     fn from_entries(entries: Vec<Subscription>, path: PathBuf) -> Self {
         let mut subs = HashMap::new();
@@ -152,7 +143,7 @@ impl RegistryInner {
         Self {
             subs,
             tag_index,
-            path: Some(path),
+            path,
         }
     }
 
@@ -185,17 +176,16 @@ impl RegistryInner {
         }
     }
 
-    /// Persist the current state to the JSON file (if a path is set).
+    /// Persist the current state to the JSON file.
     fn persist(&self) {
-        let Some(path) = &self.path else { return };
         let entries: Vec<&Subscription> = self.subs.values().collect();
         match serde_json::to_string_pretty(&entries) {
             Ok(json) => {
-                if let Some(parent) = path.parent() {
+                if let Some(parent) = self.path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                if let Err(e) = std::fs::write(path, json) {
-                    warn!(error = %e, path = %path.display(), "failed to persist subscriptions.json");
+                if let Err(e) = std::fs::write(&self.path, json) {
+                    warn!(error = %e, path = %self.path.display(), "failed to persist subscriptions.json");
                 }
             }
             Err(e) => {
@@ -206,13 +196,6 @@ impl RegistryInner {
 }
 
 impl SubscriptionRegistry {
-    /// Create an empty in-memory registry (for tests).
-    pub fn new() -> Self {
-        Self {
-            inner: tokio::sync::RwLock::new(RegistryInner::new()),
-        }
-    }
-
     /// Load subscriptions from a JSON file, or create an empty registry if
     /// the file does not exist. Subscriptions are persisted back to this path
     /// on every mutation.
@@ -322,10 +305,6 @@ impl SubscriptionRegistry {
         }
         inner.persist();
     }
-}
-
-impl Default for SubscriptionRegistry {
-    fn default() -> Self { Self::new() }
 }
 
 /// Shared reference to a subscription registry.

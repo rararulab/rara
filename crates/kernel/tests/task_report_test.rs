@@ -23,9 +23,16 @@ use rara_kernel::{
     task_report::{TaskReport, TaskReportStatus},
 };
 
+/// Create a temp-file-backed SubscriptionRegistry for tests.
+fn test_registry() -> (SubscriptionRegistry, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("subscriptions.json");
+    (SubscriptionRegistry::load(path), tmp)
+}
+
 #[tokio::test]
 async fn test_subscription_registry_tag_matching() {
-    let registry = SubscriptionRegistry::new();
+    let (registry, _tmp) = test_registry();
     let session_a = SessionKey::new();
     let session_b = SessionKey::new();
     let user = UserId("alice".into());
@@ -77,7 +84,7 @@ async fn test_subscription_registry_tag_matching() {
 
 #[tokio::test]
 async fn test_subscription_no_match() {
-    let registry = SubscriptionRegistry::new();
+    let (registry, _tmp) = test_registry();
     let session = SessionKey::new();
     let user = UserId("alice".into());
 
@@ -97,7 +104,7 @@ async fn test_subscription_no_match() {
 
 #[tokio::test]
 async fn test_unsubscribe_nonexistent() {
-    let registry = SubscriptionRegistry::new();
+    let (registry, _tmp) = test_registry();
     assert!(
         !registry
             .unsubscribe(uuid::Uuid::new_v4(), &UserId("nobody".into()))
@@ -188,8 +195,8 @@ async fn setup_tape() -> (TapeService, tempfile::TempDir) {
 /// This exercises the full data flow without needing a running kernel.
 #[tokio::test]
 async fn test_publish_report_silent_append_e2e() {
-    let (tape, _tmp) = setup_tape().await;
-    let registry = SubscriptionRegistry::new();
+    let (tape, _tape_tmp) = setup_tape().await;
+    let (registry, _reg_tmp) = test_registry();
 
     let source_session = SessionKey::new();
     let subscriber_a = SessionKey::new();
@@ -288,8 +295,8 @@ async fn test_publish_report_silent_append_e2e() {
 /// Multiple subscribers match the same report — all get notified.
 #[tokio::test]
 async fn test_publish_report_multiple_subscribers() {
-    let (tape, _tmp) = setup_tape().await;
-    let registry = SubscriptionRegistry::new();
+    let (tape, _tape_tmp) = setup_tape().await;
+    let (registry, _reg_tmp) = test_registry();
 
     let source = SessionKey::new();
     let sub_1 = SessionKey::new();
@@ -372,8 +379,8 @@ async fn test_publish_report_multiple_subscribers() {
 /// Unsubscribing before publish means no delivery.
 #[tokio::test]
 async fn test_unsubscribe_before_publish_no_delivery() {
-    let (tape, _tmp) = setup_tape().await;
-    let registry = SubscriptionRegistry::new();
+    let (tape, _tape_tmp) = setup_tape().await;
+    let (registry, _reg_tmp) = test_registry();
 
     let source = SessionKey::new();
     let subscriber = SessionKey::new();
@@ -408,7 +415,7 @@ async fn test_unsubscribe_before_publish_no_delivery() {
 /// match, even if tags overlap.
 #[tokio::test]
 async fn test_cross_user_isolation() {
-    let registry = SubscriptionRegistry::new();
+    let (registry, _tmp) = test_registry();
     let alice = UserId("alice".into());
     let bob = UserId("bob".into());
 
@@ -440,7 +447,7 @@ async fn test_cross_user_isolation() {
 /// Another user cannot unsubscribe a subscription they don't own.
 #[tokio::test]
 async fn test_cross_user_unsubscribe_rejected() {
-    let registry = SubscriptionRegistry::new();
+    let (registry, _tmp) = test_registry();
     let alice = UserId("alice".into());
     let bob = UserId("bob".into());
 
