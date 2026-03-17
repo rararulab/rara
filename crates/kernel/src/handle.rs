@@ -23,6 +23,11 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 
+/// Provider that generates a skills prompt block for injection into the agent
+/// system prompt. Called on each agent turn to reflect the latest registry
+/// state.
+pub type SkillPromptProvider = Arc<dyn Fn() -> String + Send + Sync>;
+
 use crate::{
     agent::{AgentManifest, AgentRegistryRef, TurnTrace},
     error::{KernelError, Result},
@@ -63,33 +68,35 @@ use crate::{
 #[derive(Clone)]
 pub struct KernelHandle {
     /// Core: the unified event queue sender.
-    event_queue:      EventQueueRef,
+    event_queue:           EventQueueRef,
     /// Agent registry for resolving named agents to manifests.
-    agent_registry:   AgentRegistryRef,
+    agent_registry:        AgentRegistryRef,
     /// The session table tracking all running sessions.
-    process_table:    Arc<SessionTable>,
+    process_table:         Arc<SessionTable>,
     /// Bundled I/O subsystem (ingress resolution, streaming, delivery).
-    io:               Arc<IOSubsystem>,
+    io:                    Arc<IOSubsystem>,
     /// Flat KV settings provider for runtime configuration.
-    settings:         SettingsRef,
+    settings:              SettingsRef,
     /// Unified security subsystem (auth + authz + approval + guard).
-    security:         SecurityRef,
+    security:              SecurityRef,
     /// Kernel configuration.
-    config:           KernelConfig,
+    config:                KernelConfig,
     /// Multi-driver LLM registry for resolving drivers per-agent.
-    driver_registry:  crate::llm::DriverRegistryRef,
+    driver_registry:       crate::llm::DriverRegistryRef,
     /// Global tool registry.
-    tool_registry:    ToolRegistryRef,
+    tool_registry:         ToolRegistryRef,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore: Arc<Semaphore>,
+    global_semaphore:      Arc<Semaphore>,
     /// When the kernel was created (for uptime calculation).
-    started_at:       Timestamp,
+    started_at:            Timestamp,
     /// Tape service for persistent session traces.
-    tape:             crate::memory::TapeService,
+    tape:                  crate::memory::TapeService,
     /// Execution trace service for persisting turn-level traces.
-    trace_service:    crate::trace::TraceService,
+    trace_service:         crate::trace::TraceService,
     /// Shared job wheel for querying scheduled tasks.
-    job_wheel:        Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    /// Provider for generating the skills prompt block.
+    skill_prompt_provider: SkillPromptProvider,
 }
 
 impl KernelHandle {
@@ -110,6 +117,7 @@ impl KernelHandle {
         tape: crate::memory::TapeService,
         trace_service: crate::trace::TraceService,
         job_wheel: Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+        skill_prompt_provider: SkillPromptProvider,
     ) -> Self {
         Self {
             event_queue,
@@ -126,6 +134,7 @@ impl KernelHandle {
             tape,
             trace_service,
             job_wheel,
+            skill_prompt_provider,
         }
     }
 
@@ -322,6 +331,10 @@ impl KernelHandle {
             .map(|wheel| wheel.list(session_key))
             .unwrap_or_default()
     }
+
+    /// Generate the skills prompt block for injection into the agent system
+    /// prompt.
+    pub fn skills_prompt(&self) -> String { (self.skill_prompt_provider)() }
 
     // -- Query methods ------------------------------------------------------
 

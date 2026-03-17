@@ -85,7 +85,7 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
                         name:          e.metadata.name.clone(),
                         relative_path: relative.clone(),
                         trusted:       false,
-                        enabled:       false,
+                        enabled:       true,
                     })
                     .collect();
                 (meta, states)
@@ -314,7 +314,7 @@ async fn scan_repo_skills(
             name:          meta.name.clone(),
             relative_path: relative,
             trusted:       false,
-            enabled:       false,
+            enabled:       true,
         };
         return Ok((vec![meta], vec![state]));
     }
@@ -355,7 +355,7 @@ async fn scan_repo_skills(
                             name:          meta.name.clone(),
                             relative_path: relative,
                             trusted:       false,
-                            enabled:       false,
+                            enabled:       true,
                         });
                         skills_meta.push(meta);
                     }

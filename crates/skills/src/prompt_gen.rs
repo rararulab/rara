@@ -20,6 +20,33 @@
 
 use crate::types::SkillMetadata;
 
+/// Maximum description length in characters. Descriptions longer than this are
+/// truncated with an ellipsis. Matches the Claude Code plugin spec (1024
+/// chars).
+const MAX_DESCRIPTION_CHARS: usize = 1024;
+
+/// Truncate a string to at most `max_chars` characters, appending "…" if cut.
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.len() <= max_chars {
+        return s.to_string();
+    }
+    // Find a char boundary at or before max_chars.
+    let mut end = max_chars;
+    while !s.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+/// Escape XML special characters to prevent prompt injection via skill
+/// metadata.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Generate the `<available_skills>` XML block for injection into the system
 /// prompt.
 pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
@@ -29,8 +56,13 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
 
     use crate::types::SkillSource;
 
+    // Sort by name for deterministic output (improves provider-side prompt cache
+    // hit rate by keeping the prefix stable across restarts and rehashes).
+    let mut sorted: Vec<&SkillMetadata> = skills.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+
     let mut out = String::from("## Available Skills\n\n<available_skills>\n");
-    for skill in skills {
+    for skill in sorted {
         let is_plugin = skill.source.as_ref() == Some(&SkillSource::Plugin);
         let path_display = if is_plugin {
             skill.path.display().to_string()
@@ -39,10 +71,10 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
         };
         out.push_str(&format!(
             "<skill name=\"{}\" source=\"{}\" path=\"{}\">\n{}\n</skill>\n",
-            skill.name,
+            escape_xml(&skill.name),
             if is_plugin { "plugin" } else { "skill" },
-            path_display,
-            skill.description,
+            escape_xml(&path_display),
+            escape_xml(&truncate(&skill.description, MAX_DESCRIPTION_CHARS)),
         ));
     }
     out.push_str("</available_skills>\n\n");
