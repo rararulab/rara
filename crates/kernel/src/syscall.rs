@@ -88,7 +88,7 @@ impl SyscallDispatcher {
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
     ) -> Self {
-        let scheduler_dir = rara_paths::config_dir().join("scheduler");
+        let scheduler_dir = rara_paths::workspace_dir().join("scheduler");
         let jobs_path = scheduler_dir.join("jobs.json");
         let subs_path = scheduler_dir.join("subscriptions.json");
         let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(
