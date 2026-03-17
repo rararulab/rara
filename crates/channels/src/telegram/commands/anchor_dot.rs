@@ -39,11 +39,41 @@ pub fn render_dot(tree: &AnchorTree) -> String {
     dot
 }
 
+/// Return the node ID that represents the session in the graph. When the
+/// session has anchors the caller should use the first/last anchor node;
+/// when it has none a dedicated placeholder is emitted here.
+fn ensure_session_node(
+    dot: &mut String,
+    branch: &SessionBranch,
+    is_current: bool,
+    session_label: &str,
+) -> Option<String> {
+    if !branch.anchors.is_empty() {
+        return None; // anchors will be rendered in the main loop
+    }
+    // Emit a single placeholder node so the graph is never blank.
+    let node = node_id(&branch.session_key, "__empty__");
+    let label = format!(
+        "[{}]\\n({})\\n(no anchors)",
+        escape_dot(session_label),
+        escape_dot(&branch.session_key),
+    );
+    let fill = if is_current { "#d9f4dd" } else { "#f8f9fa" };
+    let border = if is_current { "#1f8f3a" } else { "#5a6773" };
+    dot.push_str(&format!(
+        "  {node} [label=\"{label}\", fillcolor=\"{fill}\", color=\"{border}\"];\n"
+    ));
+    Some(node)
+}
+
 fn render_branch(dot: &mut String, branch: &SessionBranch, current_session: &str) {
     let is_current = branch.session_key == current_session;
     let session_label = branch.title.as_deref().unwrap_or(&branch.session_key);
 
-    let mut previous_node_id: Option<String> = None;
+    // If the session has no anchors, emit a placeholder so the graph is visible.
+    let placeholder = ensure_session_node(dot, branch, is_current, session_label);
+
+    let mut previous_node_id: Option<String> = placeholder;
     for anchor in &branch.anchors {
         // One node per anchor, chained in-session by append order.
         let node = node_id(&branch.session_key, &anchor.name);
@@ -72,13 +102,17 @@ fn render_branch(dot: &mut String, branch: &SessionBranch, current_session: &str
 
     for fork in &branch.forks {
         let parent = node_id(&branch.session_key, &fork.at_anchor);
-        if let Some(first_child_anchor) = fork.branch.anchors.first() {
-            // Dashed edge marks branch/fork transition between sessions.
-            let child = node_id(&fork.branch.session_key, &first_child_anchor.name);
-            dot.push_str(&format!(
-                "  {parent} -> {child} [style=dashed, color=\"#1f6feb\", label=\"fork\"];\n"
-            ));
-        }
+        // Resolve the first node of the child branch — either its first
+        // anchor or, when the child has none, the placeholder node.
+        let child_first = fork
+            .branch
+            .anchors
+            .first()
+            .map(|a| node_id(&fork.branch.session_key, &a.name))
+            .unwrap_or_else(|| node_id(&fork.branch.session_key, "__empty__"));
+        dot.push_str(&format!(
+            "  {parent} -> {child_first} [style=dashed, color=\"#1f6feb\", label=\"fork\"];\n"
+        ));
         render_branch(dot, &fork.branch, current_session);
     }
 }
@@ -187,5 +221,52 @@ mod tests {
         assert!(dot.contains("topic/a"));
         assert!(dot.contains("Fork 1"));
         assert!(dot.contains("fork-1"));
+    }
+
+    #[test]
+    fn empty_anchors_produces_placeholder_node() {
+        let tree = AnchorTree {
+            root:            SessionBranch {
+                session_key: "solo".into(),
+                title:       Some("Empty Session".into()),
+                anchors:     vec![],
+                forks:       vec![],
+            },
+            current_session: "solo".into(),
+        };
+        let dot = render_dot(&tree);
+        assert!(dot.contains("digraph"));
+        assert!(dot.contains("Empty Session"));
+        assert!(dot.contains("(no anchors)"));
+    }
+
+    #[test]
+    fn fork_to_empty_child_produces_edge() {
+        let tree = AnchorTree {
+            root:            SessionBranch {
+                session_key: "root".into(),
+                title:       Some("Root".into()),
+                anchors:     vec![AnchorNode {
+                    name:     "session/start".into(),
+                    summary:  None,
+                    entry_id: 1,
+                }],
+                forks:       vec![ForkEdge {
+                    at_anchor: "session/start".into(),
+                    branch:    SessionBranch {
+                        session_key: "child".into(),
+                        title:       None,
+                        anchors:     vec![],
+                        forks:       vec![],
+                    },
+                }],
+            },
+            current_session: "root".into(),
+        };
+        let dot = render_dot(&tree);
+        assert!(dot.contains("fork"));
+        assert!(dot.contains("(no anchors)"));
+        // The fork edge should connect to the placeholder node.
+        assert!(dot.contains("style=dashed"));
     }
 }
