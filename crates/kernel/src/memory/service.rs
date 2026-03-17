@@ -107,15 +107,6 @@ impl TapeService {
         Ok(self.store.read(tape_name).await?.unwrap_or_default())
     }
 
-    /// Count the number of [`TapEntryKind::Message`] entries in a tape.
-    pub async fn message_count(&self, tape_name: &str) -> TapResult<usize> {
-        let entries = self.entries(tape_name).await?;
-        Ok(entries
-            .iter()
-            .filter(|e| e.kind == TapEntryKind::Message)
-            .count())
-    }
-
     /// Load a specific entry by ID from a tape.
     pub async fn entry_by_id(&self, tape_name: &str, entry_id: u64) -> TapResult<Option<TapEntry>> {
         let entries = self.entries(tape_name).await?;

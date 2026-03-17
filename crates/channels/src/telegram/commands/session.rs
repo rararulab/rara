@@ -178,14 +178,11 @@ impl SessionCommandHandler {
 
             let (label, cb_data) = if is_active {
                 (
-                    format!("\u{2705} {} ({} msgs)", display_name, s.message_count),
+                    format!("\u{2705} {display_name}"),
                     format!("detail:{}", truncate_str(&s.key, 56)),
                 )
             } else {
-                (
-                    format!("{} ({} msgs)", display_name, s.message_count),
-                    format!("switch:{}", truncate_str(&s.key, 56)),
-                )
+                (display_name, format!("switch:{}", truncate_str(&s.key, 56)))
             };
 
             keyboard_rows.push(vec![InlineButton {
