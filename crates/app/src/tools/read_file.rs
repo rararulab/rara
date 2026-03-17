@@ -133,8 +133,9 @@ impl AgentTool for ReadFileTool {
 
     fn description(&self) -> &str {
         "Read a file from the filesystem. Returns content with line number prefixes (like cat -n). \
-         Supports offset and limit for paginated reading. Detects binary files. Long lines are \
-         truncated at 2000 characters."
+         Without offset/limit, adaptively reads up to the context-window budget (multiple pages \
+         auto-stitched). Use offset and limit to read a specific range. Detects binary files. Long \
+         lines are truncated at 2000 characters."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
