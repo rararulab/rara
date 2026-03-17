@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Integration tests for TaskReport types and SubscriptionRegistry.
+//! Integration tests for TaskReport types, SubscriptionRegistry, and
+//! end-to-end publish → subscribe → tape delivery flow.
 
 use rara_kernel::{
-    notification::{NotifyAction, SubscriptionRegistry},
+    memory::{FileTapeStore, TapEntryKind, TapeService},
+    notification::{NotifyAction, SubscriptionRegistry, TapeEntryRef, TaskNotification},
     session::SessionKey,
     task_report::{TaskReport, TaskReportStatus},
 };
@@ -149,4 +151,252 @@ fn test_notify_action_serde() {
 
     let deserialized: NotifyAction = serde_json::from_str("\"proactive_turn\"").unwrap();
     assert_eq!(deserialized, NotifyAction::ProactiveTurn);
+}
+
+// ===========================================================================
+// End-to-end: publish TaskReport → subscription match → tape delivery
+// ===========================================================================
+
+/// Helper: create a TapeService backed by a temp directory.
+async fn setup_tape() -> (TapeService, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = FileTapeStore::new(tmp.path(), tmp.path()).await.unwrap();
+    let tape = TapeService::new(store);
+    (tape, tmp)
+}
+
+/// Simulate what `handle_publish_task_report` does: write report to source
+/// tape, match subscriptions, deliver via SilentAppend to subscriber tapes.
+///
+/// This exercises the full data flow without needing a running kernel.
+#[tokio::test]
+async fn test_publish_report_silent_append_e2e() {
+    let (tape, _tmp) = setup_tape().await;
+    let registry = SubscriptionRegistry::new();
+
+    let source_session = SessionKey::new();
+    let subscriber_a = SessionKey::new();
+    let subscriber_b = SessionKey::new();
+
+    // 1. Subscribe: session A watches "pr_review", session B watches "deploy".
+    let _sub_a = registry
+        .subscribe(
+            subscriber_a,
+            vec!["pr_review".into()],
+            NotifyAction::SilentAppend,
+        )
+        .await;
+    let _sub_b = registry
+        .subscribe(
+            subscriber_b,
+            vec!["deploy".into()],
+            NotifyAction::SilentAppend,
+        )
+        .await;
+
+    // 2. Publish a TaskReport with tags ["pr_review", "repo:rararulab/rara"].
+    let report = TaskReport {
+        task_id: uuid::Uuid::new_v4(),
+        task_type: "pr_review".into(),
+        tags: vec!["pr_review".into(), "repo:rararulab/rara".into()],
+        status: TaskReportStatus::Completed,
+        summary: "PR #42 approved".into(),
+        result: serde_json::json!({"verdict": "approved", "confidence": 9}),
+        action_taken: Some("left approval comment".into()),
+        source_session,
+    };
+
+    let report_json = serde_json::to_value(&report).unwrap();
+
+    // 2a. Write TaskReport to source session's tape.
+    let source_tape = source_session.to_string();
+    let entry = tape
+        .store()
+        .append(
+            &source_tape,
+            TapEntryKind::TaskReport,
+            report_json.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    let entry_id = entry.id;
+
+    // 2b. Build notification.
+    let notification = TaskNotification {
+        task_id:    report.task_id,
+        task_type:  report.task_type.clone(),
+        tags:       report.tags.clone(),
+        status:     report.status,
+        summary:    report.summary.clone(),
+        report_ref: TapeEntryRef {
+            session_key: source_session,
+            entry_id,
+        },
+    };
+
+    // 2c. Match subscriptions and deliver.
+    let matched = registry.match_tags(&report.tags).await;
+    assert_eq!(matched.len(), 1, "only subscriber_a should match pr_review");
+    assert_eq!(matched[0].subscriber, subscriber_a);
+
+    for sub in &matched {
+        let notif_json = serde_json::to_value(&notification).unwrap();
+        let sub_tape = sub.subscriber.to_string();
+        tape.store()
+            .append(&sub_tape, TapEntryKind::TaskReport, notif_json, None)
+            .await
+            .unwrap();
+    }
+
+    // 3. Verify: source tape has the TaskReport entry.
+    let source_entries = tape.entries(&source_tape).await.unwrap();
+    assert_eq!(source_entries.len(), 1);
+    assert_eq!(source_entries[0].kind, TapEntryKind::TaskReport);
+    let stored_report: TaskReport =
+        serde_json::from_value(source_entries[0].payload.clone()).unwrap();
+    assert_eq!(stored_report.task_type, "pr_review");
+    assert_eq!(stored_report.status, TaskReportStatus::Completed);
+    assert_eq!(stored_report.summary, "PR #42 approved");
+
+    // 4. Verify: subscriber_a's tape has the notification entry.
+    let sub_a_tape = subscriber_a.to_string();
+    let sub_a_entries = tape.entries(&sub_a_tape).await.unwrap();
+    assert_eq!(sub_a_entries.len(), 1);
+    assert_eq!(sub_a_entries[0].kind, TapEntryKind::TaskReport);
+    let delivered_notif: TaskNotification =
+        serde_json::from_value(sub_a_entries[0].payload.clone()).unwrap();
+    assert_eq!(delivered_notif.task_type, "pr_review");
+    assert_eq!(delivered_notif.summary, "PR #42 approved");
+    assert_eq!(delivered_notif.report_ref.session_key, source_session);
+    assert_eq!(delivered_notif.report_ref.entry_id, entry_id);
+
+    // 5. Verify: subscriber_b's tape is empty (tags didn't match).
+    let sub_b_tape = subscriber_b.to_string();
+    let sub_b_entries = tape.entries(&sub_b_tape).await.unwrap();
+    assert!(
+        sub_b_entries.is_empty(),
+        "subscriber_b should not have received anything"
+    );
+}
+
+/// Multiple subscribers match the same report — all get notified.
+#[tokio::test]
+async fn test_publish_report_multiple_subscribers() {
+    let (tape, _tmp) = setup_tape().await;
+    let registry = SubscriptionRegistry::new();
+
+    let source = SessionKey::new();
+    let sub_1 = SessionKey::new();
+    let sub_2 = SessionKey::new();
+    let sub_3 = SessionKey::new();
+
+    // All three subscribe to "critical".
+    for sub in [sub_1, sub_2, sub_3] {
+        registry
+            .subscribe(sub, vec!["critical".into()], NotifyAction::SilentAppend)
+            .await;
+    }
+
+    // Publish with tag "critical".
+    let report = TaskReport {
+        task_id:        uuid::Uuid::new_v4(),
+        task_type:      "deploy_check".into(),
+        tags:           vec!["deploy_check".into(), "critical".into()],
+        status:         TaskReportStatus::Failed,
+        summary:        "deploy to prod failed".into(),
+        result:         serde_json::json!({"error": "timeout"}),
+        action_taken:   None,
+        source_session: source,
+    };
+
+    let report_json = serde_json::to_value(&report).unwrap();
+    let entry = tape
+        .store()
+        .append(
+            &source.to_string(),
+            TapEntryKind::TaskReport,
+            report_json,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let notification = TaskNotification {
+        task_id:    report.task_id,
+        task_type:  report.task_type.clone(),
+        tags:       report.tags.clone(),
+        status:     report.status,
+        summary:    report.summary.clone(),
+        report_ref: TapeEntryRef {
+            session_key: source,
+            entry_id:    entry.id,
+        },
+    };
+
+    let matched = registry.match_tags(&report.tags).await;
+    assert_eq!(
+        matched.len(),
+        3,
+        "all three subscribers should match 'critical'"
+    );
+
+    for sub in &matched {
+        let notif_json = serde_json::to_value(&notification).unwrap();
+        tape.store()
+            .append(
+                &sub.subscriber.to_string(),
+                TapEntryKind::TaskReport,
+                notif_json,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    // All three should have exactly one entry.
+    for sub in [sub_1, sub_2, sub_3] {
+        let entries = tape.entries(&sub.to_string()).await.unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "each subscriber should have one notification"
+        );
+        let notif: TaskNotification = serde_json::from_value(entries[0].payload.clone()).unwrap();
+        assert_eq!(notif.status, TaskReportStatus::Failed);
+        assert_eq!(notif.summary, "deploy to prod failed");
+    }
+}
+
+/// Unsubscribing before publish means no delivery.
+#[tokio::test]
+async fn test_unsubscribe_before_publish_no_delivery() {
+    let (tape, _tmp) = setup_tape().await;
+    let registry = SubscriptionRegistry::new();
+
+    let source = SessionKey::new();
+    let subscriber = SessionKey::new();
+
+    let sub_id = registry
+        .subscribe(
+            subscriber,
+            vec!["pr_review".into()],
+            NotifyAction::SilentAppend,
+        )
+        .await;
+
+    // Unsubscribe before publish.
+    assert!(registry.unsubscribe(sub_id).await);
+
+    // Publish — no subscribers should match.
+    let matched = registry.match_tags(&["pr_review".into()]).await;
+    assert!(matched.is_empty());
+
+    // Subscriber tape should be empty.
+    let entries = tape.entries(&subscriber.to_string()).await.unwrap();
+    assert!(entries.is_empty());
+
+    // Source tape should also be empty (we didn't write anything).
+    let entries = tape.entries(&source.to_string()).await.unwrap();
+    assert!(entries.is_empty());
 }
