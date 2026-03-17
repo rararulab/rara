@@ -12,24 +12,56 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// Color palette — muted, modern terminal aesthetic.
 var (
+	colorPurple  = lipgloss.Color("99")
+	colorGreen   = lipgloss.Color("42")
+	colorYellow  = lipgloss.Color("214")
+	colorRed     = lipgloss.Color("196")
+	colorDim     = lipgloss.Color("241")
+	colorFaint   = lipgloss.Color("238")
+	colorCyan    = lipgloss.Color("80")
+	colorWhite   = lipgloss.Color("255")
+	colorSubtle  = lipgloss.Color("245")
+	colorHotPink = lipgloss.Color("205")
+
 	styleTitle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("229")).
-			Background(lipgloss.Color("57")).
-			Padding(0, 1)
+			Foreground(colorWhite).
+			Background(colorPurple).
+			Padding(0, 1).
+			MarginBottom(1)
 
 	styleStatus = map[Status]lipgloss.Style{
-		StatusActive:   lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
-		StatusMerged:   lipgloss.NewStyle().Foreground(lipgloss.Color("214")),
-		StatusDetached: lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		StatusPrunable: lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
+		StatusActive:   lipgloss.NewStyle().Foreground(colorGreen),
+		StatusMerged:   lipgloss.NewStyle().Foreground(colorYellow),
+		StatusDetached: lipgloss.NewStyle().Foreground(colorSubtle),
+		StatusPrunable: lipgloss.NewStyle().Foreground(colorRed),
 	}
 
-	styleHelp    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	styleMessage = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
-	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	styleBusy    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	// Indicator icons per status
+	statusIcon = map[Status]string{
+		StatusActive:   "●",
+		StatusMerged:   "◆",
+		StatusDetached: "○",
+		StatusPrunable: "✖",
+	}
+
+	styleCheck   = lipgloss.NewStyle().Foreground(colorHotPink).Bold(true)
+	styleMain    = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
+	stylePath    = lipgloss.NewStyle().Foreground(colorWhite)
+	styleBranch  = lipgloss.NewStyle().Foreground(colorCyan)
+	styleDimPath = lipgloss.NewStyle().Foreground(colorDim)
+
+	styleMessage = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
+	styleError   = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
+	styleBusy    = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
+
+	styleHelpKey  = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
+	styleHelpDesc = lipgloss.NewStyle().Foreground(colorDim)
+	styleHelpSep  = lipgloss.NewStyle().Foreground(colorFaint)
+
+	styleCount = lipgloss.NewStyle().Foreground(colorSubtle)
 )
 
 // Messages returned by async commands.
@@ -70,11 +102,12 @@ func RunTUI() error {
 }
 
 func newTUIModel(entries []Entry) tuiModel {
+	// Wider columns to accommodate ANSI color codes in cell values
 	columns := []table.Column{
-		{Title: " ", Width: 3},
-		{Title: "Path", Width: 45},
-		{Title: "Branch", Width: 35},
-		{Title: "Status", Width: 10},
+		{Title: " ", Width: 4},
+		{Title: "Path", Width: 50},
+		{Title: "Branch", Width: 40},
+		{Title: "Status", Width: 18},
 	}
 
 	rows := make([]table.Row, len(entries))
@@ -82,7 +115,6 @@ func newTUIModel(entries []Entry) tuiModel {
 		rows[i] = entryToRow(e, false)
 	}
 
-	// Total width = sum of column widths + padding (2 per col)
 	totalWidth := 0
 	for _, c := range columns {
 		totalWidth += c.Width + 2
@@ -98,14 +130,14 @@ func newTUIModel(entries []Entry) tuiModel {
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
-		Bold(true)
+		Bold(true).
+		Foreground(colorSubtle)
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
+		Foreground(colorWhite).
+		Background(lipgloss.Color("236")).
+		Bold(true)
 	t.SetStyles(s)
 
-	// Set rows and height AFTER styles are applied so viewport calculates correctly
 	t.SetRows(rows)
 	t.SetHeight(min(len(entries)+1, 25))
 
@@ -117,21 +149,36 @@ func newTUIModel(entries []Entry) tuiModel {
 }
 
 func entryToRow(e Entry, selected bool) table.Row {
+	// Selection indicator
 	check := " "
 	if selected {
-		check = "✓"
+		check = styleCheck.Render("✓")
 	}
 	if e.IsMain {
-		check = "●"
+		check = styleMain.Render("★")
 	}
 
+	// Path with dimmed prefix
 	path := shortenPath(e.Path)
+	if strings.HasPrefix(path, ".worktrees/") {
+		path = styleDimPath.Render(".worktrees/") + stylePath.Render(strings.TrimPrefix(path, ".worktrees/"))
+	} else {
+		path = stylePath.Render(path)
+	}
+
+	// Branch with color
 	branch := e.Branch
 	if branch == "" {
-		branch = "(detached)"
+		branch = styleDimPath.Render("(detached)")
+	} else {
+		branch = styleBranch.Render(branch)
 	}
 
-	status := e.Status.String()
+	// Status with icon and color
+	icon := statusIcon[e.Status]
+	stStyle := styleStatus[e.Status]
+	status := stStyle.Render(icon + " " + e.Status.String())
+
 	return table.Row{check, path, branch, status}
 }
 
@@ -318,6 +365,11 @@ func (m *tuiModel) refreshRows() {
 	m.table.SetRows(rows)
 }
 
+// helpItem renders a single "key desc" help entry with styled key.
+func helpItem(key, desc string) string {
+	return styleHelpKey.Render(key) + " " + styleHelpDesc.Render(desc)
+}
+
 func (m tuiModel) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
@@ -325,35 +377,40 @@ func (m tuiModel) View() tea.View {
 
 	var b strings.Builder
 
-	b.WriteString(styleTitle.Render("🌳 Worktree Manager"))
+	// Title bar with worktree count
+	selected := len(m.selected)
+	title := "Worktree Manager"
+	counter := styleCount.Render(fmt.Sprintf("  %d worktrees", len(m.entries)))
+	if selected > 0 {
+		counter = styleCheck.Render(fmt.Sprintf("  %d selected", selected))
+	}
+	b.WriteString(styleTitle.Render(title) + counter)
 	b.WriteString("\n\n")
+
+	// Table
 	b.WriteString(m.table.View())
 	b.WriteString("\n\n")
 
 	// Status message
 	if m.busy {
-		b.WriteString(styleBusy.Render("⏳ " + m.message))
-		b.WriteString("\n")
+		b.WriteString(styleBusy.Render("  " + m.message))
+		b.WriteString("\n\n")
 	} else if m.err != nil {
-		b.WriteString(styleError.Render("Error: " + m.err.Error()))
-		b.WriteString("\n")
+		b.WriteString(styleError.Render("  " + m.err.Error()))
+		b.WriteString("\n\n")
 	} else if m.message != "" {
-		b.WriteString(styleMessage.Render(m.message))
-		b.WriteString("\n")
+		b.WriteString(styleMessage.Render("  " + m.message))
+		b.WriteString("\n\n")
 	}
 
-	// Help bar
-	help := []string{
-		"space: select",
-		"a: select merged",
-		"c: clean selected",
-		"C: clean all merged",
-		"d: force delete",
-		"p: prune",
-		"r: refresh",
-		"q: quit",
-	}
-	b.WriteString(styleHelp.Render(strings.Join(help, " │ ")))
+	// Help bar — grouped by function
+	sep := styleHelpSep.Render(" · ")
+	helpLine := strings.Join([]string{
+		helpItem("space", "select") + sep + helpItem("a", "all merged"),
+		helpItem("c", "clean") + sep + helpItem("C", "clean all") + sep + helpItem("d", "force del"),
+		helpItem("p", "prune") + sep + helpItem("r", "refresh") + sep + helpItem("q", "quit"),
+	}, styleHelpSep.Render("  │  "))
+	b.WriteString("  " + helpLine)
 	b.WriteString("\n")
 
 	v := tea.NewView(b.String())
