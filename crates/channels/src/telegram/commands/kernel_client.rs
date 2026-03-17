@@ -22,7 +22,7 @@ use chrono::Utc;
 use rara_kernel::{
     handle::KernelHandle,
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
-    session::{self as ks, SessionIndex, SessionKey, Signal},
+    session::{self as ks, SessionIndex, SessionKey},
 };
 use snafu::ResultExt;
 
@@ -363,10 +363,23 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
-        // Terminate any running runtime before deleting data so the agent
-        // cannot recreate the tape file after we remove it.
+        // Kill any running runtime and wait for it to exit before deleting
+        // data. Using cancel_process (immediate token cancellation) instead of
+        // Signal::Terminate (async 5s grace) to avoid a race where the agent
+        // loop writes the tape back after we delete it.
         if let Some(ref handle) = self.handle {
-            let _ = handle.send_signal(sk.clone(), Signal::Terminate);
+            let pt = handle.process_table();
+            if pt.contains(&sk) {
+                pt.cancel_process(&sk);
+                // Poll until the runtime is reaped (cleanup_process removes it
+                // from the table) or give up after a bounded timeout.
+                for _ in 0..50 {
+                    if !pt.contains(&sk) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
         }
         // Delete tape (message history).
         self.tape.delete_tape(key).await.context(TapeSnafu {
