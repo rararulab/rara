@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "ayu";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7ec5bd55.js";
+            window.path_to_searchindex_js = "searchindex-c76888db.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c5ffbd9d.js"></script>
+        <script src="toc-102850bc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -379,6 +379,22 @@ just consul-keys   # list current keys
 </tbody>
 </table>
 </div>
+<h4 id="gateway-gateway"><a class="header" href="#gateway-gateway">Gateway (<code>gateway.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bind_address</code></td><td><code>RARA__GATEWAY__BIND_ADDRESS</code></td><td><code>127.0.0.1:25556</code></td><td>Admin API listen address</td></tr>
+<tr><td><code>check_interval</code></td><td><code>RARA__GATEWAY__CHECK_INTERVAL</code></td><td><code>300</code></td><td>Upstream check interval (seconds)</td></tr>
+<tr><td><code>health_timeout</code></td><td><code>RARA__GATEWAY__HEALTH_TIMEOUT</code></td><td><code>30</code></td><td>Health confirmation timeout (seconds)</td></tr>
+<tr><td><code>health_poll_interval</code></td><td><code>RARA__GATEWAY__HEALTH_POLL_INTERVAL</code></td><td><code>2</code></td><td>HTTP health poll interval (seconds)</td></tr>
+<tr><td><code>max_restart_attempts</code></td><td><code>RARA__GATEWAY__MAX_RESTART_ATTEMPTS</code></td><td><code>3</code></td><td>Max consecutive restart failures</td></tr>
+<tr><td><code>auto_update</code></td><td><code>RARA__GATEWAY__AUTO_UPDATE</code></td><td><code>true</code></td><td>Auto-apply upstream updates</td></tr>
+</tbody>
+</table>
+</div>
 <h4 id="other"><a class="header" href="#other">Other</a></h4>
 <div class="table-wrapper">
 <table>
@@ -425,6 +441,7 @@ just consul-keys   # list current keys
 <tr><td><code>bot_token</code></td><td>Telegram bot token</td></tr>
 <tr><td><code>chat_id</code></td><td>Primary chat ID</td></tr>
 <tr><td><code>allowed_group_chat_id</code></td><td>Allowed group chat</td></tr>
+<tr><td><code>group_policy</code></td><td>Group chat response policy: <code>ignore</code>, <code>mention_only</code>, <code>mention_or_small_group</code> (default), <code>proactive_judgment</code>, <code>all</code></td></tr>
 <tr><td><code>notification_channel_id</code></td><td>Channel for automated notifications</td></tr>
 </tbody>
 </table>

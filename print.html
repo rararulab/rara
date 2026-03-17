@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "ayu";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7ec5bd55.js";
+            window.path_to_searchindex_js = "searchindex-c76888db.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c5ffbd9d.js"></script>
+        <script src="toc-102850bc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -438,6 +438,22 @@ just consul-keys   # list current keys
 </tbody>
 </table>
 </div>
+<h4 id="gateway-gateway"><a class="header" href="#gateway-gateway">Gateway (<code>gateway.*</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Env Var</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bind_address</code></td><td><code>RARA__GATEWAY__BIND_ADDRESS</code></td><td><code>127.0.0.1:25556</code></td><td>Admin API listen address</td></tr>
+<tr><td><code>check_interval</code></td><td><code>RARA__GATEWAY__CHECK_INTERVAL</code></td><td><code>300</code></td><td>Upstream check interval (seconds)</td></tr>
+<tr><td><code>health_timeout</code></td><td><code>RARA__GATEWAY__HEALTH_TIMEOUT</code></td><td><code>30</code></td><td>Health confirmation timeout (seconds)</td></tr>
+<tr><td><code>health_poll_interval</code></td><td><code>RARA__GATEWAY__HEALTH_POLL_INTERVAL</code></td><td><code>2</code></td><td>HTTP health poll interval (seconds)</td></tr>
+<tr><td><code>max_restart_attempts</code></td><td><code>RARA__GATEWAY__MAX_RESTART_ATTEMPTS</code></td><td><code>3</code></td><td>Max consecutive restart failures</td></tr>
+<tr><td><code>auto_update</code></td><td><code>RARA__GATEWAY__AUTO_UPDATE</code></td><td><code>true</code></td><td>Auto-apply upstream updates</td></tr>
+</tbody>
+</table>
+</div>
 <h4 id="other"><a class="header" href="#other">Other</a></h4>
 <div class="table-wrapper">
 <table>
@@ -484,6 +500,7 @@ just consul-keys   # list current keys
 <tr><td><code>bot_token</code></td><td>Telegram bot token</td></tr>
 <tr><td><code>chat_id</code></td><td>Primary chat ID</td></tr>
 <tr><td><code>allowed_group_chat_id</code></td><td>Allowed group chat</td></tr>
+<tr><td><code>group_policy</code></td><td>Group chat response policy: <code>ignore</code>, <code>mention_only</code>, <code>mention_or_small_group</code> (default), <code>proactive_judgment</code>, <code>all</code></td></tr>
 <tr><td><code>notification_channel_id</code></td><td>Channel for automated notifications</td></tr>
 </tbody>
 </table>
@@ -652,6 +669,361 @@ just consul-keys   # list current keys
 </tbody>
 </table>
 </div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="agent-loop--context-folding"><a class="header" href="#agent-loop--context-folding">Agent Loop &amp; Context Folding</a></h1>
+<p>The agent loop is the core execution engine in <code>rara-kernel</code>. Each user message triggers a multi-iteration loop where the LLM reasons, invokes tools, and appends results to the tape. Context folding keeps the LLM context window healthy during long conversations.</p>
+<h2 id="agent-loop-overview"><a class="header" href="#agent-loop-overview">Agent Loop Overview</a></h2>
+<pre class="mermaid">flowchart TD
+    U[User message] --&gt; FOLD{Auto-fold?}
+    FOLD --&gt;|pressure &gt; threshold&lt;br/&gt;&amp; cooldown met| SUM[Independent LLM call:&lt;br/&gt;summarize context]
+    SUM --&gt; ANCHOR[Create anchor&lt;br/&gt;via tape.handoff]
+    ANCHOR --&gt; REBUILD
+    FOLD --&gt;|no| REBUILD[rebuild_messages_for_llm]
+    REBUILD --&gt; LLM[LLM call]
+    LLM --&gt; TC{Tool calls?}
+    TC --&gt;|yes| EXEC[Execute tools]
+    EXEC --&gt; APPEND[Append results to tape]
+    APPEND --&gt; FOLD
+    TC --&gt;|no| DONE[Return response]
+</pre>
+
+<p>Each iteration:</p>
+<ol>
+<li><strong>Auto-fold check</strong> — measure context pressure, fold if needed (see below)</li>
+<li><strong>Rebuild messages</strong> — read entries from the last anchor forward, reconstruct <code>Vec&lt;llm::Message&gt;</code></li>
+<li><strong>LLM call</strong> — send messages + tool definitions, stream response</li>
+<li><strong>Tool execution</strong> — run tool calls in parallel, append results to tape</li>
+<li><strong>Pressure warning</strong> — if context is at 70% or 85%, inject a warning for the next iteration</li>
+</ol>
+<h2 id="context-folding"><a class="header" href="#context-folding">Context Folding</a></h2>
+<h3 id="problem"><a class="header" href="#problem">Problem</a></h3>
+<p>Long conversations accumulate context. Without management, the LLM eventually hits the context window limit. Before context folding, Rara relied on manual anchor creation (prompted by 70%/85% pressure warnings) — which depends on the LLM cooperating.</p>
+<h3 id="solution-auto-anchor"><a class="header" href="#solution-auto-anchor">Solution: Auto-Anchor</a></h3>
+<p>Context folding automatically compresses conversation history into a summary anchor when context pressure rises. This happens <strong>before</strong> the LLM sees the context, so the fold is invisible to the user.</p>
+<pre><code>0.0 ──── 0.60 ────── 0.70 ──────── 0.85 ──── 1.0
+          │           │              │
+     AUTO-FOLD     WARNING       CRITICAL
+     (automatic)  (prompt LLM)  (force handoff)
+</code></pre>
+<p>Auto-fold at 0.60 keeps the context healthy. If it fails, the existing 0.70/0.85 warnings remain as fallback.</p>
+<h3 id="how-it-works-1"><a class="header" href="#how-it-works-1">How It Works</a></h3>
+<pre class="mermaid">sequenceDiagram
+    participant AL as Agent Loop
+    participant CF as ContextFolder
+    participant LLM as Fold LLM
+    participant TS as TapeService
+
+    AL-&gt;&gt;TS: tape.info(tape_name)
+    Note over AL: pressure = estimated_tokens / window_size
+    alt pressure &gt; 0.60 AND entries_since_fold &gt;= 15
+        AL-&gt;&gt;TS: build_llm_context()
+        AL-&gt;&gt;TS: from_last_anchor() — get prior summary
+        AL-&gt;&gt;CF: fold_with_prior(prior_summary, messages)
+        CF-&gt;&gt;LLM: Independent completion request
+        LLM--&gt;&gt;CF: JSON {summary, next_steps}
+        CF--&gt;&gt;AL: FoldSummary
+        AL-&gt;&gt;TS: handoff("auto-fold", HandoffState)
+        Note over TS: New anchor created.&lt;br/&gt;Next rebuild reads from here.
+    end
+</pre>
+
+<p>Key properties:</p>
+<ul>
+<li><strong>Independent LLM call</strong> — the fold summarization does NOT go through the agent loop; it is a separate, short-context completion request</li>
+<li><strong>Tape is never truncated</strong> — fold only affects what the LLM sees; all entries remain searchable</li>
+<li><strong>Hierarchical</strong> — each fold receives the prior anchor’s summary, so information accumulates naturally across multiple folds</li>
+</ul>
+<h3 id="cooldown"><a class="header" href="#cooldown">Cooldown</a></h3>
+<p>Without cooldown, folding could oscillate: fold reduces context, a few entries later pressure rises again, fold again, repeat.</p>
+<p>Fold triggers only when <strong>all</strong> conditions are met:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Condition</th><th>Default</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>pressure &gt; fold_threshold</code></td><td>0.60</td><td>Context is getting large</td></tr>
+<tr><td><code>entries_since_last_fold &gt;= min_entries_between_folds</code></td><td>15</td><td>Enough new content to justify a fold</td></tr>
+<tr><td><code>context_folding.enabled</code></td><td>true</td><td>Feature is turned on</td></tr>
+<tr><td><code>!fold_failed_this_turn</code></td><td>—</td><td>No fold failure in this turn yet</td></tr>
+</tbody>
+</table>
+</div>
+<p>The cooldown counter tracks entries since the last <code>phase: "auto-fold"</code> anchor, and <strong>persists across turns</strong> — it is recovered from tape state at the start of each <code>run_agent_loop</code> call.</p>
+<h3 id="failure-handling"><a class="header" href="#failure-handling">Failure Handling</a></h3>
+<p>Fold failures are non-fatal:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Failure</th><th>Behavior</th></tr>
+</thead>
+<tbody>
+<tr><td>Fold LLM call fails</td><td><code>warn!</code>, disable fold for this turn, fall back to 0.70/0.85</td></tr>
+<tr><td>Context build fails</td><td><code>warn!</code>, disable fold for this turn</td></tr>
+<tr><td>Anchor persistence fails</td><td><code>warn!</code>, disable fold for this turn</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>fold_failed_this_turn</code> flag prevents repeated failing calls in tool-heavy turns under pressure.</p>
+<h3 id="configuration-2"><a class="header" href="#configuration-2">Configuration</a></h3>
+<pre><code class="language-yaml"># config.yaml
+context_folding:
+  enabled: true                    # toggle auto-fold on/off
+  fold_threshold: 0.60             # pressure ratio to trigger fold
+  min_entries_between_folds: 15    # cooldown entry count
+  fold_model: null                 # null = use session model
+</code></pre>
+<p>All fields have defaults via <code>SmartDefault</code>. Setting <code>enabled: false</code> disables context folding entirely — the system reverts to the original manual-anchor behavior.</p>
+<h3 id="contextfolder"><a class="header" href="#contextfolder">ContextFolder</a></h3>
+<p><code>ContextFolder</code> lives at <code>crates/kernel/src/agent/fold.rs</code>. It is an orchestration component (not part of the memory module) because it makes LLM calls.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>fold_with_prior(prior_summary, messages, source_tokens)</code></td><td>Compress conversation into <code>FoldSummary</code></td></tr>
+<tr><td><code>fold_text(text, target_chars)</code></td><td>Compress arbitrary text (used by P1 fold_branch)</td></tr>
+<tr><td><code>to_handoff_state(summary, pressure)</code></td><td>Convert <code>FoldSummary</code> to <code>HandoffState</code> for anchor creation</td></tr>
+</tbody>
+</table>
+</div>
+<p>The fold prompt instructs the LLM to:</p>
+<ul>
+<li>Preserve user identity, factual information, decisions, and errors</li>
+<li>Delete greetings, redundant tool outputs, and intermediate reasoning</li>
+<li>Output structured JSON: <code>{"summary": "...", "next_steps": "..."}</code></li>
+<li>Use the same language as the conversation</li>
+</ul>
+<p>Summary length is dynamic: ~10% of source tokens, clamped to [256, 2048] tokens.</p>
+<h2 id="background"><a class="header" href="#background">Background</a></h2>
+<p>Rara’s context folding is inspired by the <a href="https://www.primeintellect.ai/blog/rlm">RLM (Reinforcement Learning for LLM Context Management)</a> research. See <a href="#context-folding-from-rlm-to-rara">Context Folding: From RLM to Rara</a> for a detailed comparison of the two approaches, including what Rara borrows, what it adapts, and where it diverges.</p>
+<h2 id="key-files"><a class="header" href="#key-files">Key Files</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crates/kernel/src/agent/mod.rs</code></td><td>Agent loop, pressure classification, auto-fold integration</td></tr>
+<tr><td><code>crates/kernel/src/agent/fold.rs</code></td><td><code>ContextFolder</code> — LLM-based summarization</td></tr>
+<tr><td><code>crates/kernel/src/kernel.rs</code></td><td><code>ContextFoldingConfig</code></td></tr>
+<tr><td><code>crates/kernel/src/memory/service.rs</code></td><td><code>TapeService</code> — anchor persistence, <code>entries_after</code></td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="context-folding-from-rlm-to-rara"><a class="header" href="#context-folding-from-rlm-to-rara">Context Folding: From RLM to Rara</a></h1>
+<p>Rara’s context folding mechanism draws inspiration from the <a href="https://www.primeintellect.ai/blog/rlm">Reinforcement Learning for LLM Context Management (RLM)</a> research by Prime Intellect. This chapter explains the RLM concepts, how Rara adapts them, and where the two diverge.</p>
+<h2 id="rlm-core-ideas"><a class="header" href="#rlm-core-ideas">RLM: Core Ideas</a></h2>
+<p>RLM proposes that <strong>the agent itself should manage its own context window</strong>, rather than relying on fixed-length truncation or human-authored summarization rules. The key insight: an LLM agent that can read, write, and compress its working memory performs dramatically better on long-horizon tasks than one that passively waits for the context to overflow.</p>
+<h3 id="three-mechanisms"><a class="header" href="#three-mechanisms">Three Mechanisms</a></h3>
+<p>RLM introduces three complementary context management strategies:</p>
+<pre class="mermaid">graph LR
+    A[Context Folding] --&gt; A1[Conversation-level&lt;br/&gt;summarization]
+    B[Branch-Return] --&gt; B1[Subtask isolation&lt;br/&gt;in fresh context]
+    C[Hierarchical&lt;br/&gt;Summarization] --&gt; C1[Multi-level&lt;br/&gt;summary chains]
+
+    style A fill:#3b82f6,color:#fff
+    style B fill:#8b5cf6,color:#fff
+    style C fill:#10b981,color:#fff
+</pre>
+
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Mechanism</th><th>What it does</th><th>When it helps</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Context Folding</strong></td><td>Compress the current conversation into a summary checkpoint</td><td>Long conversations that accumulate stale context</td></tr>
+<tr><td><strong>Branch-Return</strong></td><td>Fork a fresh context for a subtask, compress the result back</td><td>Complex subtasks that generate heavy intermediate reasoning</td></tr>
+<tr><td><strong>Hierarchical Summarization</strong></td><td>Chain summaries so each fold builds on the previous one</td><td>Very long sessions where single-level summaries lose early details</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="the-repl-concept"><a class="header" href="#the-repl-concept">The REPL Concept</a></h3>
+<p>In RLM, the agent interacts with a Python REPL as its primary tool — executing code, observing outputs, and iterating. The REPL produces large volumes of intermediate output (stack traces, data dumps, test results) that are valuable in the moment but become noise once processed. This is the core motivation for context management: <strong>the agent needs to discard resolved context to make room for new reasoning</strong>.</p>
+<h2 id="raras-adaptation"><a class="header" href="#raras-adaptation">Rara’s Adaptation</a></h2>
+<p>Rara adapts RLM’s ideas onto its existing <strong>tape + anchor</strong> architecture rather than building a separate context management layer. The result is a system that achieves the same goals with fewer moving parts.</p>
+<h3 id="architecture-mapping"><a class="header" href="#architecture-mapping">Architecture Mapping</a></h3>
+<pre class="mermaid">graph TB
+    subgraph RLM["RLM (Research)"]
+        R1[Context folding via&lt;br/&gt;trained summarizer]
+        R2[Branch-return via&lt;br/&gt;subprocess REPL fork]
+        R3[Hierarchical summary&lt;br/&gt;via recursive compression]
+        R4[RL-trained policy&lt;br/&gt;for when to fold]
+    end
+
+    subgraph RARA["Rara (Production)"]
+        A1[Auto-anchor via&lt;br/&gt;independent LLM call]
+        A2[fold_branch tool via&lt;br/&gt;spawn_child]
+        A3[fold_with_prior&lt;br/&gt;via anchor chain]
+        A4[Pressure threshold&lt;br/&gt;+ cooldown heuristic]
+    end
+
+    R1 -.-&gt;|adapted as| A1
+    R2 -.-&gt;|adapted as| A2
+    R3 -.-&gt;|adapted as| A3
+    R4 -.-&gt;|simplified to| A4
+
+    style RLM fill:#1e293b,color:#e2e8f0
+    style RARA fill:#0f172a,color:#e2e8f0
+</pre>
+
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>RLM Concept</th><th>Rara Implementation</th><th>Key Difference</th></tr>
+</thead>
+<tbody>
+<tr><td>Trained summarizer</td><td><code>ContextFolder::fold_with_prior()</code></td><td>Uses the session’s own LLM with a structured prompt instead of a separately trained model</td></tr>
+<tr><td>REPL fork</td><td><code>FoldBranchTool</code> + <code>spawn_child()</code></td><td>Rara’s tool system already provides REPL-equivalent capabilities; no Python subprocess needed</td></tr>
+<tr><td>Recursive summary</td><td>Anchor chain with prior summary injection</td><td>Each auto-fold receives the previous anchor’s summary, producing naturally cumulative summaries</td></tr>
+<tr><td>RL policy</td><td>Pressure threshold (0.60) + cooldown (15 entries)</td><td>Deterministic heuristic instead of a learned policy — simpler, more predictable, easier to debug</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="what-rara-borrows"><a class="header" href="#what-rara-borrows">What Rara Borrows</a></h3>
+<p><strong>1. Agent-driven context management</strong></p>
+<p>The central RLM thesis — that the agent should own its context lifecycle — maps directly onto Rara’s design principle: <em>the agent decides when to fold, what to preserve, and what to discard</em>. In Rara this manifests as:</p>
+<ul>
+<li><strong>Auto-fold</strong> at 0.60 pressure: the system proactively compresses before the LLM hits capacity</li>
+<li><strong>fold_branch tool</strong>: the agent can explicitly delegate subtasks to isolated contexts when it anticipates heavy intermediate output</li>
+</ul>
+<p><strong>2. Summarization as a first-class operation</strong></p>
+<p>RLM treats summarization not as a lossy fallback but as a deliberate compression step that preserves decision-relevant information. Rara’s <code>ContextFolder</code> implements this with a structured fold prompt that explicitly instructs the LLM to:</p>
+<ul>
+<li>Preserve: user identity, file paths, code state, decisions, errors</li>
+<li>Discard: greetings, redundant tool outputs, intermediate reasoning steps</li>
+<li>Output: structured JSON with <code>summary</code> + <code>next_steps</code></li>
+</ul>
+<p><strong>3. Branch isolation for subtasks</strong></p>
+<p>RLM’s branch-return pattern — fork a clean context for a subtask, compress the result back to the parent — maps onto Rara’s <code>FoldBranchTool</code>:</p>
+<pre class="mermaid">sequenceDiagram
+    participant P as Parent Agent
+    participant FB as FoldBranchTool
+    participant C as Child Agent
+    participant CF as ContextFolder
+
+    P-&gt;&gt;FB: fold_branch(task, instruction)
+    FB-&gt;&gt;C: spawn_child (clean context)
+    Note over C: Executes subtask with&lt;br/&gt;own tape, own context window
+    C--&gt;&gt;FB: Raw result (may be large)
+    alt result &gt; 2000 chars
+        FB-&gt;&gt;CF: fold_text(result, 2000)
+        CF--&gt;&gt;FB: Compressed result
+    end
+    FB--&gt;&gt;P: Compact ToolResult
+    Note over P: Parent context only sees&lt;br/&gt;the compressed summary
+</pre>
+
+<p>The child agent gets a fresh context window, free from the parent’s conversation history. All intermediate reasoning stays in the child’s tape. Only the compressed result returns to the parent.</p>
+<p><strong>4. Hierarchical summary chains</strong></p>
+<p>RLM observes that single-pass summarization loses information over very long sessions. Rara addresses this through <code>fold_with_prior</code>:</p>
+<pre><code>Anchor-0 (session start)
+  → 15+ entries of conversation
+Anchor-1 { summary: "User wants to build X. Completed steps A and B." }
+  → 20+ entries of conversation
+Anchor-2 { summary: "Project X: A→B done. This phase: completed C, hit issue D." }
+  → 30+ entries of conversation
+Anchor-3 { summary: "Project X: A→B→C done, D resolved. Currently working on E." }
+</code></pre>
+<p>Each fold receives the prior anchor’s summary as context, so the LLM naturally produces cumulative summaries that compress early details while preserving key decisions. The full tape is never truncated — <code>tape.search()</code> can always find historical content.</p>
+<h3 id="where-rara-diverges"><a class="header" href="#where-rara-diverges">Where Rara Diverges</a></h3>
+<p><strong>1. No RL-trained policy</strong></p>
+<p>RLM uses reinforcement learning to train a policy that decides when and how to fold. Rara uses a deterministic heuristic:</p>
+<pre><code>Fold triggers when ALL of:
+  1. pressure &gt; 0.60
+  2. entries since last fold &gt;= 15
+  3. context_folding.enabled == true
+  4. no fold failure this turn
+</code></pre>
+<p>This is a deliberate trade-off: a learned policy might achieve better compression ratios, but a deterministic heuristic is transparent, debuggable, and predictable. For a personal agent (Rara’s primary use case), predictability matters more than optimal compression.</p>
+<p><strong>2. No separate REPL</strong></p>
+<p>RLM’s agent operates primarily through a Python REPL. Rara’s agent has a rich tool system (bash, file I/O, HTTP, database, etc.) that already serves the same purpose. Introducing a separate REPL would add complexity without benefit — the tool system <em>is</em> the REPL.</p>
+<p><strong>3. Tape as the single source of truth</strong></p>
+<p>RLM manages context as a mutable buffer. Rara’s tape is append-only:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Aspect</th><th>RLM</th><th>Rara</th></tr>
+</thead>
+<tbody>
+<tr><td>Storage model</td><td>Mutable context buffer</td><td>Append-only JSONL tape</td></tr>
+<tr><td>Fold effect</td><td>Replaces context in-place</td><td>Creates anchor checkpoint; rebuild reads from anchor forward</td></tr>
+<tr><td>History access</td><td>Lost after fold</td><td>Full tape always searchable</td></tr>
+<tr><td>Rollback</td><td>Not possible</td><td>Navigate anchor chain</td></tr>
+</tbody>
+</table>
+</div>
+<p>This means Rara never loses information — fold only affects what the LLM sees in its next context window. The tape file retains every entry for debugging, audit, and historical search.</p>
+<p><strong>4. Fault-tolerant folding</strong></p>
+<p>RLM assumes folding succeeds. Rara treats fold as fallible — if the summarization LLM call fails, the system gracefully degrades:</p>
+<ul>
+<li>The <code>fold_failed_this_turn</code> flag prevents retry loops</li>
+<li>Existing 0.70/0.85 pressure warnings remain as fallback</li>
+<li>The agent continues functioning with the unfolded context</li>
+</ul>
+<h2 id="three-layer-implementation"><a class="header" href="#three-layer-implementation">Three-Layer Implementation</a></h2>
+<p>Rara implements context folding in three layers, each building on the previous:</p>
+<pre class="mermaid">graph TB
+    subgraph P0["P0: Auto-Anchor"]
+        direction LR
+        P0A[Pressure detection] --&gt; P0B[ContextFolder.fold_with_prior]
+        P0B --&gt; P0C[tape.handoff — anchor]
+    end
+
+    subgraph P1["P1: Branch-Return"]
+        direction LR
+        P1A[FoldBranchTool] --&gt; P1B[spawn_child — isolated context]
+        P1B --&gt; P1C[ContextFolder.fold_text — compress result]
+    end
+
+    subgraph P2["P2: Hierarchical Summarization"]
+        direction LR
+        P2A[Prior anchor summary] --&gt; P2B[fold_with_prior — cumulative compression]
+        P2B --&gt; P2C[Anchor chain — refinement over time]
+    end
+
+    P0 --&gt; P1
+    P1 --&gt; P2
+
+    style P0 fill:#1e40af,color:#fff
+    style P1 fill:#6d28d9,color:#fff
+    style P2 fill:#047857,color:#fff
+</pre>
+
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layer</th><th>Status</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>P0: Auto-Anchor</strong></td><td>Shipped</td><td>Automatic conversation-level folding at 0.60 pressure with cooldown. Hierarchical summarization (P2) is built directly into <code>fold_with_prior</code> — each fold receives the prior anchor’s summary, so P2 is not a separate implementation step.</td></tr>
+<tr><td><strong>P1: Branch-Return</strong></td><td>Shipped</td><td><code>fold_branch</code> tool for subtask isolation with result compression</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>Note:</strong> P2 (Hierarchical Summarization) is not a separate implementation phase. The <code>fold_with_prior</code> method in P0 already accepts an optional prior summary, so hierarchical chaining is an emergent property of the auto-anchor mechanism rather than an add-on.</p>
+</blockquote>
+<h2 id="invariants"><a class="header" href="#invariants">Invariants</a></h2>
+<p>These properties are guaranteed by the context folding system:</p>
+<ol>
+<li><strong>Tape is never truncated</strong> — fold only affects the LLM’s view, not the persisted history</li>
+<li><strong>Fold uses independent LLM calls</strong> — never goes through the agent loop, preventing recursion</li>
+<li><strong>Anchors are the only fold carrier</strong> — reuses <code>HandoffState</code> + <code>TapeService::handoff()</code>, no new persistence structures</li>
+<li><strong>fold_branch is synchronous</strong> — complements <code>spawn_background</code> (async), does not replace it</li>
+<li><strong>Everything is disableable</strong> — <code>context_folding.enabled: false</code> reverts to pre-fold behavior</li>
+<li><strong>Fold-branch results are not double-written</strong> — <code>skip_tape_persist</code> flag in <code>ChildSessionDone</code> prevents duplicate tape entries</li>
+</ol>
+<h2 id="further-reading"><a class="header" href="#further-reading">Further Reading</a></h2>
+<ul>
+<li><a href="#agent-loop--context-folding">Agent Loop &amp; Context Folding</a> — implementation details and configuration</li>
+<li><a href="#memory-system">Memory System</a> — tape architecture, anchors, and context queries</li>
+<li><a href="https://github.com/rararulab/rara/blob/main/docs/plans/2026-03-15-context-folding-design.md">Context Folding Design</a> — original design document</li>
+<li><a href="https://www.primeintellect.ai/blog/rlm">RLM Paper</a> — Prime Intellect’s research on reinforcement learning for LLM context management</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="agent-tools"><a class="header" href="#agent-tools">Agent Tools</a></h1>
 <p>The agent tool system is organized into two layers registered in the <code>ToolRegistry</code>:</p>
@@ -884,7 +1256,7 @@ tool_registry.register_service(Arc::new(RecallStrategyRemoveTool::new(engine.clo
 </pre>
 
 <p><code>TapeService::fork_tape</code> wraps this pattern with a closure and automatic merge on completion.</p>
-<h2 id="key-files"><a class="header" href="#key-files">Key Files</a></h2>
+<h2 id="key-files-1"><a class="header" href="#key-files-1">Key Files</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -897,6 +1269,575 @@ tool_registry.register_service(Arc::new(RecallStrategyRemoveTool::new(engine.clo
 <tr><td><code>crates/kernel/src/memory/context.rs</code></td><td><code>default_tape_context</code> — tape entries → <code>Vec&lt;llm::Message&gt;</code></td></tr>
 <tr><td><code>crates/kernel/src/memory/anchors.rs</code></td><td><code>AnchorSummary</code> type</td></tr>
 <tr><td><code>crates/kernel/src/memory/error.rs</code></td><td><code>TapError</code> / <code>TapResult</code></td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="gateway-supervisor"><a class="header" href="#gateway-supervisor">Gateway Supervisor</a></h1>
+<p>Rara supports a <strong>gateway-supervised</strong> deployment model where a long-lived gateway process manages the agent server as a child process. This enables automatic health monitoring, restart-on-failure, and source-based self-updates.</p>
+<h2 id="process-topology"><a class="header" href="#process-topology">Process Topology</a></h2>
+<pre><code>rara gateway
+  ├── SupervisorService    — spawn / health-check / restart child
+  ├── UpdateDetector       — periodic git fetch + rev comparison
+  └── UpdateExecutor       — staging build, binary swap, rollback
+</code></pre>
+<p>The gateway does <strong>not</strong> run the kernel itself. It spawns <code>rara server</code> as a child process and supervises it.</p>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick Start</a></h2>
+<pre><code class="language-bash"># Start in supervised mode (gateway manages the server)
+rara gateway
+
+# Start in standalone mode (no supervision)
+rara server
+</code></pre>
+<p>Both modes are fully functional. Use <code>rara gateway</code> when you want automatic restarts and self-updates.</p>
+<h2 id="health-check"><a class="header" href="#health-check">Health Check</a></h2>
+<p>The gateway uses a two-phase health check to confirm the agent is ready:</p>
+<pre><code>Phase 1: stdout READY marker
+  └─ Agent prints "READY" after HTTP + gRPC servers bind successfully
+  └─ Timeout: health_timeout / 2
+
+Phase 2: HTTP /health polling
+  └─ GET http://127.0.0.1:{port}/api/health
+  └─ 3 consecutive 200 responses = healthy
+  └─ Timeout: health_timeout / 2
+</code></pre>
+<p>Phase 1 confirms the process started and initialized. Phase 2 confirms HTTP is actually accepting requests.</p>
+<h2 id="restart-policy"><a class="header" href="#restart-policy">Restart Policy</a></h2>
+<p>When the agent crashes or fails health checks:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attempt</th><th>Backoff</th></tr>
+</thead>
+<tbody>
+<tr><td>1st</td><td>2s</td></tr>
+<tr><td>2nd</td><td>4s</td></tr>
+<tr><td>3rd</td><td>8s</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>Exponential backoff: <code>2^attempt</code> seconds</li>
+<li>Max attempts controlled by <code>max_restart_attempts</code> (default: 3)</li>
+<li>After 60 seconds of continuous healthy operation, the failure counter resets</li>
+<li>If all attempts are exhausted, the gateway logs an error and stays alive for manual intervention</li>
+</ul>
+<h2 id="signal-handling"><a class="header" href="#signal-handling">Signal Handling</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Signal</th><th>Behavior</th></tr>
+</thead>
+<tbody>
+<tr><td>SIGTERM / SIGINT to gateway</td><td>Gateway sends SIGTERM to child → waits 5s → SIGKILL if needed → gateway exits</td></tr>
+<tr><td>Child exits with status 0</td><td>Gateway restarts the child (unexpected for a server, but safe)</td></tr>
+<tr><td>Child exits with non-zero</td><td>Counted as a failure, triggers backoff restart</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="self-update-flow"><a class="header" href="#self-update-flow">Self-Update Flow</a></h2>
+<p>When <code>auto_update</code> is enabled, the gateway periodically checks for upstream changes and applies them automatically.</p>
+<h3 id="update-detection"><a class="header" href="#update-detection">Update Detection</a></h3>
+<p>The <code>UpdateDetector</code> runs a background loop:</p>
+<ol>
+<li><code>git fetch origin main</code></li>
+<li>Compare <code>HEAD</code> vs <code>origin/main</code> using <code>git rev-parse</code></li>
+<li>If revisions differ → update is available</li>
+<li>Publish state via internal <code>watch</code> channel</li>
+</ol>
+<p>Detection results are logged:</p>
+<pre><code>INFO update available: abc1234 (current: def5678)
+</code></pre>
+<h3 id="update-execution"><a class="header" href="#update-execution">Update Execution</a></h3>
+<p>When an update is detected and <code>auto_update</code> is true:</p>
+<pre><code>1. Prepare   → git worktree add &lt;staging&gt;/&lt;rev&gt; origin/main
+2. Build     → cargo build --release -p rara-cli (in staging)
+3. Activate  → rename current binary → .bak, copy new binary in place
+4. Restart   → supervisor restarts agent child process
+5. Verify    → two-phase health check
+6. Finalize  → success: clean .bak + staging
+               failure: rollback .bak, restart old version
+</code></pre>
+<p>Key properties:</p>
+<ul>
+<li><strong>Isolated build</strong>: staging worktree is separate from the live runtime</li>
+<li><strong>Atomic swap</strong>: binary replacement uses rename (atomic on same filesystem)</li>
+<li><strong>Safe rollback</strong>: <code>.bak</code> file is the safety net, restored on health check failure</li>
+<li><strong>Build timeout</strong>: 10 minutes max for <code>cargo build</code></li>
+</ul>
+<h3 id="runtime-layout"><a class="header" href="#runtime-layout">Runtime Layout</a></h3>
+<pre><code>~/.local/share/rara/
+  └── staging/
+        └── abc1234/     ← staging worktree (temporary)
+</code></pre>
+<p>The staging directory is managed internally by <code>rara_paths</code> and is not user-configurable.</p>
+<h2 id="admin-api"><a class="header" href="#admin-api">Admin API</a></h2>
+<p>The gateway exposes its own HTTP server (default port <code>25556</code>, separate from the agent’s <code>25555</code>) for operational control.</p>
+<h3 id="endpoints"><a class="header" href="#endpoints">Endpoints</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GET</code></td><td><code>/gateway/status</code></td><td>Agent status, current/upstream rev, update availability</td></tr>
+<tr><td><code>POST</code></td><td><code>/gateway/restart</code></td><td>Gracefully restart the agent child process</td></tr>
+<tr><td><code>POST</code></td><td><code>/gateway/shutdown</code></td><td>Graceful shutdown of gateway + agent</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="get-gatewaystatus"><a class="header" href="#get-gatewaystatus"><code>GET /gateway/status</code></a></h3>
+<pre><code class="language-json">{
+  "agent": {
+    "running": true,
+    "restart_count": 0,
+    "pid": 12345
+  },
+  "update": {
+    "current_rev": "abc1234...",
+    "upstream_rev": "def5678...",
+    "update_available": true,
+    "last_check_time": "2026-03-06T12:00:00Z"
+  }
+}
+</code></pre>
+<h3 id="post-gatewayrestart"><a class="header" href="#post-gatewayrestart"><code>POST /gateway/restart</code></a></h3>
+<p>Triggers a graceful restart of the agent: SIGTERM → wait → respawn. This is a <strong>manual restart</strong> — it does not count as a failure and does not trigger backoff.</p>
+<pre><code class="language-bash">curl -X POST http://127.0.0.1:25556/gateway/restart
+# {"ok": true}
+</code></pre>
+<h3 id="post-gatewayshutdown"><a class="header" href="#post-gatewayshutdown"><code>POST /gateway/shutdown</code></a></h3>
+<p>Gracefully shuts down both the agent and the gateway process.</p>
+<pre><code class="language-bash">curl -X POST http://127.0.0.1:25556/gateway/shutdown
+# {"ok": true}
+</code></pre>
+<h2 id="configuration-3"><a class="header" href="#configuration-3">Configuration</a></h2>
+<p>Add an optional <code>gateway</code> section to your YAML config:</p>
+<pre><code class="language-yaml">gateway:
+  bind_address: "127.0.0.1:25556"  # admin API listen address
+  check_interval: 300        # seconds between upstream checks
+  health_timeout: 30         # total health confirmation timeout (seconds)
+  health_poll_interval: 2    # HTTP poll interval (seconds)
+  max_restart_attempts: 3    # max consecutive restart failures
+  auto_update: true          # automatically apply upstream updates
+</code></pre>
+<p>All fields have sensible defaults. If the <code>gateway</code> section is omitted entirely, defaults are used when running <code>rara gateway</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bind_address</code></td><td><code>127.0.0.1:25556</code></td><td>Admin API listen address</td></tr>
+<tr><td><code>check_interval</code></td><td><code>300</code></td><td>How often to <code>git fetch</code> and check for updates (seconds)</td></tr>
+<tr><td><code>health_timeout</code></td><td><code>30</code></td><td>Total time budget for both health check phases (seconds)</td></tr>
+<tr><td><code>health_poll_interval</code></td><td><code>2</code></td><td>Interval between HTTP <code>/health</code> poll requests (seconds)</td></tr>
+<tr><td><code>max_restart_attempts</code></td><td><code>3</code></td><td>Max consecutive failures before stopping restarts</td></tr>
+<tr><td><code>auto_update</code></td><td><code>true</code></td><td>Whether to automatically build and activate updates</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="symphony"><a class="header" href="#symphony">Symphony</a></h1>
+<p>Symphony 是 rara 内置的 issue runner。它轮询 Linear 或 GitHub issue，给每个 issue 创建独立 git worktree，在该 worktree 里启动一次 <code>ralph run</code>，并把 issue 状态同步到 tracker。</p>
+<p>当前实现不是 <code>ralph web</code> / task API 架构。主流程是：</p>
+<ol>
+<li>拉取活跃 issue</li>
+<li>为 issue 创建或复用 worktree</li>
+<li>生成 <code>PROMPT.md</code></li>
+<li><code>spawn ralph run --autonomous</code></li>
+<li>启动后把 issue 转到 <code>In Progress</code></li>
+<li>成功退出后把 issue 转到 <code>Verify</code></li>
+<li>失败时保留 workspace 供人工排查</li>
+</ol>
+<h2 id="runtime-model"><a class="header" href="#runtime-model">Runtime Model</a></h2>
+<pre><code class="language-text">Issue Tracker
+    |
+    v
+Symphony poll loop
+    |
+    +-- WorkspaceManager.ensure_worktree()
+    |
+    +-- RalphAgent.start()
+    |      writes PROMPT.md
+    |      spawns `ralph run --autonomous`
+    |
+    +-- stream stdout/stderr to per-issue log file
+    |
+    +-- transition issue -&gt; In Progress
+    |
+    +-- wait for child exit
+           |
+           +-- success -&gt; transition issue -&gt; Verify
+           |
+           +-- failure -&gt; keep workspace + log summary
+</code></pre>
+<p><code>ralph run</code> 是受管子进程，不会阻塞整个 symphony 服务。Symphony 只在 poll 周期里用非阻塞方式检查子进程状态。</p>
+<h2 id="issue-states"><a class="header" href="#issue-states">Issue States</a></h2>
+<p>Linear 的默认拉取状态是 <code>Todo</code>，终止状态是 <code>Done</code>、<code>Closed</code>、<code>Cancelled</code>、<code>Canceled</code>、<code>Duplicate</code>。</p>
+<p>Symphony 对状态的约定是：</p>
+<ul>
+<li>issue 被拾取并成功启动 <code>ralph run</code> 后，转到 <code>In Progress</code></li>
+<li><code>ralph run</code> 成功退出后，转到 <code>Verify</code></li>
+<li>不会自动转到 <code>Done</code></li>
+</ul>
+<p>这意味着：</p>
+<ul>
+<li><code>Verify</code> 之后的人工验证、PR merge、最终关闭 issue 目前不由 symphony 自动处理</li>
+<li>如果 <code>ralph run</code> 启动失败，issue 不会被自动推进到 <code>In Progress</code></li>
+</ul>
+<h2 id="worktrees"><a class="header" href="#worktrees">Worktrees</a></h2>
+<p>每个 issue 使用独立 branch 和 worktree。默认目录：</p>
+<pre><code class="language-text">~/.config/rara/ralpha/worktress/&lt;repo&gt;/worktrees/&lt;branch&gt;
+</code></pre>
+<p>branch 名由 issue number 和 title slug 组成，例如：</p>
+<pre><code class="language-text">issue-42-fix-startup
+</code></pre>
+<p>如果同名 branch 已经被别的 worktree checkout，git 会拒绝再次创建，这通常意味着旧的 issue workspace 还在。</p>
+<h2 id="logs"><a class="header" href="#logs">Logs</a></h2>
+<p>每个 issue 的 <code>ralph</code> 输出都会写入独立日志文件：</p>
+<pre><code class="language-text">~/.config/rara/ralpha/logs/&lt;repo&gt;/&lt;ISSUE_IDENTIFIER&gt;.log
+</code></pre>
+<p>例如：</p>
+<pre><code class="language-text">~/.config/rara/ralpha/logs/rararulab/rara/RAR-123.log
+</code></pre>
+<p>日志文件包含：</p>
+<ul>
+<li>一行 <code>meta</code> 头，记录 issue、repo、branch、workspace</li>
+<li>追加的 <code>stdout</code></li>
+<li>追加的 <code>stderr</code></li>
+</ul>
+<p>查看日志：</p>
+<pre><code class="language-bash">lnav ~/.config/rara/ralpha/logs/**/*.log
+</code></pre>
+<p>Symphony 自己的 stdout 只保留摘要日志，不直接转发 <code>ralph</code> 的原始输出。</p>
+<h2 id="prompt-contract"><a class="header" href="#prompt-contract">Prompt Contract</a></h2>
+<p>Symphony 会在 issue worktree 中写入 <code>PROMPT.md</code>，然后在该目录里运行 <code>ralph run</code>。</p>
+<p>默认 prompt 要求 <code>ralph</code>：</p>
+<ul>
+<li>完成 issue 对应代码修改</li>
+<li>运行必要验证</li>
+<li>用系统里的 <code>linear</code> CLI 在 Linear issue 上评论自己的 reasoning / implementation plan</li>
+<li>commit 改动</li>
+<li>push branch</li>
+<li>创建 GitHub pull request</li>
+<li>用同一个 <code>linear</code> CLI 在 Linear issue 上评论 PR link 和简短实现总结</li>
+</ul>
+<p>Symphony 当前不会主动检查 PR 是否创建或是否已 merge，这些属于 agent 交付约束，不是服务端状态机的一部分。</p>
+<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
+<p>示例：</p>
+<pre><code class="language-yaml">symphony:
+  enabled: true
+  poll_interval: 30s
+  max_concurrent_agents: 2
+  workflow_file: WORKFLOW.md
+
+  tracker:
+    kind: linear
+    api_key: $LINEAR_API_KEY
+    team_key: RAR
+    active_states: [Todo]
+    started_issue_state: In Progress
+    completed_issue_state: ToVerify
+
+  agent:
+    command: ralph
+    backend: codex
+    core_config_file: ralph.core.yml
+
+  repos:
+    - name: rararulab/rara
+      url: https://github.com/rararulab/rara
+      repo_path: /path/to/repo
+</code></pre>
+<p>说明：</p>
+<ul>
+<li><code>repo_path</code> 是主仓库 checkout</li>
+<li><code>workspace_root</code> 可选；不填时默认落到 <code>~/.config/rara/ralpha/worktress/&lt;repo&gt;/worktrees</code></li>
+<li>对于只通过 <code>repo:&lt;owner&gt;/&lt;repo&gt;</code> label 动态发现、但未显式写在 <code>symphony.repos</code> 里的仓库，Symphony 会默认使用 <code>git@github.com:&lt;owner&gt;/&lt;repo&gt;.git</code> 作为 clone URL</li>
+<li><code>workflow_file</code> 默认为 <code>WORKFLOW.md</code></li>
+<li><code>tracker.started_issue_state</code> 控制 Ralph 成功启动后 issue 要切到哪个 tracker 状态，默认是 <code>In Progress</code></li>
+<li><code>tracker.completed_issue_state</code> 控制 Ralph 成功完成后 issue 要切到哪个 tracker 状态，默认是 <code>ToVerify</code></li>
+<li><code>tracker.active_states</code> 控制 symphony 会从 tracker 拉哪些状态；默认只拉 <code>Todo</code></li>
+<li><code>agent.backend</code> 控制 symphony 在 issue worktree 里执行 <code>ralph init --force --backend &lt;backend&gt;</code> 时使用的 backend</li>
+<li><code>agent.core_config_file</code> 指向仓库根目录里的 Ralph core config；默认是 <code>ralph.core.yml</code></li>
+<li>agent 默认执行 <code>ralph run --autonomous</code></li>
+<li>symphony 会先执行 <code>ralph init --force --backend &lt;backend&gt; -c ralph.core.yml</code> 生成 worktree 本地 <code>ralph.yml</code></li>
+<li>init 完成后，symphony 会把 <code>ralph.core.yml</code> 的配置物化进生成的 <code>ralph.yml</code></li>
+<li>随后执行 <code>ralph run</code>，只使用这个已经物化好的 worktree 本地 <code>ralph.yml</code></li>
+<li>运行 symphony 前，需要确保 <code>codex</code> CLI 已安装，并通过 <code>OPENAI_API_KEY</code> 或 <code>CODEX_API_KEY</code> 完成认证</li>
+</ul>
+<h2 id="source-layout"><a class="header" href="#source-layout">Source Layout</a></h2>
+<pre><code class="language-text">crates/symphony/src/
+├── agent.rs      RalphAgent: prompt rendering + child process spawn
+├── config.rs     symphony / tracker / repo config
+├── error.rs      snafu error types
+├── service.rs    poll loop, process lifecycle, issue transitions, log routing
+├── tracker.rs    GitHub and Linear issue tracker implementations
+└── workspace.rs  git worktree provisioning and cleanup
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="scheduled--background-tasks"><a class="header" href="#scheduled--background-tasks">Scheduled &amp; Background Tasks</a></h1>
+<p>Rara’s kernel provides two mechanisms for agents to perform work outside the
+main conversational loop: <strong>scheduled tasks</strong> (time-triggered) and <strong>background
+tasks</strong> (immediately spawned). Both produce results that flow back to interested
+sessions via a <strong>tag-based notification bus</strong>.</p>
+<h2 id="overview-1"><a class="header" href="#overview-1">Overview</a></h2>
+<pre><code class="language-text">┌────────────┐   schedule-once/interval/cron   ┌───────────┐
+│  Agent A   │ ──────────────────────────────►  │  JobWheel │
+│ (session)  │                                  │ (on disk) │
+└────────────┘                                  └─────┬─────┘
+      │                                               │
+      │  subscribe(tags=["pr_review"])                 │ timer fires
+      ▼                                               ▼
+┌──────────────────────┐                   ┌────────────────────┐
+│ SubscriptionRegistry │                   │  Kernel spawns     │
+│ (file-backed, by tag)│                   │  scheduled_job     │
+└──────────────────────┘                   │  agent session     │
+                                           └─────────┬──────────┘
+                                                     │
+                                                     │ kernel tool:
+                                                     │ publish_report
+                                                     ▼
+                                           ┌────────────────────┐
+                                           │ handle_publish_    │
+                                           │ task_report()      │
+                                           │ 1. persist result  │
+                                           │ 2. match tags      │
+                                           │ 3. deliver         │
+                                           └─────────┬──────────┘
+                                                     │
+                              ┌───────────────────────┼──────────────────┐
+                              ▼                       ▼                  ▼
+                     ProactiveTurn           SilentAppend          (no match)
+                  (synthetic message →     (append to sub's
+                   triggers LLM turn)       tape silently)
+</code></pre>
+<h2 id="scheduled-tasks"><a class="header" href="#scheduled-tasks">Scheduled Tasks</a></h2>
+<h3 id="creating-a-scheduled-job"><a class="header" href="#creating-a-scheduled-job">Creating a Scheduled Job</a></h3>
+<p>Agents create scheduled jobs by calling one of three tools:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Trigger</th><th>Example</th></tr>
+</thead>
+<tbody>
+<tr><td><code>schedule-once</code></td><td>Fire once after N seconds</td><td>Review PR in 5 minutes</td></tr>
+<tr><td><code>schedule-interval</code></td><td>Fire every N seconds</td><td>Check deploy status every 60s</td></tr>
+<tr><td><code>schedule-cron</code></td><td>6-field cron expression</td><td>Daily standup report at 9am</td></tr>
+</tbody>
+</table>
+</div>
+<p>All three accept an optional <code>tags</code> array for notification routing:</p>
+<pre><code class="language-json">{
+  "action": "schedule-once",
+  "after_seconds": 300,
+  "message": "Review PR #42 on rararulab/rara",
+  "tags": ["pr_review", "repo:rararulab/rara"]
+}
+</code></pre>
+<h3 id="how-tags-flow"><a class="header" href="#how-tags-flow">How Tags Flow</a></h3>
+<ol>
+<li>The agent includes <code>tags</code> when creating the job</li>
+<li>Tags are stored in <code>JobEntry</code> and persisted to disk by <code>JobWheel</code></li>
+<li>When the job fires, tags are injected into the spawned agent’s system prompt</li>
+<li>The spawned agent includes these tags in its <code>publish_report</code> call</li>
+<li>The notification bus matches tags against subscriber subscriptions</li>
+</ol>
+<h3 id="job-persistence"><a class="header" href="#job-persistence">Job Persistence</a></h3>
+<p>Jobs are persisted to a JSON file by <code>JobWheel</code> and survive kernel restarts.
+The wheel uses a <code>BTreeMap&lt;(unix_seconds, Uuid), JobEntry&gt;</code> for efficient
+time-ordered retrieval. On each tick, <code>drain_expired()</code> yields fired jobs:</p>
+<ul>
+<li><strong>Once</strong>: removed after firing</li>
+<li><strong>Interval</strong>: <code>next_at</code> advanced by <code>every_secs</code>, re-inserted</li>
+<li><strong>Cron</strong>: next fire time computed from expression, re-inserted</li>
+</ul>
+<h3 id="in-flight-recovery"><a class="header" href="#in-flight-recovery">In-Flight Recovery</a></h3>
+<p>When a job fires, it moves from the scheduling wheel to an <strong>in-flight ledger</strong>
+(<code>in_flight.json</code>) before the execution agent is spawned. This handles the crash
+window between drain and <code>publish_report</code>:</p>
+<ol>
+<li><code>drain_expired()</code> moves fired jobs to <code>in_flight</code> and persists both files</li>
+<li>The kernel spawns an agent; the agent’s manifest metadata carries the <code>job_id</code></li>
+<li>When the agent session ends (success or failure), <code>cleanup_process</code> calls
+<code>complete_in_flight(job_id)</code> to remove it from the ledger</li>
+<li>On kernel restart, <code>take_in_flight()</code> returns any leftover in-flight jobs and
+they are re-fired as new agent sessions</li>
+</ol>
+<p>For <strong>recurring</strong> jobs (Interval/Cron), both the rescheduled future entry and the
+current in-flight copy are tracked — a crash only loses the current round, which
+gets retried on restart.</p>
+<h3 id="the-spawned-agent"><a class="header" href="#the-spawned-agent">The Spawned Agent</a></h3>
+<p>When a scheduled job fires, the kernel spawns a dedicated agent session with:</p>
+<ul>
+<li><strong>Name</strong>: <code>scheduled_job</code></li>
+<li><strong>Role</strong>: <code>Worker</code></li>
+<li><strong>Max iterations</strong>: 15</li>
+<li><strong>Max children</strong>: 0 (no sub-spawning)</li>
+<li><strong>System prompt</strong> that includes the task description, routing tags, and
+instructions to call <code>publish_report</code> when done</li>
+<li><strong>Metadata</strong>: <code>{"scheduled_job_id": "&lt;uuid&gt;"}</code> for in-flight tracking</li>
+</ul>
+<p>The spawned agent has access to all tools in the global <code>ToolRegistry</code>, including
+the <code>kernel</code> syscall tool which enables it to publish its results.</p>
+<h2 id="background-tasks"><a class="header" href="#background-tasks">Background Tasks</a></h2>
+<h3 id="spawning-a-background-task"><a class="header" href="#spawning-a-background-task">Spawning a Background Task</a></h3>
+<p>Any agent can spawn a background task using the <code>spawn-background</code> tool:</p>
+<pre><code class="language-json">{
+  "manifest": {
+    "name": "code-reviewer",
+    "system_prompt": "You review pull requests for security issues.",
+    "max_iterations": 10
+  },
+  "input": "Review PR #42 for security vulnerabilities",
+  "description": "Security review of PR #42"
+}
+</code></pre>
+<p>The background task runs as a child agent of the spawning session. The parent
+receives a <code>BackgroundTaskStarted</code> stream event and can later cancel via
+<code>cancel-background</code>.</p>
+<h3 id="differences-from-scheduled-tasks"><a class="header" href="#differences-from-scheduled-tasks">Differences from Scheduled Tasks</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Aspect</th><th>Scheduled Task</th><th>Background Task</th></tr>
+</thead>
+<tbody>
+<tr><td>Trigger</td><td>Time-based (delay/interval/cron)</td><td>Immediate</td></tr>
+<tr><td>Persistence</td><td>Survives kernel restart</td><td>Lost on restart</td></tr>
+<tr><td>Relationship</td><td>Independent session</td><td>Child of parent session</td></tr>
+<tr><td>Cancellation</td><td><code>schedule-remove</code> tool</td><td><code>cancel-background</code> tool</td></tr>
+<tr><td>Tags</td><td>Set at creation time</td><td>Set in publish_report call</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="task-report--notification-bus"><a class="header" href="#task-report--notification-bus">Task Report &amp; Notification Bus</a></h2>
+<h3 id="publishing-results"><a class="header" href="#publishing-results">Publishing Results</a></h3>
+<p>When a task (scheduled or background) completes, the agent calls the <code>kernel</code>
+tool with <code>action: "publish_report"</code>:</p>
+<pre><code class="language-json">{
+  "action": "publish_report",
+  "report": {
+    "task_id": "550e8400-e29b-41d4-a716-446655440000",
+    "task_type": "pr_review",
+    "tags": ["pr_review", "repo:rararulab/rara"],
+    "status": "completed",
+    "summary": "PR #42 approved — no issues found",
+    "result": {
+      "verdict": "approved",
+      "confidence_score": 9,
+      "risk_level": "low",
+      "comments": []
+    },
+    "action_taken": "left approval comment on GitHub"
+  }
+}
+</code></pre>
+<p><strong>Fields:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>task_id</code></td><td>yes</td><td>Unique UUID for this task execution</td></tr>
+<tr><td><code>task_type</code></td><td>yes</td><td>Category string (e.g. <code>"pr_review"</code>, <code>"deploy_check"</code>)</td></tr>
+<tr><td><code>tags</code></td><td>yes</td><td>Routing tags — subscribers match against these</td></tr>
+<tr><td><code>status</code></td><td>yes</td><td><code>"completed"</code>, <code>"failed"</code>, or <code>"needs_approval"</code></td></tr>
+<tr><td><code>summary</code></td><td>yes</td><td>Human-readable one-line summary</td></tr>
+<tr><td><code>result</code></td><td>yes</td><td>Task-type-specific structured JSON</td></tr>
+<tr><td><code>action_taken</code></td><td>no</td><td>Description of action already taken, if any</td></tr>
+<tr><td><code>source_session</code></td><td>no</td><td>Set automatically by kernel — agents should omit</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="subscribing-to-notifications"><a class="header" href="#subscribing-to-notifications">Subscribing to Notifications</a></h3>
+<p>Any session can subscribe to task notifications by calling the <code>kernel</code> tool:</p>
+<pre><code class="language-json">{
+  "action": "subscribe",
+  "match_tags": ["pr_review", "critical"],
+  "on_receive": "proactive_turn"
+}
+</code></pre>
+<p>A subscription matches if <strong>any</strong> of its <code>match_tags</code> appears in the report’s
+<code>tags</code> array. Two delivery modes are available:</p>
+<h4 id="proactiveturn"><a class="header" href="#proactiveturn">ProactiveTurn</a></h4>
+<p>Injects a synthetic user message into the subscriber’s session using the
+subscription owner’s identity, triggering a full LLM turn. The message contains
+the notification summary and structured result. Best for notifications that
+require the subscriber to take action.</p>
+<p><strong>Offline downgrade:</strong> If the subscriber session is not currently alive in the
+process table (e.g. after a kernel restart), delivery is automatically
+downgraded to <code>SilentAppend</code> to avoid restoring the session with an incorrect
+identity. The notification is written to tape so it is available when the
+session is eventually restored.</p>
+<h4 id="silentappend"><a class="header" href="#silentappend">SilentAppend</a></h4>
+<p>Appends the full <code>TaskNotification</code> to the subscriber’s tape as a
+<code>TapEntryKind::TaskReport</code> entry. The subscriber will see it on their next
+context load but no LLM turn is triggered. Best for logging and audit trails.</p>
+<h3 id="unsubscribing"><a class="header" href="#unsubscribing">Unsubscribing</a></h3>
+<pre><code class="language-json">{
+  "action": "unsubscribe",
+  "subscription_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+</code></pre>
+<p>Subscriptions are also automatically cleaned up when a session ends
+(<code>SubscriptionRegistry::remove_session</code>).</p>
+<h3 id="subscriptionregistry"><a class="header" href="#subscriptionregistry">SubscriptionRegistry</a></h3>
+<p>The registry is <strong>file-backed</strong> (<code>subscriptions.json</code>), persisted on every
+mutation (subscribe/unsubscribe/remove_session). Since sessions are persistent
+in Rara (SessionKey survives restart), subscriptions must also survive restarts
+so that notifications continue to route correctly after a kernel restart.</p>
+<h2 id="end-to-end-example"><a class="header" href="#end-to-end-example">End-to-End Example</a></h2>
+<p>Here’s a complete flow for a PR review notification:</p>
+<pre><code class="language-text">1. User Session A subscribes:
+   kernel { action: "subscribe", match_tags: ["pr_review"], on_receive: "proactive_turn" }
+   → Returns subscription_id
+
+2. User Session A schedules a recurring PR check:
+   schedule-interval {
+     interval_seconds: 300,
+     message: "Check for new PRs on rararulab/rara and review them",
+     tags: ["pr_review", "repo:rararulab/rara"]
+   }
+   → Returns job_id
+
+3. 5 minutes later, the job fires:
+   → Kernel spawns a scheduled_job agent session
+   → Agent reviews PRs using available tools
+   → Agent calls: kernel { action: "publish_report", report: { ... } }
+
+4. Kernel processes the report:
+   a. Persists result to JobResultStore (results/{job_id}/{epoch}.json)
+   b. Matches tags ["pr_review", "repo:rararulab/rara"] against subscriptions
+   c. Session A's subscription matches on "pr_review"
+   d. Session A is alive → delivers via ProactiveTurn (synthetic message)
+
+5. Session A's LLM receives:
+   [TaskNotification] pr_review: PR #42 approved — no issues found
+   status: Completed
+   result: {"verdict":"approved","confidence_score":9}
+   action_taken: left approval comment on GitHub
+   ref: &lt;source_session&gt;/entry_42
+
+6. Session A can respond to the user or take further action.
+</code></pre>
+<h2 id="relevant-source-files"><a class="header" href="#relevant-source-files">Relevant Source Files</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crates/kernel/src/schedule.rs</code></td><td><code>JobWheel</code>, <code>JobEntry</code>, <code>Trigger</code> types</td></tr>
+<tr><td><code>crates/kernel/src/task_report.rs</code></td><td><code>TaskReport</code>, <code>TaskReportStatus</code>, domain result types</td></tr>
+<tr><td><code>crates/kernel/src/notification/</code></td><td><code>TaskNotification</code>, <code>SubscriptionRegistry</code>, <code>NotifyAction</code>, <code>NotificationBus</code></td></tr>
+<tr><td><code>crates/kernel/src/syscall.rs</code></td><td><code>handle_publish_task_report()</code>, subscription dispatch</td></tr>
+<tr><td><code>crates/kernel/src/kernel.rs</code></td><td><code>handle_scheduled_task()</code> — agent spawning and system prompt</td></tr>
+<tr><td><code>crates/kernel/src/tool/schedule.rs</code></td><td><code>schedule-once/interval/cron/remove/list</code> tools</td></tr>
+<tr><td><code>crates/kernel/src/tool/spawn_background.rs</code></td><td><code>spawn-background</code> tool</td></tr>
+<tr><td><code>crates/kernel/src/tool/cancel_background.rs</code></td><td><code>cancel-background</code> tool</td></tr>
 </tbody>
 </table>
 </div>
@@ -1544,9 +2485,130 @@ third-party tools (Roo Code, OpenCode, etc.).</p>
 </li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="dock--generative-ui-canvas"><a class="header" href="#dock--generative-ui-canvas">Dock — Generative UI Canvas</a></h1>
+<p>Dock is Rara’s collaborative canvas workbench. It provides a structured writing surface where the agent manipulates <strong>blocks</strong> (rich HTML content), <strong>facts</strong> (persistent context), and <strong>annotations</strong> (inline comments) through dedicated tools, while humans interact via a chat console and direct editing.</p>
+<h2 id="core-concepts-1"><a class="header" href="#core-concepts-1">Core Concepts</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Concept</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Block</strong></td><td>A unit of canvas content (text, code, chart). Identified by ID, typed, carries HTML.</td></tr>
+<tr><td><strong>Fact</strong></td><td>A persistent piece of context visible to the agent across turns (e.g. “target audience: engineers”).</td></tr>
+<tr><td><strong>Annotation</strong></td><td>An inline comment attached to a block, authored by human or agent.</td></tr>
+<tr><td><strong>Mutation</strong></td><td>An atomic CRUD operation on blocks, facts, or annotations. All state changes flow through mutations.</td></tr>
+<tr><td><strong>Session</strong></td><td>A workspace containing blocks, facts, annotations, and history. Multiple sessions can coexist.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="architecture-3"><a class="header" href="#architecture-3">Architecture</a></h2>
+<pre class="mermaid">flowchart TD
+    UI[Frontend Canvas] --&gt;|POST /api/dock/turn| TH[Turn Handler]
+    UI --&gt;|POST /api/dock/sessions/:id/mutate| MH[Mutate Handler]
+
+    TH --&gt; SP[Build System + User Prompt]
+    SP --&gt; K[Kernel ingest]
+    K --&gt; AL[Agent Loop]
+    AL --&gt; DT[Dock Tools x9]
+    DT --&gt;|push full mutation| SINK[DockMutationSink]
+
+    TH --&gt;|subscribe| SS[StreamHub SSE]
+    SS --&gt;|text_delta, tool_call_*| UI
+
+    AL --&gt;|stream closes| DRAIN[Drain Sink]
+    DRAIN --&gt; STORE[DockSessionStore]
+    DRAIN --&gt; ANCHOR[Write Tape Anchor]
+    DRAIN --&gt;|dock_turn_complete SSE| UI
+
+    MH --&gt; STORE
+</pre>
+
+<h3 id="turn-lifecycle"><a class="header" href="#turn-lifecycle">Turn Lifecycle</a></h3>
+<ol>
+<li><strong>Frontend</strong> sends current canvas state (blocks, facts, annotations) + user message to <code>POST /api/dock/turn</code>.</li>
+<li><strong>Turn handler</strong> ensures a kernel session exists with a deterministic <code>SessionKey</code> derived from the dock session ID, then calls <code>kernel.ingest()</code>.</li>
+<li>The handler returns an <strong>SSE stream</strong> that forwards kernel events (<code>text_delta</code>, <code>tool_call_start/end</code>) to the frontend in real time.</li>
+<li>The <strong>agent loop</strong> calls dock tools (e.g. <code>dock.block.add</code>, <code>dock.fact.update</code>). Each tool pushes a full <code>DockMutation</code> into the shared <code>DockMutationSink</code> and returns a compact confirmation to the LLM.</li>
+<li>When the stream closes, the handler <strong>drains</strong> all mutations from the sink, applies them to the <code>DockSessionStore</code>, writes a tape anchor with a canvas snapshot, and emits a final <code>dock_turn_complete</code> event with authoritative state.</li>
+</ol>
+<h3 id="human-edits"><a class="header" href="#human-edits">Human Edits</a></h3>
+<p>Human mutations (adding annotations, editing facts) go directly through <code>POST /api/dock/sessions/{id}/mutate</code> without involving the kernel.</p>
+<h2 id="api-endpoints"><a class="header" href="#api-endpoints">API Endpoints</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>GET</td><td><code>/api/dock/bootstrap</code></td><td>List sessions + active session ID</td></tr>
+<tr><td>GET</td><td><code>/api/dock/session?session_id=&amp;selected_anchor=</code></td><td>Load session state (optionally at a history anchor)</td></tr>
+<tr><td>POST</td><td><code>/api/dock/sessions</code></td><td>Create a new session</td></tr>
+<tr><td>POST</td><td><code>/api/dock/sessions/:id/mutate</code></td><td>Apply human mutations</td></tr>
+<tr><td>POST</td><td><code>/api/dock/turn</code></td><td>Execute agent turn (returns SSE stream)</td></tr>
+<tr><td>PATCH</td><td><code>/api/dock/workspace</code></td><td>Update active session</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="dock-tools"><a class="header" href="#dock-tools">Dock Tools</a></h2>
+<p>Nine agent tools handle canvas CRUD:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tool</th><th>Operation</th></tr>
+</thead>
+<tbody>
+<tr><td><code>dock.block.add</code></td><td>Add a new canvas block</td></tr>
+<tr><td><code>dock.block.update</code></td><td>Update block HTML content</td></tr>
+<tr><td><code>dock.block.remove</code></td><td>Remove a block by ID</td></tr>
+<tr><td><code>dock.fact.add</code></td><td>Add a persistent fact</td></tr>
+<tr><td><code>dock.fact.update</code></td><td>Update fact content</td></tr>
+<tr><td><code>dock.fact.remove</code></td><td>Remove a fact</td></tr>
+<tr><td><code>dock.annotation.add</code></td><td>Add an annotation</td></tr>
+<tr><td><code>dock.annotation.update</code></td><td>Update annotation content</td></tr>
+<tr><td><code>dock.annotation.remove</code></td><td>Remove an annotation</td></tr>
+</tbody>
+</table>
+</div>
+<p>All tools share a <code>DockMutationSink</code> so full mutations bypass the kernel’s truncated <code>result_preview</code> (2048 bytes).</p>
+<h2 id="history--time-travel"><a class="header" href="#history--time-travel">History &amp; Time Travel</a></h2>
+<p>Each completed turn writes a <strong>tape anchor</strong> containing a <code>DockCanvasSnapshot</code> (blocks + facts). The frontend timeline shows these anchors. Selecting an anchor restores the historical canvas state from the snapshot.</p>
+<p>After a live turn completes, the <code>dock_turn_complete</code> event resets <code>selected_anchor</code> to <code>null</code>, ensuring the UI exits history-viewing mode.</p>
+<h2 id="storage"><a class="header" href="#storage">Storage</a></h2>
+<pre><code>~/.config/rara/dock/
+├── workspace.json                — { active_session_id }
+└── sessions/{id}/document.json   — { session, blocks, annotations, facts }
+</code></pre>
+<p>Session state is file-based JSON. Tape anchors (history) are stored separately by the kernel’s tape system.</p>
+<h2 id="frontend-2"><a class="header" href="#frontend-2">Frontend</a></h2>
+<p>The dock frontend lives in <code>web/src/components/dock/</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Component</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>DockCanvas.tsx</code></td><td>Main canvas rendering blocks</td></tr>
+<tr><td><code>DockBlockRenderer.tsx</code></td><td>Individual block rendering with DOMPurify sanitization</td></tr>
+<tr><td><code>DockConsole.tsx</code></td><td>Chat input for sending messages/commands</td></tr>
+<tr><td><code>DockSidebar.tsx</code></td><td>Session list + navigation</td></tr>
+<tr><td><code>DockTimeline.tsx</code></td><td>History anchor timeline</td></tr>
+<tr><td><code>DockAnnotations.tsx</code></td><td>Annotation panel</td></tr>
+<tr><td><code>DockFacts.tsx</code></td><td>Fact panel</td></tr>
+<tr><td><code>DockHeader.tsx</code></td><td>Session header + controls</td></tr>
+</tbody>
+</table>
+</div>
+<p>State management is in <code>web/src/hooks/use-dock-store.ts</code> using React hooks. SSE streaming is handled by <code>web/src/api/dock.ts</code>.</p>
+<h2 id="security-1"><a class="header" href="#security-1">Security</a></h2>
+<ul>
+<li>Block HTML is sanitized with <strong>DOMPurify</strong> using an explicit tag/attribute allowlist before rendering via <code>dangerouslySetInnerHTML</code>.</li>
+<li>Session IDs are validated to prevent path traversal in the file-based store.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="api-module"><a class="header" href="#api-module">API Module</a></h1>
 <p>This directory contains all Protocol Buffer definitions and generated gRPC stubs for the job project.</p>
-<h2 id="architecture-3"><a class="header" href="#architecture-3">Architecture</a></h2>
+<h2 id="architecture-4"><a class="header" href="#architecture-4">Architecture</a></h2>
 <p>This project uses a <strong>client-server architecture</strong>:</p>
 <ul>
 <li><strong>Rust</strong>: Implements the gRPC server with both client and server code generated</li>
@@ -1699,7 +2761,7 @@ buf generate
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="opentelemetry-integration"><a class="header" href="#opentelemetry-integration">OpenTelemetry Integration</a></h1>
 <p>This document describes how to use the OpenTelemetry integration in <code>job</code> to monitor the performance of the HTTP and gRPC servers.</p>
-<h2 id="configuration-2"><a class="header" href="#configuration-2">Configuration</a></h2>
+<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
 <p>The OpenTelemetry integration is configured through environment variables. The following variables are available:</p>
 <ul>
 <li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code>: The endpoint of the OpenTelemetry collector. Defaults to <code>http://localhost:4317</code>.</li>
@@ -1786,6 +2848,74 @@ spec:
 <p>This manifest creates a Deployment that runs the OpenTelemetry collector. The collector is configured to use the ConfigMap created in the previous step.</p>
 <p>Once the collector is deployed, you will need to configure the <code>job</code> server to export data to the collector. You can do this by setting the <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> environment variable to the address of the collector’s OTLP gRPC endpoint.</p>
 <p>For example, if the collector is running in the <code>default</code> namespace, you can set the environment variable to <code>http://otel-collector.default:4317</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="release-pipeline"><a class="header" href="#release-pipeline">Release Pipeline</a></h1>
+<p>Rara uses <a href="https://release-plz.ieni.dev/">release-plz</a> for version management and <a href="https://opensource.axo.dev/cargo-dist/">cargo-dist</a> for binary builds. The entire process is automated — no manual tagging or version bumping required.</p>
+<h2 id="flow"><a class="header" href="#flow">Flow</a></h2>
+<pre><code class="language-text">push to main
+    │
+    ▼
+CI (lint + test)
+    │
+    ▼
+release-plz creates Release PR
+  • bumps version in Cargo.toml (workspace-wide)
+  • updates CHANGELOG.md via git-cliff
+  • labels PR with "release"
+    │
+    ▼
+human reviews &amp; merges Release PR
+    │
+    ▼
+release-plz.yml triggers (on PR merge with "release" label)
+  • runs release-plz release (currently a no-op: tag/release/publish all disabled)
+  • extracts rara-cli version via cargo metadata
+  • calls release.yml via workflow_call with tag=vX.Y.Z
+    │
+    ▼
+release.yml (cargo-dist)
+  • cargo dist plan --tag=vX.Y.Z
+  • builds binaries: aarch64-apple-darwin (macos runner), x86_64-unknown-linux-gnu (linux runner)
+  • uploads artifacts to MinIO S3
+  • gh release create vX.Y.Z — creates git tag + GitHub Release with binaries attached
+  • pushes Homebrew formula (rara-cli.rb) to rararulab/homebrew-tap
+    │
+    ▼
+done — users can install via:
+  brew install rararulab/tap/rara-cli
+  # or download from GitHub Releases
+</code></pre>
+<h2 id="key-configuration-files"><a class="header" href="#key-configuration-files">Key Configuration Files</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>release-plz.toml</code></td><td>release-plz behavior: changelog, tag/release/publish toggles</td></tr>
+<tr><td><code>cliff.toml</code></td><td>git-cliff changelog generation rules</td></tr>
+<tr><td><code>Cargo.toml</code> <code>[workspace.metadata.dist]</code></td><td>cargo-dist config: targets, installers, Homebrew tap</td></tr>
+<tr><td><code>.github/workflows/release-pr.yml</code></td><td>Creates the Release PR (called by CI after main push)</td></tr>
+<tr><td><code>.github/workflows/release-plz.yml</code></td><td>Runs on Release PR merge → triggers release.yml</td></tr>
+<tr><td><code>.github/workflows/release.yml</code></td><td>cargo-dist build + GitHub Release + Homebrew</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="why-workflow_call-instead-of-tag-push"><a class="header" href="#why-workflow_call-instead-of-tag-push">Why workflow_call Instead of Tag Push?</a></h2>
+<p>GitHub Actions security restriction: tags created by <code>GITHUB_TOKEN</code> within a workflow <strong>do not trigger</strong> <code>on: push: tags</code> events (prevents infinite loops). So release-plz.yml calls release.yml directly via <code>workflow_call</code> instead of relying on tag-push triggers.</p>
+<h2 id="version-source-of-truth"><a class="header" href="#version-source-of-truth">Version Source of Truth</a></h2>
+<ul>
+<li>Workspace version is defined in root <code>Cargo.toml</code> <code>[workspace.package].version</code></li>
+<li><code>rara-cli</code> (the only distributable binary) inherits <code>version.workspace = true</code></li>
+<li>Other crates may have independent version numbers — only rara-cli’s version matters for releases</li>
+<li>Version extraction in release-plz.yml uses <code>cargo metadata</code> to read the resolved rara-cli version</li>
+</ul>
+<h2 id="homebrew"><a class="header" href="#homebrew">Homebrew</a></h2>
+<ul>
+<li>Tap repo: <a href="https://github.com/rararulab/homebrew-tap">rararulab/homebrew-tap</a></li>
+<li>Formula pushed by cargo-dist during release</li>
+<li>Requires <code>HOMEBREW_TAP_TOKEN</code> secret with write access to the tap repo</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="raras-diary"><a class="header" href="#raras-diary">Rara’s Diary</a></h1>
 <p>Rara 的个人日记。每天记录工作进展、用户活动摘要和心得感悟。</p>
