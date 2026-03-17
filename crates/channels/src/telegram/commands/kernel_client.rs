@@ -363,21 +363,43 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
-        // Stop any active turn before deleting data. The agent loop monitors
-        // `turn_cancel` in `tokio::select!` — once cancelled, it returns
-        // `Err(Interrupted)` immediately with no further tape writes.
-        // `cancel_process` prevents the session from accepting new work, and
-        // setting state to Suspended stops the kernel from dispatching new
-        // messages to it.
+        // Stop any active turn before deleting data.
+        //
+        // The agent loop monitors `turn_cancel` at `tokio::select!` points.
+        // After the turn task returns, the kernel's `handle_turn_completed`
+        // transitions state from Active → Ready (for long-lived sessions).
+        // We poll for that transition to guarantee no more tape writes can
+        // occur before we delete the data.
         if let Some(ref handle) = self.handle {
             let pt = handle.process_table();
-            if pt.contains(&sk) {
+            let is_active = pt
+                .with(&sk, |s| {
+                    s.state == rara_kernel::session::SessionState::Active
+                })
+                .unwrap_or(false);
+
+            if is_active {
                 pt.cancel_turn(&sk);
+
+                // Poll until the turn completes and state leaves Active.
+                // Bounded at 50 × 100ms = 5s to avoid hanging forever.
+                for _ in 0..50 {
+                    let still_active = pt
+                        .with(&sk, |s| {
+                            s.state == rara_kernel::session::SessionState::Active
+                        })
+                        .unwrap_or(false);
+                    if !still_active {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+
+            // Prevent new work and mark as suspended.
+            if pt.contains(&sk) {
                 pt.cancel_process(&sk);
                 let _ = pt.set_state(sk.clone(), rara_kernel::session::SessionState::Suspended);
-                // Brief wait for the turn_cancel token to propagate through
-                // the agent loop's select! and for any in-flight I/O to flush.
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             }
         }
         // Delete tape (message history).
