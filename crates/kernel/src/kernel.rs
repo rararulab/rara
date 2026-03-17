@@ -314,6 +314,7 @@ impl Kernel {
             self.started_at,
             self.tape_service.clone(),
             self.trace_service.clone(),
+            self.syscall.job_wheel().clone(),
         )
     }
 

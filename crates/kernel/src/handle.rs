@@ -88,6 +88,8 @@ pub struct KernelHandle {
     tape:             crate::memory::TapeService,
     /// Execution trace service for persisting turn-level traces.
     trace_service:    crate::trace::TraceService,
+    /// Shared job wheel for querying scheduled tasks.
+    job_wheel:        Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
 }
 
 impl KernelHandle {
@@ -107,6 +109,7 @@ impl KernelHandle {
         started_at: Timestamp,
         tape: crate::memory::TapeService,
         trace_service: crate::trace::TraceService,
+        job_wheel: Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
     ) -> Self {
         Self {
             event_queue,
@@ -122,6 +125,7 @@ impl KernelHandle {
             started_at,
             tape,
             trace_service,
+            job_wheel,
         }
     }
 
@@ -310,6 +314,14 @@ impl KernelHandle {
 
     /// Access the execution trace service.
     pub fn trace_service(&self) -> &crate::trace::TraceService { &self.trace_service }
+
+    /// List scheduled jobs, optionally filtered by session key.
+    pub fn list_jobs(&self, session_key: Option<&SessionKey>) -> Vec<crate::schedule::JobEntry> {
+        self.job_wheel
+            .lock()
+            .map(|wheel| wheel.list(session_key))
+            .unwrap_or_default()
+    }
 
     // -- Query methods ------------------------------------------------------
 
