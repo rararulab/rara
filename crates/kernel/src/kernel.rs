@@ -2749,6 +2749,7 @@ async fn generate_session_title(
         .unwrap_or_default();
 
     if first_user_msg.is_empty() {
+        tracing::warn!(tape = %tape_name, "title gen: no user message found in tape");
         return Ok(());
     }
 
@@ -2788,14 +2789,42 @@ async fn generate_session_title(
 
     let response = driver.complete(request).await?;
 
-    if let Some(title) = response.content {
-        let title = title.trim().trim_matches('"').to_string();
-        if !title.is_empty() && title.chars().count() <= 50 {
-            if let Ok(Some(mut entry)) = session_index.get_session(session_key).await {
-                entry.title = Some(title);
-                entry.updated_at = chrono::Utc::now();
-                let _ = session_index.update_session(&entry).await;
+    // Prefer content, fall back to reasoning_content for thinking models.
+    let Some(raw_title) = response.content.or(response.reasoning_content) else {
+        tracing::warn!(session_key = %session_key, "title gen: LLM returned no content");
+        return Ok(());
+    };
+
+    let title = raw_title.trim().trim_matches('"').to_string();
+    if title.is_empty() {
+        tracing::warn!(session_key = %session_key, "title gen: LLM returned empty title");
+        return Ok(());
+    }
+    if title.chars().count() > 50 {
+        tracing::warn!(
+            session_key = %session_key,
+            title_len = title.chars().count(),
+            title = %title,
+            "title gen: title exceeds 50 chars, discarded"
+        );
+        return Ok(());
+    }
+
+    match session_index.get_session(session_key).await {
+        Ok(Some(mut entry)) => {
+            entry.title = Some(title.clone());
+            entry.updated_at = chrono::Utc::now();
+            if let Err(e) = session_index.update_session(&entry).await {
+                tracing::warn!(%e, session_key = %session_key, "title gen: failed to persist title");
+            } else {
+                tracing::info!(session_key = %session_key, title = %title, "session title generated");
             }
+        }
+        Ok(None) => {
+            tracing::warn!(session_key = %session_key, "title gen: session not found");
+        }
+        Err(e) => {
+            tracing::warn!(session_key = %session_key, error = %e, "title gen: failed to fetch session");
         }
     }
 
