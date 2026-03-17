@@ -134,11 +134,16 @@ type WheelKey = (i64, Uuid);
 /// does not silently lose task results.
 pub struct JobWheel {
     /// Jobs ordered by (next_fire_time_secs, job_uuid).
-    jobs:      BTreeMap<WheelKey, JobEntry>,
+    jobs:                BTreeMap<WheelKey, JobEntry>,
     /// Jobs that have been drained and dispatched but not yet completed.
-    in_flight: HashMap<JobId, JobEntry>,
+    in_flight:           HashMap<JobId, JobEntry>,
     /// Path to the `jobs.json` persistence file.
-    path:      PathBuf,
+    path:                PathBuf,
+    /// Runtime-only flag: true once `take_in_flight` has returned recovered
+    /// jobs. Prevents re-firing on subsequent ticks without clearing the
+    /// ledger prematurely — entries are removed individually by
+    /// `complete_in_flight` after the agent session ends.
+    in_flight_recovered: bool,
 }
 
 impl JobWheel {
@@ -199,6 +204,7 @@ impl JobWheel {
             jobs,
             in_flight,
             path,
+            in_flight_recovered: false,
         }
     }
 
@@ -304,17 +310,20 @@ impl JobWheel {
         removed
     }
 
-    /// Take all in-flight jobs out of the ledger for re-firing on startup.
+    /// Return in-flight jobs from a previous run for re-firing on startup.
     ///
-    /// The ledger is cleared and persisted (empty) after this call, so a
-    /// second restart won't re-fire the same jobs twice — they will be
-    /// tracked again when `drain_expired` processes them.
+    /// Returns clones on the first call and sets a flag so subsequent calls
+    /// return empty. The ledger is **not** cleared here — entries are removed
+    /// individually by [`complete_in_flight`] after each agent session ends.
+    /// This makes the recovery crash-safe: if the kernel crashes again before
+    /// the re-fired agents finish, the ledger still contains the entries and
+    /// they will be recovered on the next startup.
     pub fn take_in_flight(&mut self) -> Vec<JobEntry> {
-        if self.in_flight.is_empty() {
+        if self.in_flight_recovered || self.in_flight.is_empty() {
             return Vec::new();
         }
-        let jobs: Vec<JobEntry> = self.in_flight.drain().map(|(_, v)| v).collect();
-        self.persist_in_flight();
+        self.in_flight_recovered = true;
+        let jobs: Vec<JobEntry> = self.in_flight.values().cloned().collect();
         info!(
             count = jobs.len(),
             "re-firing in-flight jobs from previous run"

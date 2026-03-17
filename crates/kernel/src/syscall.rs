@@ -498,6 +498,7 @@ impl SyscallDispatcher {
                     scheduled_job_id,
                     reply_tx,
                     kernel_handle,
+                    process_table,
                 )
                 .await;
             }
@@ -626,6 +627,7 @@ impl SyscallDispatcher {
         scheduled_job_id: Option<crate::schedule::JobId>,
         reply_tx: tokio::sync::oneshot::Sender<crate::error::Result<()>>,
         kernel_handle: &KernelHandle,
+        process_table: &crate::session::SessionTable,
     ) {
         use crate::notification::{NotifyAction, TaskNotification};
 
@@ -690,7 +692,17 @@ impl SyscallDispatcher {
             let notif_json = serde_json::to_value(&notification).unwrap_or_default();
             match sub.on_receive {
                 NotifyAction::ProactiveTurn => {
-                    // Deliver as a synthetic user message to trigger an LLM turn.
+                    // Only deliver if the subscriber session is still alive in the
+                    // process table. Without this guard, a stale subscription from a
+                    // previous run could cause the kernel to restore the session with
+                    // an incorrect identity (privilege escalation).
+                    if !process_table.contains(&sub.subscriber) {
+                        warn!(
+                            subscriber = %sub.subscriber,
+                            "skipping ProactiveTurn: subscriber session not in process table"
+                        );
+                        continue;
+                    }
                     let result_str = serde_json::to_string(&result).unwrap_or_default();
                     let action_str = action_taken
                         .as_deref()
@@ -700,9 +712,11 @@ impl SyscallDispatcher {
                         "[TaskNotification] {task_type}: {summary}\nstatus: {status:?}\nresult: \
                          {result_str}{action_str}"
                     );
+                    // Use the subscription owner's identity (not "system") so the
+                    // message carries the correct user context.
                     let msg = crate::io::InboundMessage::synthetic(
                         directive,
-                        crate::identity::UserId("system".into()),
+                        sub.owner.clone(),
                         sub.subscriber,
                     );
                     kernel_handle.deliver_internal(msg).await;

@@ -548,17 +548,44 @@ fn test_in_flight_recovery() {
     assert!(recovered_ids.contains(&once_id));
     assert!(recovered_ids.contains(&interval_id));
 
-    // in_flight.json should now be empty.
+    // The ledger should still contain the entries on disk (crash-safe: they
+    // are only removed individually by complete_in_flight after the agent
+    // session ends, so a second crash won't lose them).
+    let ifl_content_before_complete = std::fs::read_to_string(&in_flight_path).unwrap();
+    let ifl_entries: Vec<serde_json::Value> =
+        serde_json::from_str(&ifl_content_before_complete).unwrap();
+    assert_eq!(
+        ifl_entries.len(),
+        2,
+        "in_flight ledger should be preserved until complete_in_flight"
+    );
+
+    // 5. A second take_in_flight returns nothing (flag prevents re-fire).
+    let recovered2 = wheel2.take_in_flight();
+    assert!(recovered2.is_empty());
+
+    // 6. complete_in_flight removes entries individually and persists.
+    assert!(wheel2.complete_in_flight(&once_id));
+    assert!(wheel2.complete_in_flight(&interval_id));
     let ifl_content = std::fs::read_to_string(&in_flight_path).unwrap();
     let ifl_entries: Vec<serde_json::Value> = serde_json::from_str(&ifl_content).unwrap();
     assert!(
         ifl_entries.is_empty(),
-        "in_flight should be cleared after take"
+        "in_flight should be empty after all jobs completed"
     );
 
-    // 5. A second take_in_flight returns nothing (idempotent).
-    let recovered2 = wheel2.take_in_flight();
-    assert!(recovered2.is_empty());
+    // 7. Simulate another crash+restart after recovery — ledger should still
+    //    contain entries if complete_in_flight was never called.
+    drop(wheel2);
+    // Restore the 2-entry ledger to simulate crash before completion.
+    std::fs::write(&in_flight_path, &ifl_content_before_complete).unwrap();
+    let mut wheel3 = JobWheel::load(jobs_path);
+    let recovered3 = wheel3.take_in_flight();
+    assert_eq!(
+        recovered3.len(),
+        2,
+        "crash before complete_in_flight should re-recover jobs"
+    );
 }
 
 /// complete_in_flight removes a job from the ledger.
