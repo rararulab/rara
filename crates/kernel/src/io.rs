@@ -61,6 +61,30 @@ pub mod stages {
     pub const THINKING: &str = "thinking";
 }
 
+/// Poetic loading hints displayed during LLM thinking phases.
+/// Each call to `random_hint()` returns a randomly-selected phrase.
+pub mod loading_hints {
+    use rand::Rng;
+
+    /// Pool of poetic Chinese loading messages.
+    pub const HINTS: &[&str] = &[
+        "稍候片刻，日出文自明。",
+        "风过空庭，字句正徐来。",
+        "纸白微明，未成篇章。",
+        "夜退星沉，此页初醒。",
+        "墨痕未定，片语已生香。",
+        "云开一隙，文章将至。",
+        "万籁俱寂，万字将成。",
+        "且听风定，再看句成。",
+    ];
+
+    /// Return a randomly-selected loading hint.
+    pub fn random_hint() -> &'static str {
+        let idx = rand::rng().random_range(0..HINTS.len());
+        HINTS[idx]
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MessageId
 // ---------------------------------------------------------------------------

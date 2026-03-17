@@ -140,7 +140,10 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatState) {
         let spinner = theme::SPINNER_FRAMES[state.spinner_frame];
         lines.push(Line::from(vec![
             Span::styled(format!("  {spinner} "), Style::default().fg(theme::CYAN)),
-            Span::styled("thinking…", Style::default().fg(theme::DIM)),
+            Span::styled(
+                rara_kernel::io::loading_hints::random_hint(),
+                Style::default().fg(theme::DIM),
+            ),
         ]));
     }
 

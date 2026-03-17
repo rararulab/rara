@@ -333,6 +333,8 @@ fn format_tool_line(t: &ToolProgress) -> String {
                 None => format!("\u{274c} {}{time}", t.activity),
             }
         }
+    } else if t.activity == rara_kernel::io::stages::THINKING {
+        rara_kernel::io::loading_hints::random_hint().to_string()
     } else {
         format!("正在{}…", t.activity)
     }
@@ -403,6 +405,8 @@ fn format_phase_line(phase: &Phase) -> String {
                 None => format!("\u{274c} {}{time}", phase.activity),
             }
         }
+    } else if phase.activity == rara_kernel::io::stages::THINKING {
+        rara_kernel::io::loading_hints::random_hint().to_string()
     } else {
         format!("正在{}…", phase.activity)
     }
