@@ -654,46 +654,29 @@ Rara updates this file automatically when learning new tools or workflows.
 
 /// Load the external agent.md operational knowledge file.
 ///
-/// Searches in priority order:
-/// 1. `{config_dir}/agents/{agent_name}/agent.md` (per-agent)
-/// 2. `{config_dir}/agent.md` (global fallback)
-///
-/// If neither exists, creates the per-agent file with a seed template
+/// Reads from `{config_dir}/agents/{agent_name}/agent.md`.
+/// If the file doesn't exist, creates it with a seed template
 /// and returns `None` (the seed is just a skeleton, not real content).
 fn load_agent_md(agent_name: &str) -> Option<String> {
-    let config = rara_paths::config_dir();
+    let agent_path = rara_paths::config_dir()
+        .join("agents")
+        .join(agent_name)
+        .join("agent.md");
 
-    // Priority 1: per-agent file
-    let agent_path = config.join("agents").join(agent_name).join("agent.md");
     if agent_path.exists() {
         match std::fs::read_to_string(&agent_path) {
             Ok(content) if !content.trim().is_empty() => {
-                info!(agent = agent_name, path = %agent_path.display(), "loaded per-agent agent.md");
+                info!(agent = agent_name, path = %agent_path.display(), "loaded agent.md");
                 return Some(content);
             }
             Ok(_) => {}
             Err(e) => {
-                warn!(agent = agent_name, error = %e, "failed to read per-agent agent.md");
+                warn!(agent = agent_name, error = %e, "failed to read agent.md");
             }
         }
     }
 
-    // Priority 2: global fallback
-    let global_path = config.join("agent.md");
-    if global_path.exists() {
-        match std::fs::read_to_string(&global_path) {
-            Ok(content) if !content.trim().is_empty() => {
-                info!(agent = agent_name, path = %global_path.display(), "loaded global agent.md");
-                return Some(content);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                warn!(agent = agent_name, error = %e, "failed to read global agent.md");
-            }
-        }
-    }
-
-    // Ensure the per-agent file exists with seed content for future updates
+    // Ensure the file exists with seed content for future updates
     ensure_agent_md(&agent_path, agent_name);
     None
 }
