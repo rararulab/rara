@@ -888,6 +888,26 @@ async fn execute_inline_step(
             *total_tool_calls += turn_result.tool_calls;
             *last_model = turn_result.model.clone();
             let summary = turn_result.text.clone();
+
+            // When the agent loop exhausted its max iterations without
+            // completing, `trace.success` is false.  Treat this as a replan
+            // trigger instead of silently accepting the fallback error text
+            // — otherwise every exhausted step pushes the same "[已达到最大
+            // 迭代次数…]" message and the user sees it repeated N times.
+            if !turn_result.trace.success {
+                let reason = turn_result
+                    .trace
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "agent loop did not complete successfully".to_string());
+                warn!(
+                    step = step.index,
+                    reason = %reason,
+                    "step finished with trace.success=false, requesting replan"
+                );
+                return (StepOutcome::NeedsReplan { reason }, summary);
+            }
+
             if !turn_result.text.is_empty() {
                 final_texts.push(turn_result.text);
             }
