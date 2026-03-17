@@ -14,10 +14,10 @@
 
 //! Kernel notifications — two independent subsystems:
 //!
-//! - [`bus`] — fire-and-forget broadcast of internal kernel events
-//!   (`KernelNotification`, `NotificationBus`).
-//! - [`subscription`] — tag-based, owner-scoped delivery of
-//!   [`TaskNotification`]s to subscribing sessions.
+//! - **Event bus** (`bus` module) — fire-and-forget broadcast of internal
+//!   kernel events ([`KernelNotification`], [`NotificationBus`]).
+//! - **Task subscriptions** (`subscription` module) — tag-based, owner-scoped
+//!   delivery of [`TaskNotification`]s to subscribing sessions.
 
 mod bus;
 mod subscription;

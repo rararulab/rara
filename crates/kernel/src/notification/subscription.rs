@@ -16,7 +16,7 @@
 //!
 //! Manages per-user, per-tag subscriptions so that [`TaskNotification`]s
 //! produced by background/scheduled tasks are routed to interested sessions.
-//! Separate from the kernel event [`super::bus`] which is a fire-and-forget
+//! Separate from the kernel event bus (`bus` module) which is a fire-and-forget
 //! broadcast channel.
 
 use std::{
