@@ -314,10 +314,10 @@ impl JobWheel {
     ///
     /// Returns clones on the first call and sets a flag so subsequent calls
     /// return empty. The ledger is **not** cleared here — entries are removed
-    /// individually by [`complete_in_flight`] after each agent session ends.
-    /// This makes the recovery crash-safe: if the kernel crashes again before
-    /// the re-fired agents finish, the ledger still contains the entries and
-    /// they will be recovered on the next startup.
+    /// individually by [`JobWheel::complete_in_flight`] after each agent
+    /// session ends. This makes the recovery crash-safe: if the kernel
+    /// crashes again before the re-fired agents finish, the ledger still
+    /// contains the entries and they will be recovered on the next startup.
     pub fn take_in_flight(&mut self) -> Vec<JobEntry> {
         if self.in_flight_recovered || self.in_flight.is_empty() {
             return Vec::new();
