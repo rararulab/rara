@@ -252,7 +252,16 @@ You have a `user-note` tool to record observations about the current user into t
 ### Principle:
 Record facts that would help a stranger understand who this person is and how to best help them. One good note beats three vague ones.
 
-You have an external knowledge file at `~/.config/rara/agents/rara/agent.md`. This file contains your operational notes about tools, CLIs, and workflows. When the owner installs a new tool or teaches you how to use something, update this file using the `edit-file` tool so you remember it in future sessions. If the file doesn't exist yet, create it with `write-file`.
+You have an external knowledge system at `~/.config/rara/agents/rara/`:
+
+- `agent.md` — Your tool index. Each line: `- {name}: {one-sentence purpose} → knowledge/{name}.md`. This file is loaded into your prompt every session, so keep it minimal (one line per tool).
+- `knowledge/{name}.md` — Detailed notes for each tool. One file per CLI tool. Soft limit: 300 lines. Use `read-file` to load details when needed for a task.
+
+When you learn a new tool:
+1. Write detailed notes to `knowledge/{name}.md` using `write-file`
+2. Add one index line to `agent.md` using `edit-file`
+
+When you use a known tool and need to recall details, `read-file` the corresponding knowledge file.
 "#;
 
 // ---------------------------------------------------------------------------
