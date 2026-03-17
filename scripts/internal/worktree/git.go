@@ -4,7 +4,9 @@ package worktree
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -34,11 +36,18 @@ func (s Status) String() string {
 
 // Entry holds parsed porcelain output for a single git worktree.
 type Entry struct {
-	Path     string
-	Branch   string // empty for detached HEAD
-	IsMain   bool
-	Prunable bool
-	Status   Status
+	Path      string
+	Branch    string // empty for detached HEAD
+	IsMain    bool
+	Prunable  bool
+	Locked    bool   // worktree has a lock file
+	IsCurrent bool   // worktree is the current working directory
+	Status    Status
+}
+
+// Protected returns true if the worktree cannot be deleted.
+func (e Entry) Protected() bool {
+	return e.IsMain || e.Locked || e.IsCurrent
 }
 
 // List parses `git worktree list --porcelain` and returns all entries,
@@ -59,9 +68,13 @@ func List() ([]Entry, error) {
 		return nil, err
 	}
 
+	// Detect current working directory to mark the active worktree
+	cwd, _ := os.Getwd()
+
 	var entries []Entry
 	var cur Entry
 	prunable := false
+	locked := false
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -69,13 +82,18 @@ func List() ([]Entry, error) {
 		case strings.HasPrefix(line, "worktree "):
 			cur = Entry{Path: strings.TrimPrefix(line, "worktree ")}
 			prunable = false
+			locked = false
 		case strings.HasPrefix(line, "branch refs/heads/"):
 			cur.Branch = strings.TrimPrefix(line, "branch refs/heads/")
 		case line == "prunable":
 			prunable = true
+		case line == "locked", strings.HasPrefix(line, "locked "):
+			locked = true
 		case line == "":
 			cur.IsMain = cur.Path == mainPath
 			cur.Prunable = prunable
+			cur.Locked = locked
+			cur.IsCurrent = isSameOrChild(cwd, cur.Path)
 			cur.Status = classifyEntry(cur, merged)
 			if cur.Path != "" {
 				entries = append(entries, cur)
@@ -86,6 +104,8 @@ func List() ([]Entry, error) {
 	if cur.Path != "" {
 		cur.IsMain = cur.Path == mainPath
 		cur.Prunable = prunable
+		cur.Locked = locked
+		cur.IsCurrent = isSameOrChild(cwd, cur.Path)
 		cur.Status = classifyEntry(cur, merged)
 		entries = append(entries, cur)
 	}
@@ -103,6 +123,16 @@ func classifyEntry(e Entry, merged map[string]bool) Status {
 		return StatusMerged
 	}
 	return StatusActive
+}
+
+// isSameOrChild returns true if child is the same as or under parent directory.
+func isSameOrChild(child, parent string) bool {
+	c, err1 := filepath.EvalSymlinks(child)
+	p, err2 := filepath.EvalSymlinks(parent)
+	if err1 != nil || err2 != nil {
+		return child == parent
+	}
+	return c == p || strings.HasPrefix(c, p+string(os.PathSeparator))
 }
 
 // MainPath returns the top-level path of the main checkout.

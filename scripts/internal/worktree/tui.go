@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/table"
@@ -61,13 +62,18 @@ var (
 	styleHelpDesc = lipgloss.NewStyle().Foreground(colorDim)
 	styleHelpSep  = lipgloss.NewStyle().Foreground(colorFaint)
 
-	styleCount = lipgloss.NewStyle().Foreground(colorSubtle)
+	styleCount     = lipgloss.NewStyle().Foreground(colorSubtle)
+	styleLock      = lipgloss.NewStyle().Foreground(colorDim)
+	styleToastBox  = lipgloss.NewStyle().Foreground(colorWhite).Background(lipgloss.Color("52")).Padding(0, 1)
+	styleToastText = lipgloss.NewStyle().Foreground(lipgloss.Color("217"))
 )
+
+const toastDuration = 4 * time.Second
 
 // Messages returned by async commands.
 type deleteResultMsg struct {
 	removed int
-	err     error
+	errors  []string // per-worktree errors
 }
 
 type pruneResultMsg struct{ err error }
@@ -76,14 +82,24 @@ type reloadResultMsg struct {
 	err     error
 }
 
+// dismissToastMsg is sent by tea.Tick to auto-dismiss the toast.
+type dismissToastMsg struct{ id int }
+
+// toast represents a floating notification that auto-dismisses.
+type toast struct {
+	id   int
+	text string
+}
+
 type tuiModel struct {
 	table    table.Model
 	entries  []Entry
 	selected map[int]bool
 	message  string // status message after an action
-	err      error
-	busy     bool // true while an async operation is running
+	busy     bool   // true while an async operation is running
 	quitting bool
+	toasts   []toast  // active toast notifications (errors)
+	toastSeq int      // auto-incrementing toast ID
 }
 
 // RunTUI launches the interactive worktree manager.
@@ -149,13 +165,17 @@ func newTUIModel(entries []Entry) tuiModel {
 }
 
 func entryToRow(e Entry, selected bool) table.Row {
-	// Selection indicator
+	// Selection indicator column
 	check := " "
 	if selected {
 		check = styleCheck.Render("✓")
 	}
 	if e.IsMain {
 		check = styleMain.Render("★")
+	} else if e.Locked {
+		check = styleLock.Render("🔒")
+	} else if e.IsCurrent {
+		check = styleMain.Render("▸")
 	}
 
 	// Path with dimmed prefix
@@ -174,10 +194,16 @@ func entryToRow(e Entry, selected bool) table.Row {
 		branch = styleBranch.Render(branch)
 	}
 
-	// Status with icon and color
+	// Status with icon and color, add lock/current tag
 	icon := statusIcon[e.Status]
 	stStyle := styleStatus[e.Status]
-	status := stStyle.Render(icon + " " + e.Status.String())
+	statusText := icon + " " + e.Status.String()
+	if e.Locked {
+		statusText += styleLock.Render(" 🔒")
+	} else if e.IsCurrent {
+		statusText += styleLock.Render(" cwd")
+	}
+	status := stStyle.Render(statusText)
 
 	return table.Row{check, path, branch, status}
 }
@@ -194,37 +220,55 @@ func shortenPath(p string) string {
 	return p
 }
 
+// pushToast adds an error toast and returns a Cmd to auto-dismiss it.
+func (m *tuiModel) pushToast(text string) tea.Cmd {
+	m.toastSeq++
+	id := m.toastSeq
+	m.toasts = append(m.toasts, toast{id: id, text: text})
+	return tea.Tick(toastDuration, func(time.Time) tea.Msg {
+		return dismissToastMsg{id: id}
+	})
+}
+
 func (m tuiModel) Init() tea.Cmd {
 	return nil
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	// Toast auto-dismiss
+	case dismissToastMsg:
+		for i, t := range m.toasts {
+			if t.id == msg.id {
+				m.toasts = append(m.toasts[:i], m.toasts[i+1:]...)
+				break
+			}
+		}
+		return m, nil
+
 	// Async result handlers
 	case deleteResultMsg:
 		m.busy = false
-		if msg.err != nil {
-			m.err = msg.err
-		} else {
-			m.message = fmt.Sprintf("Removed %d worktree(s)", msg.removed)
-			m.err = nil
+		m.message = fmt.Sprintf("Removed %d worktree(s)", msg.removed)
+		var cmds []tea.Cmd
+		for _, errText := range msg.errors {
+			cmds = append(cmds, m.pushToast(errText))
 		}
-		return m, m.reloadCmd()
+		cmds = append(cmds, m.reloadCmd())
+		return m, tea.Batch(cmds...)
 
 	case pruneResultMsg:
 		m.busy = false
 		if msg.err != nil {
-			m.err = msg.err
-		} else {
-			m.message = "Pruned stale worktree references"
+			return m, m.pushToast(msg.err.Error())
 		}
+		m.message = "Pruned stale worktree references"
 		return m, m.reloadCmd()
 
 	case reloadResultMsg:
 		m.busy = false
 		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
+			return m, m.pushToast(msg.err.Error())
 		}
 		m.entries = msg.entries
 		m.selected = make(map[int]bool)
@@ -243,9 +287,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "space":
-			// Toggle selection (skip main worktree)
+			// Toggle selection (skip protected worktrees)
 			idx := m.table.Cursor()
-			if idx < len(m.entries) && !m.entries[idx].IsMain {
+			if idx < len(m.entries) && !m.entries[idx].Protected() {
 				m.selected[idx] = !m.selected[idx]
 				if !m.selected[idx] {
 					delete(m.selected, idx)
@@ -255,9 +299,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "a":
-			// Select all merged
+			// Select all merged (skip protected)
 			for i, e := range m.entries {
-				if e.Status == StatusMerged && !e.IsMain {
+				if e.Status == StatusMerged && !e.Protected() {
 					m.selected[i] = true
 				}
 			}
@@ -273,9 +317,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.deleteSelectedCmd(false)
 
 		case "C":
-			// Clean ALL merged worktrees
+			// Clean ALL merged worktrees (skip protected)
 			for i, e := range m.entries {
-				if e.Status == StatusMerged && !e.IsMain {
+				if e.Status == StatusMerged && !e.Protected() {
 					m.selected[i] = true
 				}
 			}
@@ -305,7 +349,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // deleteSelectedCmd returns a tea.Cmd that removes selected worktrees in the background.
 func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
-	// Snapshot the work to do before going async
 	type target struct {
 		path   string
 		branch string
@@ -316,7 +359,7 @@ func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 			continue
 		}
 		e := m.entries[idx]
-		if e.IsMain {
+		if e.Protected() {
 			continue
 		}
 		targets = append(targets, target{path: e.Path, branch: e.Branch})
@@ -332,10 +375,10 @@ func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 
 	return func() tea.Msg {
 		removed := 0
-		var lastErr error
+		var errors []string
 		for _, t := range targets {
 			if err := Remove(t.path, force); err != nil {
-				lastErr = fmt.Errorf("remove %s: %w", shortenPath(t.path), err)
+				errors = append(errors, fmt.Sprintf("%s: %s", shortenPath(t.path), err))
 				continue
 			}
 			if t.branch != "" {
@@ -344,7 +387,7 @@ func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 			removed++
 		}
 		_ = Prune()
-		return deleteResultMsg{removed: removed, err: lastErr}
+		return deleteResultMsg{removed: removed, errors: errors}
 	}
 }
 
@@ -395,12 +438,18 @@ func (m tuiModel) View() tea.View {
 	if m.busy {
 		b.WriteString(styleBusy.Render("  " + m.message))
 		b.WriteString("\n\n")
-	} else if m.err != nil {
-		b.WriteString(styleError.Render("  " + m.err.Error()))
-		b.WriteString("\n\n")
 	} else if m.message != "" {
 		b.WriteString(styleMessage.Render("  " + m.message))
 		b.WriteString("\n\n")
+	}
+
+	// Floating toast notifications (errors)
+	for _, t := range m.toasts {
+		b.WriteString(styleToastBox.Render(styleToastText.Render("  " + t.text)))
+		b.WriteString("\n")
+	}
+	if len(m.toasts) > 0 {
+		b.WriteString("\n")
 	}
 
 	// Help bar — grouped by function
