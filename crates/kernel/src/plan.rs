@@ -841,6 +841,79 @@ fn create_fallback_plan(user_text: &str) -> Plan {
     }
 }
 
+/// Classified result of a step's agent turn — extracted for testability.
+#[derive(Debug)]
+struct StepClassification {
+    step_outcome:        StepOutcome,
+    iterations_consumed: usize,
+    tool_calls_consumed: usize,
+    model:               String,
+}
+
+/// Classify an `AgentTurnResult` (or error) into a [`StepOutcome`], deciding
+/// whether to keep the text for `final_texts`.
+///
+/// Returns `(classification, summary_text, optional_text_to_keep)`.
+fn classify_step_result(
+    result: std::result::Result<crate::agent::AgentTurnResult, KernelError>,
+    step_index: usize,
+) -> (StepClassification, String, Option<String>) {
+    match result {
+        Ok(turn) => {
+            let summary = turn.text.clone();
+            let cls = StepClassification {
+                iterations_consumed: turn.iterations,
+                tool_calls_consumed: turn.tool_calls,
+                model:               turn.model.clone(),
+                step_outcome:        StepOutcome::Success, // may be overridden below
+            };
+
+            // When the agent loop exhausted its max iterations without
+            // completing, `trace.success` is false.  Treat this as a replan
+            // trigger instead of silently accepting the fallback error text
+            // — otherwise every exhausted step pushes the same "[已达到最大
+            // 迭代次数…]" message and the user sees it repeated N times.
+            if !turn.trace.success {
+                let reason = turn
+                    .trace
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "agent loop did not complete successfully".to_string());
+                warn!(
+                    step = step_index,
+                    reason = %reason,
+                    "step finished with trace.success=false, requesting replan"
+                );
+                let cls = StepClassification {
+                    step_outcome: StepOutcome::NeedsReplan { reason },
+                    ..cls
+                };
+                // Don't push fallback text — it would pollute final output.
+                return (cls, summary, None);
+            }
+
+            let text_to_keep = if turn.text.is_empty() {
+                None
+            } else {
+                Some(turn.text)
+            };
+            (cls, summary, text_to_keep)
+        }
+        Err(e) => {
+            let summary = e.to_string();
+            let cls = StepClassification {
+                step_outcome:        StepOutcome::Failed {
+                    reason: summary.clone(),
+                },
+                iterations_consumed: 0,
+                tool_calls_consumed: 0,
+                model:               String::new(),
+            };
+            (cls, summary, None)
+        }
+    }
+}
+
 /// Execute a single plan step inline using `run_agent_loop`.
 ///
 /// Returns `(StepOutcome, summary_text)`.
@@ -882,47 +955,16 @@ async fn execute_inline_step(
     )
     .await;
 
-    match result {
-        Ok(turn_result) => {
-            *total_iterations += turn_result.iterations;
-            *total_tool_calls += turn_result.tool_calls;
-            *last_model = turn_result.model.clone();
-            let summary = turn_result.text.clone();
-
-            // When the agent loop exhausted its max iterations without
-            // completing, `trace.success` is false.  Treat this as a replan
-            // trigger instead of silently accepting the fallback error text
-            // — otherwise every exhausted step pushes the same "[已达到最大
-            // 迭代次数…]" message and the user sees it repeated N times.
-            if !turn_result.trace.success {
-                let reason = turn_result
-                    .trace
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "agent loop did not complete successfully".to_string());
-                warn!(
-                    step = step.index,
-                    reason = %reason,
-                    "step finished with trace.success=false, requesting replan"
-                );
-                return (StepOutcome::NeedsReplan { reason }, summary);
-            }
-
-            if !turn_result.text.is_empty() {
-                final_texts.push(turn_result.text);
-            }
-            (StepOutcome::Success, summary)
-        }
-        Err(e) => {
-            let summary = e.to_string();
-            (
-                StepOutcome::Failed {
-                    reason: summary.clone(),
-                },
-                summary,
-            )
-        }
+    let (outcome, summary, text_to_keep) = classify_step_result(result, step.index);
+    *total_iterations += outcome.iterations_consumed;
+    *total_tool_calls += outcome.tool_calls_consumed;
+    if !outcome.model.is_empty() {
+        *last_model = outcome.model;
     }
+    if let Some(text) = text_to_keep {
+        final_texts.push(text);
+    }
+    (outcome.step_outcome, summary)
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +1014,83 @@ mod tests {
         assert_eq!(plan.steps[0].task, "fix the login bug");
         assert_eq!(plan.steps[0].mode, ExecutionMode::Inline);
         assert_eq!(plan.status, PlanStatus::Active);
+    }
+
+    /// Helper to build a minimal `AgentTurnResult` for classification tests.
+    fn make_turn_result(
+        text: &str,
+        success: bool,
+        error: Option<&str>,
+    ) -> crate::agent::AgentTurnResult {
+        use crate::io::MessageId;
+        crate::agent::AgentTurnResult {
+            text:       text.to_owned(),
+            iterations: 25,
+            tool_calls: 25,
+            model:      "test-model".to_owned(),
+            trace:      crate::agent::TurnTrace {
+                duration_ms: 1000,
+                model: "test-model".to_owned(),
+                input_text: None,
+                iterations: vec![],
+                final_text_len: text.len(),
+                total_tool_calls: 25,
+                success,
+                error: error.map(|s| s.to_owned()),
+                rara_message_id: MessageId::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn classify_step_result_success_keeps_text() {
+        let turn = make_turn_result("step output", true, None);
+        let (cls, summary, text) = super::classify_step_result(Ok(turn), 0);
+        assert_eq!(cls.step_outcome, StepOutcome::Success);
+        assert_eq!(summary, "step output");
+        assert_eq!(text, Some("step output".to_owned()));
+    }
+
+    #[test]
+    fn classify_step_result_exhaustion_triggers_replan_and_drops_text() {
+        let fallback = "[已达到最大迭代次数，任务未完成。已执行 25 次工具调用。]";
+        let turn = make_turn_result(
+            fallback,
+            false,
+            Some("max iterations exhausted (25 iterations, 25 tool calls)"),
+        );
+        let (cls, _summary, text) = super::classify_step_result(Ok(turn), 0);
+        assert!(
+            matches!(cls.step_outcome, StepOutcome::NeedsReplan { .. }),
+            "expected NeedsReplan, got {:?}",
+            cls.step_outcome
+        );
+        // Fallback text must NOT be kept — prevents repeated messages in
+        // final_texts when multiple steps exhaust.
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn classify_step_result_exhaustion_without_error_field() {
+        let turn = make_turn_result("", false, None);
+        let (cls, _summary, text) = super::classify_step_result(Ok(turn), 0);
+        assert!(matches!(cls.step_outcome, StepOutcome::NeedsReplan { .. }));
+        assert_eq!(text, None);
+        // Should use default reason when trace.error is None.
+        if let StepOutcome::NeedsReplan { reason } = cls.step_outcome {
+            assert!(reason.contains("did not complete"), "reason: {reason}");
+        }
+    }
+
+    #[test]
+    fn classify_step_result_kernel_error_returns_failed() {
+        let err = KernelError::Llm {
+            message: "boom".into(),
+        };
+        let (cls, summary, text) = super::classify_step_result(Err(err), 0);
+        assert!(matches!(cls.step_outcome, StepOutcome::Failed { .. }));
+        assert!(summary.contains("boom"));
+        assert_eq!(text, None);
     }
 
     #[test]
