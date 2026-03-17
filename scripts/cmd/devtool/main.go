@@ -15,25 +15,11 @@ func main() {
 		Name:  "devtool",
 		Usage: "Unified developer toolkit for rara",
 		Commands: []*cli.Command{
-			worktreeCmd(),
+			worktree.Cmd(),
 		},
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
-	}
-}
-
-func worktreeCmd() *cli.Command {
-	return &cli.Command{
-		Name:    "worktree",
-		Aliases: []string{"wt"},
-		Usage:   "Manage git worktree lifecycle",
-		Commands: []*cli.Command{
-			worktree.ListCmd(),
-			worktree.CleanCmd(),
-			worktree.NukeCmd(),
-		},
-		DefaultCommand: "list",
 	}
 }
