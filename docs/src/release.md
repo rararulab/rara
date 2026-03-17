@@ -60,15 +60,6 @@ GitHub Actions security restriction: tags created by `GITHUB_TOKEN` within a wor
 - `rara-cli` is the only distributable binary (defined in `crates/cmd/Cargo.toml`)
 - Version extraction in release-plz.yml uses `cargo metadata` to read the resolved rara-cli version
 
-## Docker (Separate Pipeline)
-
-Docker images are **not** part of the release pipeline. They are built on every successful CI run on main:
-
-- `ghcr.io/rararulab/rara:latest` — backend
-- `ghcr.io/rararulab/rara-web:latest` — frontend
-
-See `.github/workflows/docker-publish.yml`.
-
 ## Homebrew
 
 - Tap repo: [rararulab/homebrew-tap](https://github.com/rararulab/homebrew-tap)
