@@ -188,6 +188,8 @@ pub enum TapEntryKind {
     Summary,
     /// Plan-execute plan snapshot.
     Plan,
+    /// Structured task report from background/scheduled tasks.
+    TaskReport,
 }
 
 /// Canonical tape name prefix for per-user tapes.

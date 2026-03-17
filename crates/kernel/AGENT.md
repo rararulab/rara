@@ -163,3 +163,46 @@ rebuild_messages_for_llm()
 - Do NOT truncate tape entries — tape 是完整历史，截断只发生在 `rebuild_messages_for_llm()` 之后的 `context_budget` 阶段。
 - Do NOT bypass `rebuild_messages_for_llm` for "performance" by caching messages across iterations — tape 是 append-only JSONL 本地文件，读取 <1ms。缓存引入双写一致性问题，正是我们刚消除的。
 - Do NOT change `context_budget` thresholds without testing — 30%/50%/75% 是参考 OpenFang 的经验值，过低会截断有用信息，过高会 context overflow。
+
+---
+
+## TaskReport & Subscription Notification Bus
+
+### What
+
+Structured `TaskReport` publishing and tag-based `Subscription` routing so background/scheduled tasks can notify sessions of their results.
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `task_report.rs` | `TaskReport`, `TaskReportStatus`, `PrReviewResult` and related types |
+| `notification/` | `TaskNotification`, `TaskReportRef`, `NotifyAction`, `Subscription`, `SubscriptionRegistry` (file-backed) |
+| `event.rs` | `Syscall::Subscribe`, `Syscall::Unsubscribe`, `Syscall::PublishTaskReport` variants |
+| `syscall.rs` | Dispatch arms + `handle_publish_task_report` + `SyscallTool` exec methods and schema |
+| `handle.rs` | `KernelHandle::deliver_internal()` for ProactiveTurn delivery |
+| `kernel.rs` | `SubscriptionRegistry` instantiation and session cleanup |
+
+### Three Syscalls
+
+1. **Subscribe** — register tag-based subscription for a session, returns subscription UUID
+2. **Unsubscribe** — remove subscription by ID
+3. **PublishTaskReport** — persist result to `JobResultStore` (for scheduled jobs), match subscriptions, deliver via ProactiveTurn (synthetic message → LLM turn) or SilentAppend (tape entry only)
+
+### Critical Invariants
+
+- `task_type` is always auto-included in `tags` by `exec_publish_report` — callers don't need to duplicate it
+- `source_session` is always overwritten to the calling session — agents cannot spoof the source
+- Subscriptions are cleaned up on session end (`cleanup_process` calls `remove_session`)
+- `SubscriptionRegistry` is file-backed (`subscriptions.json`) — subscriptions survive kernel restarts
+
+### Delivery Modes
+
+- `ProactiveTurn`: creates an `InboundMessage::synthetic()` with the subscription owner's identity, pushed to the event queue. This triggers an LLM turn on the subscriber session. **If the subscriber session is not in the process table** (e.g. after restart), delivery is automatically downgraded to `SilentAppend` to avoid restoring the session with an incorrect identity.
+- `SilentAppend`: appends a `TapEntryKind::TaskReport` entry to the subscriber's tape. No LLM turn is triggered.
+
+### What NOT To Do
+
+- Do NOT publish TaskReport without going through the syscall — `exec_publish_report` enforces `source_session` and `tags` invariants
+- Do NOT use `UserId("system")` in synthetic messages for ProactiveTurn — always use the subscription owner's identity to prevent privilege escalation on session restore
+- Do NOT construct `TaskNotification` outside `handle_publish_task_report` — it builds the `TaskReportRef` and coordinates result persistence

@@ -50,6 +50,7 @@ pub mod schedule;
 pub mod security;
 pub mod session;
 pub(crate) mod syscall;
+pub mod task_report;
 pub mod tool;
 pub mod trace;
 

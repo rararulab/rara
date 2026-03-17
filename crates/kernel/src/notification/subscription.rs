@@ -1,0 +1,311 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Tag-based task notification subscriptions.
+//!
+//! Manages per-user, per-tag subscriptions so that [`TaskNotification`]s
+//! produced by background/scheduled tasks are routed to interested sessions.
+//! Separate from the kernel event bus (`bus` module) which is a fire-and-forget
+//! broadcast channel.
+//!
+//! Subscriptions are persisted to a JSON file and restored on kernel startup,
+//! so they survive restarts.
+
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
+
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
+use uuid::Uuid;
+
+use crate::{identity::UserId, session::SessionKey, task_report::TaskReportStatus};
+
+// ---------------------------------------------------------------------------
+// Task notification types
+// ---------------------------------------------------------------------------
+
+/// Lightweight notification delivered when a TaskReport is published.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskNotification {
+    /// Unique task identifier.
+    pub task_id:      Uuid,
+    /// Fixed category (e.g. "pr_review").
+    pub task_type:    String,
+    /// Routing tags for subscription matching.
+    pub tags:         Vec<String>,
+    /// Completion status.
+    pub status:       TaskReportStatus,
+    /// Human-readable one-line summary.
+    pub summary:      String,
+    /// Task-type-specific structured result from the report.
+    pub result:       serde_json::Value,
+    /// Action already taken by the task agent, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_taken: Option<String>,
+    /// Pointer back to the source of this report.
+    pub report_ref:   TaskReportRef,
+}
+
+/// Reference to locate the full result in the result store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskReportRef {
+    /// Session that produced the report.
+    pub source_session: SessionKey,
+    /// Scheduled job ID (if produced by a scheduled task).
+    /// Used to look up results in `results/{job_id}/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id:         Option<crate::schedule::JobId>,
+}
+
+/// Action to take when a matching notification arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyAction {
+    /// Trigger a proactive LLM turn on the subscriber with the notification
+    /// as directive.
+    ProactiveTurn,
+    /// Silently append a TaskReport entry to the subscriber's tape.
+    SilentAppend,
+}
+
+/// A session's subscription to task notifications.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subscription {
+    /// Unique subscription ID.
+    pub id:         Uuid,
+    /// Session that will receive matching notifications.
+    pub subscriber: SessionKey,
+    /// Owner identity — only reports from the same user are delivered.
+    pub owner:      UserId,
+    /// Any matching tag triggers delivery.
+    pub match_tags: Vec<String>,
+    /// What to do when a notification matches.
+    pub on_receive: NotifyAction,
+}
+
+// ---------------------------------------------------------------------------
+// SubscriptionRegistry
+// ---------------------------------------------------------------------------
+
+/// File-backed registry of tag-based notification subscriptions.
+///
+/// Uses an inverted index `(UserId, tag) → {sub_id}` so that `match_tags`
+/// is O(M) hash lookups (M = number of report tags) instead of a full scan
+/// over all subscriptions.
+///
+/// Mutations (subscribe/unsubscribe/remove_session) persist the full state
+/// to a JSON file so subscriptions survive kernel restarts.
+///
+/// Thread-safe: guarded by a tokio `RwLock` for concurrent read access
+/// during notification fan-out.
+pub struct SubscriptionRegistry {
+    inner: tokio::sync::RwLock<RegistryInner>,
+}
+
+/// Interior state behind the `RwLock`.
+struct RegistryInner {
+    /// Primary store: sub_id → Subscription.
+    subs:      HashMap<Uuid, Subscription>,
+    /// Inverted index: (owner, tag) → set of sub_ids.
+    tag_index: HashMap<(UserId, String), HashSet<Uuid>>,
+    /// Path to the JSON persistence file.
+    path:      PathBuf,
+}
+
+impl RegistryInner {
+    /// Build a registry from a list of subscriptions loaded from disk.
+    fn from_entries(entries: Vec<Subscription>, path: PathBuf) -> Self {
+        let mut subs = HashMap::new();
+        let mut tag_index: HashMap<(UserId, String), HashSet<Uuid>> = HashMap::new();
+        for sub in entries {
+            for tag in &sub.match_tags {
+                tag_index
+                    .entry((sub.owner.clone(), tag.clone()))
+                    .or_default()
+                    .insert(sub.id);
+            }
+            subs.insert(sub.id, sub);
+        }
+        Self {
+            subs,
+            tag_index,
+            path,
+        }
+    }
+
+    /// Insert a subscription into the primary store and inverted index.
+    fn insert(&mut self, sub: Subscription) {
+        for tag in &sub.match_tags {
+            self.tag_index
+                .entry((sub.owner.clone(), tag.clone()))
+                .or_default()
+                .insert(sub.id);
+        }
+        self.subs.insert(sub.id, sub);
+    }
+
+    /// Remove a subscription from the primary store and inverted index.
+    fn remove(&mut self, id: Uuid) -> Option<Subscription> {
+        if let Some(sub) = self.subs.remove(&id) {
+            for tag in &sub.match_tags {
+                let key = (sub.owner.clone(), tag.clone());
+                if let Some(set) = self.tag_index.get_mut(&key) {
+                    set.remove(&id);
+                    if set.is_empty() {
+                        self.tag_index.remove(&key);
+                    }
+                }
+            }
+            Some(sub)
+        } else {
+            None
+        }
+    }
+
+    /// Persist the current state to the JSON file.
+    fn persist(&self) {
+        let entries: Vec<&Subscription> = self.subs.values().collect();
+        match serde_json::to_string_pretty(&entries) {
+            Ok(json) => {
+                if let Some(parent) = self.path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = std::fs::write(&self.path, json) {
+                    warn!(error = %e, path = %self.path.display(), "failed to persist subscriptions.json");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to serialize subscriptions for persistence");
+            }
+        }
+    }
+}
+
+impl SubscriptionRegistry {
+    /// Load subscriptions from a JSON file, or create an empty registry if
+    /// the file does not exist. Subscriptions are persisted back to this path
+    /// on every mutation.
+    pub fn load(path: PathBuf) -> Self {
+        let entries = match std::fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<Vec<Subscription>>(&content) {
+                Ok(v) => {
+                    info!(count = v.len(), "restored subscriptions from disk");
+                    v
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "failed to parse subscriptions.json, starting empty"
+                    );
+                    Vec::new()
+                }
+            },
+            Err(_) => {
+                info!(path = %path.display(), "no subscriptions.json found, starting empty");
+                Vec::new()
+            }
+        };
+        Self {
+            inner: tokio::sync::RwLock::new(RegistryInner::from_entries(entries, path)),
+        }
+    }
+
+    /// Register a new subscription. Returns the subscription ID.
+    ///
+    /// `owner` scopes the subscription — only reports published by the same
+    /// user will be delivered, preventing cross-user data leakage.
+    pub async fn subscribe(
+        &self,
+        subscriber: SessionKey,
+        owner: UserId,
+        match_tags: Vec<String>,
+        on_receive: NotifyAction,
+    ) -> Uuid {
+        let id = Uuid::new_v4();
+        let sub = Subscription {
+            id,
+            subscriber,
+            owner,
+            match_tags,
+            on_receive,
+        };
+        let mut inner = self.inner.write().await;
+        inner.insert(sub);
+        inner.persist();
+        id
+    }
+
+    /// Remove a subscription by ID, only if owned by `caller`.
+    /// Returns true if it existed and was removed.
+    pub async fn unsubscribe(&self, subscription_id: Uuid, caller: &UserId) -> bool {
+        let mut inner = self.inner.write().await;
+        let owned = inner
+            .subs
+            .get(&subscription_id)
+            .is_some_and(|sub| sub.owner == *caller);
+        if !owned {
+            return false;
+        }
+        let removed = inner.remove(subscription_id).is_some();
+        if removed {
+            inner.persist();
+        }
+        removed
+    }
+
+    /// Find all subscriptions matching any of the given tags, scoped to the
+    /// publisher's owner. O(M) hash lookups where M = number of report tags.
+    pub async fn match_tags(&self, tags: &[String], publisher: &UserId) -> Vec<Subscription> {
+        let inner = self.inner.read().await;
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for tag in tags {
+            if let Some(ids) = inner.tag_index.get(&(publisher.clone(), tag.clone())) {
+                for id in ids {
+                    if seen.insert(*id) {
+                        if let Some(sub) = inner.subs.get(id) {
+                            result.push(sub.clone());
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Remove all subscriptions for a given session (cleanup on session end).
+    pub async fn remove_session(&self, session_key: &SessionKey) {
+        let mut inner = self.inner.write().await;
+        let to_remove: Vec<Uuid> = inner
+            .subs
+            .values()
+            .filter(|sub| &sub.subscriber == session_key)
+            .map(|sub| sub.id)
+            .collect();
+        if to_remove.is_empty() {
+            return;
+        }
+        for id in to_remove {
+            inner.remove(id);
+        }
+        inner.persist();
+    }
+}
+
+/// Shared reference to a subscription registry.
+pub type SubscriptionRegistryRef = Arc<SubscriptionRegistry>;

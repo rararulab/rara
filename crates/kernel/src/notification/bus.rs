@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel notifications — inter-component event broadcasting.
+//! Kernel event bus — fire-and-forget broadcast of internal kernel events.
+//!
+//! Used by kernel components (agent loop, guards, tool dispatch) to emit
+//! observable events. Subscribers receive all events; filtering is
+//! client-side.
 
 use std::sync::Arc;
 
@@ -20,6 +24,8 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::session::SessionKey;
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -117,5 +123,3 @@ impl NotificationBus for BroadcastNotificationBus {
         self.sender.subscribe()
     }
 }
-
-use crate::session::SessionKey;

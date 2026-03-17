@@ -37,6 +37,7 @@ use crate::{
 async fn register_job(
     trigger: Trigger,
     message: String,
+    tags: Vec<String>,
     context: &ToolContext,
 ) -> anyhow::Result<ToolOutput> {
     let next_at = trigger.next_at();
@@ -50,6 +51,7 @@ async fn register_job(
         Syscall::RegisterJob {
             trigger,
             message,
+            tags,
             reply_tx: tx,
         },
     ));
@@ -82,6 +84,8 @@ impl ScheduleOnceTool {
 struct ScheduleOnceParams {
     after_seconds: u64,
     message:       String,
+    #[serde(default)]
+    tags:          Vec<String>,
 }
 
 #[async_trait]
@@ -104,6 +108,11 @@ impl AgentTool for ScheduleOnceTool {
                 "message": {
                     "type": "string",
                     "description": "The task description to execute when the job fires"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Routing tags for task report notification matching (e.g. [\"pr_review\", \"repo:rararulab/rara\"])"
                 }
             }
         })
@@ -126,7 +135,7 @@ impl AgentTool for ScheduleOnceTool {
             .checked_add(jiff::SignedDuration::from_secs(p.after_seconds as i64))
             .map_err(|e| anyhow::anyhow!("timestamp overflow: {e}"))?;
 
-        register_job(Trigger::Once { run_at }, p.message, context).await
+        register_job(Trigger::Once { run_at }, p.message, p.tags, context).await
     }
 }
 
@@ -144,6 +153,8 @@ impl ScheduleIntervalTool {
 struct ScheduleIntervalParams {
     interval_seconds: u64,
     message:          String,
+    #[serde(default)]
+    tags:             Vec<String>,
 }
 
 #[async_trait]
@@ -164,6 +175,11 @@ impl AgentTool for ScheduleIntervalTool {
                 "message": {
                     "type": "string",
                     "description": "The task description to execute when the job fires"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Routing tags for task report notification matching (e.g. [\"pr_review\", \"repo:rararulab/rara\"])"
                 }
             }
         })
@@ -192,6 +208,7 @@ impl AgentTool for ScheduleIntervalTool {
                 next_at,
             },
             p.message,
+            p.tags,
             context,
         )
         .await
@@ -212,6 +229,8 @@ impl ScheduleCronTool {
 struct ScheduleCronParams {
     cron:    String,
     message: String,
+    #[serde(default)]
+    tags:    Vec<String>,
 }
 
 #[async_trait]
@@ -235,6 +254,11 @@ impl AgentTool for ScheduleCronTool {
                 "message": {
                     "type": "string",
                     "description": "The task description to execute when the job fires"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Routing tags for task report notification matching (e.g. [\"pr_review\", \"repo:rararulab/rara\"])"
                 }
             }
         })
@@ -277,6 +301,7 @@ impl AgentTool for ScheduleCronTool {
                 next_at,
             },
             p.message,
+            p.tags,
             context,
         )
         .await

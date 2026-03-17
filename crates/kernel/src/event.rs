@@ -197,6 +197,7 @@ pub enum Syscall {
     RegisterJob {
         trigger:  crate::schedule::Trigger,
         message:  String,
+        tags:     Vec<String>,
         #[debug(skip)]
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<crate::schedule::JobId>>,
@@ -215,6 +216,32 @@ pub enum Syscall {
         #[debug(skip)]
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
+    },
+
+    // -- Task Report & Subscription --
+    /// Register a notification subscription for the calling session.
+    Subscribe {
+        match_tags: Vec<String>,
+        on_receive: crate::notification::NotifyAction,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx:   oneshot::Sender<crate::error::Result<uuid::Uuid>>,
+    },
+
+    /// Remove a subscription by ID.
+    Unsubscribe {
+        subscription_id: uuid::Uuid,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx:        oneshot::Sender<crate::error::Result<bool>>,
+    },
+
+    /// Publish a TaskReport and broadcast notification to matching subscribers.
+    PublishTaskReport {
+        report:   crate::task_report::TaskReport,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<()>>,
     },
 }
 
