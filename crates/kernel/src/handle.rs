@@ -364,7 +364,7 @@ impl KernelHandle {
     // ========================================================================
 
     /// Push a syscall event into the event queue.
-    async fn syscall_push(&self, event: KernelEventEnvelope) -> Result<()> {
+    pub(crate) async fn syscall_push(&self, event: KernelEventEnvelope) -> Result<()> {
         self.event_queue
             .push(event)
             .map_err(|_| KernelError::Other {
@@ -737,5 +737,14 @@ impl KernelHandle {
             },
         ))
         .await
+    }
+
+    /// Deliver a system-generated message to a session, triggering an LLM turn.
+    ///
+    /// Used by the notification bus to deliver proactive-turn notifications.
+    pub async fn deliver_internal(&self, msg: crate::io::InboundMessage) {
+        let _ = self
+            .event_queue
+            .push(KernelEventEnvelope::user_message(msg));
     }
 }

@@ -50,6 +50,7 @@ async fn register_job(
         Syscall::RegisterJob {
             trigger,
             message,
+            tags: vec![],
             reply_tx: tx,
         },
     ));

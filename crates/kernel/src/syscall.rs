@@ -38,7 +38,7 @@ use crate::{
     kv::{KvScope, SharedKv},
     llm::DriverRegistryRef,
     memory::TapeService,
-    notification::NotificationBusRef,
+    notification::{NotificationBusRef, SubscriptionRegistryRef},
     security::SecurityRef,
     session::{SessionKey, SessionTable},
     tool::{DynamicToolProviderRef, ToolRegistryRef, tape::TapeTool},
@@ -70,6 +70,8 @@ pub(crate) struct SyscallDispatcher {
     dynamic_tool_provider: Option<DynamicToolProviderRef>,
     /// Scheduled task wheel for job scheduling.
     job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    /// Tag-based subscription registry for task notifications.
+    subscription_registry: SubscriptionRegistryRef,
 }
 
 impl SyscallDispatcher {
@@ -83,6 +85,7 @@ impl SyscallDispatcher {
         config: KernelConfig,
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
+        subscription_registry: SubscriptionRegistryRef,
     ) -> Self {
         let jobs_path = rara_paths::config_dir().join("scheduler").join("jobs.json");
         let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(
@@ -98,6 +101,7 @@ impl SyscallDispatcher {
             tape_service,
             dynamic_tool_provider,
             job_wheel,
+            subscription_registry,
         }
     }
 
@@ -352,6 +356,7 @@ impl SyscallDispatcher {
             Syscall::RegisterJob {
                 trigger,
                 message,
+                tags,
                 reply_tx,
             } => {
                 let principal = process_table.with(&syscall_sender, |p| p.principal.clone());
@@ -364,6 +369,7 @@ impl SyscallDispatcher {
                             session_key: syscall_sender,
                             principal,
                             created_at: Timestamp::now(),
+                            tags,
                         };
                         let id = entry.id.clone();
                         let wheel_ref = self.job_wheel.clone();
@@ -417,6 +423,41 @@ impl SyscallDispatcher {
                 let wheel = self.job_wheel.lock().unwrap();
                 let jobs = wheel.list(Some(&syscall_sender));
                 let _ = reply_tx.send(Ok(jobs));
+            }
+            Syscall::Subscribe {
+                match_tags,
+                on_receive,
+                reply_tx,
+            } => {
+                let sub_id = self
+                    .subscription_registry
+                    .subscribe(syscall_sender, match_tags, on_receive)
+                    .await;
+                info!(
+                    subscription_id = %sub_id,
+                    session = %syscall_sender,
+                    "registered task notification subscription"
+                );
+                let _ = reply_tx.send(Ok(sub_id));
+            }
+            Syscall::Unsubscribe {
+                subscription_id,
+                reply_tx,
+            } => {
+                let removed = self
+                    .subscription_registry
+                    .unsubscribe(subscription_id)
+                    .await;
+                info!(
+                    subscription_id = %subscription_id,
+                    removed,
+                    "unsubscribed from task notifications"
+                );
+                let _ = reply_tx.send(Ok(removed));
+            }
+            Syscall::PublishTaskReport { report, reply_tx } => {
+                self.handle_publish_task_report(report, reply_tx, kernel_handle)
+                    .await;
             }
         }
     }
@@ -530,6 +571,105 @@ impl SyscallDispatcher {
         Self::check_scope_permission(session_key, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
         Ok(self.shared_kv.get(&scoped).await)
+    }
+
+    /// Access the subscription registry.
+    pub fn subscription_registry(&self) -> &SubscriptionRegistryRef { &self.subscription_registry }
+
+    /// Write TaskReport to source tape, match subscriptions, and deliver.
+    async fn handle_publish_task_report(
+        &self,
+        report: crate::task_report::TaskReport,
+        reply_tx: tokio::sync::oneshot::Sender<crate::error::Result<()>>,
+        kernel_handle: &KernelHandle,
+    ) {
+        use crate::{
+            memory::TapEntryKind,
+            notification::{NotifyAction, TapeEntryRef, TaskNotification},
+        };
+
+        let source_session = report.source_session;
+        let task_id = report.task_id;
+        let tags = report.tags.clone();
+        let summary = report.summary.clone();
+        let status = report.status;
+        let task_type = report.task_type.clone();
+
+        // 1. Write TaskReport to source session's tape.
+        let tape_name = source_session.to_string();
+        let report_json = serde_json::to_value(&report).unwrap_or_default();
+        let entry_id = match self
+            .tape_service
+            .store()
+            .append(
+                &tape_name,
+                TapEntryKind::TaskReport,
+                report_json.clone(),
+                None,
+            )
+            .await
+        {
+            Ok(entry) => entry.id,
+            Err(e) => {
+                warn!(error = %e, "failed to append TaskReport to tape");
+                let _ = reply_tx.send(Err(crate::error::KernelError::Other {
+                    message: format!("tape append failed: {e}").into(),
+                }));
+                return;
+            }
+        };
+
+        // 2. Build notification with tape entry ref.
+        let notification = TaskNotification {
+            task_id,
+            task_type: task_type.clone(),
+            tags: tags.clone(),
+            status,
+            summary: summary.clone(),
+            report_ref: TapeEntryRef {
+                session_key: source_session,
+                entry_id,
+            },
+        };
+
+        // 3. Match subscriptions and deliver.
+        let matched = self.subscription_registry.match_tags(&tags).await;
+        let matched_count = matched.len();
+        for sub in matched {
+            let notif_json = serde_json::to_value(&notification).unwrap_or_default();
+            match sub.on_receive {
+                NotifyAction::ProactiveTurn => {
+                    // Deliver as a synthetic user message to trigger an LLM turn.
+                    let directive = format!(
+                        "[TaskNotification] {}: {}\nref: {}/entry_{}",
+                        task_type, summary, source_session, entry_id
+                    );
+                    let msg = crate::io::InboundMessage::synthetic(
+                        directive,
+                        crate::identity::UserId("system".into()),
+                        sub.subscriber,
+                    );
+                    kernel_handle.deliver_internal(msg).await;
+                }
+                NotifyAction::SilentAppend => {
+                    // Silently append the notification to subscriber's tape.
+                    let sub_tape = sub.subscriber.to_string();
+                    let _ = self
+                        .tape_service
+                        .store()
+                        .append(&sub_tape, TapEntryKind::TaskReport, notif_json, None)
+                        .await;
+                }
+            }
+        }
+
+        info!(
+            task_id = %task_id,
+            task_type,
+            matched_subs = matched_count,
+            "task report published and notifications delivered"
+        );
+        let _ = reply_tx.send(Ok(()));
     }
 }
 
@@ -849,6 +989,96 @@ impl SyscallTool {
             .map_err(|e| anyhow::anyhow!("publish failed: {e}"))?;
         Ok(serde_json::json!({ "ok": true }))
     }
+
+    // ========================================================================
+    // Task Report & Subscriptions
+    // ========================================================================
+
+    async fn exec_subscribe(
+        &self,
+        match_tags: Vec<String>,
+        on_receive: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        use crate::notification::NotifyAction;
+        let action = match on_receive {
+            "proactive_turn" => NotifyAction::ProactiveTurn,
+            "silent_append" => NotifyAction::SilentAppend,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "invalid on_receive: '{other}'. Expected 'proactive_turn' or 'silent_append'"
+                ));
+            }
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.handle
+            .syscall_push(crate::event::KernelEventEnvelope::syscall(
+                self.session_key,
+                crate::event::Syscall::Subscribe {
+                    match_tags,
+                    on_receive: action,
+                    reply_tx: tx,
+                },
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!("subscribe push failed: {e}"))?;
+        let sub_id = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("subscribe: reply channel dropped"))?
+            .map_err(|e| anyhow::anyhow!("subscribe failed: {e}"))?;
+        Ok(serde_json::json!({ "subscription_id": sub_id.to_string() }))
+    }
+
+    async fn exec_unsubscribe(&self, subscription_id: &str) -> anyhow::Result<serde_json::Value> {
+        let id: uuid::Uuid = subscription_id
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid subscription_id: {e}"))?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.handle
+            .syscall_push(crate::event::KernelEventEnvelope::syscall(
+                self.session_key,
+                crate::event::Syscall::Unsubscribe {
+                    subscription_id: id,
+                    reply_tx:        tx,
+                },
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!("unsubscribe push failed: {e}"))?;
+        let removed = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("unsubscribe: reply channel dropped"))?
+            .map_err(|e| anyhow::anyhow!("unsubscribe failed: {e}"))?;
+        Ok(serde_json::json!({ "removed": removed }))
+    }
+
+    async fn exec_publish_report(
+        &self,
+        report_data: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        use crate::task_report::TaskReport;
+        let mut report: TaskReport = serde_json::from_value(report_data)
+            .map_err(|e| anyhow::anyhow!("invalid task report: {e}"))?;
+        // Ensure source_session is set to caller.
+        report.source_session = self.session_key;
+        // Ensure task_type is in tags.
+        if !report.tags.contains(&report.task_type) {
+            report.tags.insert(0, report.task_type.clone());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.handle
+            .syscall_push(crate::event::KernelEventEnvelope::syscall(
+                self.session_key,
+                crate::event::Syscall::PublishTaskReport {
+                    report,
+                    reply_tx: tx,
+                },
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!("publish_report push failed: {e}"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("publish_report: reply channel dropped"))?
+            .map_err(|e| anyhow::anyhow!("publish_report failed: {e}"))?;
+        Ok(serde_json::json!({ "ok": true }))
+    }
 }
 
 // ============================================================================
@@ -907,6 +1137,17 @@ enum SyscallParams {
         event_type: String,
         payload:    serde_json::Value,
     },
+    // -- Task Report & Subscription --
+    Subscribe {
+        match_tags: Vec<String>,
+        on_receive: String,
+    },
+    Unsubscribe {
+        subscription_id: String,
+    },
+    PublishReport {
+        report: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -953,7 +1194,8 @@ impl crate::tool::AgentTool for SyscallTool {
 
     fn description(&self) -> &str {
         "Interact with the kernel: spawn agents, query process status, send signals, manage memory \
-         (private & shared), and publish events. Set the 'action' field to select the operation."
+         (private & shared), publish events, subscribe to task notifications, and publish task \
+         reports. Set the 'action' field to select the operation."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -970,7 +1212,8 @@ impl crate::tool::AgentTool for SyscallTool {
                         "status", "children", "kill", "pause", "resume", "interrupt",
                         "mem_store", "mem_recall",
                         "shared_store", "shared_recall",
-                        "publish"
+                        "publish",
+                        "subscribe", "unsubscribe", "publish_report"
                     ],
                     "description": "The kernel operation to perform."
                 },
@@ -1020,6 +1263,24 @@ impl crate::tool::AgentTool for SyscallTool {
                 },
                 "payload": {
                     "description": "Event payload (any JSON) for publish"
+                },
+                "match_tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Tags to match for subscribe"
+                },
+                "on_receive": {
+                    "type": "string",
+                    "enum": ["proactive_turn", "silent_append"],
+                    "description": "Action when notification matches: proactive_turn or silent_append"
+                },
+                "subscription_id": {
+                    "type": "string",
+                    "description": "Subscription UUID for unsubscribe"
+                },
+                "report": {
+                    "type": "object",
+                    "description": "TaskReport object for publish_report"
                 }
             }
         })
@@ -1061,6 +1322,14 @@ impl crate::tool::AgentTool for SyscallTool {
                 event_type,
                 payload,
             } => self.exec_publish(&event_type, payload).await,
+            SyscallParams::Subscribe {
+                match_tags,
+                on_receive,
+            } => self.exec_subscribe(match_tags, &on_receive).await,
+            SyscallParams::Unsubscribe { subscription_id } => {
+                self.exec_unsubscribe(&subscription_id).await
+            }
+            SyscallParams::PublishReport { report } => self.exec_publish_report(report).await,
         };
         result.map(Into::into)
     }

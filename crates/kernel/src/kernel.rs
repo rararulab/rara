@@ -59,7 +59,7 @@ use crate::{
     kv::SharedKv,
     llm::DriverRegistryRef,
     memory::TapeService,
-    notification::{BroadcastNotificationBus, NotificationBusRef},
+    notification::{BroadcastNotificationBus, NotificationBusRef, SubscriptionRegistryRef},
     plan::run_plan_loop,
     queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
@@ -147,48 +147,50 @@ pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
 /// flattened directly into this struct.
 pub struct Kernel {
     /// Kernel configuration.
-    config:             KernelConfig,
+    config:                KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:      Arc<SessionTable>,
+    process_table:         Arc<SessionTable>,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore:   Arc<Semaphore>,
+    global_semaphore:      Arc<Semaphore>,
     /// Unified security subsystem (auth + authz + approval).
-    security:           SecurityRef,
+    security:              SecurityRef,
     /// Agent registry for looking up named agent definitions.
-    agent_registry:     AgentRegistryRef,
+    agent_registry:        AgentRegistryRef,
     /// Tape service for session message persistence.
-    tape_service:       TapeService,
+    tape_service:          TapeService,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
-    session_index:      SessionIndexRef,
+    session_index:         SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
-    settings:           SettingsRef,
+    settings:              SettingsRef,
     /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
     /// tool_registry, event_bus).
-    syscall:            SyscallDispatcher,
+    syscall:               SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
     /// Bundled I/O subsystem (ingress, stream hub, delivery).
-    io:                 Arc<IOSubsystem>,
+    io:                    Arc<IOSubsystem>,
     /// Unified event queue for all kernel interactions.
-    event_queue:        EventQueueRef,
+    event_queue:           EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
     ///
     /// Always present. When `num_shards == 0` (single-queue mode), all
     /// events are routed to the global queue and processed by a single
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
-    sharded_queue:      ShardedQueueRef,
+    sharded_queue:         ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
-    started_at:         Timestamp,
+    started_at:            Timestamp,
     /// Knowledge layer service for long-term memory extraction.
-    knowledge:          crate::memory::knowledge::KnowledgeServiceRef,
+    knowledge:             crate::memory::knowledge::KnowledgeServiceRef,
     /// Optional hook to transform tool outputs before sending to the LLM.
-    output_interceptor: crate::tool::DynamicOutputInterceptor,
+    output_interceptor:    crate::tool::DynamicOutputInterceptor,
     /// Security guard pipeline (taint tracking + pattern scanning).
-    guard_pipeline:     Arc<crate::guard::pipeline::GuardPipeline>,
+    guard_pipeline:        Arc<crate::guard::pipeline::GuardPipeline>,
     /// Execution trace service for persisting turn-level traces.
-    trace_service:      crate::trace::TraceService,
+    trace_service:         crate::trace::TraceService,
+    /// Tag-based subscription registry for task notifications.
+    subscription_registry: SubscriptionRegistryRef,
 }
 
 impl Kernel {
@@ -211,6 +213,8 @@ impl Kernel {
         trace_service: crate::trace::TraceService,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
+        let subscription_registry: SubscriptionRegistryRef =
+            Arc::new(crate::notification::SubscriptionRegistry::new());
 
         info!(
             max_concurrency = config.max_concurrency,
@@ -240,6 +244,7 @@ impl Kernel {
             config.clone(),
             tape_service.clone(),
             dynamic_tool_provider,
+            subscription_registry.clone(),
         );
 
         Self {
@@ -260,6 +265,7 @@ impl Kernel {
             output_interceptor,
             guard_pipeline,
             trace_service,
+            subscription_registry,
         }
     }
 
@@ -1051,6 +1057,9 @@ impl Kernel {
         self.guard_pipeline
             .taint_tracker()
             .clear_session(&session_key);
+        self.subscription_registry
+            .remove_session(&session_key)
+            .await;
         if let Some(rt) = self.process_table.remove(session_key) {
             let manifest_name = rt.manifest.name.clone();
             let state = rt.state;
@@ -1332,16 +1341,27 @@ impl Kernel {
             description:            "Executes a scheduled task and summarizes the result"
                 .to_string(),
             model:                  None,
-            system_prompt:          format!(
-                "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
-                 {trigger_summary}\nTask: {message}\n\n## Instructions\n1. Execute the task \
-                 described above using available tools.\n2. After completion, provide a brief \
-                 summary of what you did and the outcome.\n\n## After Completion\nWhen you finish \
-                 the task, call the `kernel` tool with:\n- action: \"publish\"\n- event_type: \
-                 \"scheduled_task_done\"\n- payload: {{ \"message\": \"<your summary of what was \
-                 done and the outcome>\" }}\n",
-                message = job.message,
-            ),
+            system_prompt:          {
+                let tags_str = if job.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nRouting tags: {}\n", job.tags.join(", "))
+                };
+                format!(
+                    "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
+                     {trigger_summary}\nTask: {message}\n{tags_str}\n## Instructions\n1. Execute \
+                     the task described above using available tools.\n2. After completion, \
+                     provide a brief summary of what you did and the outcome.\n\n## After \
+                     Completion\nWhen you finish the task, call the `kernel` tool with:\n- \
+                     action: \"publish_report\"\n- report: {{ \"task_id\": \"<uuid>\", \
+                     \"task_type\": \"<type>\", \"tags\": [<routing tags>], \"status\": \
+                     \"completed\", \"summary\": \"<one-line summary>\", \"result\": \
+                     {{<structured result>}} }}\n\nAlternatively, use action: \"publish\" with \
+                     event_type: \"scheduled_task_done\" and payload: {{ \"message\": \
+                     \"<summary>\" }}\n",
+                    message = job.message,
+                )
+            },
             soul_prompt:            None,
             provider_hint:          None,
             max_iterations:         Some(15),

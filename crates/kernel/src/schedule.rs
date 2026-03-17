@@ -105,6 +105,9 @@ pub struct JobEntry {
     pub principal:   Principal,
     /// When this job was created.
     pub created_at:  Timestamp,
+    /// Routing tags propagated to TaskNotification on completion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags:        Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

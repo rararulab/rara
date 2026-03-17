@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -118,4 +119,124 @@ impl NotificationBus for BroadcastNotificationBus {
     }
 }
 
-use crate::session::SessionKey;
+use crate::{session::SessionKey, task_report::TaskReportStatus};
+
+// ---------------------------------------------------------------------------
+// Task notification types
+// ---------------------------------------------------------------------------
+
+/// Lightweight notification broadcast when a TaskReport is written.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskNotification {
+    /// Unique task identifier.
+    pub task_id:    Uuid,
+    /// Fixed category (e.g. "pr_review").
+    pub task_type:  String,
+    /// Routing tags for subscription matching.
+    pub tags:       Vec<String>,
+    /// Completion status.
+    pub status:     TaskReportStatus,
+    /// Human-readable one-line summary.
+    pub summary:    String,
+    /// Pointer to the full TaskReport in the source session's tape.
+    pub report_ref: TapeEntryRef,
+}
+
+/// Pointer to a specific tape entry in a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TapeEntryRef {
+    /// Session that holds the tape entry.
+    pub session_key: SessionKey,
+    /// Entry ID within the tape.
+    pub entry_id:    u64,
+}
+
+/// Action to take when a matching notification arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyAction {
+    /// Trigger a proactive LLM turn on the subscriber with the notification
+    /// as directive.
+    ProactiveTurn,
+    /// Silently append a TaskReport entry to the subscriber's tape.
+    SilentAppend,
+}
+
+/// A session's subscription to task notifications.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subscription {
+    /// Unique subscription ID.
+    pub id:         Uuid,
+    /// Session that will receive matching notifications.
+    pub subscriber: SessionKey,
+    /// Any matching tag triggers delivery.
+    pub match_tags: Vec<String>,
+    /// What to do when a notification matches.
+    pub on_receive: NotifyAction,
+}
+
+// ---------------------------------------------------------------------------
+// SubscriptionRegistry
+// ---------------------------------------------------------------------------
+
+/// In-memory registry of tag-based notification subscriptions.
+///
+/// Thread-safe: guarded by a tokio `RwLock` for concurrent read access
+/// during notification fan-out.
+pub struct SubscriptionRegistry {
+    subs: tokio::sync::RwLock<std::collections::HashMap<Uuid, Subscription>>,
+}
+
+impl SubscriptionRegistry {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self {
+            subs: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Register a new subscription. Returns the subscription ID.
+    pub async fn subscribe(
+        &self,
+        subscriber: SessionKey,
+        match_tags: Vec<String>,
+        on_receive: NotifyAction,
+    ) -> Uuid {
+        let id = Uuid::new_v4();
+        let sub = Subscription {
+            id,
+            subscriber,
+            match_tags,
+            on_receive,
+        };
+        self.subs.write().await.insert(id, sub);
+        id
+    }
+
+    /// Remove a subscription by ID. Returns true if it existed.
+    pub async fn unsubscribe(&self, subscription_id: Uuid) -> bool {
+        self.subs.write().await.remove(&subscription_id).is_some()
+    }
+
+    /// Find all subscriptions matching any of the given tags.
+    pub async fn match_tags(&self, tags: &[String]) -> Vec<Subscription> {
+        let subs = self.subs.read().await;
+        subs.values()
+            .filter(|sub| sub.match_tags.iter().any(|t| tags.contains(t)))
+            .cloned()
+            .collect()
+    }
+
+    /// Remove all subscriptions for a given session (cleanup on session end).
+    pub async fn remove_session(&self, session_key: &SessionKey) {
+        let mut subs = self.subs.write().await;
+        subs.retain(|_, sub| &sub.subscriber != session_key);
+    }
+}
+
+impl Default for SubscriptionRegistry {
+    fn default() -> Self { Self::new() }
+}
+
+/// Shared reference to a subscription registry.
+pub type SubscriptionRegistryRef = Arc<SubscriptionRegistry>;
