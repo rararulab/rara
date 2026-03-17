@@ -692,15 +692,28 @@ impl SyscallDispatcher {
             let notif_json = serde_json::to_value(&notification).unwrap_or_default();
             match sub.on_receive {
                 NotifyAction::ProactiveTurn => {
-                    // Only deliver if the subscriber session is still alive in the
-                    // process table. Without this guard, a stale subscription from a
-                    // previous run could cause the kernel to restore the session with
-                    // an incorrect identity (privilege escalation).
+                    // If the subscriber session is not alive in the process
+                    // table (e.g. after a kernel restart), fall back to
+                    // SilentAppend so the notification is persisted to tape
+                    // rather than lost. Sending a synthetic message to an
+                    // absent session would restore it with the wrong identity.
                     if !process_table.contains(&sub.subscriber) {
                         warn!(
                             subscriber = %sub.subscriber,
-                            "skipping ProactiveTurn: subscriber session not in process table"
+                            "ProactiveTurn downgraded to SilentAppend: \
+                             subscriber session not in process table"
                         );
+                        let sub_tape = sub.subscriber.to_string();
+                        let _ = self
+                            .tape_service
+                            .store()
+                            .append(
+                                &sub_tape,
+                                crate::memory::TapEntryKind::TaskReport,
+                                notif_json,
+                                None,
+                            )
+                            .await;
                         continue;
                     }
                     let result_str = serde_json::to_string(&result).unwrap_or_default();
