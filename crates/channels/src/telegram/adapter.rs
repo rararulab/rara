@@ -1602,7 +1602,8 @@ async fn handle_update(
             }
 
             // Dispatch to registered callback handlers by prefix match.
-            // Enforce the same allowed-chat authorization as normal messages.
+            // Enforce the same authorization as normal messages: both
+            // allowed_chat_ids and allowed_group_chat_id are checked.
             let cb_chat_id = callback
                 .message
                 .as_ref()
@@ -1615,6 +1616,25 @@ async fn handle_update(
                 );
                 let _ = bot.answer_callback_query(callback.id.clone()).await;
                 return;
+            }
+            // Group-level auth: mirror the allowed_group_chat_id gate from
+            // the normal message path.
+            let cb_is_group = callback
+                .message
+                .as_ref()
+                .is_some_and(|m| matches!(m.chat().kind, teloxide::types::ChatKind::Public(..)));
+            if cb_is_group {
+                if let Some(allowed_id) = cfg.allowed_group_chat_id {
+                    if cb_chat_id != allowed_id {
+                        tracing::warn!(
+                            chat_id = cb_chat_id,
+                            allowed_group_chat_id = allowed_id,
+                            "telegram adapter: dropping callback from unauthorized group"
+                        );
+                        let _ = bot.answer_callback_query(callback.id.clone()).await;
+                        return;
+                    }
+                }
             }
 
             for handler in callback_handlers {
