@@ -275,11 +275,15 @@ impl GatewayArgs {
         // 5. Run supervisor (blocking).
         match supervisor.run().await {
             Ok(()) => {
+                notifier.gateway_shutdown("Clean shutdown requested").await;
                 cancel.cancel();
                 tracing::info!("Gateway supervisor exited cleanly");
                 Ok(())
             }
             Err(e) => {
+                notifier
+                    .gateway_shutdown(&format!("Supervisor error: {e}"))
+                    .await;
                 tracing::error!(error = %e, "Gateway supervisor stopped with error");
                 // Gateway stays alive for manual intervention — don't propagate
                 // the error as a hard failure.

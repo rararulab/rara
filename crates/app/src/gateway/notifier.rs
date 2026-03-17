@@ -105,6 +105,15 @@ impl UpdateNotifier {
         .await;
     }
 
+    /// Gateway process is shutting down (clean exit or fatal error).
+    pub async fn gateway_shutdown(&self, reason: &str) {
+        self.send(&format!(
+            "🛑 <b>Gateway shutting down</b>\n{reason}\n{}",
+            self.status_block(),
+        ))
+        .await;
+    }
+
     // -- resource events ------------------------------------------------------
 
     pub async fn resource_alert(&self, detail: &str) {
