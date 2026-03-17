@@ -20,6 +20,24 @@
 
 use crate::types::SkillMetadata;
 
+/// Maximum description length in characters. Descriptions longer than this are
+/// truncated with an ellipsis. Matches the Claude Code plugin spec (1024
+/// chars).
+const MAX_DESCRIPTION_CHARS: usize = 1024;
+
+/// Truncate a string to at most `max_chars` characters, appending "…" if cut.
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.len() <= max_chars {
+        return s.to_string();
+    }
+    // Find a char boundary at or before max_chars.
+    let mut end = max_chars;
+    while !s.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
 /// Escape XML special characters to prevent prompt injection via skill
 /// metadata.
 fn escape_xml(s: &str) -> String {
@@ -56,7 +74,7 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
             escape_xml(&skill.name),
             if is_plugin { "plugin" } else { "skill" },
             escape_xml(&path_display),
-            escape_xml(&skill.description),
+            escape_xml(&truncate(&skill.description, MAX_DESCRIPTION_CHARS)),
         ));
     }
     out.push_str("</available_skills>\n\n");
