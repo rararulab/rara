@@ -33,7 +33,7 @@ jobs:
         run: mdbook build docs
 
       - name: Deploy to GitHub Pages
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
