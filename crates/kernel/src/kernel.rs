@@ -524,6 +524,9 @@ impl Kernel {
 
     /// Drain expired scheduled jobs and inject them as `ScheduledTask` events.
     ///
+    /// On the first call after startup, any jobs left in the in-flight ledger
+    /// from a previous run are also re-fired.
+    ///
     /// The mutex lock + file persist are blocking I/O, so they run on the
     /// blocking thread-pool to avoid starving the tokio runtime.
     async fn drain_scheduled_jobs(&self) {
@@ -537,11 +540,17 @@ impl Kernel {
                     return vec![];
                 }
             };
+
+            // Re-fire any in-flight jobs from a previous run (only returns
+            // entries on the first call; subsequent calls return empty).
+            let mut all = wheel.take_in_flight();
+
             let expired = wheel.drain_expired(now);
             if !expired.is_empty() {
                 wheel.persist();
             }
-            expired
+            all.extend(expired);
+            all
         })
         .await
         .unwrap_or_default();
@@ -1059,6 +1068,23 @@ impl Kernel {
             let state = rt.state;
             let parent_id = rt.parent_id;
 
+            // Clear in-flight ledger entry for scheduled job agents.
+            if manifest_name == "scheduled_job" {
+                if let Some(job_id_str) = rt
+                    .manifest
+                    .metadata
+                    .get("scheduled_job_id")
+                    .and_then(|v| v.as_str())
+                {
+                    if let Ok(uuid) = uuid::Uuid::parse_str(job_id_str) {
+                        let job_id = crate::schedule::JobId(uuid);
+                        if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
+                            wheel.complete_in_flight(&job_id);
+                        }
+                    }
+                }
+            }
+
             crate::metrics::SESSION_ACTIVE
                 .with_label_values(&[&manifest_name])
                 .dec();
@@ -1363,7 +1389,9 @@ impl Kernel {
             max_children:           Some(0),
             max_context_tokens:     None,
             priority:               Priority::default(),
-            metadata:               serde_json::Value::Null,
+            metadata:               serde_json::json!({
+                "scheduled_job_id": job_id.to_string(),
+            }),
             sandbox:                None,
             default_execution_mode: None,
         };

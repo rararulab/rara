@@ -506,6 +506,134 @@ async fn test_cross_user_unsubscribe_rejected() {
     assert!(matched.is_empty());
 }
 
+/// In-flight jobs survive a simulated kernel crash and are re-fired on
+/// startup.
+#[test]
+fn test_in_flight_recovery() {
+    use rara_kernel::schedule::{JobEntry, JobId, JobWheel, Trigger};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let jobs_path = tmp.path().join("jobs.json");
+    let in_flight_path = tmp.path().join("in_flight.json");
+
+    let principal = rara_kernel::identity::Principal::lookup("test-user".to_string());
+    let session = SessionKey::new();
+    let now = jiff::Timestamp::now();
+    let past = now
+        .checked_sub(jiff::SignedDuration::from_secs(10))
+        .unwrap();
+
+    // 1. Create a wheel with one Once job and one Interval job, both expired.
+    let mut wheel = JobWheel::load(jobs_path.clone());
+    let once_job = JobEntry {
+        id:          JobId(uuid::Uuid::new_v4()),
+        trigger:     Trigger::Once { run_at: past },
+        message:     "once task".into(),
+        session_key: session,
+        principal:   principal.clone(),
+        created_at:  past,
+        tags:        vec!["test".into()],
+    };
+    let interval_job = JobEntry {
+        id:          JobId(uuid::Uuid::new_v4()),
+        trigger:     Trigger::Interval {
+            every_secs: 60,
+            next_at:    past,
+        },
+        message:     "interval task".into(),
+        session_key: session,
+        principal:   principal.clone(),
+        created_at:  past,
+        tags:        vec![],
+    };
+    let once_id = once_job.id;
+    let interval_id = interval_job.id;
+    wheel.add(once_job);
+    wheel.add(interval_job);
+
+    // 2. Drain expired — both should be returned and tracked in-flight.
+    let expired = wheel.drain_expired(now);
+    assert_eq!(expired.len(), 2);
+    wheel.persist();
+
+    // in_flight.json should exist and contain 2 entries.
+    assert!(in_flight_path.exists(), "in_flight.json should be written");
+    let ifl_content = std::fs::read_to_string(&in_flight_path).unwrap();
+    let ifl_entries: Vec<serde_json::Value> = serde_json::from_str(&ifl_content).unwrap();
+    assert_eq!(ifl_entries.len(), 2);
+
+    // The interval job should also be rescheduled in the wheel.
+    let listed = wheel.list(None);
+    assert_eq!(listed.len(), 1, "interval job should be rescheduled");
+    assert_eq!(listed[0].id, interval_id);
+
+    // 3. Simulate kernel crash — drop the wheel, load fresh.
+    drop(wheel);
+    let mut wheel2 = JobWheel::load(jobs_path.clone());
+
+    // 4. take_in_flight should return the 2 jobs from the previous run.
+    let recovered = wheel2.take_in_flight();
+    assert_eq!(recovered.len(), 2);
+    let recovered_ids: std::collections::HashSet<_> = recovered.iter().map(|j| j.id).collect();
+    assert!(recovered_ids.contains(&once_id));
+    assert!(recovered_ids.contains(&interval_id));
+
+    // in_flight.json should now be empty.
+    let ifl_content = std::fs::read_to_string(&in_flight_path).unwrap();
+    let ifl_entries: Vec<serde_json::Value> = serde_json::from_str(&ifl_content).unwrap();
+    assert!(
+        ifl_entries.is_empty(),
+        "in_flight should be cleared after take"
+    );
+
+    // 5. A second take_in_flight returns nothing (idempotent).
+    let recovered2 = wheel2.take_in_flight();
+    assert!(recovered2.is_empty());
+}
+
+/// complete_in_flight removes a job from the ledger.
+#[test]
+fn test_complete_in_flight() {
+    use rara_kernel::schedule::{JobEntry, JobId, JobWheel, Trigger};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let jobs_path = tmp.path().join("jobs.json");
+
+    let principal = rara_kernel::identity::Principal::lookup("test-user".to_string());
+    let session = SessionKey::new();
+    let past = jiff::Timestamp::now()
+        .checked_sub(jiff::SignedDuration::from_secs(10))
+        .unwrap();
+
+    let mut wheel = JobWheel::load(jobs_path);
+    let job = JobEntry {
+        id: JobId(uuid::Uuid::new_v4()),
+        trigger: Trigger::Once { run_at: past },
+        message: "task".into(),
+        session_key: session,
+        principal,
+        created_at: past,
+        tags: vec![],
+    };
+    let job_id = job.id;
+    wheel.add(job);
+    wheel.drain_expired(jiff::Timestamp::now());
+    wheel.persist();
+
+    // Complete the job — should remove from in-flight.
+    assert!(wheel.complete_in_flight(&job_id));
+    assert!(
+        !wheel.complete_in_flight(&job_id),
+        "second call should return false"
+    );
+
+    // Simulate restart — no in-flight jobs should remain.
+    drop(wheel);
+    let mut wheel2 = JobWheel::load(tmp.path().join("jobs.json"));
+    let recovered = wheel2.take_in_flight();
+    assert!(recovered.is_empty());
+}
+
 /// Subscriptions survive a simulated restart via file persistence.
 #[tokio::test]
 async fn test_subscription_persistence_roundtrip() {

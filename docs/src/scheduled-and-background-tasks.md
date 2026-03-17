@@ -17,7 +17,7 @@ sessions via a **tag-based notification bus**.
       ▼                                               ▼
 ┌──────────────────────┐                   ┌────────────────────┐
 │ SubscriptionRegistry │                   │  Kernel spawns     │
-│ (in-memory, by tag)  │                   │  scheduled_job     │
+│ (file-backed, by tag)│                   │  scheduled_job     │
 └──────────────────────┘                   │  agent session     │
                                            └─────────┬──────────┘
                                                      │
@@ -80,6 +80,23 @@ time-ordered retrieval. On each tick, `drain_expired()` yields fired jobs:
 - **Interval**: `next_at` advanced by `every_secs`, re-inserted
 - **Cron**: next fire time computed from expression, re-inserted
 
+### In-Flight Recovery
+
+When a job fires, it moves from the scheduling wheel to an **in-flight ledger**
+(`in_flight.json`) before the execution agent is spawned. This handles the crash
+window between drain and `publish_report`:
+
+1. `drain_expired()` moves fired jobs to `in_flight` and persists both files
+2. The kernel spawns an agent; the agent's manifest metadata carries the `job_id`
+3. When the agent session ends (success or failure), `cleanup_process` calls
+   `complete_in_flight(job_id)` to remove it from the ledger
+4. On kernel restart, `take_in_flight()` returns any leftover in-flight jobs and
+   they are re-fired as new agent sessions
+
+For **recurring** jobs (Interval/Cron), both the rescheduled future entry and the
+current in-flight copy are tracked — a crash only loses the current round, which
+gets retried on restart.
+
 ### The Spawned Agent
 
 When a scheduled job fires, the kernel spawns a dedicated agent session with:
@@ -90,6 +107,7 @@ When a scheduled job fires, the kernel spawns a dedicated agent session with:
 - **Max children**: 0 (no sub-spawning)
 - **System prompt** that includes the task description, routing tags, and
   instructions to call `publish_report` when done
+- **Metadata**: `{"scheduled_job_id": "<uuid>"}` for in-flight tracking
 
 The spawned agent has access to all tools in the global `ToolRegistry`, including
 the `kernel` syscall tool which enables it to publish its results.
@@ -208,12 +226,10 @@ Subscriptions are also automatically cleaned up when a session ends
 
 ### SubscriptionRegistry
 
-The registry is **in-memory** (not persisted). This is intentional:
-
-- Subscriptions are session-scoped — they only matter while the session is alive
-- Agents re-subscribe on session start, which is cheap
-- Task reports are always written to the source session's tape regardless of
-  subscriptions, so no data is lost on kernel restart
+The registry is **file-backed** (`subscriptions.json`), persisted on every
+mutation (subscribe/unsubscribe/remove_session). Since sessions are persistent
+in Rara (SessionKey survives restart), subscriptions must also survive restarts
+so that notifications continue to route correctly after a kernel restart.
 
 ## End-to-End Example
 
@@ -259,7 +275,7 @@ Here's a complete flow for a PR review notification:
 |------|---------|
 | `crates/kernel/src/schedule.rs` | `JobWheel`, `JobEntry`, `Trigger` types |
 | `crates/kernel/src/task_report.rs` | `TaskReport`, `TaskReportStatus`, domain result types |
-| `crates/kernel/src/notification.rs` | `TaskNotification`, `SubscriptionRegistry`, `NotifyAction` |
+| `crates/kernel/src/notification/` | `TaskNotification`, `SubscriptionRegistry`, `NotifyAction`, `NotificationBus` |
 | `crates/kernel/src/syscall.rs` | `handle_publish_task_report()`, subscription dispatch |
 | `crates/kernel/src/kernel.rs` | `handle_scheduled_task()` — agent spawning and system prompt |
 | `crates/kernel/src/tool/schedule.rs` | `schedule-once/interval/cron/remove/list` tools |

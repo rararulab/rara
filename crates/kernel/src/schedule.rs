@@ -18,7 +18,10 @@
 //! and [`JobWheel`] (the scheduling data structure backed by a `BTreeMap`).
 //! Jobs are persisted as JSON and restored on startup.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -124,18 +127,30 @@ type WheelKey = (i64, Uuid);
 ///
 /// Jobs are keyed by `(next_at_seconds, job_uuid)` so `drain_expired` can
 /// efficiently pop all entries whose time has passed.
+///
+/// An **in-flight ledger** tracks jobs that have been drained but whose
+/// execution agent has not yet completed. On startup, any in-flight jobs
+/// are re-fired so that a kernel crash between drain and `publish_report`
+/// does not silently lose task results.
 pub struct JobWheel {
     /// Jobs ordered by (next_fire_time_secs, job_uuid).
-    jobs: BTreeMap<WheelKey, JobEntry>,
-    /// Path to the JSON persistence file.
-    path: PathBuf,
+    jobs:      BTreeMap<WheelKey, JobEntry>,
+    /// Jobs that have been drained and dispatched but not yet completed.
+    in_flight: HashMap<JobId, JobEntry>,
+    /// Path to the `jobs.json` persistence file.
+    path:      PathBuf,
 }
 
 impl JobWheel {
     /// Build a wheel key from a job entry.
     fn key(entry: &JobEntry) -> WheelKey { (entry.trigger.next_at().as_second(), entry.id.0) }
 
-    /// Load jobs from the JSON persistence file, or create an empty wheel.
+    /// Derive the in-flight ledger path from the jobs.json path.
+    fn in_flight_path(jobs_path: &std::path::Path) -> PathBuf {
+        jobs_path.with_file_name("in_flight.json")
+    }
+
+    /// Load jobs and in-flight ledger from disk, or create an empty wheel.
     pub fn load(path: PathBuf) -> Self {
         let jobs = match std::fs::read_to_string(&path) {
             Ok(content) => {
@@ -159,7 +174,32 @@ impl JobWheel {
                 BTreeMap::new()
             }
         };
-        Self { jobs, path }
+
+        let ifl_path = Self::in_flight_path(&path);
+        let in_flight = match std::fs::read_to_string(&ifl_path) {
+            Ok(content) => {
+                let entries: Vec<JobEntry> = match serde_json::from_str(&content) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(error = %e, path = %ifl_path.display(), "failed to parse in_flight.json, starting empty");
+                        Vec::new()
+                    }
+                };
+                let map: HashMap<JobId, JobEntry> =
+                    entries.into_iter().map(|e| (e.id, e)).collect();
+                if !map.is_empty() {
+                    info!(count = map.len(), "restored in-flight jobs from disk");
+                }
+                map
+            }
+            Err(_) => HashMap::new(),
+        };
+
+        Self {
+            jobs,
+            in_flight,
+            path,
+        }
     }
 
     /// Return the next fire time, or `None` if the wheel is empty.
@@ -172,11 +212,15 @@ impl JobWheel {
 
     /// Drain all jobs whose `next_at` is at or before `now`.
     ///
-    /// - `Once` jobs are removed permanently.
+    /// - `Once` jobs are removed from the wheel.
     /// - `Interval` jobs have their `next_at` advanced and are re-inserted.
     /// - `Cron` jobs compute the next fire time from their expression and are
     ///   re-inserted. If the cron expression yields no future time, the job is
     ///   removed.
+    ///
+    /// All drained jobs are placed in the **in-flight ledger** so they can
+    /// be re-fired on startup if the kernel crashes before the execution
+    /// agent completes.
     pub fn drain_expired(&mut self, now: Timestamp) -> Vec<JobEntry> {
         let mut expired = Vec::new();
         let cutoff: WheelKey = (now.as_second(), Uuid::max());
@@ -186,12 +230,14 @@ impl JobWheel {
 
         for key in keys {
             if let Some(entry) = self.jobs.remove(&key) {
+                // Record in the in-flight ledger before dispatching.
+                self.in_flight.insert(entry.id, entry.clone());
                 expired.push(entry.clone());
 
                 // Re-schedule recurring jobs.
                 match entry.trigger.clone() {
                     Trigger::Once { .. } => {
-                        // One-shot — do not re-insert.
+                        // One-shot — do not re-insert into the wheel.
                     }
                     Trigger::Interval { every_secs, .. } => {
                         let next = now
@@ -246,8 +292,44 @@ impl JobWheel {
             .collect()
     }
 
-    /// Persist the current state to the JSON file.
+    /// Mark a job as completed, removing it from the in-flight ledger.
+    ///
+    /// Called when the execution agent's session ends (regardless of whether
+    /// `publish_report` was called). Persists the updated ledger to disk.
+    pub fn complete_in_flight(&mut self, job_id: &JobId) -> bool {
+        let removed = self.in_flight.remove(job_id).is_some();
+        if removed {
+            self.persist_in_flight();
+        }
+        removed
+    }
+
+    /// Take all in-flight jobs out of the ledger for re-firing on startup.
+    ///
+    /// The ledger is cleared and persisted (empty) after this call, so a
+    /// second restart won't re-fire the same jobs twice — they will be
+    /// tracked again when `drain_expired` processes them.
+    pub fn take_in_flight(&mut self) -> Vec<JobEntry> {
+        if self.in_flight.is_empty() {
+            return Vec::new();
+        }
+        let jobs: Vec<JobEntry> = self.in_flight.drain().map(|(_, v)| v).collect();
+        self.persist_in_flight();
+        info!(
+            count = jobs.len(),
+            "re-firing in-flight jobs from previous run"
+        );
+        jobs
+    }
+
+    /// Persist the current wheel state to the JSON file.
     pub fn persist(&self) {
+        self.persist_jobs();
+        self.persist_in_flight();
+    }
+
+    /// Persist only the jobs BTreeMap.
+    fn persist_jobs(&self) {
         let entries: Vec<&JobEntry> = self.jobs.values().collect();
         match serde_json::to_string_pretty(&entries) {
             Ok(json) => {
@@ -260,6 +342,25 @@ impl JobWheel {
             }
             Err(e) => {
                 warn!(error = %e, "failed to serialize jobs for persistence");
+            }
+        }
+    }
+
+    /// Persist only the in-flight ledger.
+    fn persist_in_flight(&self) {
+        let ifl_path = Self::in_flight_path(&self.path);
+        let entries: Vec<&JobEntry> = self.in_flight.values().collect();
+        match serde_json::to_string_pretty(&entries) {
+            Ok(json) => {
+                if let Some(parent) = ifl_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = std::fs::write(&ifl_path, json) {
+                    warn!(error = %e, path = %ifl_path.display(), "failed to persist in_flight.json");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to serialize in-flight jobs for persistence");
             }
         }
     }
