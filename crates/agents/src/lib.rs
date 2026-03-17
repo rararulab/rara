@@ -251,6 +251,8 @@ You have a `user-note` tool to record observations about the current user into t
 
 ### Principle:
 Record facts that would help a stranger understand who this person is and how to best help them. One good note beats three vague ones.
+
+You have an external knowledge file at `~/.config/rara/agents/rara/agent.md`. This file contains your operational notes about tools, CLIs, and workflows. When the owner installs a new tool or teaches you how to use something, update this file using the `write_file` or `edit_file` tool so you remember it in future sessions. If the file doesn't exist yet, create it with `write_file`.
 "#;
 
 // ---------------------------------------------------------------------------

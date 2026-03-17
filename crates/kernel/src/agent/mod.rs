@@ -640,6 +640,49 @@ fn resolve_soul_prompt(agent_name: &str) -> Option<String> {
     }
 }
 
+/// Load the external agent.md operational knowledge file.
+///
+/// Searches in priority order:
+/// 1. `{config_dir}/agents/{agent_name}/agent.md` (per-agent)
+/// 2. `{config_dir}/agent.md` (global fallback)
+///
+/// Returns `None` if no file exists at either location.
+fn load_agent_md(agent_name: &str) -> Option<String> {
+    let config = rara_paths::config_dir();
+
+    // Priority 1: per-agent file
+    let agent_path = config.join("agents").join(agent_name).join("agent.md");
+    if agent_path.exists() {
+        match std::fs::read_to_string(&agent_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                info!(agent = agent_name, path = %agent_path.display(), "loaded per-agent agent.md");
+                return Some(content);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(agent = agent_name, error = %e, "failed to read per-agent agent.md");
+            }
+        }
+    }
+
+    // Priority 2: global fallback
+    let global_path = config.join("agent.md");
+    if global_path.exists() {
+        match std::fs::read_to_string(&global_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                info!(agent = agent_name, path = %global_path.display(), "loaded global agent.md");
+                return Some(content);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(agent = agent_name, error = %e, "failed to read global agent.md");
+            }
+        }
+    }
+
+    None
+}
+
 fn build_runtime_contract_prompt(
     base_prompt: &str,
     has_kernel_tool: bool,
@@ -779,6 +822,12 @@ pub(crate) async fn run_agent_loop(
             Some(soul) => (format!("{soul}\n\n---\n\n{}", manifest.system_prompt), true),
             None => (manifest.system_prompt.clone(), false),
         }
+    };
+    // Append external agent.md (tool knowledge, CLI guides, operational notes)
+    let effective_prompt = if let Some(agent_md) = load_agent_md(&manifest.name) {
+        format!("{effective_prompt}\n\n<agent_knowledge>\n{agent_md}\n</agent_knowledge>")
+    } else {
+        effective_prompt
     };
     let effective_prompt =
         build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
@@ -1859,7 +1908,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
+        ContextPressure, build_runtime_contract_prompt, classify_context_pressure, load_agent_md,
         resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
     };
 
@@ -1955,5 +2004,11 @@ mod tests {
         let result = resolve_soul_prompt("rara");
         assert!(result.is_some());
         assert!(result.unwrap().contains("Identity: rara"));
+    }
+
+    #[test]
+    fn load_agent_md_returns_none_when_no_file() {
+        let result = load_agent_md("nonexistent_test_agent_xyz");
+        assert!(result.is_none());
     }
 }
