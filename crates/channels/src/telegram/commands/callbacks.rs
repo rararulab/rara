@@ -114,6 +114,114 @@ impl CallbackHandler for SessionDetailCallbackHandler {
 }
 
 // ---------------------------------------------------------------------------
+// SessionDeleteCallbackHandler
+// ---------------------------------------------------------------------------
+
+/// Handles `delete:{session_key}` callback queries — shows a confirmation
+/// prompt before deleting a session.
+pub struct SessionDeleteCallbackHandler {
+    client: Arc<dyn BotServiceClient>,
+}
+
+impl SessionDeleteCallbackHandler {
+    /// Create a new handler backed by the given service client.
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
+}
+
+#[async_trait]
+impl CallbackHandler for SessionDeleteCallbackHandler {
+    fn prefix(&self) -> &str { "delete:" }
+
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
+        let session_key = &context.data["delete:".len()..];
+
+        let display_name = match self.client.get_session(session_key).await {
+            Ok(detail) => detail
+                .title
+                .unwrap_or_else(|| session_key[..8.min(session_key.len())].to_owned()),
+            Err(_) => session_key[..8.min(session_key.len())].to_owned(),
+        };
+
+        let keyboard = vec![vec![
+            rara_kernel::channel::types::InlineButton {
+                text:          "Yes, delete".to_owned(),
+                callback_data: Some(format!("confirm_del:{session_key}")),
+                url:           None,
+            },
+            rara_kernel::channel::types::InlineButton {
+                text:          "Cancel".to_owned(),
+                callback_data: Some(format!("cancel_del:{session_key}")),
+                url:           None,
+            },
+        ]];
+
+        Ok(CallbackResult::SendMessageWithKeyboard {
+            text: format!(
+                "Delete session <b>{}</b>?\nThis cannot be undone.",
+                html_escape(&display_name)
+            ),
+            keyboard,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionDeleteConfirmHandler
+// ---------------------------------------------------------------------------
+
+/// Handles `confirm_del:{session_key}` callback queries — actually deletes
+/// the session after the user confirmed.
+pub struct SessionDeleteConfirmHandler {
+    client: Arc<dyn BotServiceClient>,
+}
+
+impl SessionDeleteConfirmHandler {
+    /// Create a new handler backed by the given service client.
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
+}
+
+#[async_trait]
+impl CallbackHandler for SessionDeleteConfirmHandler {
+    fn prefix(&self) -> &str { "confirm_del:" }
+
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
+        let session_key = &context.data["confirm_del:".len()..];
+
+        match self.client.delete_session(session_key).await {
+            Ok(()) => Ok(CallbackResult::SendMessage {
+                text: format!("Session <code>{}</code> deleted.", html_escape(session_key)),
+            }),
+            Err(e) => Ok(CallbackResult::SendMessage {
+                text: format!("Failed to delete session: {e}"),
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionDeleteCancelHandler
+// ---------------------------------------------------------------------------
+
+/// Handles `cancel_del:{session_key}` callback queries — cancels deletion.
+pub struct SessionDeleteCancelHandler;
+
+impl SessionDeleteCancelHandler {
+    /// Create a new handler.
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait]
+impl CallbackHandler for SessionDeleteCancelHandler {
+    fn prefix(&self) -> &str { "cancel_del:" }
+
+    async fn handle(&self, _context: &CallbackContext) -> Result<CallbackResult, KernelError> {
+        Ok(CallbackResult::SendMessage {
+            text: "Cancelled.".to_owned(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

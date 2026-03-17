@@ -205,4 +205,28 @@ impl SessionIndex for FileSessionIndex {
         let path = self.binding_path(channel_type, chat_id);
         self.read_json(&path).await
     }
+
+    async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
+        let bindings_dir = self.index_dir.join("bindings");
+        let mut dir = fs::read_dir(&bindings_dir)
+            .await
+            .map_err(|source| SessionError::FileIo { source })?;
+
+        while let Some(entry) = dir
+            .next_entry()
+            .await
+            .map_err(|source| SessionError::FileIo { source })?
+        {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(binding) = self.read_json::<ChannelBinding>(&path).await? {
+                if binding.session_key == *key {
+                    let _ = fs::remove_file(&path).await;
+                }
+            }
+        }
+        Ok(())
+    }
 }

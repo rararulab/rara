@@ -347,6 +347,25 @@ impl BotServiceClient for KernelBotServiceClient {
             message: "MCP management not available via kernel client".to_owned(),
         })
     }
+
+    async fn delete_session(&self, key: &str) -> Result<(), BotServiceError> {
+        let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
+            message: format!("invalid session key: {e}"),
+        })?;
+        // Delete tape (message history).
+        let _ = self.tape.delete_tape(key).await;
+        // Remove channel bindings pointing to this session.
+        self.sessions
+            .unbind_session(&sk)
+            .await
+            .context(SessionSnafu)?;
+        // Delete session metadata.
+        self.sessions
+            .delete_session(&sk)
+            .await
+            .context(SessionSnafu)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -440,6 +459,20 @@ mod tests {
                 .bindings
                 .get(&(channel_type.to_owned(), chat_id.to_owned()))
                 .map(|binding| binding.clone()))
+        }
+
+        async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
+            let key_str = key.to_string();
+            let to_remove: Vec<_> = self
+                .bindings
+                .iter()
+                .filter(|entry| entry.value().session_key.to_string() == key_str)
+                .map(|entry| entry.key().clone())
+                .collect();
+            for k in to_remove {
+                self.bindings.remove(&k);
+            }
+            Ok(())
         }
     }
 

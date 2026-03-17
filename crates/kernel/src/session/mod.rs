@@ -193,6 +193,9 @@ pub trait SessionIndex: Send + Sync + 'static {
         channel_type: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError>;
+
+    /// Remove all channel bindings that point to the given session.
+    async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError>;
 }
 
 /// Runtime state of a session.

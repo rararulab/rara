@@ -249,4 +249,7 @@ pub trait BotServiceClient: Send + Sync {
 
     /// Remove an MCP server configuration.
     async fn remove_mcp_server(&self, name: &str) -> Result<(), BotServiceError>;
+
+    /// Delete a session and all associated data (metadata, tape, bindings).
+    async fn delete_session(&self, key: &str) -> Result<(), BotServiceError>;
 }

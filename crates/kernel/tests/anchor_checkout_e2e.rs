@@ -85,6 +85,8 @@ impl SessionIndex for TestSessionIndex {
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(None)
     }
+
+    async fn unbind_session(&self, _key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
 }
 
 // ---------------------------------------------------------------------------

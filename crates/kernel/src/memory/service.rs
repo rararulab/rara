@@ -503,6 +503,14 @@ impl TapeService {
         })
     }
 
+    /// Delete the tape file for a session permanently.
+    ///
+    /// Unlike [`reset`], this does not create a new bootstrap anchor —
+    /// the tape is simply removed. Used when deleting a session entirely.
+    pub async fn delete_tape(&self, tape_name: &str) -> TapResult<()> {
+        self.store.reset(tape_name).await
+    }
+
     /// Create a new tape at `target` containing all entries from `source`
     /// up to and including the anchor named `anchor_name`.
     ///
