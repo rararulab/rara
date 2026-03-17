@@ -12,112 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel notifications — inter-component event broadcasting.
+//! Tag-based task notification subscriptions.
+//!
+//! Manages per-user, per-tag subscriptions so that [`TaskNotification`]s
+//! produced by background/scheduled tasks are routed to interested sessions.
+//! Separate from the kernel event [`super::bus`] which is a fire-and-forget
+//! broadcast channel.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use async_trait::async_trait;
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 use uuid::Uuid;
-
-// ---------------------------------------------------------------------------
-// Event types
-// ---------------------------------------------------------------------------
-
-/// Notifications emitted by the kernel during agent execution.
-#[derive(Debug, Clone, strum::IntoStaticStr)]
-pub enum KernelNotification {
-    /// A tool was executed.
-    ToolExecuted {
-        session_key: SessionKey,
-        tool_name:   String,
-        success:     bool,
-        timestamp:   Timestamp,
-    },
-    /// Memory was updated.
-    MemoryUpdated {
-        agent_id:  Uuid,
-        layer:     String,
-        timestamp: Timestamp,
-    },
-    /// Agent state changed (Idle → Running, etc.).
-    AgentStateChanged {
-        agent_id:  Uuid,
-        old_state: String,
-        new_state: String,
-        timestamp: Timestamp,
-    },
-    /// A guard denied a tool call or output.
-    GuardDenied {
-        agent_id:  Uuid,
-        tool_name: String,
-        reason:    String,
-        timestamp: Timestamp,
-    },
-}
-
-/// Filter for subscribing to specific events.
-#[derive(Debug, Clone, Default)]
-pub struct NotificationFilter {
-    /// Only receive events for this agent (None = all agents).
-    pub agent_id:    Option<Uuid>,
-    /// Only receive these event types (empty = all types).
-    pub event_types: Vec<String>,
-}
-
-/// A stream of kernel notifications.
-pub type NotificationStream = tokio::sync::broadcast::Receiver<KernelNotification>;
-
-// ---------------------------------------------------------------------------
-// NotificationBus trait
-// ---------------------------------------------------------------------------
-
-pub type NotificationBusRef = Arc<dyn NotificationBus>;
-
-/// Inter-component notification broadcasting.
-#[async_trait]
-pub trait NotificationBus: Send + Sync {
-    /// Publish a notification to all subscribers.
-    async fn publish(&self, event: KernelNotification);
-
-    /// Subscribe to notifications matching the given filter.
-    async fn subscribe(&self, filter: NotificationFilter) -> NotificationStream;
-}
-
-// ---------------------------------------------------------------------------
-// BroadcastNotificationBus
-// ---------------------------------------------------------------------------
-
-/// Notification bus backed by `tokio::sync::broadcast`.
-pub struct BroadcastNotificationBus {
-    sender: broadcast::Sender<KernelNotification>,
-}
-
-impl BroadcastNotificationBus {
-    /// Create a new broadcast notification bus with the given channel capacity.
-    pub fn new(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
-    }
-}
-
-impl Default for BroadcastNotificationBus {
-    fn default() -> Self { Self::new(256) }
-}
-
-#[async_trait]
-impl NotificationBus for BroadcastNotificationBus {
-    async fn publish(&self, event: KernelNotification) {
-        // Ignore send errors (no active subscribers).
-        let _ = self.sender.send(event);
-    }
-
-    async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream {
-        self.sender.subscribe()
-    }
-}
 
 use crate::{identity::UserId, session::SessionKey, task_report::TaskReportStatus};
 
@@ -125,7 +33,7 @@ use crate::{identity::UserId, session::SessionKey, task_report::TaskReportStatus
 // Task notification types
 // ---------------------------------------------------------------------------
 
-/// Lightweight notification broadcast when a TaskReport is written.
+/// Lightweight notification delivered when a TaskReport is published.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskNotification {
     /// Unique task identifier.
@@ -201,16 +109,16 @@ pub struct SubscriptionRegistry {
 /// Interior state behind the `RwLock`.
 struct RegistryInner {
     /// Primary store: sub_id → Subscription.
-    subs:      std::collections::HashMap<Uuid, Subscription>,
+    subs:      HashMap<Uuid, Subscription>,
     /// Inverted index: (owner, tag) → set of sub_ids.
-    tag_index: std::collections::HashMap<(UserId, String), std::collections::HashSet<Uuid>>,
+    tag_index: HashMap<(UserId, String), HashSet<Uuid>>,
 }
 
 impl RegistryInner {
     fn new() -> Self {
         Self {
-            subs:      std::collections::HashMap::new(),
-            tag_index: std::collections::HashMap::new(),
+            subs:      HashMap::new(),
+            tag_index: HashMap::new(),
         }
     }
 }
@@ -277,7 +185,7 @@ impl SubscriptionRegistry {
     /// publisher's owner. O(M) hash lookups where M = number of report tags.
     pub async fn match_tags(&self, tags: &[String], publisher: &UserId) -> Vec<Subscription> {
         let inner = self.inner.read().await;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut result = Vec::new();
         for tag in tags {
             if let Some(ids) = inner.tag_index.get(&(publisher.clone(), tag.clone())) {
