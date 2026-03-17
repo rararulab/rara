@@ -223,7 +223,9 @@ impl SessionIndex for FileSessionIndex {
             }
             if let Some(binding) = self.read_json::<ChannelBinding>(&path).await? {
                 if binding.session_key == *key {
-                    let _ = fs::remove_file(&path).await;
+                    fs::remove_file(&path)
+                        .await
+                        .map_err(|source| SessionError::FileIo { source })?;
                 }
             }
         }

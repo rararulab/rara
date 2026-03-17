@@ -52,6 +52,13 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
         let session_key = &context.data["switch:".len()..];
         let chat_id = super::extract_chat_id(&context.metadata)?;
 
+        // Verify session still exists before binding to prevent ghost bindings.
+        if self.client.get_session(session_key).await.is_err() {
+            return Ok(CallbackResult::SendMessage {
+                text: "Session no longer exists.".to_owned(),
+            });
+        }
+
         match self
             .client
             .bind_channel("telegram", &chat_id, session_key)

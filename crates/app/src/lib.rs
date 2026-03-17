@@ -472,6 +472,7 @@ pub async fn start_with_options(
         std::sync::Arc::new(KernelBotServiceClient::new(
             rara.session_index.clone(),
             rara.tape_service.clone(),
+            kernel_handle.clone(),
         ))
     };
 

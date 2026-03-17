@@ -20,8 +20,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use rara_kernel::{
+    handle::KernelHandle,
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
-    session::{self as ks, SessionIndex, SessionKey},
+    session::{self as ks, SessionIndex, SessionKey, Signal},
 };
 use snafu::ResultExt;
 
@@ -35,11 +36,21 @@ use super::client::{
 pub struct KernelBotServiceClient {
     sessions: Arc<dyn SessionIndex>,
     tape:     TapeService,
+    handle:   Option<KernelHandle>,
 }
 
 impl KernelBotServiceClient {
-    pub fn new(sessions: Arc<dyn SessionIndex>, tape: TapeService) -> Self {
-        Self { sessions, tape }
+    /// Create a new client backed by kernel subsystems.
+    pub fn new(
+        sessions: Arc<dyn SessionIndex>,
+        tape: TapeService,
+        handle: impl Into<Option<KernelHandle>>,
+    ) -> Self {
+        Self {
+            sessions,
+            tape,
+            handle: handle.into(),
+        }
     }
 }
 
@@ -352,8 +363,15 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
+        // Terminate any running runtime before deleting data so the agent
+        // cannot recreate the tape file after we remove it.
+        if let Some(ref handle) = self.handle {
+            let _ = handle.send_signal(sk.clone(), Signal::Terminate);
+        }
         // Delete tape (message history).
-        let _ = self.tape.delete_tape(key).await;
+        self.tape.delete_tape(key).await.context(TapeSnafu {
+            context: "failed to delete tape",
+        })?;
         // Remove channel bindings pointing to this session.
         self.sessions
             .unbind_session(&sk)
@@ -506,7 +524,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let tape = temp_tape_service(tmp.path()).await;
         let sessions = Arc::new(InMemorySessionIndex::default());
-        let client = KernelBotServiceClient::new(sessions.clone(), tape.clone());
+        let client = KernelBotServiceClient::new(sessions.clone(), tape.clone(), None);
 
         let root_key = SessionKey::new();
         let root_raw = root_key.to_string();
