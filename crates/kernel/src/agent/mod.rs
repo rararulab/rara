@@ -829,6 +829,16 @@ pub(crate) async fn run_agent_loop(
     } else {
         effective_prompt
     };
+    // Append available skills so the agent can discover and activate them.
+    let effective_prompt = if let Some(skills_block) = handle.skills_prompt() {
+        if skills_block.is_empty() {
+            effective_prompt
+        } else {
+            format!("{effective_prompt}\n\n{skills_block}")
+        }
+    } else {
+        effective_prompt
+    };
     let effective_prompt =
         build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
     let provider_hint = manifest.provider_hint.as_deref();

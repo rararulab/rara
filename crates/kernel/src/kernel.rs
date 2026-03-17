@@ -147,48 +147,50 @@ pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
 /// flattened directly into this struct.
 pub struct Kernel {
     /// Kernel configuration.
-    config:             KernelConfig,
+    config:                KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:      Arc<SessionTable>,
+    process_table:         Arc<SessionTable>,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore:   Arc<Semaphore>,
+    global_semaphore:      Arc<Semaphore>,
     /// Unified security subsystem (auth + authz + approval).
-    security:           SecurityRef,
+    security:              SecurityRef,
     /// Agent registry for looking up named agent definitions.
-    agent_registry:     AgentRegistryRef,
+    agent_registry:        AgentRegistryRef,
     /// Tape service for session message persistence.
-    tape_service:       TapeService,
+    tape_service:          TapeService,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
-    session_index:      SessionIndexRef,
+    session_index:         SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
-    settings:           SettingsRef,
+    settings:              SettingsRef,
     /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
     /// tool_registry, event_bus).
-    syscall:            SyscallDispatcher,
+    syscall:               SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
     /// Bundled I/O subsystem (ingress, stream hub, delivery).
-    io:                 Arc<IOSubsystem>,
+    io:                    Arc<IOSubsystem>,
     /// Unified event queue for all kernel interactions.
-    event_queue:        EventQueueRef,
+    event_queue:           EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
     ///
     /// Always present. When `num_shards == 0` (single-queue mode), all
     /// events are routed to the global queue and processed by a single
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
-    sharded_queue:      ShardedQueueRef,
+    sharded_queue:         ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
-    started_at:         Timestamp,
+    started_at:            Timestamp,
     /// Knowledge layer service for long-term memory extraction.
-    knowledge:          crate::memory::knowledge::KnowledgeServiceRef,
+    knowledge:             crate::memory::knowledge::KnowledgeServiceRef,
     /// Optional hook to transform tool outputs before sending to the LLM.
-    output_interceptor: crate::tool::DynamicOutputInterceptor,
+    output_interceptor:    crate::tool::DynamicOutputInterceptor,
     /// Security guard pipeline (taint tracking + pattern scanning).
-    guard_pipeline:     Arc<crate::guard::pipeline::GuardPipeline>,
+    guard_pipeline:        Arc<crate::guard::pipeline::GuardPipeline>,
     /// Execution trace service for persisting turn-level traces.
-    trace_service:      crate::trace::TraceService,
+    trace_service:         crate::trace::TraceService,
+    /// Optional provider for generating the skills prompt block.
+    skill_prompt_provider: Option<crate::handle::SkillPromptProvider>,
 }
 
 impl Kernel {
@@ -209,6 +211,7 @@ impl Kernel {
         output_interceptor: crate::tool::DynamicOutputInterceptor,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
         trace_service: crate::trace::TraceService,
+        skill_prompt_provider: Option<crate::handle::SkillPromptProvider>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
         info!(
@@ -259,6 +262,7 @@ impl Kernel {
             output_interceptor,
             guard_pipeline,
             trace_service,
+            skill_prompt_provider,
         }
     }
 
@@ -314,6 +318,7 @@ impl Kernel {
             self.tape_service.clone(),
             self.trace_service.clone(),
             self.syscall.job_wheel().clone(),
+            self.skill_prompt_provider.clone(),
         )
     }
 

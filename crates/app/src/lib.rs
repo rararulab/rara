@@ -366,6 +366,7 @@ pub async fn start_with_options(
         rara.output_interceptor.clone(),
         mcp_tool_provider,
         rara_kernel::trace::TraceService::new(pool.clone()),
+        None, // skill_prompt_provider — wired in Task 4
     );
 
     let cancellation_token = CancellationToken::new();
