@@ -27,7 +27,7 @@ sessions via a **tag-based notification bus**.
                                            ┌────────────────────┐
                                            │ handle_publish_    │
                                            │ task_report()      │
-                                           │ 1. write to tape   │
+                                           │ 1. persist result  │
                                            │ 2. match tags      │
                                            │ 3. deliver         │
                                            └─────────┬──────────┘
@@ -201,10 +201,16 @@ A subscription matches if **any** of its `match_tags` appears in the report's
 
 #### ProactiveTurn
 
-Injects a synthetic user message into the subscriber's session, triggering a
-full LLM turn. The message contains the notification summary, structured result,
-and a tape reference to the full report. Best for notifications that require the
-subscriber to take action.
+Injects a synthetic user message into the subscriber's session using the
+subscription owner's identity, triggering a full LLM turn. The message contains
+the notification summary and structured result. Best for notifications that
+require the subscriber to take action.
+
+**Offline downgrade:** If the subscriber session is not currently alive in the
+process table (e.g. after a kernel restart), delivery is automatically
+downgraded to `SilentAppend` to avoid restoring the session with an incorrect
+identity. The notification is written to tape so it is available when the
+session is eventually restored.
 
 #### SilentAppend
 
@@ -254,10 +260,10 @@ Here's a complete flow for a PR review notification:
    → Agent calls: kernel { action: "publish_report", report: { ... } }
 
 4. Kernel processes the report:
-   a. Writes TaskReport to the scheduled agent's tape
+   a. Persists result to JobResultStore (results/{job_id}/{epoch}.json)
    b. Matches tags ["pr_review", "repo:rararulab/rara"] against subscriptions
    c. Session A's subscription matches on "pr_review"
-   d. Delivers via ProactiveTurn → synthetic message injected into Session A
+   d. Session A is alive → delivers via ProactiveTurn (synthetic message)
 
 5. Session A's LLM receives:
    [TaskNotification] pr_review: PR #42 approved — no issues found

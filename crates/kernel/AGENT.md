@@ -177,7 +177,7 @@ Structured `TaskReport` publishing and tag-based `Subscription` routing so backg
 | File | Role |
 |------|------|
 | `task_report.rs` | `TaskReport`, `TaskReportStatus`, `PrReviewResult` and related types |
-| `notification.rs` | `TaskNotification`, `TapeEntryRef`, `NotifyAction`, `Subscription`, `SubscriptionRegistry` |
+| `notification/` | `TaskNotification`, `TaskReportRef`, `NotifyAction`, `Subscription`, `SubscriptionRegistry` (file-backed) |
 | `event.rs` | `Syscall::Subscribe`, `Syscall::Unsubscribe`, `Syscall::PublishTaskReport` variants |
 | `syscall.rs` | Dispatch arms + `handle_publish_task_report` + `SyscallTool` exec methods and schema |
 | `handle.rs` | `KernelHandle::deliver_internal()` for ProactiveTurn delivery |
@@ -187,22 +187,22 @@ Structured `TaskReport` publishing and tag-based `Subscription` routing so backg
 
 1. **Subscribe** — register tag-based subscription for a session, returns subscription UUID
 2. **Unsubscribe** — remove subscription by ID
-3. **PublishTaskReport** — write report to source tape, match subscriptions, deliver via ProactiveTurn (synthetic message → LLM turn) or SilentAppend (tape entry only)
+3. **PublishTaskReport** — persist result to `JobResultStore` (for scheduled jobs), match subscriptions, deliver via ProactiveTurn (synthetic message → LLM turn) or SilentAppend (tape entry only)
 
 ### Critical Invariants
 
 - `task_type` is always auto-included in `tags` by `exec_publish_report` — callers don't need to duplicate it
 - `source_session` is always overwritten to the calling session — agents cannot spoof the source
 - Subscriptions are cleaned up on session end (`cleanup_process` calls `remove_session`)
-- `SubscriptionRegistry` is in-memory only — subscriptions do not survive kernel restarts
+- `SubscriptionRegistry` is file-backed (`subscriptions.json`) — subscriptions survive kernel restarts
 
 ### Delivery Modes
 
-- `ProactiveTurn`: creates an `InboundMessage::synthetic()` with the notification as text, pushed to the event queue. This triggers an LLM turn on the subscriber session.
+- `ProactiveTurn`: creates an `InboundMessage::synthetic()` with the subscription owner's identity, pushed to the event queue. This triggers an LLM turn on the subscriber session. **If the subscriber session is not in the process table** (e.g. after restart), delivery is automatically downgraded to `SilentAppend` to avoid restoring the session with an incorrect identity.
 - `SilentAppend`: appends a `TapEntryKind::TaskReport` entry to the subscriber's tape. No LLM turn is triggered.
 
 ### What NOT To Do
 
 - Do NOT publish TaskReport without going through the syscall — `exec_publish_report` enforces `source_session` and `tags` invariants
-- Do NOT rely on subscription persistence across kernel restarts — the registry is in-memory (`tokio::sync::RwLock<HashMap>`)
-- Do NOT construct `TaskNotification` outside `handle_publish_task_report` — it needs the tape entry ID from the append operation
+- Do NOT use `UserId("system")` in synthetic messages for ProactiveTurn — always use the subscription owner's identity to prevent privilege escalation on session restore
+- Do NOT construct `TaskNotification` outside `handle_publish_task_report` — it builds the `TaskReportRef` and coordinates result persistence
