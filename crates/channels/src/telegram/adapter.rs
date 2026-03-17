@@ -81,7 +81,10 @@ use dashmap::DashMap;
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
-        command::{CallbackHandler, CommandContext, CommandHandler, CommandInfo, CommandResult},
+        command::{
+            CallbackHandler, CallbackResult, CommandContext, CommandHandler, CommandInfo,
+            CommandResult,
+        },
         types::{ChannelType, ChannelUser, GroupPolicy, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
@@ -714,7 +717,7 @@ pub struct TelegramAdapter {
     /// Registered command handlers for slash commands.
     command_handlers:  StdRwLock<Vec<Arc<dyn CommandHandler>>>,
     /// Registered callback handlers for interactive elements.
-    callback_handlers: Vec<Arc<dyn CallbackHandler>>,
+    callback_handlers: StdRwLock<Vec<Arc<dyn CallbackHandler>>>,
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
     /// ID).
     config:            Arc<StdRwLock<TelegramConfig>>,
@@ -742,7 +745,7 @@ impl TelegramAdapter {
             shutdown_rx,
             bot_username: Arc::new(RwLock::new(None)),
             command_handlers: StdRwLock::new(Vec::new()),
-            callback_handlers: Vec::new(),
+            callback_handlers: StdRwLock::new(Vec::new()),
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
@@ -790,11 +793,24 @@ impl TelegramAdapter {
             .unwrap_or_else(|e| e.into_inner()) = handlers;
     }
 
-    /// Register callback handlers.
+    /// Register callback handlers (builder pattern — must be called before
+    /// `Arc` wrapping).
     #[must_use]
-    pub fn with_callback_handlers(mut self, handlers: Vec<Arc<dyn CallbackHandler>>) -> Self {
-        self.callback_handlers = handlers;
+    pub fn with_callback_handlers(self, handlers: Vec<Arc<dyn CallbackHandler>>) -> Self {
+        *self
+            .callback_handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = handlers;
         self
+    }
+
+    /// Replace callback handlers at runtime (works through `&self` /
+    /// `Arc<Self>`).
+    pub fn set_callback_handlers(&self, handlers: Vec<Arc<dyn CallbackHandler>>) {
+        *self
+            .callback_handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = handlers;
     }
 
     /// Set the primary chat ID for privileged commands.
@@ -1082,6 +1098,12 @@ impl ChannelAdapter for TelegramAdapter {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .into();
+        let callback_handlers: Arc<[Arc<dyn CallbackHandler>]> = self
+            .callback_handlers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .into();
 
         // Register slash-menu with Telegram so '/' shows available commands.
         {
@@ -1131,6 +1153,7 @@ impl ChannelAdapter for TelegramAdapter {
                 stream_hub,
                 active_streams,
                 command_handlers,
+                callback_handlers,
             )
             .await;
         });
@@ -1182,6 +1205,7 @@ async fn polling_loop(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
+    callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1237,6 +1261,7 @@ async fn polling_loop(
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
+                    let callback_handlers = Arc::clone(&callback_handlers);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1248,6 +1273,7 @@ async fn polling_loop(
                             &stream_hub,
                             &active_streams,
                             &command_handlers,
+                            &callback_handlers,
                         )
                         .await;
                     });
@@ -1552,6 +1578,7 @@ async fn handle_update(
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
+    callback_handlers: &[Arc<dyn CallbackHandler>],
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -1572,6 +1599,92 @@ async fn handle_update(
             if data.starts_with("trace:") {
                 handle_trace_callback(bot, callback, data, handle.trace_service()).await;
                 return;
+            }
+
+            // Dispatch to registered callback handlers by prefix match.
+            // Enforce the same authorization as normal messages: both
+            // allowed_chat_ids and allowed_group_chat_id are checked.
+            let cb_chat_id = callback
+                .message
+                .as_ref()
+                .map(|m| m.chat().id.0)
+                .unwrap_or(0);
+            if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&cb_chat_id) {
+                tracing::warn!(
+                    chat_id = cb_chat_id,
+                    "telegram adapter: dropping callback from unauthorized chat"
+                );
+                let _ = bot.answer_callback_query(callback.id.clone()).await;
+                return;
+            }
+            // Group-level auth: mirror the allowed_group_chat_id gate from
+            // the normal message path.
+            let cb_is_group = callback
+                .message
+                .as_ref()
+                .is_some_and(|m| matches!(m.chat().kind, teloxide::types::ChatKind::Public(..)));
+            if cb_is_group {
+                if let Some(allowed_id) = cfg.allowed_group_chat_id {
+                    if cb_chat_id != allowed_id {
+                        tracing::warn!(
+                            chat_id = cb_chat_id,
+                            allowed_group_chat_id = allowed_id,
+                            "telegram adapter: dropping callback from unauthorized group"
+                        );
+                        let _ = bot.answer_callback_query(callback.id.clone()).await;
+                        return;
+                    }
+                }
+            }
+
+            for handler in callback_handlers {
+                if data.starts_with(handler.prefix()) {
+                    let chat_id = cb_chat_id;
+                    let context = rara_kernel::channel::command::CallbackContext {
+                        channel_type: ChannelType::Telegram,
+                        session_key:  String::new(),
+                        user:         ChannelUser {
+                            platform_id:  callback.from.id.0.to_string(),
+                            display_name: Some(callback.from.first_name.clone()),
+                        },
+                        data:         data.clone(),
+                        message_id:   callback.message.as_ref().map(|m| m.id().0.to_string()),
+                        metadata:     {
+                            let mut m = HashMap::new();
+                            m.insert(
+                                "telegram_chat_id".to_string(),
+                                serde_json::Value::Number(chat_id.into()),
+                            );
+                            m
+                        },
+                    };
+                    match handler.handle(&context).await {
+                        Ok(CallbackResult::SendMessage { text }) => {
+                            let _ = bot
+                                .send_message(teloxide::types::ChatId(chat_id), text)
+                                .parse_mode(teloxide::types::ParseMode::Html)
+                                .await;
+                        }
+                        Ok(CallbackResult::EditMessage { text }) => {
+                            if let Some(msg) = &callback.message {
+                                let _ = bot
+                                    .edit_message_text(msg.chat().id, msg.id(), text)
+                                    .parse_mode(teloxide::types::ParseMode::Html)
+                                    .await;
+                            }
+                        }
+                        Ok(CallbackResult::Ack) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                %e,
+                                prefix = handler.prefix(),
+                                "callback handler error"
+                            );
+                        }
+                    }
+                    let _ = bot.answer_callback_query(callback.id.clone()).await;
+                    return;
+                }
             }
         }
         return;

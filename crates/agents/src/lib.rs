@@ -129,6 +129,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "distill-user-notes".to_string(),
         "update-soul-state".to_string(),
         "evolve-soul".to_string(),
+        "update-session-title".to_string(),
     ],
     max_children:           Some(0),
     max_context_tokens:     None,
@@ -285,6 +286,7 @@ You are the "scheduler brain" of the system. Your job is to:
 
 Each heartbeat cycle:
 1. Use `list_sessions` to see all active sessions with their metadata.
+1.5. **Session title housekeeping**: For any session whose title is missing or empty, use `read_tape` to grab the first few messages, then call `update-session-title` with a concise title (max 30 chars, match the conversation language). Only fill in missing titles — never overwrite an existing one.
 2. Use `read_tape` to read into sessions that look interesting (recent activity, long gaps, pending tasks).
 3. Analyze cross-session patterns — look for recurring themes, evolving interests, or connections between different conversations a user is having.
 4. Use `write_user_note` to persist important observations into user tapes when you discover:

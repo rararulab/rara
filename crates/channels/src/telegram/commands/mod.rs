@@ -39,7 +39,7 @@ pub mod session;
 pub mod tape;
 
 pub use basic::BasicCommandHandler;
-pub use callbacks::SessionSwitchCallbackHandler;
+pub use callbacks::{SessionDetailCallbackHandler, SessionSwitchCallbackHandler};
 pub use client::BotServiceClient;
 pub use kernel_client::KernelBotServiceClient;
 pub use mcp::McpCommandHandler;

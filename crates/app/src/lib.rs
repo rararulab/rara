@@ -455,17 +455,21 @@ pub async fn start_with_options(
     // tracing goes to stderr, so this does not interfere.
     println!("READY");
 
+    // Build a shared service client used by both command and callback handlers.
+    let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> = {
+        use rara_channels::telegram::commands::KernelBotServiceClient;
+        std::sync::Arc::new(KernelBotServiceClient::new(
+            rara.session_index.clone(),
+            rara.tape_service.clone(),
+        ))
+    };
+
     // Build command handlers shared across all channels.
     let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
         use rara_channels::telegram::commands::{
-            BasicCommandHandler, KernelBotServiceClient, McpCommandHandler, SessionCommandHandler,
-            StopCommandHandler, TapeCommandHandler,
+            BasicCommandHandler, McpCommandHandler, SessionCommandHandler, StopCommandHandler,
+            TapeCommandHandler,
         };
-        let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> =
-            std::sync::Arc::new(KernelBotServiceClient::new(
-                rara.session_index.clone(),
-                rara.tape_service.clone(),
-            ));
         let session_handler = std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone()));
         let stop_handler = std::sync::Arc::new(StopCommandHandler::new(
             bot_client.clone(),
@@ -483,7 +487,7 @@ pub async fn start_with_options(
         .flatten()
         .collect();
         let basic_handler = std::sync::Arc::new(BasicCommandHandler::new(all_commands));
-        let mcp_handler = std::sync::Arc::new(McpCommandHandler::new(bot_client));
+        let mcp_handler = std::sync::Arc::new(McpCommandHandler::new(bot_client.clone()));
         vec![
             basic_handler,
             session_handler,
@@ -495,6 +499,20 @@ pub async fn start_with_options(
 
     if let Some(ref tg_adapter) = telegram_adapter {
         tg_adapter.set_command_handlers(command_handlers.clone());
+
+        // Register callback handlers for inline keyboard interactions.
+        {
+            use rara_channels::telegram::commands::{
+                SessionDetailCallbackHandler, SessionSwitchCallbackHandler,
+            };
+            let callback_handlers: Vec<
+                std::sync::Arc<dyn rara_kernel::channel::command::CallbackHandler>,
+            > = vec![
+                std::sync::Arc::new(SessionSwitchCallbackHandler::new(bot_client.clone())),
+                std::sync::Arc::new(SessionDetailCallbackHandler::new(bot_client.clone())),
+            ];
+            tg_adapter.set_callback_handlers(callback_handlers);
+        }
 
         use rara_kernel::channel::adapter::ChannelAdapter as _;
         match tg_adapter.start(kernel_handle.clone()).await {

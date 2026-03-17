@@ -63,6 +63,7 @@ pub struct ChannelBinding {
 pub struct SessionListItem {
     pub key:           String,
     pub title:         Option<String>,
+    pub preview:       Option<String>,
     pub message_count: i64,
     pub updated_at:    String,
 }
