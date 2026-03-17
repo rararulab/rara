@@ -31,13 +31,17 @@ tool/browser/
 ## Critical Invariants
 
 - **RefMap is per-tab and rebuilt on every snapshot.** Never cache refs across snapshots. A stale ref will return `BrowserError::RefNotFound`.
-- **BrowserManager is shared across all agent sessions.** Tabs provide session isolation. The `RwLock<HashMap>` on tabs must not be held across await points.
+- **Single lock for all tab state.** `TabStore` (tabs + active pointer) lives behind one `RwLock` to prevent deadlocks from split locks. Never introduce a second lock for tab-related state.
+- **Tabs use `IndexMap` for stable ordering.** Numeric indices are insertion-ordered. Do NOT switch to `HashMap`.
+- **`navigate()` reuses the active tab** via `Page::goto()` to preserve browser history. New tabs are only created when no active tab exists.
+- **`close_tab()` / `close_all()` call `Page::close()`** to release CDP targets in Lightpanda. Never just remove from the map without closing.
 - **Lightpanda process is `kill_on_drop(true)`.** If BrowserManager is dropped, the subprocess is killed.
 - **chromiumoxide handler task must stay alive.** The `_handler: JoinHandle` field exists solely to keep the CDP event processing loop running. Never remove it.
 
 ## What NOT To Do
 
-- Do NOT hold tab `RwLock` guards across `.await` — causes deadlocks.
+- Do NOT hold the `TabStore` `RwLock` guard across `.await` points — causes deadlocks. Clone `Page` handles out of the lock first, then do async I/O.
+- Do NOT introduce a second lock for tab-related state — the single-lock design exists to prevent lock-ordering deadlocks.
 - Do NOT index into `Quad` directly — use `.inner()` to get the underlying `Vec<f64>`.
 - Do NOT use `chromiumoxide_cdp` directly — use `chromiumoxide::cdp` re-exports instead.
 - Do NOT assume CDP builder `.build()` always returns `Result` — DOM builders return the struct directly, Input builders return `Result<Params, String>`.

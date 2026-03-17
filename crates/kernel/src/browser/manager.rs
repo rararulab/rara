@@ -14,9 +14,10 @@
 
 //! Manages the Lightpanda browser process and CDP connection.
 
-use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use chromiumoxide::{Page, browser::Browser};
+use indexmap::IndexMap;
 use serde::Deserialize;
 use tokio::{
     process::{Child, Command},
@@ -80,6 +81,26 @@ struct TabState {
     ref_map: RefMap,
 }
 
+/// Combined tab storage behind a single lock to prevent deadlocks.
+///
+/// All tab-related state lives here. Uses `IndexMap` so that iteration order
+/// matches insertion order, making numeric indices stable across calls.
+struct TabStore {
+    /// Tabs in insertion order. Numeric indices come from this order.
+    tabs:   IndexMap<String, TabState>,
+    /// The "active" tab ID (most recently navigated/selected).
+    active: Option<String>,
+}
+
+impl TabStore {
+    fn new() -> Self {
+        Self {
+            tabs:   IndexMap::new(),
+            active: None,
+        }
+    }
+}
+
 /// Kernel-level browser subsystem.
 ///
 /// Manages a persistent Lightpanda CDP connection and provides high-level
@@ -89,9 +110,8 @@ pub struct BrowserManager {
     browser:  Browser,
     /// Event handler task — must be kept alive for the browser to work.
     _handler: tokio::task::JoinHandle<()>,
-    tabs:     RwLock<HashMap<String, TabState>>,
-    /// The "active" tab ID (most recently navigated).
-    active:   RwLock<Option<String>>,
+    /// Single lock for all tab state — prevents deadlocks from split locks.
+    store:    RwLock<TabStore>,
     config:   BrowserConfig,
 }
 
@@ -171,21 +191,47 @@ impl BrowserManager {
             process: Some(child),
             browser,
             _handler: handler_task,
-            tabs: RwLock::new(HashMap::new()),
-            active: RwLock::new(None),
+            store: RwLock::new(TabStore::new()),
             config,
         })
     }
 
-    /// Navigate to a URL. Creates a new page or reuses the active one.
-    /// Returns the page title, URL, and accessibility snapshot.
+    /// Navigate to a URL.
+    ///
+    /// Reuses the active tab if one exists (preserving browser history), or
+    /// creates a new tab if none is active. Returns page metadata and an
+    /// accessibility snapshot.
     pub async fn navigate(&self, url: &str) -> BrowserResult<NavigateResult> {
-        let page = self.browser.new_page(url).await.map_err(|e| {
-            CdpSnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?;
+        // Check if there is an active page we can reuse.
+        let existing_page = {
+            let store = self.store.read().await;
+            store
+                .active
+                .as_ref()
+                .and_then(|id| store.tabs.get(id))
+                .map(|tab| (store.active.clone().unwrap(), tab.page.clone()))
+        };
+
+        let (tab_id, page) = if let Some((id, page)) = existing_page {
+            // Reuse the active tab — navigate in-place to preserve history.
+            page.goto(url).await.map_err(|e| {
+                CdpSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
+            (id, page)
+        } else {
+            // No active tab — create a new one.
+            let page = self.browser.new_page(url).await.map_err(|e| {
+                CdpSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
+            let id = ulid::Ulid::new().to_string();
+            (id, page)
+        };
 
         let title = page
             .evaluate("document.title")
@@ -212,19 +258,15 @@ impl BrowserManager {
 
         let snap = snapshot::take_snapshot(&page, self.config.snapshot_max_bytes).await?;
 
-        let tab_id = ulid::Ulid::new().to_string();
         let tab_state = TabState {
             page,
             ref_map: snap.ref_map.clone(),
         };
 
         {
-            let mut tabs = self.tabs.write().await;
-            tabs.insert(tab_id.clone(), tab_state);
-        }
-        {
-            let mut active = self.active.write().await;
-            *active = Some(tab_id.clone());
+            let mut store = self.store.write().await;
+            store.tabs.insert(tab_id.clone(), tab_state);
+            store.active = Some(tab_id.clone());
         }
 
         Ok(NavigateResult {
@@ -251,9 +293,13 @@ impl BrowserManager {
 
     /// Take a fresh accessibility tree snapshot of the active page.
     pub async fn take_snapshot_active(&self) -> BrowserResult<String> {
-        let active_id = self.active_tab_id().await?;
-        let mut tabs = self.tabs.write().await;
-        let tab = tabs
+        let mut store = self.store.write().await;
+        let active_id = store
+            .active
+            .clone()
+            .ok_or_else(|| NoActivePageSnafu.build())?;
+        let tab = store
+            .tabs
             .get_mut(&active_id)
             .ok_or_else(|| NoActivePageSnafu.build())?;
 
@@ -287,10 +333,8 @@ impl BrowserManager {
             .build()
         })?;
 
-        // Use chromiumoxide's built-in Element click which handles
-        // scrolling, coordinate calculation, and input dispatch.
-        // We find the element via its backend node ID, then use the
-        // higher-level Element API.
+        // Scroll element into view and compute click coordinates from the box
+        // model center.
         use chromiumoxide::cdp::browser_protocol::dom;
 
         page.execute(
@@ -548,91 +592,104 @@ impl BrowserManager {
     }
 
     /// List all open tabs.
+    ///
+    /// Indices are stable (insertion-ordered via `IndexMap`) and remain
+    /// consistent between calls as long as no tabs are inserted or removed.
     pub async fn list_tabs(&self) -> Vec<TabInfo> {
-        let tabs = self.tabs.read().await;
-        let active = self.active.read().await;
-        let mut result = Vec::new();
-        for (i, (id, _tab)) in tabs.iter().enumerate() {
-            result.push(TabInfo {
+        let store = self.store.read().await;
+        store
+            .tabs
+            .keys()
+            .enumerate()
+            .map(|(i, id)| TabInfo {
                 index:     i,
                 tab_id:    id.clone(),
-                is_active: active.as_deref() == Some(id),
-            });
-        }
-        result
+                is_active: store.active.as_deref() == Some(id),
+            })
+            .collect()
     }
 
     /// Switch to a tab by index.
     pub async fn select_tab(&self, index: usize) -> BrowserResult<()> {
-        let tabs = self.tabs.read().await;
-        let tab_ids: Vec<String> = tabs.keys().cloned().collect();
-        let count = tab_ids.len();
-        let tab_id = tab_ids
-            .into_iter()
-            .nth(index)
+        let mut store = self.store.write().await;
+        let count = store.tabs.len();
+        let tab_id = store
+            .tabs
+            .get_index(index)
+            .map(|(id, _)| id.clone())
             .ok_or_else(|| TabIndexOutOfRangeSnafu { index, count }.build())?;
-        drop(tabs);
-        let mut active = self.active.write().await;
-        *active = Some(tab_id);
+        store.active = Some(tab_id);
         Ok(())
     }
 
     /// Close a tab by index, or the active tab if no index given.
+    ///
+    /// Actually closes the underlying CDP page to free Lightpanda resources.
     pub async fn close_tab(&self, index: Option<usize>) -> BrowserResult<Vec<TabInfo>> {
-        let tab_id = if let Some(idx) = index {
-            let tabs = self.tabs.read().await;
-            let tab_ids: Vec<String> = tabs.keys().cloned().collect();
-            let count = tab_ids.len();
-            tab_ids
-                .into_iter()
-                .nth(idx)
-                .ok_or_else(|| TabIndexOutOfRangeSnafu { index: idx, count }.build())?
-        } else {
-            self.active_tab_id().await?
+        // Determine which tab to close and remove it, all under one lock.
+        let removed_page = {
+            let mut store = self.store.write().await;
+            let tab_id = if let Some(idx) = index {
+                let count = store.tabs.len();
+                store
+                    .tabs
+                    .get_index(idx)
+                    .map(|(id, _)| id.clone())
+                    .ok_or_else(|| TabIndexOutOfRangeSnafu { index: idx, count }.build())?
+            } else {
+                store
+                    .active
+                    .clone()
+                    .ok_or_else(|| NoActivePageSnafu.build())?
+            };
+
+            let tab_state = store.tabs.swap_remove(&tab_id);
+
+            // Update active pointer if needed.
+            if store.active.as_deref() == Some(&tab_id) {
+                store.active = store.tabs.keys().next().cloned();
+            }
+
+            tab_state.map(|t| t.page)
         };
 
-        {
-            let mut tabs = self.tabs.write().await;
-            tabs.remove(&tab_id);
-        }
-
-        // Update active if needed.
-        {
-            let mut active = self.active.write().await;
-            if active.as_deref() == Some(&tab_id) {
-                let tabs = self.tabs.read().await;
-                *active = tabs.keys().next().cloned();
-            }
+        // Close the CDP page outside the lock to avoid holding it during I/O.
+        if let Some(page) = removed_page {
+            let _ = page.close().await;
         }
 
         Ok(self.list_tabs().await)
     }
 
-    /// Close the browser and kill the Lightpanda process.
+    /// Close all tabs and release their CDP pages.
     pub async fn close_all(&self) -> BrowserResult<Vec<TabInfo>> {
-        let mut tabs = self.tabs.write().await;
-        tabs.clear();
-        let mut active = self.active.write().await;
-        *active = None;
+        let pages: Vec<Page> = {
+            let mut store = self.store.write().await;
+            let pages = store.tabs.drain(..).map(|(_, t)| t.page).collect();
+            store.active = None;
+            pages
+        };
+
+        // Close CDP pages outside the lock.
+        for page in pages {
+            let _ = page.close().await;
+        }
+
         Ok(vec![])
     }
 
     // -- Private helpers --
 
-    /// Get the active tab ID.
-    async fn active_tab_id(&self) -> BrowserResult<String> {
-        self.active
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| NoActivePageSnafu.build())
-    }
-
-    /// Get the active page.
+    /// Get a clone of the active page (no lock held after return).
     async fn active_page(&self) -> BrowserResult<Page> {
-        let active_id = self.active_tab_id().await?;
-        let tabs = self.tabs.read().await;
-        tabs.get(&active_id)
+        let store = self.store.read().await;
+        let active_id = store
+            .active
+            .as_ref()
+            .ok_or_else(|| NoActivePageSnafu.build())?;
+        store
+            .tabs
+            .get(active_id)
             .map(|t| t.page.clone())
             .ok_or_else(|| NoActivePageSnafu.build())
     }
@@ -645,10 +702,14 @@ impl BrowserManager {
         Page,
         chromiumoxide::cdp::browser_protocol::dom::BackendNodeId,
     )> {
-        let active_id = self.active_tab_id().await?;
-        let tabs = self.tabs.read().await;
-        let tab = tabs
-            .get(&active_id)
+        let store = self.store.read().await;
+        let active_id = store
+            .active
+            .as_ref()
+            .ok_or_else(|| NoActivePageSnafu.build())?;
+        let tab = store
+            .tabs
+            .get(active_id)
             .ok_or_else(|| NoActivePageSnafu.build())?;
         let backend_id = tab.ref_map.resolve(ref_id)?;
         Ok((tab.page.clone(), backend_id))
@@ -680,7 +741,7 @@ pub struct NavigateResult {
 /// Basic info about an open tab.
 #[derive(Debug, Clone)]
 pub struct TabInfo {
-    /// Tab position index.
+    /// Tab position index (stable insertion order).
     pub index:     usize,
     /// Unique tab identifier.
     pub tab_id:    String,
