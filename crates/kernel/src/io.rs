@@ -1633,24 +1633,27 @@ impl IOSubsystem {
         )
     )]
     async fn deliver_to_endpoints(&self, envelope: OutboundEnvelope) {
-        let connected = self.endpoint_registry.get_endpoints(&envelope.user);
-        let mut targets = match &envelope.routing {
-            OutboundRouting::BroadcastAll => connected,
-            OutboundRouting::BroadcastExcept { exclude } => connected
-                .into_iter()
-                .filter(|e| &e.channel_type != exclude)
-                .collect(),
-            OutboundRouting::Targeted { channels } => connected
-                .into_iter()
-                .filter(|e| channels.contains(&e.channel_type))
-                .collect(),
+        // When origin_endpoint is set, deliver directly to that endpoint
+        // without a user-based registry lookup.  Background/system tasks carry
+        // the correct target from the original inbound message, but their
+        // envelope.user may have no registered endpoints — looking up by user
+        // first would produce an empty list and silently drop the message.
+        let targets: Vec<Endpoint> = if let Some(ref origin) = envelope.origin_endpoint {
+            vec![origin.clone()]
+        } else {
+            let connected = self.endpoint_registry.get_endpoints(&envelope.user);
+            match &envelope.routing {
+                OutboundRouting::BroadcastAll => connected,
+                OutboundRouting::BroadcastExcept { exclude } => connected
+                    .into_iter()
+                    .filter(|e| &e.channel_type != exclude)
+                    .collect(),
+                OutboundRouting::Targeted { channels } => connected
+                    .into_iter()
+                    .filter(|e| channels.contains(&e.channel_type))
+                    .collect(),
+            }
         };
-
-        // Session-scoped delivery: when origin_endpoint is set, deliver only
-        // to that endpoint instead of broadcasting to all same-type endpoints.
-        if let Some(ref origin) = envelope.origin_endpoint {
-            targets.retain(|e| e == origin);
-        }
 
         let futs = targets.into_iter().map(|endpoint| {
             let adapter = self.adapters.get(&endpoint.channel_type).cloned();
