@@ -212,11 +212,13 @@ impl AgentTool for ReadFileTool {
         let mut accumulated = String::new();
         let mut page_offset: usize = 1;
         let mut file_fully_read = false;
+        let mut any_content_truncated = false;
         let mut total_lines = 0;
 
         for _ in 0..MAX_PAGES {
             let page = read_page(&all_lines, page_offset, DEFAULT_LIMIT);
             total_lines = page.total_lines;
+            any_content_truncated |= page.content_truncated;
             accumulated.push_str(&page.output);
 
             if !page.has_more_lines {
@@ -250,7 +252,7 @@ impl AgentTool for ReadFileTool {
         Ok(json!({
             "content": accumulated,
             "total_lines": total_lines,
-            "truncated": !file_fully_read,
+            "truncated": !file_fully_read || any_content_truncated,
         })
         .into())
     }
