@@ -1633,27 +1633,14 @@ impl IOSubsystem {
         )
     )]
     async fn deliver_to_endpoints(&self, envelope: OutboundEnvelope) {
-        // When origin_endpoint is set, deliver directly to that endpoint
-        // without a user-based registry lookup.  Background/system tasks carry
-        // the correct target from the original inbound message, but their
-        // envelope.user may have no registered endpoints — looking up by user
-        // first would produce an empty list and silently drop the message.
-        let targets: Vec<Endpoint> = if let Some(ref origin) = envelope.origin_endpoint {
+        // Build candidates from origin_endpoint (if set) or user registry,
+        // then apply routing filters.
+        let candidates: Vec<Endpoint> = if let Some(ref origin) = envelope.origin_endpoint {
             vec![origin.clone()]
         } else {
-            let connected = self.endpoint_registry.get_endpoints(&envelope.user);
-            match &envelope.routing {
-                OutboundRouting::BroadcastAll => connected,
-                OutboundRouting::BroadcastExcept { exclude } => connected
-                    .into_iter()
-                    .filter(|e| &e.channel_type != exclude)
-                    .collect(),
-                OutboundRouting::Targeted { channels } => connected
-                    .into_iter()
-                    .filter(|e| channels.contains(&e.channel_type))
-                    .collect(),
-            }
+            self.endpoint_registry.get_endpoints(&envelope.user)
         };
+        let targets = resolve_delivery_targets(candidates, &envelope.routing);
 
         let futs = targets.into_iter().map(|endpoint| {
             let adapter = self.adapters.get(&endpoint.channel_type).cloned();
@@ -1682,6 +1669,106 @@ impl IOSubsystem {
             }
         });
         futures::future::join_all(futs).await;
+    }
+}
+
+/// Apply [`OutboundRouting`] filters to a candidate endpoint list.
+///
+/// Extracted from `deliver_to_endpoints` for testability.
+fn resolve_delivery_targets(candidates: Vec<Endpoint>, routing: &OutboundRouting) -> Vec<Endpoint> {
+    match routing {
+        OutboundRouting::BroadcastAll => candidates,
+        OutboundRouting::BroadcastExcept { exclude } => candidates
+            .into_iter()
+            .filter(|e| &e.channel_type != exclude)
+            .collect(),
+        OutboundRouting::Targeted { channels } => candidates
+            .into_iter()
+            .filter(|e| channels.contains(&e.channel_type))
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod delivery_routing_tests {
+    use super::*;
+
+    fn tg_endpoint(chat_id: i64) -> Endpoint {
+        Endpoint {
+            channel_type: ChannelType::Telegram,
+            address:      EndpointAddress::Telegram {
+                chat_id,
+                thread_id: None,
+            },
+        }
+    }
+
+    fn web_endpoint() -> Endpoint {
+        Endpoint {
+            channel_type: ChannelType::Web,
+            address:      EndpointAddress::Web {
+                connection_id: "ws-1".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn origin_endpoint_with_broadcast_all_delivers() {
+        // Simulates system user with origin_endpoint — no registry lookup.
+        let origin = tg_endpoint(12345);
+        let targets =
+            resolve_delivery_targets(vec![origin.clone()], &OutboundRouting::BroadcastAll);
+        assert_eq!(targets, vec![origin]);
+    }
+
+    #[test]
+    fn origin_endpoint_filtered_by_broadcast_except() {
+        // origin is Telegram, routing excludes Telegram → no delivery.
+        let origin = tg_endpoint(12345);
+        let targets = resolve_delivery_targets(
+            vec![origin],
+            &OutboundRouting::BroadcastExcept {
+                exclude: ChannelType::Telegram,
+            },
+        );
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn origin_endpoint_filtered_by_targeted() {
+        // origin is Telegram, routing targets only Web → no delivery.
+        let origin = tg_endpoint(12345);
+        let targets = resolve_delivery_targets(
+            vec![origin],
+            &OutboundRouting::Targeted {
+                channels: vec![ChannelType::Web],
+            },
+        );
+        assert!(targets.is_empty());
+
+        // origin is Web, routing targets Web → delivered.
+        let origin = web_endpoint();
+        let targets = resolve_delivery_targets(
+            vec![origin.clone()],
+            &OutboundRouting::Targeted {
+                channels: vec![ChannelType::Web],
+            },
+        );
+        assert_eq!(targets, vec![origin]);
+    }
+
+    #[test]
+    fn registry_candidates_broadcast_except_filters() {
+        // Multiple endpoints from registry, exclude Telegram.
+        let tg = tg_endpoint(111);
+        let web = web_endpoint();
+        let targets = resolve_delivery_targets(
+            vec![tg, web.clone()],
+            &OutboundRouting::BroadcastExcept {
+                exclude: ChannelType::Telegram,
+            },
+        );
+        assert_eq!(targets, vec![web]);
     }
 }
 
