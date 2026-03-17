@@ -467,11 +467,15 @@ pub async fn start_with_options(
     // Build command handlers shared across all channels.
     let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
         use rara_channels::telegram::commands::{
-            BasicCommandHandler, McpCommandHandler, SessionCommandHandler, StopCommandHandler,
-            TapeCommandHandler,
+            BasicCommandHandler, McpCommandHandler, SessionCommandHandler, StatusCommandHandler,
+            StopCommandHandler, TapeCommandHandler,
         };
         let session_handler = std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone()));
         let stop_handler = std::sync::Arc::new(StopCommandHandler::new(
+            bot_client.clone(),
+            kernel_handle.clone(),
+        ));
+        let status_handler = std::sync::Arc::new(StatusCommandHandler::new(
             bot_client.clone(),
             kernel_handle.clone(),
         ));
@@ -481,6 +485,7 @@ pub async fn start_with_options(
         let all_commands: Vec<rara_kernel::channel::command::CommandDefinition> = [
             session_handler.commands(),
             stop_handler.commands(),
+            status_handler.commands(),
             tape_handler.commands(),
         ]
         .into_iter()
@@ -492,6 +497,7 @@ pub async fn start_with_options(
             basic_handler,
             session_handler,
             stop_handler,
+            status_handler,
             tape_handler,
             mcp_handler,
         ]
@@ -504,12 +510,14 @@ pub async fn start_with_options(
         {
             use rara_channels::telegram::commands::{
                 SessionDetailCallbackHandler, SessionSwitchCallbackHandler,
+                StatusJobsCallbackHandler,
             };
             let callback_handlers: Vec<
                 std::sync::Arc<dyn rara_kernel::channel::command::CallbackHandler>,
             > = vec![
                 std::sync::Arc::new(SessionSwitchCallbackHandler::new(bot_client.clone())),
                 std::sync::Arc::new(SessionDetailCallbackHandler::new(bot_client.clone())),
+                std::sync::Arc::new(StatusJobsCallbackHandler::new(kernel_handle.clone())),
             ];
             tg_adapter.set_callback_handlers(callback_handlers);
         }
