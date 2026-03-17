@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Schedule tools — LLM-callable tools for managing scheduled tasks.
+//! Schedule tools — LLM-callable tools for scheduling future agent turns.
 //!
 //! Five tools are provided:
-//! - `schedule-once` — fire once after N seconds
-//! - `schedule-interval` — fire every N seconds (repeating)
-//! - `schedule-cron` — fire according to a cron expression
+//! - `schedule-once` — trigger a future LLM task once after N seconds
+//! - `schedule-interval` — trigger a future LLM task every N seconds
+//! - `schedule-cron` — trigger a future LLM task from a cron expression
 //! - `schedule-remove` — remove a scheduled job by ID
 //! - `schedule-list` — list all scheduled jobs across sessions
 
@@ -93,7 +93,9 @@ impl AgentTool for ScheduleOnceTool {
     fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
-        "Schedule a one-shot task. It fires once after the specified delay in seconds."
+        "Schedule a one-shot future agent turn. `message` is the prompt that will be sent to the \
+         LLM when the job fires, so write it like a user instruction and name any required skills \
+         explicitly."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -107,7 +109,7 @@ impl AgentTool for ScheduleOnceTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "The task description to execute when the job fires"
+                    "description": "Prompt for the future scheduled agent. This is sent to the LLM when the job fires, so write it like a user instruction; if a skill should be used, name it explicitly."
                 },
                 "tags": {
                     "type": "array",
@@ -161,7 +163,11 @@ struct ScheduleIntervalParams {
 impl AgentTool for ScheduleIntervalTool {
     fn name(&self) -> &str { Self::NAME }
 
-    fn description(&self) -> &str { "Schedule a repeating task. It fires every N seconds." }
+    fn description(&self) -> &str {
+        "Schedule a repeating future agent turn. `message` is the prompt that will be sent to the \
+         LLM each time the job fires, so write it like a user instruction and name any required \
+         skills explicitly."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -174,7 +180,7 @@ impl AgentTool for ScheduleIntervalTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "The task description to execute when the job fires"
+                    "description": "Prompt for the future scheduled agent. This is sent to the LLM every time the job fires, so write it like a user instruction; if a skill should be used, name it explicitly."
                 },
                 "tags": {
                     "type": "array",
@@ -238,8 +244,9 @@ impl AgentTool for ScheduleCronTool {
     fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
-        "Schedule a task using a 6-field cron expression: 'sec min hour day month weekday' (e.g. \
-         '0 0 9 * * *' for daily at 9am UTC)."
+        "Schedule a future agent turn using a 6-field cron expression: 'sec min hour day month \
+         weekday'. `message` is the prompt that will be sent to the LLM whenever the job fires, so \
+         write it like a user instruction and name any required skills explicitly."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -253,7 +260,7 @@ impl AgentTool for ScheduleCronTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "The task description to execute when the job fires"
+                    "description": "Prompt for the future scheduled agent. This is sent to the LLM whenever the cron job fires, so write it like a user instruction; if a skill should be used, name it explicitly."
                 },
                 "tags": {
                     "type": "array",

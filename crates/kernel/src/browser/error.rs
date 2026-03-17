@@ -21,7 +21,9 @@ use snafu::Snafu;
 #[snafu(visibility(pub))]
 pub enum BrowserError {
     /// Lightpanda binary was not found on the system.
-    #[snafu(display("lightpanda binary not found at '{path}' — install from https://github.com/nicholasgasior/lightpanda"))]
+    #[snafu(display(
+        "lightpanda binary not found at '{path}' — install from https://github.com/nicholasgasior/lightpanda"
+    ))]
     BinaryNotFound { path: String },
 
     /// Lightpanda process failed to become ready within the timeout.
