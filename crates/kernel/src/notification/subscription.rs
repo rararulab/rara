@@ -18,13 +18,18 @@
 //! produced by background/scheduled tasks are routed to interested sessions.
 //! Separate from the kernel event bus (`bus` module) which is a fire-and-forget
 //! broadcast channel.
+//!
+//! Subscriptions are persisted to a JSON file and restored on kernel startup,
+//! so they survive restarts.
 
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{identity::UserId, session::SessionKey, task_report::TaskReportStatus};
@@ -94,11 +99,14 @@ pub struct Subscription {
 // SubscriptionRegistry
 // ---------------------------------------------------------------------------
 
-/// In-memory registry of tag-based notification subscriptions.
+/// File-backed registry of tag-based notification subscriptions.
 ///
 /// Uses an inverted index `(UserId, tag) → {sub_id}` so that `match_tags`
 /// is O(M) hash lookups (M = number of report tags) instead of a full scan
 /// over all subscriptions.
+///
+/// Mutations (subscribe/unsubscribe/remove_session) persist the full state
+/// to a JSON file so subscriptions survive kernel restarts.
 ///
 /// Thread-safe: guarded by a tokio `RwLock` for concurrent read access
 /// during notification fan-out.
@@ -112,22 +120,123 @@ struct RegistryInner {
     subs:      HashMap<Uuid, Subscription>,
     /// Inverted index: (owner, tag) → set of sub_ids.
     tag_index: HashMap<(UserId, String), HashSet<Uuid>>,
+    /// Path to the JSON persistence file. `None` for in-memory only (tests).
+    path:      Option<PathBuf>,
 }
 
 impl RegistryInner {
+    /// Build an empty registry (in-memory only).
     fn new() -> Self {
         Self {
             subs:      HashMap::new(),
             tag_index: HashMap::new(),
+            path:      None,
+        }
+    }
+
+    /// Build a registry from a list of subscriptions loaded from disk.
+    fn from_entries(entries: Vec<Subscription>, path: PathBuf) -> Self {
+        let mut subs = HashMap::new();
+        let mut tag_index: HashMap<(UserId, String), HashSet<Uuid>> = HashMap::new();
+        for sub in entries {
+            for tag in &sub.match_tags {
+                tag_index
+                    .entry((sub.owner.clone(), tag.clone()))
+                    .or_default()
+                    .insert(sub.id);
+            }
+            subs.insert(sub.id, sub);
+        }
+        Self {
+            subs,
+            tag_index,
+            path: Some(path),
+        }
+    }
+
+    /// Insert a subscription into the primary store and inverted index.
+    fn insert(&mut self, sub: Subscription) {
+        for tag in &sub.match_tags {
+            self.tag_index
+                .entry((sub.owner.clone(), tag.clone()))
+                .or_default()
+                .insert(sub.id);
+        }
+        self.subs.insert(sub.id, sub);
+    }
+
+    /// Remove a subscription from the primary store and inverted index.
+    fn remove(&mut self, id: Uuid) -> Option<Subscription> {
+        if let Some(sub) = self.subs.remove(&id) {
+            for tag in &sub.match_tags {
+                let key = (sub.owner.clone(), tag.clone());
+                if let Some(set) = self.tag_index.get_mut(&key) {
+                    set.remove(&id);
+                    if set.is_empty() {
+                        self.tag_index.remove(&key);
+                    }
+                }
+            }
+            Some(sub)
+        } else {
+            None
+        }
+    }
+
+    /// Persist the current state to the JSON file (if a path is set).
+    fn persist(&self) {
+        let Some(path) = &self.path else { return };
+        let entries: Vec<&Subscription> = self.subs.values().collect();
+        match serde_json::to_string_pretty(&entries) {
+            Ok(json) => {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = std::fs::write(path, json) {
+                    warn!(error = %e, path = %path.display(), "failed to persist subscriptions.json");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to serialize subscriptions for persistence");
+            }
         }
     }
 }
 
 impl SubscriptionRegistry {
-    /// Create an empty registry.
+    /// Create an empty in-memory registry (for tests).
     pub fn new() -> Self {
         Self {
             inner: tokio::sync::RwLock::new(RegistryInner::new()),
+        }
+    }
+
+    /// Load subscriptions from a JSON file, or create an empty registry if
+    /// the file does not exist. Subscriptions are persisted back to this path
+    /// on every mutation.
+    pub fn load(path: PathBuf) -> Self {
+        let entries = match std::fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<Vec<Subscription>>(&content) {
+                Ok(v) => {
+                    info!(count = v.len(), "restored subscriptions from disk");
+                    v
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "failed to parse subscriptions.json, starting empty"
+                    );
+                    Vec::new()
+                }
+            },
+            Err(_) => {
+                info!(path = %path.display(), "no subscriptions.json found, starting empty");
+                Vec::new()
+            }
+        };
+        Self {
+            inner: tokio::sync::RwLock::new(RegistryInner::from_entries(entries, path)),
         }
     }
 
@@ -151,14 +260,8 @@ impl SubscriptionRegistry {
             on_receive,
         };
         let mut inner = self.inner.write().await;
-        for tag in &sub.match_tags {
-            inner
-                .tag_index
-                .entry((sub.owner.clone(), tag.clone()))
-                .or_default()
-                .insert(id);
-        }
-        inner.subs.insert(id, sub);
+        inner.insert(sub);
+        inner.persist();
         id
     }
 
@@ -166,7 +269,6 @@ impl SubscriptionRegistry {
     /// Returns true if it existed and was removed.
     pub async fn unsubscribe(&self, subscription_id: Uuid, caller: &UserId) -> bool {
         let mut inner = self.inner.write().await;
-        // Check ownership before removing.
         let owned = inner
             .subs
             .get(&subscription_id)
@@ -174,20 +276,11 @@ impl SubscriptionRegistry {
         if !owned {
             return false;
         }
-        if let Some(sub) = inner.subs.remove(&subscription_id) {
-            for tag in &sub.match_tags {
-                let key = (sub.owner.clone(), tag.clone());
-                if let Some(set) = inner.tag_index.get_mut(&key) {
-                    set.remove(&subscription_id);
-                    if set.is_empty() {
-                        inner.tag_index.remove(&key);
-                    }
-                }
-            }
-            true
-        } else {
-            false
+        let removed = inner.remove(subscription_id).is_some();
+        if removed {
+            inner.persist();
         }
+        removed
     }
 
     /// Find all subscriptions matching any of the given tags, scoped to the
@@ -219,19 +312,13 @@ impl SubscriptionRegistry {
             .filter(|sub| &sub.subscriber == session_key)
             .map(|sub| sub.id)
             .collect();
-        for id in to_remove {
-            if let Some(sub) = inner.subs.remove(&id) {
-                for tag in &sub.match_tags {
-                    let key = (sub.owner.clone(), tag.clone());
-                    if let Some(set) = inner.tag_index.get_mut(&key) {
-                        set.remove(&id);
-                        if set.is_empty() {
-                            inner.tag_index.remove(&key);
-                        }
-                    }
-                }
-            }
+        if to_remove.is_empty() {
+            return;
         }
+        for id in to_remove {
+            inner.remove(id);
+        }
+        inner.persist();
     }
 }
 

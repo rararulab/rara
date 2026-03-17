@@ -85,12 +85,15 @@ impl SyscallDispatcher {
         config: KernelConfig,
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
-        subscription_registry: SubscriptionRegistryRef,
     ) -> Self {
-        let jobs_path = rara_paths::config_dir().join("scheduler").join("jobs.json");
+        let scheduler_dir = rara_paths::config_dir().join("scheduler");
+        let jobs_path = scheduler_dir.join("jobs.json");
+        let subs_path = scheduler_dir.join("subscriptions.json");
         let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(
             jobs_path,
         )));
+        let subscription_registry =
+            Arc::new(crate::notification::SubscriptionRegistry::load(subs_path));
         Self {
             shared_kv,
             pipe_registry,

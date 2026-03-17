@@ -505,3 +505,53 @@ async fn test_cross_user_unsubscribe_rejected() {
     let matched = registry.match_tags(&["pr_review".into()], &alice).await;
     assert!(matched.is_empty());
 }
+
+/// Subscriptions survive a simulated restart via file persistence.
+#[tokio::test]
+async fn test_subscription_persistence_roundtrip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("subscriptions.json");
+    let user = UserId("alice".into());
+    let session = SessionKey::new();
+
+    // 1. Create registry, subscribe, let it persist.
+    let sub_id = {
+        let registry = SubscriptionRegistry::load(path.clone());
+        let id = registry
+            .subscribe(
+                session,
+                user.clone(),
+                vec!["pr_review".into(), "critical".into()],
+                NotifyAction::ProactiveTurn,
+            )
+            .await;
+        // File should exist now.
+        assert!(path.exists(), "subscriptions.json should be written");
+        id
+    };
+    // Registry dropped here — simulates kernel shutdown.
+
+    // 2. Load a fresh registry from the same file.
+    let registry2 = SubscriptionRegistry::load(path.clone());
+
+    // Subscription should be restored.
+    let matched = registry2.match_tags(&["pr_review".into()], &user).await;
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].id, sub_id);
+    assert_eq!(matched[0].subscriber, session);
+    assert_eq!(matched[0].on_receive, NotifyAction::ProactiveTurn);
+
+    // Also matches on the other tag.
+    let matched = registry2.match_tags(&["critical".into()], &user).await;
+    assert_eq!(matched.len(), 1);
+
+    // 3. Unsubscribe and verify file is updated.
+    assert!(registry2.unsubscribe(sub_id, &user).await);
+    let matched = registry2.match_tags(&["pr_review".into()], &user).await;
+    assert!(matched.is_empty());
+
+    // 4. Load again — should be empty.
+    let registry3 = SubscriptionRegistry::load(path);
+    let matched = registry3.match_tags(&["pr_review".into()], &user).await;
+    assert!(matched.is_empty());
+}
