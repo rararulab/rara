@@ -1681,6 +1681,34 @@ async fn handle_update(
                                     .await;
                             }
                         }
+                        Ok(CallbackResult::SendMessageWithKeyboard { text, keyboard }) => {
+                            let rows: Vec<Vec<teloxide::types::InlineKeyboardButton>> = keyboard
+                                .into_iter()
+                                .map(|row| {
+                                    row.into_iter()
+                                        .map(|btn| {
+                                            if let Some(url) = btn.url {
+                                                teloxide::types::InlineKeyboardButton::url(
+                                                    btn.text,
+                                                    url.parse().unwrap(),
+                                                )
+                                            } else {
+                                                teloxide::types::InlineKeyboardButton::callback(
+                                                    btn.text,
+                                                    btn.callback_data.unwrap_or_default(),
+                                                )
+                                            }
+                                        })
+                                        .collect()
+                                })
+                                .collect();
+                            let markup = teloxide::types::InlineKeyboardMarkup::new(rows);
+                            let _ = bot
+                                .send_message(teloxide::types::ChatId(chat_id), text)
+                                .parse_mode(teloxide::types::ParseMode::Html)
+                                .reply_markup(markup)
+                                .await;
+                        }
                         Ok(CallbackResult::Ack) => {}
                         Err(e) => {
                             tracing::warn!(

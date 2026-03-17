@@ -96,6 +96,20 @@ impl SessionIndex for InMemorySessionIndex {
             .get(&(channel_type.to_owned(), chat_id.to_owned()))
             .map(|entry| entry.clone()))
     }
+
+    async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
+        let key_str = key.to_string();
+        let to_remove: Vec<_> = self
+            .bindings
+            .iter()
+            .filter(|entry| entry.value().session_key.to_string() == key_str)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for k in to_remove {
+            self.bindings.remove(&k);
+        }
+        Ok(())
+    }
 }
 
 /// Helper to create a test session with optional metadata.

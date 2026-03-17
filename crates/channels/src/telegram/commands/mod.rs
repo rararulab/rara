@@ -41,7 +41,10 @@ pub mod status;
 pub mod tape;
 
 pub use basic::BasicCommandHandler;
-pub use callbacks::{SessionDetailCallbackHandler, SessionSwitchCallbackHandler};
+pub use callbacks::{
+    SessionDeleteCallbackHandler, SessionDeleteCancelHandler, SessionDeleteConfirmHandler,
+    SessionDetailCallbackHandler, SessionSwitchCallbackHandler,
+};
 pub use client::BotServiceClient;
 pub use kernel_client::KernelBotServiceClient;
 pub use mcp::McpCommandHandler;

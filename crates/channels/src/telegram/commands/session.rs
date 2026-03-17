@@ -175,21 +175,37 @@ impl SessionCommandHandler {
         for s in &sessions {
             let display_name = session_display_name(s);
             let is_active = active_key.as_deref() == Some(s.key.as_str());
+            let time_ago = format_relative_time(&s.updated_at);
+            let time_suffix = if time_ago.is_empty() {
+                String::new()
+            } else {
+                format!(" \u{00b7} {time_ago}")
+            };
 
             let (label, cb_data) = if is_active {
                 (
-                    format!("\u{2705} {display_name}"),
+                    format!("\u{2705} {display_name}{time_suffix}"),
                     format!("detail:{}", truncate_str(&s.key, 56)),
                 )
             } else {
-                (display_name, format!("switch:{}", truncate_str(&s.key, 56)))
+                (
+                    format!("{display_name}{time_suffix}"),
+                    format!("switch:{}", truncate_str(&s.key, 56)),
+                )
             };
 
-            keyboard_rows.push(vec![InlineButton {
-                text:          label,
-                callback_data: Some(cb_data),
-                url:           None,
-            }]);
+            keyboard_rows.push(vec![
+                InlineButton {
+                    text:          label,
+                    callback_data: Some(cb_data),
+                    url:           None,
+                },
+                InlineButton {
+                    text:          "\u{1f5d1}".to_owned(),
+                    callback_data: Some(format!("delete:{}", truncate_str(&s.key, 56))),
+                    url:           None,
+                },
+            ]);
         }
 
         Ok(CommandResult::HtmlWithKeyboard {
@@ -450,6 +466,31 @@ pub(crate) fn format_timestamp(raw: &str) -> String {
         }
     }
     raw.to_owned()
+}
+
+/// Format an ISO-8601 timestamp as a relative duration from now.
+///
+/// Returns compact strings like `"now"`, `"3m ago"`, `"2h ago"`, `"5d ago"`.
+fn format_relative_time(updated_at: &str) -> String {
+    let Ok(ts) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
+        return String::new();
+    };
+    let delta = chrono::Utc::now().signed_duration_since(ts);
+    let secs = delta.num_seconds();
+    if secs < 60 {
+        "now".to_owned()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        let days = secs / 86400;
+        if days > 30 {
+            "30d+ ago".to_owned()
+        } else {
+            format!("{days}d ago")
+        }
+    }
 }
 
 /// Resolve a human-readable display name for a session.

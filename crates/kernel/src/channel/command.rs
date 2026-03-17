@@ -161,6 +161,11 @@ pub enum CallbackResult {
     EditMessage { text: String },
     /// Send a new message.
     SendMessage { text: String },
+    /// Send a new message with inline keyboard.
+    SendMessageWithKeyboard {
+        text:     String,
+        keyboard: Vec<Vec<super::types::InlineButton>>,
+    },
     /// Acknowledge without visible action.
     Ack,
 }

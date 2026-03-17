@@ -20,6 +20,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use rara_kernel::{
+    handle::KernelHandle,
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
 };
@@ -35,11 +36,21 @@ use super::client::{
 pub struct KernelBotServiceClient {
     sessions: Arc<dyn SessionIndex>,
     tape:     TapeService,
+    handle:   Option<KernelHandle>,
 }
 
 impl KernelBotServiceClient {
-    pub fn new(sessions: Arc<dyn SessionIndex>, tape: TapeService) -> Self {
-        Self { sessions, tape }
+    /// Create a new client backed by kernel subsystems.
+    pub fn new(
+        sessions: Arc<dyn SessionIndex>,
+        tape: TapeService,
+        handle: impl Into<Option<KernelHandle>>,
+    ) -> Self {
+        Self {
+            sessions,
+            tape,
+            handle: handle.into(),
+        }
     }
 }
 
@@ -347,6 +358,66 @@ impl BotServiceClient for KernelBotServiceClient {
             message: "MCP management not available via kernel client".to_owned(),
         })
     }
+
+    async fn delete_session(&self, key: &str) -> Result<(), BotServiceError> {
+        let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
+            message: format!("invalid session key: {e}"),
+        })?;
+        // Stop any active turn before deleting data.
+        //
+        // The agent loop monitors `turn_cancel` at `tokio::select!` points.
+        // After the turn task returns, the kernel's `handle_turn_completed`
+        // transitions state from Active → Ready (for long-lived sessions).
+        // We poll for that transition to guarantee no more tape writes can
+        // occur before we delete the data.
+        if let Some(ref handle) = self.handle {
+            let pt = handle.process_table();
+            let is_active = pt
+                .with(&sk, |s| {
+                    s.state == rara_kernel::session::SessionState::Active
+                })
+                .unwrap_or(false);
+
+            if is_active {
+                pt.cancel_turn(&sk);
+
+                // Poll until the turn completes and state leaves Active.
+                // Bounded at 50 × 100ms = 5s to avoid hanging forever.
+                for _ in 0..50 {
+                    let still_active = pt
+                        .with(&sk, |s| {
+                            s.state == rara_kernel::session::SessionState::Active
+                        })
+                        .unwrap_or(false);
+                    if !still_active {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+
+            // Prevent new work and mark as suspended.
+            if pt.contains(&sk) {
+                pt.cancel_process(&sk);
+                let _ = pt.set_state(sk.clone(), rara_kernel::session::SessionState::Suspended);
+            }
+        }
+        // Delete tape (message history).
+        self.tape.delete_tape(key).await.context(TapeSnafu {
+            context: "failed to delete tape",
+        })?;
+        // Remove channel bindings pointing to this session.
+        self.sessions
+            .unbind_session(&sk)
+            .await
+            .context(SessionSnafu)?;
+        // Delete session metadata.
+        self.sessions
+            .delete_session(&sk)
+            .await
+            .context(SessionSnafu)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +512,20 @@ mod tests {
                 .get(&(channel_type.to_owned(), chat_id.to_owned()))
                 .map(|binding| binding.clone()))
         }
+
+        async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
+            let key_str = key.to_string();
+            let to_remove: Vec<_> = self
+                .bindings
+                .iter()
+                .filter(|entry| entry.value().session_key.to_string() == key_str)
+                .map(|entry| entry.key().clone())
+                .collect();
+            for k in to_remove {
+                self.bindings.remove(&k);
+            }
+            Ok(())
+        }
     }
 
     async fn temp_tape_service(dir: &Path) -> TapeService {
@@ -473,7 +558,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let tape = temp_tape_service(tmp.path()).await;
         let sessions = Arc::new(InMemorySessionIndex::default());
-        let client = KernelBotServiceClient::new(sessions.clone(), tape.clone());
+        let client = KernelBotServiceClient::new(sessions.clone(), tape.clone(), None);
 
         let root_key = SessionKey::new();
         let root_raw = root_key.to_string();
