@@ -380,3 +380,101 @@ impl JobWheel {
         Some(next_ts)
     }
 }
+
+// ---------------------------------------------------------------------------
+// JobResult & JobResultStore — per-job append-only result log
+// ---------------------------------------------------------------------------
+
+/// A single execution result for a scheduled job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobResult {
+    /// The job that produced this result.
+    pub job_id:       JobId,
+    /// Task ID from the agent's TaskReport.
+    pub task_id:      Uuid,
+    /// Task type (e.g. "pr_review").
+    pub task_type:    String,
+    /// Routing tags.
+    pub tags:         Vec<String>,
+    /// Completion status.
+    pub status:       crate::task_report::TaskReportStatus,
+    /// Human-readable summary.
+    pub summary:      String,
+    /// Structured result data.
+    pub result:       serde_json::Value,
+    /// Action taken by the agent, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_taken: Option<String>,
+    /// When this execution completed.
+    pub completed_at: Timestamp,
+}
+
+/// Append-only store for job execution results backed by OpenDAL.
+///
+/// Storage layout: `{job_id}/{completed_at_epoch}.json` — one object per
+/// execution. For once-jobs there is exactly one object; for recurring
+/// jobs each execution adds a new object.
+///
+/// Uses the OpenDAL `Fs` service so results survive kernel restarts and
+/// the backend can be swapped to S3/GCS later without code changes.
+pub struct JobResultStore {
+    op: opendal::Operator,
+}
+
+impl JobResultStore {
+    /// Create a new result store rooted at `results_dir`.
+    pub fn new(results_dir: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&results_dir);
+        let op = opendal::Operator::new(
+            opendal::services::Fs::default().root(&results_dir.to_string_lossy()),
+        )
+        .expect("Fs operator should be infallible")
+        .finish();
+        Self { op }
+    }
+
+    /// Write an execution result as a new object.
+    ///
+    /// Object key: `{job_id}/{completed_at_epoch}.json`
+    pub async fn append(&self, result: &JobResult) -> anyhow::Result<()> {
+        let key = format!(
+            "{}/{}.json",
+            result.job_id.0,
+            result.completed_at.as_second()
+        );
+        let bytes = serde_json::to_vec_pretty(result)?;
+        self.op.write(&key, bytes).await?;
+        Ok(())
+    }
+
+    /// Read all execution results for a given job, ordered by completion
+    /// time (lexicographic on the epoch filename).
+    pub async fn read(&self, job_id: &JobId) -> Vec<JobResult> {
+        let prefix = format!("{}/", job_id.0);
+        let mut entries = match self.op.list(&prefix).await {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        // Sort by path (epoch filenames sort chronologically).
+        entries.sort_by(|a, b| a.path().cmp(b.path()));
+
+        let mut results = Vec::new();
+        for entry in entries {
+            if entry.metadata().is_dir() {
+                continue;
+            }
+            match self.op.read(entry.path()).await {
+                Ok(buf) => match serde_json::from_slice::<JobResult>(&buf.to_vec()) {
+                    Ok(r) => results.push(r),
+                    Err(e) => {
+                        warn!(error = %e, path = entry.path(), "skipping malformed job result");
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, path = entry.path(), "failed to read job result");
+                }
+            }
+        }
+        results
+    }
+}

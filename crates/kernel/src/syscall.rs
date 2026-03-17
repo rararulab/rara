@@ -70,6 +70,8 @@ pub(crate) struct SyscallDispatcher {
     dynamic_tool_provider: Option<DynamicToolProviderRef>,
     /// Scheduled task wheel for job scheduling.
     job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    /// Append-only store for job execution results.
+    job_result_store:      Arc<crate::schedule::JobResultStore>,
     /// Tag-based subscription registry for task notifications.
     subscription_registry: SubscriptionRegistryRef,
 }
@@ -92,6 +94,8 @@ impl SyscallDispatcher {
         let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(
             jobs_path,
         )));
+        let results_dir = scheduler_dir.join("results");
+        let job_result_store = Arc::new(crate::schedule::JobResultStore::new(results_dir));
         let subscription_registry =
             Arc::new(crate::notification::SubscriptionRegistry::load(subs_path));
         Self {
@@ -104,6 +108,7 @@ impl SyscallDispatcher {
             tape_service,
             dynamic_tool_provider,
             job_wheel,
+            job_result_store,
             subscription_registry,
         }
     }
@@ -474,10 +479,27 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(Ok(removed));
             }
             Syscall::PublishTaskReport { report, reply_tx } => {
-                let publisher_id =
-                    process_table.with(&syscall_sender, |p| p.principal.user_id.clone());
-                self.handle_publish_task_report(report, publisher_id, reply_tx, kernel_handle)
-                    .await;
+                let (publisher_id, scheduled_job_id) = process_table
+                    .with(&syscall_sender, |p| {
+                        let uid = p.principal.user_id.clone();
+                        let jid = p
+                            .manifest
+                            .metadata
+                            .get("scheduled_job_id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                            .map(crate::schedule::JobId);
+                        (uid, jid)
+                    })
+                    .unwrap_or((crate::identity::UserId("unknown".into()), None));
+                self.handle_publish_task_report(
+                    report,
+                    Some(publisher_id),
+                    scheduled_job_id,
+                    reply_tx,
+                    kernel_handle,
+                )
+                .await;
             }
         }
     }
@@ -601,13 +623,11 @@ impl SyscallDispatcher {
         &self,
         report: crate::task_report::TaskReport,
         publisher_id: Option<crate::identity::UserId>,
+        scheduled_job_id: Option<crate::schedule::JobId>,
         reply_tx: tokio::sync::oneshot::Sender<crate::error::Result<()>>,
         kernel_handle: &KernelHandle,
     ) {
-        use crate::{
-            memory::TapEntryKind,
-            notification::{NotifyAction, TapeEntryRef, TaskNotification},
-        };
+        use crate::notification::{NotifyAction, TaskNotification};
 
         let source_session = report.source_session;
         let task_id = report.task_id;
@@ -618,31 +638,26 @@ impl SyscallDispatcher {
         let result = report.result.clone();
         let action_taken = report.action_taken.clone();
 
-        // 1. Write TaskReport to source session's tape.
-        let tape_name = source_session.to_string();
-        let report_json = serde_json::to_value(&report).unwrap_or_default();
-        let entry_id = match self
-            .tape_service
-            .store()
-            .append(
-                &tape_name,
-                TapEntryKind::TaskReport,
-                report_json.clone(),
-                None,
-            )
-            .await
-        {
-            Ok(entry) => entry.id,
-            Err(e) => {
-                warn!(error = %e, "failed to append TaskReport to tape");
-                let _ = reply_tx.send(Err(crate::error::KernelError::Other {
-                    message: format!("tape append failed: {e}").into(),
-                }));
-                return;
+        // 1. Persist result to the per-job result store (if this is a scheduled job) so
+        //    results survive restarts and are discoverable.
+        if let Some(job_id) = scheduled_job_id {
+            let job_result = crate::schedule::JobResult {
+                job_id,
+                task_id,
+                task_type: task_type.clone(),
+                tags: tags.clone(),
+                status,
+                summary: summary.clone(),
+                result: result.clone(),
+                action_taken: action_taken.clone(),
+                completed_at: jiff::Timestamp::now(),
+            };
+            if let Err(e) = self.job_result_store.append(&job_result).await {
+                warn!(error = %e, "failed to persist job result");
             }
-        };
+        }
 
-        // 2. Build notification with tape entry ref and full report data.
+        // 2. Build lightweight notification for subscription delivery.
         let notification = TaskNotification {
             task_id,
             task_type: task_type.clone(),
@@ -651,9 +666,9 @@ impl SyscallDispatcher {
             summary: summary.clone(),
             result: result.clone(),
             action_taken: action_taken.clone(),
-            report_ref: TapeEntryRef {
-                session_key: source_session,
-                entry_id,
+            report_ref: crate::notification::TaskReportRef {
+                source_session,
+                job_id: scheduled_job_id,
             },
         };
 
@@ -683,7 +698,7 @@ impl SyscallDispatcher {
                         .unwrap_or_default();
                     let directive = format!(
                         "[TaskNotification] {task_type}: {summary}\nstatus: {status:?}\nresult: \
-                         {result_str}{action_str}\nref: {source_session}/entry_{entry_id}"
+                         {result_str}{action_str}"
                     );
                     let msg = crate::io::InboundMessage::synthetic(
                         directive,
@@ -698,7 +713,12 @@ impl SyscallDispatcher {
                     let _ = self
                         .tape_service
                         .store()
-                        .append(&sub_tape, TapEntryKind::TaskReport, notif_json, None)
+                        .append(
+                            &sub_tape,
+                            crate::memory::TapEntryKind::TaskReport,
+                            notif_json,
+                            None,
+                        )
                         .await;
                 }
             }

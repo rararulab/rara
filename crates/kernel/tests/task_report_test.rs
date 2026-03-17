@@ -18,7 +18,7 @@
 use rara_kernel::{
     identity::UserId,
     memory::{FileTapeStore, TapEntryKind, TapeService},
-    notification::{NotifyAction, SubscriptionRegistry, TapeEntryRef, TaskNotification},
+    notification::{NotifyAction, SubscriptionRegistry, TaskNotification, TaskReportRef},
     session::SessionKey,
     task_report::{TaskReport, TaskReportStatus},
 };
@@ -226,23 +226,8 @@ async fn test_publish_report_silent_append_e2e() {
         source_session,
     };
 
-    let report_json = serde_json::to_value(&report).unwrap();
-
-    // 2a. Write TaskReport to source session's tape.
-    let source_tape = source_session.to_string();
-    let entry = tape
-        .store()
-        .append(
-            &source_tape,
-            TapEntryKind::TaskReport,
-            report_json.clone(),
-            None,
-        )
-        .await
-        .unwrap();
-    let entry_id = entry.id;
-
-    // 2b. Build notification.
+    // 2. Build notification (kernel no longer writes to source tape; results go to
+    //    per-job result store instead).
     let notification = TaskNotification {
         task_id:      report.task_id,
         task_type:    report.task_type.clone(),
@@ -251,9 +236,9 @@ async fn test_publish_report_silent_append_e2e() {
         summary:      report.summary.clone(),
         result:       report.result.clone(),
         action_taken: report.action_taken.clone(),
-        report_ref:   TapeEntryRef {
-            session_key: source_session,
-            entry_id,
+        report_ref:   TaskReportRef {
+            source_session,
+            job_id: None,
         },
     };
 
@@ -271,17 +256,7 @@ async fn test_publish_report_silent_append_e2e() {
             .unwrap();
     }
 
-    // 3. Verify: source tape has the TaskReport entry.
-    let source_entries = tape.entries(&source_tape).await.unwrap();
-    assert_eq!(source_entries.len(), 1);
-    assert_eq!(source_entries[0].kind, TapEntryKind::TaskReport);
-    let stored_report: TaskReport =
-        serde_json::from_value(source_entries[0].payload.clone()).unwrap();
-    assert_eq!(stored_report.task_type, "pr_review");
-    assert_eq!(stored_report.status, TaskReportStatus::Completed);
-    assert_eq!(stored_report.summary, "PR #42 approved");
-
-    // 4. Verify: subscriber_a's tape has the notification entry.
+    // 3. Verify: subscriber_a's tape has the notification entry.
     let sub_a_tape = subscriber_a.to_string();
     let sub_a_entries = tape.entries(&sub_a_tape).await.unwrap();
     assert_eq!(sub_a_entries.len(), 1);
@@ -298,8 +273,8 @@ async fn test_publish_report_silent_append_e2e() {
         delivered_notif.action_taken.as_deref(),
         Some("left approval comment")
     );
-    assert_eq!(delivered_notif.report_ref.session_key, source_session);
-    assert_eq!(delivered_notif.report_ref.entry_id, entry_id);
+    assert_eq!(delivered_notif.report_ref.source_session, source_session);
+    assert!(delivered_notif.report_ref.job_id.is_none());
 
     // 5. Verify: subscriber_b's tape is empty (tags didn't match).
     let sub_b_tape = subscriber_b.to_string();
@@ -346,18 +321,6 @@ async fn test_publish_report_multiple_subscribers() {
         source_session: source,
     };
 
-    let report_json = serde_json::to_value(&report).unwrap();
-    let entry = tape
-        .store()
-        .append(
-            &source.to_string(),
-            TapEntryKind::TaskReport,
-            report_json,
-            None,
-        )
-        .await
-        .unwrap();
-
     let notification = TaskNotification {
         task_id:      report.task_id,
         task_type:    report.task_type.clone(),
@@ -366,9 +329,9 @@ async fn test_publish_report_multiple_subscribers() {
         summary:      report.summary.clone(),
         result:       report.result.clone(),
         action_taken: report.action_taken.clone(),
-        report_ref:   TapeEntryRef {
-            session_key: source,
-            entry_id:    entry.id,
+        report_ref:   TaskReportRef {
+            source_session: source,
+            job_id:         None,
         },
     };
 
@@ -632,6 +595,59 @@ fn test_complete_in_flight() {
     let mut wheel2 = JobWheel::load(tmp.path().join("jobs.json"));
     let recovered = wheel2.take_in_flight();
     assert!(recovered.is_empty());
+}
+
+/// JobResultStore writes per-job result files and reads them back.
+#[tokio::test]
+async fn test_job_result_store_roundtrip() {
+    use rara_kernel::{
+        schedule::{JobId, JobResult, JobResultStore},
+        task_report::TaskReportStatus,
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let store = JobResultStore::new(tmp.path().join("results"));
+
+    let job_id = JobId(uuid::Uuid::new_v4());
+
+    // Append two results for the same job (simulates recurring execution).
+    let r1 = JobResult {
+        job_id,
+        task_id: uuid::Uuid::new_v4(),
+        task_type: "deploy_check".into(),
+        tags: vec!["deploy".into()],
+        status: TaskReportStatus::Completed,
+        summary: "deploy ok".into(),
+        result: serde_json::json!({"version": "1.0"}),
+        action_taken: None,
+        completed_at: jiff::Timestamp::from_second(1000).unwrap(),
+    };
+    let r2 = JobResult {
+        job_id,
+        task_id: uuid::Uuid::new_v4(),
+        task_type: "deploy_check".into(),
+        tags: vec!["deploy".into()],
+        status: TaskReportStatus::Failed,
+        summary: "deploy failed".into(),
+        result: serde_json::json!({"error": "timeout"}),
+        action_taken: None,
+        completed_at: jiff::Timestamp::from_second(2000).unwrap(),
+    };
+
+    store.append(&r1).await.unwrap();
+    store.append(&r2).await.unwrap();
+
+    // Read back — should return both, ordered by completion time.
+    let results = store.read(&job_id).await;
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].summary, "deploy ok");
+    assert_eq!(results[1].summary, "deploy failed");
+    assert_eq!(results[1].status, TaskReportStatus::Failed);
+
+    // A different job_id returns empty.
+    let other_id = JobId(uuid::Uuid::new_v4());
+    let results = store.read(&other_id).await;
+    assert!(results.is_empty());
 }
 
 /// Subscriptions survive a simulated restart via file persistence.

@@ -56,17 +56,19 @@ pub struct TaskNotification {
     /// Action already taken by the task agent, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_taken: Option<String>,
-    /// Pointer to the full TaskReport in the source session's tape.
-    pub report_ref:   TapeEntryRef,
+    /// Pointer back to the source of this report.
+    pub report_ref:   TaskReportRef,
 }
 
-/// Pointer to a specific tape entry in a session.
+/// Reference to locate the full result in the result store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TapeEntryRef {
-    /// Session that holds the tape entry.
-    pub session_key: SessionKey,
-    /// Entry ID within the tape.
-    pub entry_id:    u64,
+pub struct TaskReportRef {
+    /// Session that produced the report.
+    pub source_session: SessionKey,
+    /// Scheduled job ID (if produced by a scheduled task).
+    /// Used to look up results in `results/{job_id}/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id:         Option<crate::schedule::JobId>,
 }
 
 /// Action to take when a matching notification arrives.
