@@ -421,11 +421,22 @@ pub async fn start_with_options(
     let swagger_ui =
         utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
 
+    let dock_store_path = rara_paths::data_dir().join("dock");
+    let dock_state = rara_dock::DockRouterState {
+        store:         std::sync::Arc::new(rara_dock::DockSessionStore::new(dock_store_path)),
+        tape_service:  Some(rara.tape_service.clone()),
+        kernel_handle: Some(kernel_handle.clone()),
+        mutation_sink: rara.dock_mutation_sink.clone(),
+        in_flight:     std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    };
+    let dock_routes = rara_dock::dock_router(dock_state);
+
     let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
         Box::new(move |router| {
             health_routes(router)
                 .merge(domain_routes.clone())
                 .merge(swagger_ui.clone())
+                .merge(dock_routes.clone())
                 .nest("/api/v1/kernel/chat", web_router.clone())
         });
 

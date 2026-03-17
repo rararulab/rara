@@ -1,0 +1,45 @@
+use snafu::Snafu;
+
+/// Errors produced by Dock operations.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
+pub enum DockError {
+    #[snafu(display("Failed to read dock data at {path}: {source}"))]
+    Read {
+        path:   String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Failed to write dock data at {path}: {source}"))]
+    Write {
+        path:   String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Failed to create directory {path}: {source}"))]
+    CreateDir {
+        path:   String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Failed to list sessions in {path}: {source}"))]
+    ListSessions {
+        path:   String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("Failed to serialize dock data: {source}"))]
+    Serialize { source: serde_json::Error },
+
+    #[snafu(display("Failed to deserialize dock data: {source}"))]
+    Deserialize { source: serde_json::Error },
+
+    #[snafu(display("Invalid session ID: {id}"))]
+    InvalidSessionId { id: String },
+
+    #[snafu(display("Session already exists: {id}"))]
+    SessionAlreadyExists { id: String },
+
+    #[snafu(display("Kernel error: {message}"))]
+    Kernel { message: String },
+}

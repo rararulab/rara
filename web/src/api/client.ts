@@ -14,7 +14,20 @@
  * limitations under the License.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || '';
+export const BASE_URL = import.meta.env.VITE_API_URL || '';
+
+/** Build common request headers (Content-Type + Authorization if logged in). */
+export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...extra,
+  };
+  const token = localStorage.getItem('access_token');
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
 
 class ApiError extends Error {
   readonly status: number;

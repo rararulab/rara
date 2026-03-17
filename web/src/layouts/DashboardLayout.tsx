@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bot, LogOut } from 'lucide-react';
+import { Activity, Bot, LayoutDashboard, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { settingsApi } from '@/api/client';
@@ -25,7 +25,7 @@ import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
 
 /** Routes that need zero padding in the main content area. */
-const FULL_BLEED_ROUTES = new Set(['/agent', '/docs']);
+const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);
 
 /** Routes that need full bleed when they match as a prefix. */
 const FULL_BLEED_PREFIXES: string[] = [];
@@ -122,6 +122,15 @@ export default function DashboardLayout() {
           >
             <Bot className="h-3.5 w-3.5" />
             Symphony
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => navigate('/dock')}
+          >
+            <LayoutDashboard className="h-3.5 w-3.5" />
+            Dock
           </Button>
           <Button
             variant="ghost"

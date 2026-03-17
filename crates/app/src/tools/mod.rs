@@ -134,6 +134,7 @@ pub struct ToolDeps {
     pub session_index:          rara_kernel::session::SessionIndexRef,
     pub marketplace_service:    std::sync::Arc<rara_skills::marketplace::MarketplaceService>,
     pub clawhub_client:         std::sync::Arc<rara_skills::clawhub::ClawhubClient>,
+    pub dock_mutation_sink:     rara_dock::DockMutationSink,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -213,6 +214,11 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     ];
 
     for tool in tools {
+        registry.register(tool);
+    }
+
+    // Dock canvas tools (block, fact, annotation CRUD)
+    for tool in rara_dock::dock_tools(deps.dock_mutation_sink) {
         registry.register(tool);
     }
 
