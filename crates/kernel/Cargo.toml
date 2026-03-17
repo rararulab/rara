@@ -23,6 +23,7 @@ base.workspace = true
 base64.workspace = true
 bon.workspace = true
 chrono.workspace = true
+chromiumoxide.workspace = true
 cron = "0.15"
 crossbeam-queue.workspace = true
 dashmap = "6"

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod browser;
 pub(crate) mod cancel_background;
 pub(crate) mod create_plan;
 pub(crate) mod fold_branch;
