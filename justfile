@@ -170,7 +170,7 @@ release:
     @echo "  2. CI runs lint + test"
     @echo "  3. release-plz creates a Release PR (version bump + changelog)"
     @echo "  4. Review and merge the Release PR"
-    @echo "  5. release-plz tags + cargo-dist builds binaries + GitHub Release"
+    @echo "  5. cargo-dist builds binaries + creates GitHub Release (with tag)"
     @echo "  6. Homebrew formula auto-published to rararulab/homebrew-tap"
     @echo ""
     @echo "To preview unreleased changes: just changelog-unreleased"
