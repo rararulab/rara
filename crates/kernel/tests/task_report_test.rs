@@ -16,6 +16,7 @@
 //! end-to-end publish → subscribe → tape delivery flow.
 
 use rara_kernel::{
+    identity::UserId,
     memory::{FileTapeStore, TapEntryKind, TapeService},
     notification::{NotifyAction, SubscriptionRegistry, TapeEntryRef, TaskNotification},
     session::SessionKey,
@@ -27,11 +28,13 @@ async fn test_subscription_registry_tag_matching() {
     let registry = SubscriptionRegistry::new();
     let session_a = SessionKey::new();
     let session_b = SessionKey::new();
+    let user = UserId("alice".into());
 
     // Subscribe session_a to "pr_review".
     let sub_a = registry
         .subscribe(
             session_a,
+            user.clone(),
             vec!["pr_review".into()],
             NotifyAction::ProactiveTurn,
         )
@@ -41,30 +44,34 @@ async fn test_subscription_registry_tag_matching() {
     let _sub_b = registry
         .subscribe(
             session_b,
+            user.clone(),
             vec!["repo:rararulab/rara".into()],
             NotifyAction::SilentAppend,
         )
         .await;
 
-    // Match with tags ["pr_review", "repo:rararulab/rara"] — both match.
+    // Match with tags ["pr_review", "repo:rararulab/rara"] — both match (same
+    // owner).
     let matched = registry
-        .match_tags(&["pr_review".into(), "repo:rararulab/rara".into()])
+        .match_tags(&["pr_review".into(), "repo:rararulab/rara".into()], &user)
         .await;
     assert_eq!(matched.len(), 2);
 
     // Match with only "pr_review" — only session_a matches.
-    let matched = registry.match_tags(&["pr_review".into()]).await;
+    let matched = registry.match_tags(&["pr_review".into()], &user).await;
     assert_eq!(matched.len(), 1);
     assert_eq!(matched[0].subscriber, session_a);
 
     // Unsubscribe session_a.
     assert!(registry.unsubscribe(sub_a).await);
-    let matched = registry.match_tags(&["pr_review".into()]).await;
+    let matched = registry.match_tags(&["pr_review".into()], &user).await;
     assert!(matched.is_empty());
 
     // Remove session_b.
     registry.remove_session(&session_b).await;
-    let matched = registry.match_tags(&["repo:rararulab/rara".into()]).await;
+    let matched = registry
+        .match_tags(&["repo:rararulab/rara".into()], &user)
+        .await;
     assert!(matched.is_empty());
 }
 
@@ -72,13 +79,19 @@ async fn test_subscription_registry_tag_matching() {
 async fn test_subscription_no_match() {
     let registry = SubscriptionRegistry::new();
     let session = SessionKey::new();
+    let user = UserId("alice".into());
 
     registry
-        .subscribe(session, vec!["deploy".into()], NotifyAction::SilentAppend)
+        .subscribe(
+            session,
+            user.clone(),
+            vec!["deploy".into()],
+            NotifyAction::SilentAppend,
+        )
         .await;
 
     // No matching tags.
-    let matched = registry.match_tags(&["pr_review".into()]).await;
+    let matched = registry.match_tags(&["pr_review".into()], &user).await;
     assert!(matched.is_empty());
 }
 
@@ -177,11 +190,13 @@ async fn test_publish_report_silent_append_e2e() {
     let source_session = SessionKey::new();
     let subscriber_a = SessionKey::new();
     let subscriber_b = SessionKey::new();
+    let user = UserId("alice".into());
 
     // 1. Subscribe: session A watches "pr_review", session B watches "deploy".
     let _sub_a = registry
         .subscribe(
             subscriber_a,
+            user.clone(),
             vec!["pr_review".into()],
             NotifyAction::SilentAppend,
         )
@@ -189,6 +204,7 @@ async fn test_publish_report_silent_append_e2e() {
     let _sub_b = registry
         .subscribe(
             subscriber_b,
+            user.clone(),
             vec!["deploy".into()],
             NotifyAction::SilentAppend,
         )
@@ -237,8 +253,8 @@ async fn test_publish_report_silent_append_e2e() {
         },
     };
 
-    // 2c. Match subscriptions and deliver.
-    let matched = registry.match_tags(&report.tags).await;
+    // 2c. Match subscriptions and deliver (scoped to same user).
+    let matched = registry.match_tags(&report.tags, &user).await;
     assert_eq!(matched.len(), 1, "only subscriber_a should match pr_review");
     assert_eq!(matched[0].subscriber, subscriber_a);
 
@@ -300,11 +316,17 @@ async fn test_publish_report_multiple_subscribers() {
     let sub_1 = SessionKey::new();
     let sub_2 = SessionKey::new();
     let sub_3 = SessionKey::new();
+    let user = UserId("alice".into());
 
     // All three subscribe to "critical".
     for sub in [sub_1, sub_2, sub_3] {
         registry
-            .subscribe(sub, vec!["critical".into()], NotifyAction::SilentAppend)
+            .subscribe(
+                sub,
+                user.clone(),
+                vec!["critical".into()],
+                NotifyAction::SilentAppend,
+            )
             .await;
     }
 
@@ -346,7 +368,7 @@ async fn test_publish_report_multiple_subscribers() {
         },
     };
 
-    let matched = registry.match_tags(&report.tags).await;
+    let matched = registry.match_tags(&report.tags, &user).await;
     assert_eq!(
         matched.len(),
         3,
@@ -388,10 +410,12 @@ async fn test_unsubscribe_before_publish_no_delivery() {
 
     let source = SessionKey::new();
     let subscriber = SessionKey::new();
+    let user = UserId("alice".into());
 
     let sub_id = registry
         .subscribe(
             subscriber,
+            user.clone(),
             vec!["pr_review".into()],
             NotifyAction::SilentAppend,
         )
@@ -401,7 +425,7 @@ async fn test_unsubscribe_before_publish_no_delivery() {
     assert!(registry.unsubscribe(sub_id).await);
 
     // Publish — no subscribers should match.
-    let matched = registry.match_tags(&["pr_review".into()]).await;
+    let matched = registry.match_tags(&["pr_review".into()], &user).await;
     assert!(matched.is_empty());
 
     // Subscriber tape should be empty.
@@ -411,4 +435,37 @@ async fn test_unsubscribe_before_publish_no_delivery() {
     // Source tape should also be empty (we didn't write anything).
     let entries = tape.entries(&source.to_string()).await.unwrap();
     assert!(entries.is_empty());
+}
+
+/// Subscriptions are scoped by owner — a different user's publish does not
+/// match, even if tags overlap.
+#[tokio::test]
+async fn test_cross_user_isolation() {
+    let registry = SubscriptionRegistry::new();
+    let alice = UserId("alice".into());
+    let bob = UserId("bob".into());
+
+    let alice_session = SessionKey::new();
+
+    // Alice subscribes to "pr_review".
+    registry
+        .subscribe(
+            alice_session,
+            alice.clone(),
+            vec!["pr_review".into()],
+            NotifyAction::SilentAppend,
+        )
+        .await;
+
+    // Bob publishes with tag "pr_review" — Alice must NOT receive it.
+    let matched = registry.match_tags(&["pr_review".into()], &bob).await;
+    assert!(
+        matched.is_empty(),
+        "cross-user: Alice's subscription must not match Bob's publish"
+    );
+
+    // Alice publishes with the same tag — should match.
+    let matched = registry.match_tags(&["pr_review".into()], &alice).await;
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].subscriber, alice_session);
 }

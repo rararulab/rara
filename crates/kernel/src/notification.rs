@@ -119,7 +119,7 @@ impl NotificationBus for BroadcastNotificationBus {
     }
 }
 
-use crate::{session::SessionKey, task_report::TaskReportStatus};
+use crate::{identity::UserId, session::SessionKey, task_report::TaskReportStatus};
 
 // ---------------------------------------------------------------------------
 // Task notification types
@@ -174,6 +174,8 @@ pub struct Subscription {
     pub id:         Uuid,
     /// Session that will receive matching notifications.
     pub subscriber: SessionKey,
+    /// Owner identity — only reports from the same user are delivered.
+    pub owner:      UserId,
     /// Any matching tag triggers delivery.
     pub match_tags: Vec<String>,
     /// What to do when a notification matches.
@@ -201,9 +203,13 @@ impl SubscriptionRegistry {
     }
 
     /// Register a new subscription. Returns the subscription ID.
+    ///
+    /// `owner` scopes the subscription — only reports published by the same
+    /// user will be delivered, preventing cross-user data leakage.
     pub async fn subscribe(
         &self,
         subscriber: SessionKey,
+        owner: UserId,
         match_tags: Vec<String>,
         on_receive: NotifyAction,
     ) -> Uuid {
@@ -211,6 +217,7 @@ impl SubscriptionRegistry {
         let sub = Subscription {
             id,
             subscriber,
+            owner,
             match_tags,
             on_receive,
         };
@@ -223,11 +230,15 @@ impl SubscriptionRegistry {
         self.subs.write().await.remove(&subscription_id).is_some()
     }
 
-    /// Find all subscriptions matching any of the given tags.
-    pub async fn match_tags(&self, tags: &[String]) -> Vec<Subscription> {
+    /// Find all subscriptions matching any of the given tags, scoped to the
+    /// publisher's owner. Only subscriptions belonging to the same user are
+    /// returned, preventing cross-user data leakage.
+    pub async fn match_tags(&self, tags: &[String], publisher: &UserId) -> Vec<Subscription> {
         let subs = self.subs.read().await;
         subs.values()
-            .filter(|sub| sub.match_tags.iter().any(|t| tags.contains(t)))
+            .filter(|sub| {
+                sub.owner == *publisher && sub.match_tags.iter().any(|t| tags.contains(t))
+            })
             .cloned()
             .collect()
     }

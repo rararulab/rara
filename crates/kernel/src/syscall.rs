@@ -429,16 +429,26 @@ impl SyscallDispatcher {
                 on_receive,
                 reply_tx,
             } => {
-                let sub_id = self
-                    .subscription_registry
-                    .subscribe(syscall_sender, match_tags, on_receive)
-                    .await;
-                info!(
-                    subscription_id = %sub_id,
-                    session = %syscall_sender,
-                    "registered task notification subscription"
-                );
-                let _ = reply_tx.send(Ok(sub_id));
+                let owner = process_table.with(&syscall_sender, |p| p.principal.user_id.clone());
+                match owner {
+                    Some(user_id) => {
+                        let sub_id = self
+                            .subscription_registry
+                            .subscribe(syscall_sender, user_id, match_tags, on_receive)
+                            .await;
+                        info!(
+                            subscription_id = %sub_id,
+                            session = %syscall_sender,
+                            "registered task notification subscription"
+                        );
+                        let _ = reply_tx.send(Ok(sub_id));
+                    }
+                    None => {
+                        let _ = reply_tx.send(Err(crate::error::KernelError::Other {
+                            message: format!("session not found: {syscall_sender}").into(),
+                        }));
+                    }
+                }
             }
             Syscall::Unsubscribe {
                 subscription_id,
@@ -456,7 +466,9 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(Ok(removed));
             }
             Syscall::PublishTaskReport { report, reply_tx } => {
-                self.handle_publish_task_report(report, reply_tx, kernel_handle)
+                let publisher_id =
+                    process_table.with(&syscall_sender, |p| p.principal.user_id.clone());
+                self.handle_publish_task_report(report, publisher_id, reply_tx, kernel_handle)
                     .await;
             }
         }
@@ -580,6 +592,7 @@ impl SyscallDispatcher {
     async fn handle_publish_task_report(
         &self,
         report: crate::task_report::TaskReport,
+        publisher_id: Option<crate::identity::UserId>,
         reply_tx: tokio::sync::oneshot::Sender<crate::error::Result<()>>,
         kernel_handle: &KernelHandle,
     ) {
@@ -636,8 +649,19 @@ impl SyscallDispatcher {
             },
         };
 
-        // 3. Match subscriptions and deliver.
-        let matched = self.subscription_registry.match_tags(&tags).await;
+        // 3. Match subscriptions scoped to publisher's identity.
+        let publisher = match publisher_id {
+            Some(id) => id,
+            None => {
+                warn!("publish_task_report: no principal for source session, skipping delivery");
+                let _ = reply_tx.send(Ok(()));
+                return;
+            }
+        };
+        let matched = self
+            .subscription_registry
+            .match_tags(&tags, &publisher)
+            .await;
         let matched_count = matched.len();
         for sub in matched {
             let notif_json = serde_json::to_value(&notification).unwrap_or_default();
