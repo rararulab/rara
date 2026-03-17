@@ -97,12 +97,10 @@ impl CallbackHandler for SessionDetailCallbackHandler {
                 let title = detail.title.as_deref().unwrap_or("Untitled");
                 let model = detail.model.as_deref().unwrap_or("(default)");
                 let text = format!(
-                    "<b>{}</b>\nKey: <code>{}</code>\nModel: {}\nMessages: {}\nCreated: {}\nLast \
-                     active: {}",
+                    "<b>{}</b>\nKey: <code>{}</code>\nModel: {}\nCreated: {}\nLast active: {}",
                     html_escape(title),
                     html_escape(&detail.key),
                     html_escape(model),
-                    detail.message_count,
                     format_timestamp(&detail.created_at),
                     format_timestamp(&detail.updated_at),
                 );

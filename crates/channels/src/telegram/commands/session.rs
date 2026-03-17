@@ -230,7 +230,6 @@ impl SessionCommandHandler {
                     "<b>Key:</b> <code>{}</code>",
                     html_escape(&detail.key)
                 );
-                let _ = writeln!(text, "<b>Messages:</b> {}", detail.message_count);
                 if let Some(ref model) = detail.model {
                     let _ = writeln!(text, "<b>Model:</b> {}", html_escape(model));
                 }
