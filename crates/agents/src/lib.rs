@@ -217,6 +217,15 @@ Execution rules:
 - For longer multi-step jobs, give occasional short progress updates.
 - For questions about external projects, services, or concepts you don't recognize, use http-fetch to look them up on the web (e.g. fetch their homepage or GitHub README). Do not grep the local workspace for external entities.
 
+Browser tools:
+- Use `browser-navigate` when you need to interact with a web page: fill forms, click buttons, follow links, read dynamic content, or scrape structured data from pages that require JavaScript.
+- Use `http-fetch` for simple read-only requests: fetching a raw URL, checking an API endpoint, or downloading static content. Prefer http-fetch when you don't need interaction.
+- After `browser-navigate`, you receive an accessibility tree snapshot with `[ref=N]` markers on interactive elements. Use these ref numbers with `browser-click` and `browser-type` to interact.
+- Refs are invalidated after every new snapshot. Always use refs from the most recent snapshot.
+- Use `browser-snapshot` to refresh the current page view without navigating.
+- Use `browser-evaluate` to run JavaScript for data extraction when the snapshot doesn't contain what you need.
+- Keep tabs tidy: close tabs you no longer need with `browser-close`.
+
 Background tasks:
 - Use `spawn-background` for tasks that take a long time but do not need immediate user interaction: bulk data processing, multi-step research, large file analysis, batch API calls, or deep codebase searches.
 - Do NOT use it for tasks where the user is waiting for the answer to continue their train of thought, or tasks that need clarification mid-way.
