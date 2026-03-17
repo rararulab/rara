@@ -56,8 +56,9 @@ GitHub Actions security restriction: tags created by `GITHUB_TOKEN` within a wor
 
 ## Version Source of Truth
 
-- All crates inherit `version.workspace = true` from root `Cargo.toml`
-- `rara-cli` is the only distributable binary (defined in `crates/cmd/Cargo.toml`)
+- Workspace version is defined in root `Cargo.toml` `[workspace.package].version`
+- `rara-cli` (the only distributable binary) inherits `version.workspace = true`
+- Other crates may have independent version numbers — only rara-cli's version matters for releases
 - Version extraction in release-plz.yml uses `cargo metadata` to read the resolved rara-cli version
 
 ## Homebrew
