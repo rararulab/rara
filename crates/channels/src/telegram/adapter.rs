@@ -1984,10 +1984,16 @@ async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: Comm
             let _ = bot.send_message(ChatId(chat_id), text).await;
         }
         CommandResult::Html(html) => {
-            let _ = bot
-                .send_message(ChatId(chat_id), html)
-                .parse_mode(ParseMode::Html)
-                .await;
+            let chunks = crate::telegram::markdown::chunk_message(
+                &html,
+                crate::telegram::markdown::TELEGRAM_MAX_MESSAGE_LEN,
+            );
+            for chunk in chunks {
+                let _ = bot
+                    .send_message(ChatId(chat_id), chunk)
+                    .parse_mode(ParseMode::Html)
+                    .await;
+            }
         }
         CommandResult::HtmlWithKeyboard { html, keyboard } => {
             let rows: Vec<Vec<InlineKeyboardButton>> = keyboard
