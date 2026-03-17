@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { api } from "@/api/client";
+import { api, apiHeaders, BASE_URL } from "@/api/client";
 
 // ---------------------------------------------------------------------------
 // Types matching rara-dock models
@@ -194,11 +194,19 @@ export async function dockTurnStream(
   request: DockTurnRequest,
   onEvent: (event: DockTurnEvent) => void,
 ): Promise<void> {
-  const response = await fetch("/api/dock/turn", {
+  const response = await fetch(`${BASE_URL}/api/dock/turn`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body: JSON.stringify(request),
   });
+
+  if (response.status === 401) {
+    localStorage.removeItem("access_token");
+    if (window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
+    throw new Error("Unauthorized");
+  }
 
   if (!response.ok) {
     const text = await response.text();

@@ -3,7 +3,12 @@
 //! These handlers expose the dock session store over HTTP for the frontend
 //! canvas workbench.
 
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{
     Json, Router,
@@ -44,6 +49,9 @@ pub struct DockRouterState {
     /// Shared mutation sink — dock tools push mutations here during
     /// execution; the turn handler drains them after the agent loop.
     pub mutation_sink: crate::tools::DockMutationSink,
+    /// Guard preventing concurrent turns on the same dock session.
+    /// Contains session IDs with in-flight turns.
+    pub in_flight:     Arc<Mutex<HashSet<String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -349,13 +357,26 @@ async fn turn_handler(
     State(state): State<DockRouterState>,
     Json(body): Json<DockTurnRequest>,
 ) -> DockResult<Response> {
+    // Reject concurrent turns on the same session to prevent mutation
+    // mixing in the shared DockMutationSink.
+    {
+        let mut guard = state.in_flight.lock().expect("in_flight lock poisoned");
+        if !guard.insert(body.session_id.clone()) {
+            return Err(crate::DockError::Kernel {
+                message: "a turn is already in progress for this session".into(),
+            });
+        }
+    }
+
+    // Use persisted server-side document as source of truth for the prompt,
+    // not the client-supplied state which may be stale in multi-tab scenarios.
     let doc = state.store.ensure_session(&body.session_id)?;
 
-    let system_prompt = build_dock_system_prompt(&body.facts);
+    let system_prompt = build_dock_system_prompt(&doc.facts);
     let user_prompt = build_dock_user_prompt(
         &body.content,
-        &body.blocks,
-        &body.annotations,
+        &doc.blocks,
+        &doc.annotations,
         body.selected_anchor.as_deref(),
     );
 
@@ -425,9 +446,22 @@ async fn turn_handler(
     let store = state.store.clone();
     let tape_service = state.tape_service.clone();
     let mutation_sink = state.mutation_sink.clone();
+    let in_flight = state.in_flight.clone();
     let session_id = body.session_id.clone();
 
     tokio::spawn(async move {
+        // Ensure the in-flight guard is released when the task exits,
+        // regardless of which code path returns early.
+        struct InFlightGuard(Arc<Mutex<HashSet<String>>>, String);
+        impl Drop for InFlightGuard {
+            fn drop(&mut self) {
+                if let Ok(mut guard) = self.0.lock() {
+                    guard.remove(&self.1);
+                }
+            }
+        }
+        let _guard = InFlightGuard(in_flight, session_id.clone());
+
         // Poll until the kernel opens a stream for this session.
         let mut attempts = 0;
         let subs = loop {
