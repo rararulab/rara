@@ -25,3 +25,6 @@ publish_allow_dirty = false
 
 # disable running `cargo-semver-checks`
 semver_check = false
+
+# disable cargo publish - this is a private project, not published to crates.io
+publish = false

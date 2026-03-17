@@ -38,9 +38,9 @@ jobs:
       - name: Get workspace version
         id: get-version
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          VERSION=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "rara-cli") | .version')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Workspace version: $VERSION"
+          echo "rara-cli version: $VERSION"
 
   # Trigger release workflow
   trigger-release:
