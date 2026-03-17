@@ -29,7 +29,20 @@ var (
 	styleHelp    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	styleMessage = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	styleBusy    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 )
+
+// Messages returned by async commands.
+type deleteResultMsg struct {
+	removed int
+	err     error
+}
+
+type pruneResultMsg struct{ err error }
+type reloadResultMsg struct {
+	entries []Entry
+	err     error
+}
 
 type tuiModel struct {
 	table    table.Model
@@ -37,6 +50,7 @@ type tuiModel struct {
 	selected map[int]bool
 	message  string // status message after an action
 	err      error
+	busy     bool // true while an async operation is running
 	quitting bool
 }
 
@@ -139,7 +153,43 @@ func (m tuiModel) Init() tea.Cmd {
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	// Async result handlers
+	case deleteResultMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.message = fmt.Sprintf("Removed %d worktree(s)", msg.removed)
+			m.err = nil
+		}
+		return m, m.reloadCmd()
+
+	case pruneResultMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.message = "Pruned stale worktree references"
+		}
+		return m, m.reloadCmd()
+
+	case reloadResultMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.entries = msg.entries
+		m.selected = make(map[int]bool)
+		m.refreshRows()
+		m.table.SetHeight(min(len(msg.entries)+1, 25))
+		return m, nil
+
 	case tea.KeyPressMsg:
+		// Ignore keys while busy
+		if m.busy {
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -169,13 +219,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "d":
 			// Delete selected worktrees (force)
-			m.deleteSelected(true)
-			return m, nil
+			return m, m.deleteSelectedCmd(true)
 
 		case "c":
 			// Clean selected merged worktrees
-			m.deleteSelected(false)
-			return m, nil
+			return m, m.deleteSelectedCmd(false)
 
 		case "C":
 			// Clean ALL merged worktrees
@@ -184,24 +232,22 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected[i] = true
 				}
 			}
-			m.deleteSelected(false)
-			return m, nil
+			return m, m.deleteSelectedCmd(false)
 
 		case "p":
 			// Prune stale references
-			if err := Prune(); err != nil {
-				m.err = err
-			} else {
-				m.message = "Pruned stale worktree references"
-				m.reload()
+			m.busy = true
+			m.message = "Pruning..."
+			return m, func() tea.Msg {
+				err := Prune()
+				return pruneResultMsg{err: err}
 			}
-			return m, nil
 
 		case "r":
 			// Refresh list
-			m.reload()
-			m.message = "Refreshed"
-			return m, nil
+			m.busy = true
+			m.message = "Refreshing..."
+			return m, m.reloadCmd()
 		}
 	}
 
@@ -210,8 +256,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *tuiModel) deleteSelected(force bool) {
-	removed := 0
+// deleteSelectedCmd returns a tea.Cmd that removes selected worktrees in the background.
+func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
+	// Snapshot the work to do before going async
+	type target struct {
+		path   string
+		branch string
+	}
+	var targets []target
 	for idx, sel := range m.selected {
 		if !sel || idx >= len(m.entries) {
 			continue
@@ -220,34 +272,42 @@ func (m *tuiModel) deleteSelected(force bool) {
 		if e.IsMain {
 			continue
 		}
-		if err := Remove(e.Path, force); err != nil {
-			m.err = fmt.Errorf("remove %s: %w", shortenPath(e.Path), err)
-			continue
-		}
-		if e.Branch != "" {
-			_ = DeleteBranch(e.Branch, force)
-		}
-		removed++
+		targets = append(targets, target{path: e.Path, branch: e.Branch})
 	}
-	_ = Prune()
-	m.selected = make(map[int]bool)
-	m.reload()
-	m.message = fmt.Sprintf("Removed %d worktree(s)", removed)
-	m.err = nil
-}
+	if len(targets) == 0 {
+		return nil
+	}
 
-func (m *tuiModel) reload() {
-	entries, err := List()
-	if err != nil {
-		m.err = err
-		return
-	}
-	m.entries = entries
+	m.busy = true
+	m.message = fmt.Sprintf("Removing %d worktree(s)...", len(targets))
 	m.selected = make(map[int]bool)
 	m.refreshRows()
 
-	// Adjust table height
-	m.table.SetHeight(min(len(entries)+1, 25))
+	return func() tea.Msg {
+		removed := 0
+		var lastErr error
+		for _, t := range targets {
+			if err := Remove(t.path, force); err != nil {
+				lastErr = fmt.Errorf("remove %s: %w", shortenPath(t.path), err)
+				continue
+			}
+			if t.branch != "" {
+				_ = DeleteBranch(t.branch, force)
+			}
+			removed++
+		}
+		_ = Prune()
+		return deleteResultMsg{removed: removed, err: lastErr}
+	}
+}
+
+// reloadCmd returns a tea.Cmd that refreshes the worktree list in the background.
+func (m *tuiModel) reloadCmd() tea.Cmd {
+	m.busy = true
+	return func() tea.Msg {
+		entries, err := List()
+		return reloadResultMsg{entries: entries, err: err}
+	}
 }
 
 func (m *tuiModel) refreshRows() {
@@ -271,7 +331,10 @@ func (m tuiModel) View() tea.View {
 	b.WriteString("\n\n")
 
 	// Status message
-	if m.err != nil {
+	if m.busy {
+		b.WriteString(styleBusy.Render("⏳ " + m.message))
+		b.WriteString("\n")
+	} else if m.err != nil {
 		b.WriteString(styleError.Render("Error: " + m.err.Error()))
 		b.WriteString("\n")
 	} else if m.message != "" {
