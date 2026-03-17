@@ -363,22 +363,21 @@ impl BotServiceClient for KernelBotServiceClient {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
-        // Kill any running runtime and wait for it to exit before deleting
-        // data. Using cancel_process (immediate token cancellation) instead of
-        // Signal::Terminate (async 5s grace) to avoid a race where the agent
-        // loop writes the tape back after we delete it.
+        // Stop any active turn before deleting data. The agent loop monitors
+        // `turn_cancel` in `tokio::select!` — once cancelled, it returns
+        // `Err(Interrupted)` immediately with no further tape writes.
+        // `cancel_process` prevents the session from accepting new work, and
+        // setting state to Suspended stops the kernel from dispatching new
+        // messages to it.
         if let Some(ref handle) = self.handle {
             let pt = handle.process_table();
             if pt.contains(&sk) {
+                pt.cancel_turn(&sk);
                 pt.cancel_process(&sk);
-                // Poll until the runtime is reaped (cleanup_process removes it
-                // from the table) or give up after a bounded timeout.
-                for _ in 0..50 {
-                    if !pt.contains(&sk) {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
+                let _ = pt.set_state(sk.clone(), rara_kernel::session::SessionState::Suspended);
+                // Brief wait for the turn_cancel token to propagate through
+                // the agent loop's select! and for any in-flight I/O to flush.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             }
         }
         // Delete tape (message history).
