@@ -289,7 +289,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          repository: "crrow/homebrew-tap"
+          repository: "rararulab/homebrew-tap"
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       # So we have access to the formula
       - name: Fetch homebrew formulae

@@ -161,25 +161,19 @@ changelog-unreleased:
     @echo "📝 Preview unreleased changes..."
     git cliff --unreleased
 
-[doc("create release tag (CI will update version and changelog)")]
+[doc("show release workflow (managed by release-plz)")]
 [group("📦 Release")]
-release version:
-    @echo "🚀 Creating release tag {{ version }}..."
-    @echo "📝 Preview of unreleased changes:"
-    @git cliff --unreleased --strip all || true
+release:
+    @echo "Release workflow (automated via release-plz):"
     @echo ""
-    @echo "Creating tag {{ version }}..."
-    git tag -a {{ version }} -m "Release {{ version }}"
-    @echo "✅ Tag {{ version }} created!"
+    @echo "  1. Push/merge to main"
+    @echo "  2. CI runs lint + test"
+    @echo "  3. release-plz creates a Release PR (version bump + changelog)"
+    @echo "  4. Review and merge the Release PR"
+    @echo "  5. cargo-dist builds binaries + creates GitHub Release (with tag)"
+    @echo "  6. Homebrew formula auto-published to rararulab/homebrew-tap"
     @echo ""
-    @echo "⚠️  CI will automatically:"
-    @echo "  1. Update Cargo.toml version"
-    @echo "  2. Generate CHANGELOG.md"
-    @echo "  3. Commit changes to main"
-    @echo "  4. Build and publish release"
-    @echo ""
-    @echo "Next step: Push the tag to trigger release"
-    @git push origin {{ version }}
+    @echo "To preview unreleased changes: just changelog-unreleased"
 
 # ========================================================================================
 # Protobuf/gRPC
