@@ -508,6 +508,11 @@ impl MarketplaceService {
     /// Re-discover enabled skills for a repo and insert them into the
     /// in-memory registry.
     fn sync_repo_to_registry(&self, manifest: &crate::types::SkillsManifest, source_repo: &str) {
+        use crate::{
+            formats::PluginFormat,
+            types::{SkillMetadata, SkillSource},
+        };
+
         let registry = match self.registry {
             Some(ref r) => r,
             None => return,
@@ -518,15 +523,41 @@ impl MarketplaceService {
         };
         if let Some(repo_entry) = manifest.find_repo(source_repo) {
             for skill_state in &repo_entry.skills {
-                if skill_state.enabled {
-                    let skill_dir = install_dir.join(&skill_state.relative_path);
-                    let skill_md = skill_dir.join("SKILL.md");
-                    if skill_md.is_file() {
-                        if let Ok(content) = std::fs::read_to_string(&skill_md) {
-                            if let Ok(meta) = crate::parse::parse_metadata(&content, &skill_dir) {
-                                registry.insert(meta);
+                if !skill_state.enabled {
+                    continue;
+                }
+                let skill_dir = install_dir.join(&skill_state.relative_path);
+
+                match repo_entry.format {
+                    PluginFormat::Skill => {
+                        // Native SKILL.md format: parse full metadata.
+                        let skill_md = skill_dir.join("SKILL.md");
+                        if skill_md.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                                if let Ok(mut meta) =
+                                    crate::parse::parse_metadata(&content, &skill_dir)
+                                {
+                                    meta.source = Some(SkillSource::Registry);
+                                    registry.insert(meta);
+                                }
                             }
                         }
+                    }
+                    _ => {
+                        // Non-SKILL.md formats (ClaudeCode, Codex, Generic):
+                        // stub metadata with Plugin source, matching discover_registry.
+                        registry.insert(SkillMetadata {
+                            name:          skill_state.name.clone(),
+                            description:   String::new(),
+                            homepage:      None,
+                            license:       None,
+                            compatibility: None,
+                            allowed_tools: Vec::new(),
+                            requires:      Default::default(),
+                            path:          skill_dir,
+                            source:        Some(SkillSource::Plugin),
+                            dockerfile:    None,
+                        });
                     }
                 }
             }
