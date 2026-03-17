@@ -275,6 +275,7 @@ impl GatewayArgs {
         // 5. Run supervisor (blocking).
         match supervisor.run().await {
             Ok(()) => {
+                notifier.gateway_shutdown("Clean shutdown requested").await;
                 cancel.cancel();
                 tracing::info!("Gateway supervisor exited cleanly");
                 Ok(())
@@ -287,6 +288,9 @@ impl GatewayArgs {
                     "Gateway will remain alive for manual intervention. Press Ctrl+C to exit."
                 );
                 tokio::signal::ctrl_c().await.ok();
+                notifier
+                    .gateway_shutdown(&format!("Supervisor error: {e}"))
+                    .await;
                 cancel.cancel();
                 Ok(())
             }
