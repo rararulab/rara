@@ -32,11 +32,49 @@ jobs:
       - name: Build mdbook
         run: mdbook build docs
 
-      - name: Deploy to Github Pages
-        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4.8.0
-        if: ${{ github.event_name == 'push' }}
-        with:
-          branch: gh-pages
-          folder: docs/book
-          token: ${{ secrets.GITHUB_TOKEN }}
-          single-commit: true
+      - name: Deploy to GitHub Pages
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          deploy_dir="$(mktemp -d)"
+          cleanup() {
+            git worktree remove "$deploy_dir" --force || true
+          }
+          trap cleanup EXIT
+
+          git remote set-url origin "$remote_url"
+
+          if git ls-remote --exit-code --heads "$remote_url" gh-pages >/dev/null 2>&1; then
+            git fetch --depth=1 "$remote_url" gh-pages
+            git worktree add --detach "$deploy_dir" origin/gh-pages
+          else
+            git worktree add --detach "$deploy_dir"
+            pushd "$deploy_dir" >/dev/null
+            git checkout --orphan gh-pages
+            popd >/dev/null
+          fi
+
+          git config --global --add safe.directory "$deploy_dir"
+
+          # Publish with git directly so the self-hosted runner does not depend on rsync.
+          find "$deploy_dir" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -R docs/book/. "$deploy_dir"/
+          touch "$deploy_dir/.nojekyll"
+
+          pushd "$deploy_dir" >/dev/null
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo "No changes to deploy"
+            exit 0
+          fi
+
+          git commit -m "docs: deploy GitHub Pages"
+          git push --force "$remote_url" HEAD:gh-pages
+          popd >/dev/null
