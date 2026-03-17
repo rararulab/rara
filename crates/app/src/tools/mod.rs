@@ -118,6 +118,24 @@ pub fn rara_tool_names() -> Vec<String> {
         tool_names::CREATE_PLAN,
         tool_names::SPAWN_BACKGROUND,
         tool_names::CANCEL_BACKGROUND,
+        // Browser tools
+        tool_names::BROWSER_NAVIGATE,
+        tool_names::BROWSER_NAVIGATE_BACK,
+        tool_names::BROWSER_SNAPSHOT,
+        tool_names::BROWSER_CLICK,
+        tool_names::BROWSER_TYPE,
+        tool_names::BROWSER_PRESS_KEY,
+        tool_names::BROWSER_EVALUATE,
+        tool_names::BROWSER_WAIT_FOR,
+        tool_names::BROWSER_TABS,
+        tool_names::BROWSER_CLOSE,
+        tool_names::BROWSER_HOVER,
+        tool_names::BROWSER_DRAG,
+        tool_names::BROWSER_SELECT_OPTION,
+        tool_names::BROWSER_FILL_FORM,
+        tool_names::BROWSER_HANDLE_DIALOG,
+        tool_names::BROWSER_CONSOLE_MESSAGES,
+        tool_names::BROWSER_NETWORK_REQUESTS,
     ]
     .into_iter()
     .map(String::from)

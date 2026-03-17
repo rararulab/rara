@@ -148,6 +148,7 @@ base64 = "^0.22"
 bon = "^3.6"
 bytes = "^1.11"
 chrono = { version = "^0.4", features = ["serde"] }
+chromiumoxide = { version = "0.9", default-features = false }
 clap = { version = "4.4", features = ["derive"] }
 config = { version = "0.15", features = ["yaml"] }
 croner = "3"

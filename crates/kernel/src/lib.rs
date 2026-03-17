@@ -29,6 +29,7 @@
 //! | Notification Bus | `NotificationBus` | Inter-component notification broadcasting |
 
 pub mod agent;
+pub mod browser;
 pub mod channel;
 pub mod error;
 pub mod event;
@@ -71,6 +72,25 @@ pub mod tool_names {
     pub const SPAWN_BACKGROUND: &str = "spawn-background";
     pub const CANCEL_BACKGROUND: &str = "cancel-background";
     pub const FOLD_BRANCH: &str = "fold-branch";
+
+    // Browser tools
+    pub const BROWSER_NAVIGATE: &str = "browser-navigate";
+    pub const BROWSER_NAVIGATE_BACK: &str = "browser-navigate-back";
+    pub const BROWSER_SNAPSHOT: &str = "browser-snapshot";
+    pub const BROWSER_CLICK: &str = "browser-click";
+    pub const BROWSER_TYPE: &str = "browser-type";
+    pub const BROWSER_PRESS_KEY: &str = "browser-press-key";
+    pub const BROWSER_EVALUATE: &str = "browser-evaluate";
+    pub const BROWSER_WAIT_FOR: &str = "browser-wait-for";
+    pub const BROWSER_TABS: &str = "browser-tabs";
+    pub const BROWSER_CLOSE: &str = "browser-close";
+    pub const BROWSER_HOVER: &str = "browser-hover";
+    pub const BROWSER_DRAG: &str = "browser-drag";
+    pub const BROWSER_SELECT_OPTION: &str = "browser-select-option";
+    pub const BROWSER_FILL_FORM: &str = "browser-fill-form";
+    pub const BROWSER_HANDLE_DIALOG: &str = "browser-handle-dialog";
+    pub const BROWSER_CONSOLE_MESSAGES: &str = "browser-console-messages";
+    pub const BROWSER_NETWORK_REQUESTS: &str = "browser-network-requests";
 }
 
 pub use error::{KernelError, Result};

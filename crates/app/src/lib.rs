@@ -99,6 +99,9 @@ pub struct AppConfig {
     /// Context folding (auto-anchor) configuration for the kernel.
     #[serde(default)]
     pub context_folding:        rara_kernel::kernel::ContextFoldingConfig,
+    /// Browser tool configuration (Lightpanda headless browser).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser:                Option<rara_kernel::browser::BrowserConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -282,9 +285,14 @@ pub async fn start_with_options(
             .await
             .whatever_context("Failed to initialize config file sync")?;
 
-    let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
-        .await
-        .whatever_context("Failed to boot kernel dependencies")?;
+    let rara = crate::boot::boot(
+        pool.clone(),
+        settings_provider.clone(),
+        &config.users,
+        config.browser.clone(),
+    )
+    .await
+    .whatever_context("Failed to boot kernel dependencies")?;
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),

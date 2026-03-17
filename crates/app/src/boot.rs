@@ -23,7 +23,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
-use tracing::info;
+use tracing::{info, warn};
 
 // =========================================================================
 // Public types
@@ -88,6 +88,7 @@ pub(crate) async fn boot(
     pool: sqlx::SqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
+    browser_config: Option<rara_kernel::browser::BrowserConfig>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
 
@@ -197,6 +198,24 @@ pub(crate) async fn boot(
             dock_mutation_sink: dock_mutation_sink.clone(),
         },
     );
+
+    // -- browser subsystem -------------------------------------------------
+
+    if let Some(browser_cfg) = browser_config {
+        match rara_kernel::browser::BrowserManager::start(browser_cfg).await {
+            Ok(manager) => {
+                let manager_ref: rara_kernel::browser::BrowserManagerRef =
+                    std::sync::Arc::new(manager);
+                for tool in rara_kernel::tool::browser::browser_tools(manager_ref) {
+                    tool_registry.register(tool);
+                }
+                info!("Browser subsystem initialized with Lightpanda");
+            }
+            Err(e) => {
+                warn!("Browser subsystem disabled: {e}");
+            }
+        }
+    }
 
     let tools = Arc::new(tool_registry);
 
