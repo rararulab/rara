@@ -640,6 +640,49 @@ fn resolve_soul_prompt(agent_name: &str) -> Option<String> {
     }
 }
 
+/// Load the external agent.md operational knowledge file.
+///
+/// Reads from `{config_dir}/agents/{agent_name}/agent.md`.
+/// If the file doesn't exist, creates an empty placeholder so rara
+/// can later populate it via `write-file`. Empty files are not injected.
+fn load_agent_md(agent_name: &str) -> Option<String> {
+    let agent_path = rara_paths::config_dir()
+        .join("agents")
+        .join(agent_name)
+        .join("agent.md");
+
+    if agent_path.exists() {
+        match std::fs::read_to_string(&agent_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                info!(agent = agent_name, path = %agent_path.display(), "loaded agent.md");
+                return Some(content);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(agent = agent_name, error = %e, "failed to read agent.md");
+            }
+        }
+    }
+
+    // Ensure the file exists with seed content for future updates
+    ensure_agent_md(&agent_path, agent_name);
+    None
+}
+
+/// Create the agent.md file with seed content if it doesn't exist.
+fn ensure_agent_md(path: &Path, agent_name: &str) {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(agent = agent_name, error = %e, "failed to create agent.md parent directory");
+            return;
+        }
+    }
+    match std::fs::write(path, "") {
+        Ok(()) => info!(agent = agent_name, path = %path.display(), "created empty agent.md"),
+        Err(e) => warn!(agent = agent_name, error = %e, "failed to create agent.md"),
+    }
+}
+
 fn build_runtime_contract_prompt(
     base_prompt: &str,
     has_kernel_tool: bool,
@@ -779,6 +822,12 @@ pub(crate) async fn run_agent_loop(
             Some(soul) => (format!("{soul}\n\n---\n\n{}", manifest.system_prompt), true),
             None => (manifest.system_prompt.clone(), false),
         }
+    };
+    // Append external agent.md (tool knowledge, CLI guides, operational notes)
+    let effective_prompt = if let Some(agent_md) = load_agent_md(&manifest.name) {
+        format!("{effective_prompt}\n\n<agent_knowledge>\n{agent_md}\n</agent_knowledge>")
+    } else {
+        effective_prompt
     };
     let effective_prompt =
         build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
