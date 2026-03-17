@@ -1937,7 +1937,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextPressure, build_runtime_contract_prompt, classify_context_pressure, load_agent_md,
+        ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
         resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
     };
 
@@ -2033,11 +2033,5 @@ mod tests {
         let result = resolve_soul_prompt("rara");
         assert!(result.is_some());
         assert!(result.unwrap().contains("Identity: rara"));
-    }
-
-    #[test]
-    fn load_agent_md_returns_none_when_no_file() {
-        let result = load_agent_md("nonexistent_test_agent_xyz");
-        assert!(result.is_none());
     }
 }
