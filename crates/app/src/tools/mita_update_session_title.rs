@@ -91,6 +91,17 @@ impl AgentTool for UpdateSessionTitleTool {
             .map_err(|e| anyhow::anyhow!("failed to get session: {e}"))?
             .ok_or_else(|| anyhow::anyhow!("session not found: {session_key_str}"))?;
 
+        // Guard: never overwrite an existing title.
+        if entry.title.as_ref().is_some_and(|t| !t.is_empty()) {
+            return Ok(json!({
+                "status": "skipped",
+                "reason": "session already has a title",
+                "session_key": session_key_str,
+                "existing_title": entry.title,
+            })
+            .into());
+        }
+
         entry.title = Some(title.to_string());
         entry.updated_at = chrono::Utc::now();
 

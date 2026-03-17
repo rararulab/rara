@@ -1602,13 +1602,24 @@ async fn handle_update(
             }
 
             // Dispatch to registered callback handlers by prefix match.
+            // Enforce the same allowed-chat authorization as normal messages.
+            let cb_chat_id = callback
+                .message
+                .as_ref()
+                .map(|m| m.chat().id.0)
+                .unwrap_or(0);
+            if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&cb_chat_id) {
+                tracing::warn!(
+                    chat_id = cb_chat_id,
+                    "telegram adapter: dropping callback from unauthorized chat"
+                );
+                let _ = bot.answer_callback_query(callback.id.clone()).await;
+                return;
+            }
+
             for handler in callback_handlers {
                 if data.starts_with(handler.prefix()) {
-                    let chat_id = callback
-                        .message
-                        .as_ref()
-                        .map(|m| m.chat().id.0)
-                        .unwrap_or(0);
+                    let chat_id = cb_chat_id;
                     let context = rara_kernel::channel::command::CallbackContext {
                         channel_type: ChannelType::Telegram,
                         session_key:  String::new(),

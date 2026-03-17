@@ -95,7 +95,7 @@ impl SessionCommandHandler {
     async fn handle_new(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let (channel_type, chat_id) = extract_channel_info(context);
 
-        match self.client.create_session(Some("Chat")).await {
+        match self.client.create_session(None).await {
             Ok(key) => {
                 let _ = self.client.bind_channel(channel_type, &chat_id, &key).await;
                 Ok(CommandResult::Text("New chat session started.".to_owned()))
