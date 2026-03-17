@@ -347,6 +347,16 @@ pub async fn start_with_options(
         ..Default::default()
     };
 
+    // Build a closure that captures the skill registry and generates the
+    // skills prompt block on each agent turn.
+    let skill_prompt_provider: Option<rara_kernel::handle::SkillPromptProvider> = {
+        let registry = rara.skill_registry.clone();
+        Some(Arc::new(move || {
+            let skills = registry.list_all();
+            rara_skills::prompt_gen::generate_skills_prompt(&skills)
+        }))
+    };
+
     let kernel = rara_kernel::kernel::Kernel::new(
         kernel_config,
         rara.driver_registry.clone(),
@@ -366,7 +376,7 @@ pub async fn start_with_options(
         rara.output_interceptor.clone(),
         mcp_tool_provider,
         rara_kernel::trace::TraceService::new(pool.clone()),
-        None, // skill_prompt_provider — wired in Task 4
+        skill_prompt_provider,
     );
 
     let cancellation_token = CancellationToken::new();
