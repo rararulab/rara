@@ -55,28 +55,20 @@ interface ChartData {
 }
 
 /**
- * Extract attribute value from an HTML tag string.
- */
-function extractAttr(tag: string, name: string): string {
-  const re = new RegExp(`${name}\\s*=\\s*"([^"]*)"`, "i");
-  const match = tag.match(re);
-  return match?.[1] ?? "";
-}
-
-/**
  * Detect whether a block contains a `<chart>` tag and parse its attributes.
+ * Uses DOMParser so both single- and double-quoted attributes work.
  * Returns `null` when no chart data is found.
  */
 function parseChart(block: DockBlock): ChartData | null {
   if (block.block_type === "chart" || /<chart[\s>]/i.test(block.html)) {
-    const tagMatch = block.html.match(/<chart[^>]*>/i);
-    if (!tagMatch) return null;
-    const tag = tagMatch[0];
+    const doc = new DOMParser().parseFromString(block.html, "text/html");
+    const el = doc.querySelector("chart");
+    if (!el) return null;
 
-    const title = extractAttr(tag, "title");
-    const labelsRaw = extractAttr(tag, "labels");
-    const valuesRaw = extractAttr(tag, "values");
-    const type = extractAttr(tag, "type") || "bar";
+    const title = el.getAttribute("title") ?? "";
+    const labelsRaw = el.getAttribute("labels") ?? "";
+    const valuesRaw = el.getAttribute("values") ?? "";
+    const type = el.getAttribute("type") || "bar";
 
     const labels = labelsRaw ? labelsRaw.split(",").map((s) => s.trim()) : [];
     const values = valuesRaw
