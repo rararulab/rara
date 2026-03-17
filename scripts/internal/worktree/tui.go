@@ -145,7 +145,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		case " ":
+		case "space":
 			// Toggle selection (skip main worktree)
 			idx := m.table.Cursor()
 			if idx < len(m.entries) && !m.entries[idx].IsMain {
