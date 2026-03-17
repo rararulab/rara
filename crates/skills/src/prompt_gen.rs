@@ -38,8 +38,13 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
 
     use crate::types::SkillSource;
 
+    // Sort by name for deterministic output (improves provider-side prompt cache
+    // hit rate by keeping the prefix stable across restarts and rehashes).
+    let mut sorted: Vec<&SkillMetadata> = skills.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+
     let mut out = String::from("## Available Skills\n\n<available_skills>\n");
-    for skill in skills {
+    for skill in sorted {
         let is_plugin = skill.source.as_ref() == Some(&SkillSource::Plugin);
         let path_display = if is_plugin {
             skill.path.display().to_string()
