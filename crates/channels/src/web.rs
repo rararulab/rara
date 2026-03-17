@@ -297,15 +297,20 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     }
 }
 
-/// JSON body for POST /messages.
+/// Parsed inbound WebSocket text frame.
 #[derive(Debug, Deserialize)]
 struct InboundPayload {
     content: MessageContent,
 }
 
 fn parse_inbound_text_frame(text: &str) -> InboundPayload {
-    serde_json::from_str(text).unwrap_or_else(|_| InboundPayload {
-        content: MessageContent::Text(text.to_owned()),
+    serde_json::from_str(text).unwrap_or_else(|err| {
+        if text.starts_with('{') {
+            tracing::debug!(error = %err, "WebSocket frame looks like JSON but failed to parse; treating as plain text");
+        }
+        InboundPayload {
+            content: MessageContent::Text(text.to_owned()),
+        }
     })
 }
 

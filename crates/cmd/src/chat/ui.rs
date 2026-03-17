@@ -68,9 +68,9 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
                     .add_modifier(Modifier::SLOW_BLINK),
             ),
         ];
-        if !state.staged_messages.is_empty() {
+        if !state.staged_queue.is_empty() {
             spans.push(Span::styled(
-                format!("  ({} staged)", state.staged_messages.len()),
+                format!("  ({} staged)", state.staged_queue.len()),
                 Style::default().fg(theme::PURPLE),
             ));
         }

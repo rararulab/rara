@@ -576,7 +576,18 @@ async fn send_cli_message(
 async fn load_image_blocks(image_paths: &[String]) -> Result<Vec<ContentBlock>, Whatever> {
     let mut blocks = Vec::with_capacity(image_paths.len());
 
+    /// 20 MiB upper bound — prevents accidental memory blowup from huge files.
+    const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
     for path in image_paths {
+        let meta = tokio::fs::metadata(path)
+            .await
+            .with_whatever_context(|_| format!("Failed to stat image: {path}"))?;
+        snafu::ensure_whatever!(
+            meta.len() <= MAX_IMAGE_BYTES,
+            "Image too large ({:.1} MiB, max 20 MiB): {path}",
+            meta.len() as f64 / (1024.0 * 1024.0)
+        );
         let bytes = tokio::fs::read(path)
             .await
             .with_whatever_context(|_| format!("Failed to read image: {path}"))?;

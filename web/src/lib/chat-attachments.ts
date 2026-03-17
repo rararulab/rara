@@ -53,7 +53,15 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MiB
+
 export async function fileToImageBlock(file: File): Promise<ImageChatContentBlock> {
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `Image too large (${(file.size / 1024 / 1024).toFixed(1)} MiB, max 20 MiB)`,
+    );
+  }
+
   const bytes = new Uint8Array(await file.arrayBuffer());
 
   return {

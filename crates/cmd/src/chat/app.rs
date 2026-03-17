@@ -60,9 +60,8 @@ pub struct ChatState {
     pub last_cost_usd:   Option<f64>,
     pub streaming_chars: usize,
     pub status_msg:      Option<String>,
-    pub staged_messages: Vec<String>,
+    pub staged_queue:    Vec<(String, Vec<String>)>,
     pub staged_images:   Vec<String>,
-    pub staged_batches:  Vec<Vec<String>>,
     pub tool_input_buf:  String,
     /// Cached loading hint, sampled once when entering thinking state to avoid
     /// flicker on every render tick.
@@ -97,9 +96,8 @@ impl ChatState {
             last_cost_usd:   None,
             streaming_chars: 0,
             status_msg:      None,
-            staged_messages: Vec::new(),
+            staged_queue:    Vec::new(),
             staged_images:   Vec::new(),
-            staged_batches:  Vec::new(),
             tool_input_buf:  String::new(),
             loading_hint:    String::new(),
         };
@@ -120,9 +118,8 @@ impl ChatState {
         self.last_cost_usd = None;
         self.streaming_chars = 0;
         self.status_msg = None;
-        self.staged_messages.clear();
+        self.staged_queue.clear();
         self.staged_images.clear();
-        self.staged_batches.clear();
         self.tool_input_buf.clear();
         self.loading_hint.clear();
     }
@@ -144,16 +141,10 @@ impl ChatState {
     }
 
     pub fn take_staged(&mut self) -> Option<(String, Vec<String>)> {
-        if self.staged_messages.is_empty() {
+        if self.staged_queue.is_empty() {
             None
         } else {
-            let text = self.staged_messages.remove(0);
-            let images = if self.staged_batches.is_empty() {
-                Vec::new()
-            } else {
-                self.staged_batches.remove(0)
-            };
-            Some((text, images))
+            Some(self.staged_queue.remove(0))
         }
     }
 
@@ -349,9 +340,8 @@ impl ChatState {
                 let msg = self.input.trim().to_owned();
                 self.input.clear();
                 if (!msg.is_empty() || !self.staged_images.is_empty()) && !msg.starts_with('/') {
-                    self.staged_messages.push(msg.clone());
-                    self.staged_batches
-                        .push(std::mem::take(&mut self.staged_images));
+                    self.staged_queue
+                        .push((msg.clone(), std::mem::take(&mut self.staged_images)));
                     if msg.is_empty() {
                         self.status_msg = Some("Queued staged images for next turn".to_owned());
                     } else {
@@ -522,7 +512,8 @@ mod tests {
         let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(matches!(action, ChatAction::Continue));
-        assert_eq!(chat.staged_messages, vec!["next".to_string()]);
+        assert_eq!(chat.staged_queue.len(), 1);
+        assert_eq!(chat.staged_queue[0].0, "next");
         assert_eq!(
             chat.messages.last().map(|message| message.role),
             Some(Role::User)
