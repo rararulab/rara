@@ -2254,6 +2254,7 @@ impl Kernel {
                     origin_endpoint: origin_endpoint.clone(),
                     event_queue: event_queue.clone(),
                     rara_message_id: msg_id.clone(),
+                    context_window_tokens: 0,
                 };
 
                 // Route to v1 (reactive) or v2 (plan-execute) based on the

@@ -96,15 +96,17 @@ pub type ToolRegistryRef = Arc<ToolRegistry>;
 #[derive(Clone)]
 pub struct ToolContext {
     /// The authenticated user identifier for the current session.
-    pub user_id:         String,
+    pub user_id:               String,
     /// The session key for the current conversation turn.
-    pub session_key:     crate::session::SessionKey,
+    pub session_key:           crate::session::SessionKey,
     /// The originating endpoint (e.g. Telegram chat) for routing replies.
-    pub origin_endpoint: Option<crate::io::Endpoint>,
+    pub origin_endpoint:       Option<crate::io::Endpoint>,
     /// Event queue for pushing outbound events.
-    pub event_queue:     crate::queue::EventQueueRef,
+    pub event_queue:           crate::queue::EventQueueRef,
     /// The inbound message ID that triggered the current turn.
-    pub rara_message_id: crate::io::MessageId,
+    pub rara_message_id:       crate::io::MessageId,
+    /// Context window size in tokens for the current model.
+    pub context_window_tokens: usize,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -115,6 +117,7 @@ impl std::fmt::Debug for ToolContext {
             .field("origin_endpoint", &self.origin_endpoint)
             .field("event_queue", &"...")
             .field("rara_message_id", &self.rara_message_id)
+            .field("context_window_tokens", &self.context_window_tokens)
             .finish()
     }
 }
