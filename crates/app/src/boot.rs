@@ -152,7 +152,9 @@ pub(crate) async fn boot(
 
     // -- marketplace service -----------------------------------------------
 
-    let marketplace_service = Arc::new(rara_skills::marketplace::MarketplaceService::new());
+    let marketplace_service = Arc::new(
+        rara_skills::marketplace::MarketplaceService::new().with_registry(skill_registry.clone()),
+    );
     info!("marketplace service initialized");
     let clawhub_client = Arc::new(rara_skills::clawhub::ClawhubClient::new());
     info!("clawhub client initialized");

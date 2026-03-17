@@ -349,12 +349,12 @@ pub async fn start_with_options(
 
     // Build a closure that captures the skill registry and generates the
     // skills prompt block on each agent turn.
-    let skill_prompt_provider: Option<rara_kernel::handle::SkillPromptProvider> = {
+    let skill_prompt_provider: rara_kernel::handle::SkillPromptProvider = {
         let registry = rara.skill_registry.clone();
-        Some(Arc::new(move || {
+        Arc::new(move || {
             let skills = registry.list_all();
             rara_skills::prompt_gen::generate_skills_prompt(&skills)
-        }))
+        })
     };
 
     let kernel = rara_kernel::kernel::Kernel::new(

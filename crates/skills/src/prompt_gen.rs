@@ -20,6 +20,15 @@
 
 use crate::types::SkillMetadata;
 
+/// Escape XML special characters to prevent prompt injection via skill
+/// metadata.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Generate the `<available_skills>` XML block for injection into the system
 /// prompt.
 pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
@@ -39,10 +48,10 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
         };
         out.push_str(&format!(
             "<skill name=\"{}\" source=\"{}\" path=\"{}\">\n{}\n</skill>\n",
-            skill.name,
+            escape_xml(&skill.name),
             if is_plugin { "plugin" } else { "skill" },
-            path_display,
-            skill.description,
+            escape_xml(&path_display),
+            escape_xml(&skill.description),
         ));
     }
     out.push_str("</available_skills>\n\n");

@@ -189,8 +189,8 @@ pub struct Kernel {
     guard_pipeline:        Arc<crate::guard::pipeline::GuardPipeline>,
     /// Execution trace service for persisting turn-level traces.
     trace_service:         crate::trace::TraceService,
-    /// Optional provider for generating the skills prompt block.
-    skill_prompt_provider: Option<crate::handle::SkillPromptProvider>,
+    /// Provider for generating the skills prompt block.
+    skill_prompt_provider: crate::handle::SkillPromptProvider,
 }
 
 impl Kernel {
@@ -211,7 +211,7 @@ impl Kernel {
         output_interceptor: crate::tool::DynamicOutputInterceptor,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
         trace_service: crate::trace::TraceService,
-        skill_prompt_provider: Option<crate::handle::SkillPromptProvider>,
+        skill_prompt_provider: crate::handle::SkillPromptProvider,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
         info!(

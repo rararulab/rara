@@ -95,8 +95,8 @@ pub struct KernelHandle {
     trace_service:         crate::trace::TraceService,
     /// Shared job wheel for querying scheduled tasks.
     job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
-    /// Optional provider for generating the skills prompt block.
-    skill_prompt_provider: Option<SkillPromptProvider>,
+    /// Provider for generating the skills prompt block.
+    skill_prompt_provider: SkillPromptProvider,
 }
 
 impl KernelHandle {
@@ -117,7 +117,7 @@ impl KernelHandle {
         tape: crate::memory::TapeService,
         trace_service: crate::trace::TraceService,
         job_wheel: Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
-        skill_prompt_provider: Option<SkillPromptProvider>,
+        skill_prompt_provider: SkillPromptProvider,
     ) -> Self {
         Self {
             event_queue,
@@ -332,10 +332,9 @@ impl KernelHandle {
             .unwrap_or_default()
     }
 
-    /// Generate the skills prompt block, if a provider is configured.
-    pub fn skills_prompt(&self) -> Option<String> {
-        self.skill_prompt_provider.as_ref().map(|f| f())
-    }
+    /// Generate the skills prompt block for injection into the agent system
+    /// prompt.
+    pub fn skills_prompt(&self) -> String { (self.skill_prompt_provider)() }
 
     // -- Query methods ------------------------------------------------------
 

@@ -107,6 +107,9 @@ pub struct MarketplaceService {
     sources:      RwLock<Vec<MarketplaceSource>>,
     /// In-memory index cache, keyed by repo string.
     cache:        RwLock<HashMap<String, MarketplaceIndex>>,
+    /// Optional live skill registry for immediate updates on
+    /// install/enable/disable.
+    registry:     Option<crate::registry::InMemoryRegistry>,
 }
 
 impl MarketplaceService {
@@ -121,7 +124,15 @@ impl MarketplaceService {
             persist_path: path,
             sources:      RwLock::new(sources),
             cache:        RwLock::new(HashMap::new()),
+            registry:     None,
         }
+    }
+
+    /// Attach a skill registry for live updates on install/enable/disable.
+    #[must_use]
+    pub fn with_registry(mut self, registry: crate::registry::InMemoryRegistry) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// List registered marketplace sources.
@@ -387,6 +398,10 @@ impl MarketplaceService {
         }
         store.save(&manifest)?;
 
+        // Update in-memory registry so the agent prompt reflects new skills
+        // immediately.
+        self.sync_repo_to_registry(&manifest, &source_repo);
+
         Ok(PluginInstallResult {
             plugin:       plugin_name.to_string(),
             skills_count: enabled_skills.len(),
@@ -421,6 +436,10 @@ impl MarketplaceService {
         }
         store.save(&manifest)?;
 
+        // Update in-memory registry so the agent prompt reflects new skills
+        // immediately.
+        self.sync_repo_to_registry(&manifest, repo);
+
         let repo_name = repo.split('/').next_back().unwrap_or(repo);
         Ok(PluginInstallResult {
             plugin:       repo_name.to_string(),
@@ -445,6 +464,7 @@ impl MarketplaceService {
         let mut manifest = store.load()?;
 
         let mut found = false;
+        let mut affected_names = Vec::new();
         for repo in &mut manifest.repos {
             for skill in &mut repo.skills {
                 if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
@@ -452,6 +472,7 @@ impl MarketplaceService {
                     if enabled {
                         skill.trusted = true;
                     }
+                    affected_names.push(skill.name.clone());
                     found = true;
                 }
             }
@@ -461,12 +482,57 @@ impl MarketplaceService {
                 name: format!("plugin '{plugin_name}' is not installed"),
             });
         }
-        store.save(&manifest)
+        store.save(&manifest)?;
+
+        // Update in-memory registry for immediate effect.
+        if let Some(ref registry) = self.registry {
+            if enabled {
+                // Re-discover and insert enabled skills.
+                for repo in &manifest.repos {
+                    self.sync_repo_to_registry(&manifest, &repo.source);
+                }
+            } else {
+                // Remove disabled skills from the registry.
+                for name in &affected_names {
+                    registry.remove(name);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 // Private helpers.
 impl MarketplaceService {
+    /// Re-discover enabled skills for a repo and insert them into the
+    /// in-memory registry.
+    fn sync_repo_to_registry(&self, manifest: &crate::types::SkillsManifest, source_repo: &str) {
+        let registry = match self.registry {
+            Some(ref r) => r,
+            None => return,
+        };
+        let install_dir = match crate::install::default_install_dir() {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        if let Some(repo_entry) = manifest.find_repo(source_repo) {
+            for skill_state in &repo_entry.skills {
+                if skill_state.enabled {
+                    let skill_dir = install_dir.join(&skill_state.relative_path);
+                    let skill_md = skill_dir.join("SKILL.md");
+                    if skill_md.is_file() {
+                        if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                            if let Ok(meta) = crate::parse::parse_metadata(&content, &skill_dir) {
+                                registry.insert(meta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn load_install_manifest(&self) -> crate::types::SkillsManifest {
         crate::manifest::ManifestStore::default_path()
             .ok()
