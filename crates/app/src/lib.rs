@@ -510,12 +510,14 @@ pub async fn start_with_options(
         {
             use rara_channels::telegram::commands::{
                 SessionDetailCallbackHandler, SessionSwitchCallbackHandler,
+                StatusJobsCallbackHandler,
             };
             let callback_handlers: Vec<
                 std::sync::Arc<dyn rara_kernel::channel::command::CallbackHandler>,
             > = vec![
                 std::sync::Arc::new(SessionSwitchCallbackHandler::new(bot_client.clone())),
                 std::sync::Arc::new(SessionDetailCallbackHandler::new(bot_client.clone())),
+                std::sync::Arc::new(StatusJobsCallbackHandler::new(kernel_handle.clone())),
             ];
             tg_adapter.set_callback_handlers(callback_handlers);
         }

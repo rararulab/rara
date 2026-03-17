@@ -46,7 +46,7 @@ pub use client::BotServiceClient;
 pub use kernel_client::KernelBotServiceClient;
 pub use mcp::McpCommandHandler;
 pub use session::{SessionCommandHandler, StopCommandHandler};
-pub use status::StatusCommandHandler;
+pub use status::{StatusCommandHandler, StatusJobsCallbackHandler};
 pub use tape::TapeCommandHandler;
 
 /// Extract Telegram chat ID from command/callback metadata.

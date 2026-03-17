@@ -14,13 +14,22 @@
 
 //! `/status` command — show session metadata, runtime metrics, scheduled
 //! jobs, and system stats in a single view.
+//!
+//! When the session has more than [`INLINE_JOB_LIMIT`] scheduled jobs, the
+//! command returns an inline "All jobs" button.
+//! [`StatusJobsCallbackHandler`] handles the callback and sends the full
+//! list.
 
 use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
 use rara_kernel::{
-    channel::command::{
-        CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+    channel::{
+        command::{
+            CallbackContext, CallbackHandler, CallbackResult, CommandContext, CommandDefinition,
+            CommandHandler, CommandInfo, CommandResult,
+        },
+        types::InlineButton,
     },
     error::KernelError,
     handle::KernelHandle,
@@ -31,6 +40,9 @@ use super::{
     client::BotServiceClient,
     session::{extract_channel_info, format_timestamp, html_escape},
 };
+
+/// Maximum scheduled jobs shown inline in the `/status` response.
+const INLINE_JOB_LIMIT: usize = 5;
 
 /// Handles the `/status` command — a comprehensive dashboard view of the
 /// current session, its scheduled jobs, and kernel-wide system stats.
@@ -83,6 +95,7 @@ impl CommandHandler for StatusCommandHandler {
         };
 
         let mut text = String::new();
+        let mut has_more_jobs = false;
 
         // -- Section 1: Session metadata ------------------------------------
         match self.client.get_session(&session_key_str).await {
@@ -121,23 +134,12 @@ impl CommandHandler for StatusCommandHandler {
             if jobs.is_empty() {
                 let _ = writeln!(text, "<b>Scheduled jobs</b>: none");
             } else {
-                const MAX_DISPLAY_JOBS: usize = 10;
                 let _ = writeln!(text, "<b>Scheduled jobs</b> ({})", jobs.len());
-                for job in jobs.iter().take(MAX_DISPLAY_JOBS) {
-                    let msg = truncate_msg(&job.message, 40);
-                    let schedule = job.trigger.summary();
-                    let next = job.trigger.next_at().to_string();
-                    let next_fmt = format_timestamp(&next);
-                    let _ = writeln!(
-                        text,
-                        "  {} | {} | {}",
-                        html_escape(&msg),
-                        html_escape(&schedule),
-                        next_fmt,
-                    );
+                for job in jobs.iter().take(INLINE_JOB_LIMIT) {
+                    render_job_line(&mut text, job);
                 }
-                if jobs.len() > MAX_DISPLAY_JOBS {
-                    let _ = writeln!(text, "  ... and {} more", jobs.len() - MAX_DISPLAY_JOBS);
+                if jobs.len() > INLINE_JOB_LIMIT {
+                    has_more_jobs = true;
                 }
             }
         }
@@ -150,13 +152,87 @@ impl CommandHandler for StatusCommandHandler {
         let _ = writeln!(text, "Uptime: {}", format_uptime(sys.uptime_ms));
         let _ = writeln!(text, "Total tokens: {}", sys.total_tokens_consumed);
 
-        Ok(CommandResult::Html(text))
+        if has_more_jobs {
+            let keyboard = vec![vec![InlineButton {
+                text:          "All jobs".to_owned(),
+                callback_data: Some(format!("status_jobs:{session_key_str}")),
+                url:           None,
+            }]];
+            Ok(CommandResult::HtmlWithKeyboard {
+                html: text,
+                keyboard,
+            })
+        } else {
+            Ok(CommandResult::Html(text))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StatusJobsCallbackHandler
+// ---------------------------------------------------------------------------
+
+/// Handles `status_jobs:{session_key}` callbacks — sends the full list of
+/// scheduled jobs for the session.
+pub struct StatusJobsCallbackHandler {
+    handle: KernelHandle,
+}
+
+impl StatusJobsCallbackHandler {
+    /// Create a new handler with the given kernel handle.
+    pub fn new(handle: KernelHandle) -> Self { Self { handle } }
+}
+
+#[async_trait]
+impl CallbackHandler for StatusJobsCallbackHandler {
+    fn prefix(&self) -> &str { "status_jobs:" }
+
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
+        let session_key_str = &context.data["status_jobs:".len()..];
+        let sk = match SessionKey::try_from_raw(session_key_str) {
+            Ok(sk) => sk,
+            Err(_) => {
+                return Ok(CallbackResult::SendMessage {
+                    text: "Invalid session key.".to_owned(),
+                });
+            }
+        };
+
+        let jobs = self.handle.list_jobs(Some(&sk));
+        if jobs.is_empty() {
+            return Ok(CallbackResult::SendMessage {
+                text: "No scheduled jobs.".to_owned(),
+            });
+        }
+
+        let mut text = String::new();
+        let _ = writeln!(text, "<b>All scheduled jobs</b> ({})", jobs.len());
+        for job in &jobs {
+            render_job_line(&mut text, job);
+        }
+
+        Ok(CallbackResult::SendMessage { text })
     }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Render a single job as one line in the output.
+fn render_job_line(text: &mut String, job: &rara_kernel::schedule::JobEntry) {
+    let msg = truncate_msg(&job.message, 40);
+    let schedule = job.trigger.summary();
+    let next = job.trigger.next_at().to_string();
+    let next_fmt = format_timestamp(&next);
+    let _ = writeln!(
+        text,
+        "  {} | {} | {}",
+        html_escape(&msg),
+        html_escape(&schedule),
+        next_fmt,
+    );
+}
 
 /// Truncate a string to the first line and at most `max` characters.
 fn truncate_msg(s: &str, max: usize) -> String {
