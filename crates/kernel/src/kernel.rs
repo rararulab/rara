@@ -2673,7 +2673,11 @@ impl Kernel {
             let session_index = Arc::clone(self.io.session_index());
             let needs_title = match session_index.get_session(&session_key).await {
                 Ok(Some(entry)) => entry.title.is_none(),
-                _ => false,
+                Ok(None) => false,
+                Err(e) => {
+                    tracing::warn!(%e, session_key = %session_key, "title gen: failed to check session");
+                    false
+                }
             };
             if needs_title {
                 let tape_service = self.tape_service.clone();
@@ -2789,8 +2793,13 @@ async fn generate_session_title(
 
     let response = driver.complete(request).await?;
 
-    // Prefer content, fall back to reasoning_content for thinking models.
-    let Some(raw_title) = response.content.or(response.reasoning_content) else {
+    // Prefer non-empty content, fall back to reasoning_content for thinking
+    // models that return content = Some("") with actual text in reasoning.
+    let raw_title = response
+        .content
+        .filter(|s| !s.trim().is_empty())
+        .or(response.reasoning_content);
+    let Some(raw_title) = raw_title else {
         tracing::warn!(session_key = %session_key, "title gen: LLM returned no content");
         return Ok(());
     };
