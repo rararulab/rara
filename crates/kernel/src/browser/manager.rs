@@ -292,19 +292,35 @@ impl BrowserManager {
     }
 
     /// Take a fresh accessibility tree snapshot of the active page.
+    ///
+    /// Clones the `Page` handle out of the lock before doing async CDP I/O,
+    /// then briefly re-acquires the write lock to update the ref map.
     pub async fn take_snapshot_active(&self) -> BrowserResult<String> {
-        let mut store = self.store.write().await;
-        let active_id = store
-            .active
-            .clone()
-            .ok_or_else(|| NoActivePageSnafu.build())?;
-        let tab = store
-            .tabs
-            .get_mut(&active_id)
-            .ok_or_else(|| NoActivePageSnafu.build())?;
+        let (active_id, page) = {
+            let store = self.store.read().await;
+            let id = store
+                .active
+                .clone()
+                .ok_or_else(|| NoActivePageSnafu.build())?;
+            let page = store
+                .tabs
+                .get(&id)
+                .map(|t| t.page.clone())
+                .ok_or_else(|| NoActivePageSnafu.build())?;
+            (id, page)
+        };
 
-        let snap = snapshot::take_snapshot(&tab.page, self.config.snapshot_max_bytes).await?;
-        tab.ref_map = snap.ref_map;
+        // Async CDP call happens outside any lock.
+        let snap = snapshot::take_snapshot(&page, self.config.snapshot_max_bytes).await?;
+
+        // Brief write lock to update the ref map only.
+        {
+            let mut store = self.store.write().await;
+            if let Some(tab) = store.tabs.get_mut(&active_id) {
+                tab.ref_map = snap.ref_map;
+            }
+        }
+
         Ok(snap.text)
     }
 
@@ -643,7 +659,7 @@ impl BrowserManager {
                     .ok_or_else(|| NoActivePageSnafu.build())?
             };
 
-            let tab_state = store.tabs.swap_remove(&tab_id);
+            let tab_state = store.tabs.shift_remove(&tab_id);
 
             // Update active pointer if needed.
             if store.active.as_deref() == Some(&tab_id) {
