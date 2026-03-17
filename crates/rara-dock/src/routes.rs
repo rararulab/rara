@@ -359,14 +359,27 @@ async fn turn_handler(
 ) -> DockResult<Response> {
     // Reject concurrent turns on the same session to prevent mutation
     // mixing in the shared DockMutationSink.
-    {
+    //
+    // The RAII guard is created immediately after insertion so that ANY
+    // early return (test-mode, session-setup error, ingest error) will
+    // automatically remove the session from the in-flight set.
+    struct InFlightGuard(Arc<Mutex<HashSet<String>>>, String);
+    impl Drop for InFlightGuard {
+        fn drop(&mut self) {
+            if let Ok(mut guard) = self.0.lock() {
+                guard.remove(&self.1);
+            }
+        }
+    }
+    let in_flight_guard = {
         let mut guard = state.in_flight.lock().expect("in_flight lock poisoned");
         if !guard.insert(body.session_id.clone()) {
             return Err(crate::DockError::Kernel {
                 message: "a turn is already in progress for this session".into(),
             });
         }
-    }
+        InFlightGuard(state.in_flight.clone(), body.session_id.clone())
+    };
 
     // Use persisted server-side document as source of truth for the prompt,
     // not the client-supplied state which may be stale in multi-tab scenarios.
@@ -446,21 +459,12 @@ async fn turn_handler(
     let store = state.store.clone();
     let tape_service = state.tape_service.clone();
     let mutation_sink = state.mutation_sink.clone();
-    let in_flight = state.in_flight.clone();
     let session_id = body.session_id.clone();
 
     tokio::spawn(async move {
-        // Ensure the in-flight guard is released when the task exits,
-        // regardless of which code path returns early.
-        struct InFlightGuard(Arc<Mutex<HashSet<String>>>, String);
-        impl Drop for InFlightGuard {
-            fn drop(&mut self) {
-                if let Ok(mut guard) = self.0.lock() {
-                    guard.remove(&self.1);
-                }
-            }
-        }
-        let _guard = InFlightGuard(in_flight, session_id.clone());
+        // Move the RAII guard into the spawned task so it is released
+        // when the stream-forwarding task exits.
+        let _guard = in_flight_guard;
 
         // Poll until the kernel opens a stream for this session.
         let mut attempts = 0;
