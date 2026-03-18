@@ -1,6 +1,6 @@
 //! Known agent commands and their resolution.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 /// Identifies which external coding agent to use.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -13,6 +13,17 @@ pub enum AgentKind {
     Gemini,
     /// A user-defined agent identified by name.
     Custom(String),
+}
+
+impl fmt::Display for AgentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Claude => write!(f, "claude"),
+            Self::Codex => write!(f, "codex"),
+            Self::Gemini => write!(f, "gemini"),
+            Self::Custom(name) => write!(f, "{name}"),
+        }
+    }
 }
 
 /// Resolved command to spawn an agent subprocess.

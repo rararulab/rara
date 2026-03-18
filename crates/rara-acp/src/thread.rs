@@ -8,7 +8,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use agent_client_protocol::RequestPermissionOutcome;
-use futures::future::BoxFuture;
+use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -28,8 +28,8 @@ pub(crate) enum AcpCommand {
         text:     String,
         reply_tx: oneshot::Sender<Result<StopReason, AcpError>>,
     },
-    /// Gracefully shut down the connection.
-    Shutdown { reply_tx: oneshot::Sender<()> },
+    /// Gracefully shut down the connection (fire-and-forget).
+    Shutdown,
 }
 
 /// Status of an AcpThread.
@@ -159,7 +159,7 @@ impl AcpThread {
         let command = registry
             .resolve(&agent_kind)
             .ok_or_else(|| AcpError::Handshake {
-                message: format!("unknown agent kind: {agent_kind:?}"),
+                message: format!("unknown agent kind: {agent_kind}"),
             })?
             .clone();
 
@@ -187,12 +187,12 @@ impl AcpThread {
         });
 
         // Wait for the actor to complete handshake and report session ID.
-        let session_id = session_id_rx.await.map_err(|_| AcpError::Handshake {
+        let session_id = session_id_rx.await.map_err(|_| AcpError::AgentExited {
             message: "connection actor exited before reporting session ID".into(),
         })??;
 
         info!(
-            agent = ?agent_kind,
+            agent = %agent_kind,
             session_id = %session_id,
             "AcpThread spawned"
         );
@@ -240,17 +240,16 @@ impl AcpThread {
                 reply_tx,
             })
             .await
-            .map_err(|_| AcpError::Handshake {
+            .map_err(|_| AcpError::AgentExited {
                 message: "command channel closed".into(),
             })?;
 
         let mut assistant_text = String::new();
 
-        // Active permission resolution futures.
-        let mut pending_permissions: Vec<(
-            String, // tool_call_id
+        // Active permission resolution futures, driven via select!.
+        let mut pending_permissions: FuturesUnordered<
             tokio::task::JoinHandle<(String, RequestPermissionOutcome)>,
-        )> = Vec::new();
+        > = FuturesUnordered::new();
 
         loop {
             tokio::select! {
@@ -258,7 +257,7 @@ impl AcpThread {
                 event = self.event_rx.recv() => {
                     let Some(event) = event else {
                         self.status = AcpThreadStatus::Disconnected;
-                        return Err(AcpError::Handshake {
+                        return Err(AcpError::AgentExited {
                             message: "event channel closed unexpectedly".into(),
                         });
                     };
@@ -271,12 +270,20 @@ impl AcpThread {
                             self.entries.push(AcpThreadEntry::Thinking(text.clone()));
                         }
                         AcpEvent::ToolCallStarted { id, title } => {
-                            self.tool_calls.insert(id.clone(), AcpToolCall {
-                                id: id.clone(),
-                                title: title.clone(),
-                                status: AcpToolCallStatus::Running,
-                                output: None,
-                            });
+                            // Use entry API to avoid overwriting an existing
+                            // record that may already hold a reply_tx (if the
+                            // PermissionBridge arrived before ToolCallStarted).
+                            self.tool_calls
+                                .entry(id.clone())
+                                .and_modify(|tc| {
+                                    tc.title.clone_from(title);
+                                })
+                                .or_insert_with(|| AcpToolCall {
+                                    id:     id.clone(),
+                                    title:  title.clone(),
+                                    status: AcpToolCallStatus::Running,
+                                    output: None,
+                                });
                             self.entries.push(AcpThreadEntry::ToolCall {
                                 id: id.clone(),
                                 title: title.clone(),
@@ -286,11 +293,19 @@ impl AcpThread {
                         }
                         AcpEvent::ToolCallUpdate { id, status, output } => {
                             if let Some(tc) = self.tool_calls.get_mut(id) {
-                                tc.status = match status {
-                                    ToolCallStatus::Running => AcpToolCallStatus::Running,
-                                    ToolCallStatus::Completed => AcpToolCallStatus::Completed,
-                                    ToolCallStatus::Failed => AcpToolCallStatus::Failed,
-                                };
+                                // Don't overwrite WaitingForConfirmation —
+                                // that state holds a reply_tx that must be
+                                // preserved until the user decides.
+                                if !matches!(
+                                    tc.status,
+                                    AcpToolCallStatus::WaitingForConfirmation { .. }
+                                ) {
+                                    tc.status = match status {
+                                        ToolCallStatus::Running => AcpToolCallStatus::Running,
+                                        ToolCallStatus::Completed => AcpToolCallStatus::Completed,
+                                        ToolCallStatus::Failed => AcpToolCallStatus::Failed,
+                                    };
+                                }
                                 tc.output.clone_from(output);
                             }
                         }
@@ -366,7 +381,14 @@ impl AcpThread {
                         let outcome = future.await;
                         (tc_id, outcome)
                     });
-                    pending_permissions.push((tool_call_id, handle));
+                    pending_permissions.push(handle);
+                }
+
+                // A permission resolution completed.
+                Some(result) = pending_permissions.next() => {
+                    if let Ok((tc_id, outcome)) = result {
+                        self.resolve_permission_outcome(&tc_id, outcome);
+                    }
                 }
 
                 // Prompt completed.
@@ -379,7 +401,7 @@ impl AcpThread {
                     }
 
                     let stop_reason = result
-                        .map_err(|_| AcpError::Handshake {
+                        .map_err(|_| AcpError::AgentExited {
                             message: "prompt reply channel closed".into(),
                         })??;
 
@@ -387,19 +409,6 @@ impl AcpThread {
                         stop_reason: stop_reason.clone(),
                     };
                     return Ok(stop_reason);
-                }
-            }
-
-            // Check if any permission resolutions have completed.
-            let mut i = 0;
-            while i < pending_permissions.len() {
-                if pending_permissions[i].1.is_finished() {
-                    let (_, handle) = pending_permissions.swap_remove(i);
-                    if let Ok((tc_id, outcome)) = handle.await {
-                        self.resolve_permission_outcome(&tc_id, outcome);
-                    }
-                } else {
-                    i += 1;
                 }
             }
         }
@@ -480,12 +489,7 @@ impl AcpThread {
 
     /// Gracefully shut down: close session, kill subprocess, reap.
     pub async fn shutdown(mut self) -> Result<(), AcpError> {
-        let (tx, rx) = oneshot::channel();
-        let _ = self
-            .command_tx
-            .send(AcpCommand::Shutdown { reply_tx: tx })
-            .await;
-        let _ = rx.await;
+        let _ = self.command_tx.send(AcpCommand::Shutdown).await;
 
         if let Some(handle) = self.actor_handle.take() {
             let _ = handle.await;
@@ -509,6 +513,17 @@ impl AcpThread {
 
     /// The agent kind.
     pub fn agent_kind(&self) -> &AgentKind { &self.agent_kind }
+}
+
+/// Map ACP protocol stop reason to our crate-level [`StopReason`].
+fn map_stop_reason(reason: agent_client_protocol::StopReason) -> StopReason {
+    match reason {
+        agent_client_protocol::StopReason::EndTurn => StopReason::EndTurn,
+        agent_client_protocol::StopReason::Cancelled => StopReason::Cancelled,
+        agent_client_protocol::StopReason::MaxTokens => StopReason::MaxTokens,
+        agent_client_protocol::StopReason::Refusal => StopReason::Refusal,
+        other => StopReason::Error(format!("{other:?}")),
+    }
 }
 
 /// Connection actor: runs on a dedicated single-threaded runtime + LocalSet.
@@ -560,16 +575,11 @@ async fn run_connection_actor(
         match cmd {
             AcpCommand::Prompt { text, reply_tx } => {
                 let result = conn.send_prompt(&text).await;
-                let mapped = result.map(|resp| match resp.stop_reason {
-                    agent_client_protocol::StopReason::EndTurn => StopReason::EndTurn,
-                    agent_client_protocol::StopReason::Cancelled => StopReason::Cancelled,
-                    _ => StopReason::EndTurn,
-                });
+                let mapped = result.map(|resp| map_stop_reason(resp.stop_reason));
                 let _ = reply_tx.send(mapped);
             }
-            AcpCommand::Shutdown { reply_tx } => {
+            AcpCommand::Shutdown => {
                 let _ = conn.shutdown().await;
-                let _ = reply_tx.send(());
                 break;
             }
         }
@@ -578,11 +588,9 @@ async fn run_connection_actor(
 
 impl Drop for AcpThread {
     fn drop(&mut self) {
-        // Best-effort: tell the actor to shut down.
+        // Fire-and-forget: tell the actor to shut down.
         // Can't await here, but the actor will clean up the child process
         // via AcpConnection::Drop.
-        let _ = self.command_tx.try_send(AcpCommand::Shutdown {
-            reply_tx: oneshot::channel().0,
-        });
+        let _ = self.command_tx.try_send(AcpCommand::Shutdown);
     }
 }
