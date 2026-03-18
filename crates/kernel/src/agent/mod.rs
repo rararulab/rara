@@ -221,10 +221,19 @@ pub struct AgentManifest {
     /// unless overridden by session-level `/msg_version`.
     #[serde(default)]
     pub default_execution_mode: Option<ExecutionMode>,
-    /// Per-turn tool call threshold that triggers a pause requiring user
-    /// confirmation. When `tool_calls_made >= pause_turn_threshold`, the
-    /// agent loop pauses and waits for user input (continue/stop).
-    /// Default: 15.
+    /// Per-turn tool call ceiling that triggers a pause requiring user
+    /// confirmation before the agent loop continues.
+    ///
+    /// When cumulative `tool_calls_made >= pause_turn_threshold`, the loop
+    /// emits a [`StreamEvent::PauseTurn`] and blocks on a oneshot channel
+    /// for up to 120 seconds. If the user continues, the next pause fires
+    /// after another `pause_turn_threshold` calls (i.e. the threshold is
+    /// additive, not reset to zero).
+    ///
+    /// **Default: `0` (disabled).** Set to a positive value in the agent
+    /// manifest YAML to enable. Only channels with interactive decision UI
+    /// (e.g. Telegram inline keyboard) should enable this; channels without
+    /// UI would hit the 120s timeout and silently stop.
     #[serde(default)]
     pub pause_turn_threshold:   Option<usize>,
 }
@@ -893,10 +902,19 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
-    // ── Pause turn state ─────────────────────────────────────────────
+    // ── Pause turn circuit breaker ─────────────────────────────────────
+    // Prevents runaway tool loops by pausing execution every N tool calls
+    // and asking the user whether to continue. 0 = disabled (default).
     let pause_interval = manifest.pause_turn_threshold.unwrap_or(0);
+    // Absolute tool call count at which the next pause fires. After each
+    // continue decision this advances by `pause_interval` (additive).
     let mut next_pause_at: usize = pause_interval;
+    // Monotonically increasing counter ensuring each pause event has a
+    // unique ID. Prevents stale Telegram inline buttons from resolving a
+    // newer pause (handle.resolve_pause_turn checks ID match).
     let mut pause_id_counter: u64 = 0;
+    // Distinguishes "user stopped via pause" from "max iterations exhausted"
+    // in the post-loop exit logic — they produce different user messages.
     let mut stopped_by_pause = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
@@ -1828,9 +1846,19 @@ pub(crate) async fn run_agent_loop(
             });
         }
 
-        // ── Pause turn check ─────────────────────────────────────────
-        // When cumulative tool calls reach the threshold, pause and ask
-        // the user whether to continue or stop.
+        // ── Pause turn circuit breaker ─────────────────────────────────
+        // When cumulative tool calls reach the ceiling, pause execution and
+        // wait for the user to decide whether to continue or stop.
+        //
+        // Flow:
+        //   1. Emit PauseTurn → adapter shows inline buttons to the user.
+        //   2. Register a oneshot channel on the session (keyed by pause_id).
+        //   3. Await the oneshot with a 120s hard timeout.
+        //   4a. Continue → advance next_pause_at by pause_interval.
+        //   4b. Stop / Timeout / channel closed → set stopped_by_pause, break.
+        //
+        // The 120s timeout prevents the agent loop from hanging indefinitely
+        // if the user walks away or the adapter lacks decision UI.
         if pause_interval > 0 && tool_calls_made >= next_pause_at {
             pause_id_counter += 1;
             let current_pause_id = pause_id_counter;
@@ -1842,6 +1870,9 @@ pub(crate) async fn run_agent_loop(
                 elapsed_secs,
             });
 
+            // Register the oneshot sender on the session so that the adapter
+            // (e.g. Telegram callback handler) can deliver the user's decision.
+            // Uses the same oneshot pattern as the guard approval system.
             let (tx, rx) = tokio::sync::oneshot::channel();
             handle.register_pause_turn(&session_key, current_pause_id, tx);
 
@@ -1853,6 +1884,7 @@ pub(crate) async fn run_agent_loop(
                 "agent loop paused at tool call threshold, awaiting user decision"
             );
 
+            // 120s hard timeout — treats expiry the same as an explicit Stop.
             let decision = tokio::select! {
                 result = tokio::time::timeout(
                     std::time::Duration::from_secs(120),
@@ -1866,6 +1898,7 @@ pub(crate) async fn run_agent_loop(
             match decision {
                 Ok(Ok(crate::io::PauseTurnDecision::Continue)) => {
                     info!(tool_calls_made, "user chose to continue agent loop");
+                    // Additive: next pause fires after another full interval.
                     next_pause_at = tool_calls_made + pause_interval;
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
@@ -1874,7 +1907,8 @@ pub(crate) async fn run_agent_loop(
                     });
                 }
                 _ => {
-                    // Stop or Timeout or channel closed — NOT max iterations
+                    // Explicit Stop, 120s timeout, or oneshot dropped — all
+                    // treated as a graceful stop. NOT max-iteration exhaustion.
                     warn!(tool_calls_made, "agent loop stopped by user or timeout");
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),

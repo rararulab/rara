@@ -1431,12 +1431,29 @@ async fn handle_guard_callback(
     }
 }
 
-/// Handle a pause-turn callback query (continue/stop) from an inline keyboard.
+/// Handle a pause-turn callback query (continue/stop) from a Telegram
+/// inline keyboard button.
 ///
-/// Callback data format: `"turn:{action}:{session_key}:{pause_id}"`
-/// - `action` = "continue" → resume agent loop
-/// - `action` = "stop"     → stop agent loop
-/// - `pause_id` binds the callback to a specific pause instance
+/// ## Callback data protocol
+///
+/// Format: `"turn:{action}:{session_key}:{pause_id}"`
+///
+/// - `action`      — `"continue"` (resume loop) or `"stop"` (graceful stop)
+/// - `session_key`  — identifies the session whose agent loop is paused
+/// - `pause_id` — monotonic counter binding this button to a specific pause
+///   instance. Stale IDs are rejected by `KernelHandle::resolve_pause_turn`.
+///
+/// ## Authorization
+///
+/// Uses **chat-based auth** (`callback.message.chat().id`) checked against
+/// `allowed_chat_ids`, matching the same authorization used for inbound
+/// messages. This is intentional: in group chats any member of the allowed
+/// chat can resolve the pause, not just the user who triggered it.
+///
+/// ## UI feedback
+///
+/// After resolving, the original inline keyboard message is edited to show
+/// who made the decision and what action was taken.
 async fn handle_turn_pause_callback(
     handle: &KernelHandle,
     bot: &teloxide::Bot,
@@ -2520,6 +2537,10 @@ fn spawn_stream_forwarder(
                             progress.model = model;
                             progress.iterations = iterations;
                         }
+                        // Pause turn: send inline keyboard with continue/stop
+                        // buttons. The callback data encodes session_key and
+                        // pause_id so handle_turn_pause_callback can route the
+                        // decision back to the correct oneshot channel.
                         Ok(StreamEvent::PauseTurn { session_key, pause_id, tool_calls_made, elapsed_secs }) => {
                             let text = format!(
                                 "⚠️ <b>Agent Paused</b>\n\n\

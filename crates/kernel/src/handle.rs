@@ -526,7 +526,15 @@ impl KernelHandle {
     }
 
     /// Register a pause-turn oneshot sender on the session.
-    /// Called by the agent loop when tool call threshold is reached.
+    ///
+    /// Called by the agent loop (inline or plan) when cumulative tool calls
+    /// reach the `pause_turn_threshold`. The `tx` end is stored alongside
+    /// `pause_id` so that [`resolve_pause_turn`](Self::resolve_pause_turn)
+    /// can validate the ID before delivering the decision.
+    ///
+    /// Only one pause can be pending per session at a time — registering a
+    /// new one implicitly drops the previous sender (if any), which causes
+    /// the old `rx` to receive a channel-closed error (treated as Stop).
     pub fn register_pause_turn(
         &self,
         session_key: &SessionKey,
@@ -539,10 +547,17 @@ impl KernelHandle {
     }
 
     /// Resolve a pending pause-turn decision.
-    /// Called by channel adapters when user clicks continue/stop.
-    /// Only resolves if `pause_id` matches the pending one, preventing
-    /// stale buttons from resolving a newer pause.
-    /// Returns `true` if the decision was delivered.
+    ///
+    /// Called by channel adapters (e.g. Telegram callback handler) when the
+    /// user clicks continue/stop on the inline keyboard.
+    ///
+    /// **Stale button protection:** only resolves if `pause_id` matches the
+    /// currently pending one. This prevents a button from an earlier pause
+    /// (which the user didn't click in time) from accidentally resolving a
+    /// newer pause instance. Mismatched IDs are silently ignored.
+    ///
+    /// Returns `true` if the decision was successfully delivered to the
+    /// waiting agent loop.
     pub fn resolve_pause_turn(
         &self,
         session_key: &SessionKey,

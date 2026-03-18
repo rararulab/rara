@@ -237,6 +237,11 @@ pub(crate) async fn run_plan_loop(
     let mut last_model = String::new();
     let mut final_texts: Vec<String> = Vec::new();
     let mut replan_count = 0usize;
+    // ── Pause turn circuit breaker (plan mode) ────────────────────────
+    // Same mechanism as the inline agent loop, but tracks cumulative tool
+    // calls across *all* plan steps (total_tool_calls). 0 = disabled.
+    // Note: each plan step's inner agent loop has its own independent
+    // pause check — this outer layer provides cross-step protection.
     let pause_interval = handle
         .session_manifest(&session_key)
         .await
@@ -320,7 +325,9 @@ pub(crate) async fn run_plan_loop(
             outcome: outcome.clone(),
         });
 
-        // ── Pause turn check (cumulative across steps) ───────────────
+        // ── Pause turn check (cumulative across all plan steps) ────────
+        // Uses total_tool_calls (sum across steps) rather than per-step
+        // counts. Same oneshot + 120s timeout pattern as inline agent loop.
         if pause_interval > 0 && total_tool_calls >= next_pause_at {
             pause_id_counter += 1;
             let current_pause_id = pause_id_counter;

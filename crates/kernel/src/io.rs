@@ -824,12 +824,22 @@ pub enum BackgroundTaskStatus {
     Cancelled,
 }
 
-/// Decision from user when agent loop is paused at tool call threshold.
+/// User's decision when the agent loop is paused at the tool call threshold.
+///
+/// The agent loop (both inline and plan modes) tracks cumulative tool calls
+/// per turn. When the count reaches `pause_turn_threshold`, execution suspends
+/// and the adapter presents the user with continue/stop options (e.g. Telegram
+/// inline keyboard). The decision is delivered back through a
+/// `tokio::sync::oneshot` channel registered on the session.
+///
+/// If no decision arrives within **120 seconds**, the loop treats it as `Stop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseTurnDecision {
-    /// Resume agent loop execution.
+    /// Resume agent loop execution. The next pause fires after another
+    /// `pause_turn_threshold` tool calls from the current count.
     Continue,
-    /// Stop the agent loop, return partial results.
+    /// Stop the agent loop gracefully, returning partial results accumulated
+    /// so far. This is distinct from max-iteration exhaustion.
     Stop,
 }
 
@@ -926,18 +936,36 @@ pub enum StreamEvent {
         history:         Vec<serde_json::Value>,
         selected_anchor: Option<String>,
     },
-    /// Agent loop paused because tool call count reached threshold.
-    /// Client should display inline buttons for continue/stop.
+    /// Agent loop paused because cumulative tool calls reached the
+    /// `pause_turn_threshold` ceiling.
+    ///
+    /// Channel adapters should present the user with continue/stop controls
+    /// (e.g. Telegram inline keyboard). The agent loop blocks on a oneshot
+    /// channel for up to **120 seconds**; if no decision arrives the loop
+    /// stops automatically.
+    ///
+    /// `pause_id` is a monotonically increasing counter (per turn) that binds
+    /// this event to a specific pause instance. Adapters must include it in
+    /// callback data so that stale buttons from an earlier pause cannot
+    /// accidentally resolve a newer one.
     PauseTurn {
         session_key:     String,
+        /// Monotonic pause instance ID — prevents stale callback resolution.
         pause_id:        u64,
+        /// Cumulative tool calls executed so far in this turn.
         tool_calls_made: usize,
+        /// Wall-clock seconds since turn start.
         elapsed_secs:    u64,
     },
-    /// User resolved a pause-turn decision.
+    /// A pending pause-turn has been resolved by the user (or by timeout).
+    ///
+    /// Informational only — adapters may use this to update UI (e.g. edit
+    /// the Telegram inline keyboard message to show the decision).
     PauseTurnResolved {
         session_key: String,
+        /// Must match the `pause_id` from the corresponding `PauseTurn`.
         pause_id:    u64,
+        /// `true` if the user chose to continue; `false` on stop or timeout.
         continued:   bool,
     },
 }
