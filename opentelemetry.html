@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "ayu";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-524c37ba.js";
+            window.path_to_searchindex_js = "searchindex-3bb21123.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-04e93f4b.js"></script>
@@ -180,95 +180,167 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="opentelemetry-integration"><a class="header" href="#opentelemetry-integration">OpenTelemetry Integration</a></h1>
-<p>This document describes how to use the OpenTelemetry integration in <code>job</code> to monitor the performance of the HTTP and gRPC servers.</p>
+                        <h1 id="observability"><a class="header" href="#observability">Observability</a></h1>
+<p>Rara uses OpenTelemetry for all telemetry signals — <strong>traces</strong> and <strong>metrics</strong> are pushed via OTLP to a local collector. There is no pull-based <code>/metrics</code> endpoint; everything is push-based, suitable for local-first deployments without sidecars.</p>
+<h2 id="architecture"><a class="header" href="#architecture">Architecture</a></h2>
+<pre><code>┌─────────┐   OTLP (HTTP/gRPC)   ┌────────────────┐
+│  Rara   │ ───────────────────▶  │  OTel Collector │
+│         │   traces + metrics    │  (or Alloy)     │
+└─────────┘   every 30s (metrics) └────────┬───────┘
+                                           │
+                          ┌────────────────┼────────────────┐
+                          ▼                ▼                ▼
+                    ┌──────────┐   ┌────────────┐   ┌───────────┐
+                    │  Tempo   │   │   Mimir /   │   │  Grafana  │
+                    │ (traces) │   │ Prometheus  │   │           │
+                    └──────────┘   │ (metrics)   │   └───────────┘
+                                   └────────────┘
+</code></pre>
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
-<p>The OpenTelemetry integration is configured through environment variables. The following variables are available:</p>
+<p>All telemetry is configured in <code>config.yaml</code> under the <code>telemetry</code> section:</p>
+<pre><code class="language-yaml">telemetry:
+  otlp_endpoint: "http://localhost:4318"   # OTLP collector endpoint
+  otlp_protocol: "http"                    # "http" or "grpc"
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>otlp_endpoint</code></td><td><code>string</code></td><td><code>null</code> (disabled)</td><td>OTLP collector endpoint. Set this to enable telemetry.</td></tr>
+<tr><td><code>otlp_protocol</code></td><td><code>string</code></td><td><code>"http"</code></td><td>Transport protocol: <code>"http"</code> (port 4318) or <code>"grpc"</code> (port 4317).</td></tr>
+</tbody>
+</table>
+</div>
+<p>When <code>otlp_endpoint</code> is set, Rara pushes both traces and metrics to the same endpoint:</p>
 <ul>
-<li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code>: The endpoint of the OpenTelemetry collector. Defaults to <code>http://localhost:4317</code>.</li>
-<li><code>OTEL_SERVICE_NAME</code>: The name of the service. Defaults to <code>job</code>.</li>
+<li><strong>HTTP</strong>: traces → <code>{endpoint}/v1/traces</code>, metrics → <code>{endpoint}/v1/metrics</code></li>
+<li><strong>gRPC</strong>: both signals use the same gRPC endpoint</li>
 </ul>
-<h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
-<p>To enable the OpenTelemetry integration, simply start the <code>job</code> server:</p>
-<pre><code class="language-bash">cargo run --bin job -- server
+<p>When <code>otlp_endpoint</code> is <code>null</code>, telemetry is disabled (logs still go to local files).</p>
+<h2 id="signals"><a class="header" href="#signals">Signals</a></h2>
+<h3 id="traces"><a class="header" href="#traces">Traces</a></h3>
+<p>Distributed tracing with span context propagation (W3C Trace Context). Key instrumented operations:</p>
+<ul>
+<li><code>run_agent_loop</code> — full agent execution</li>
+<li><code>start_llm_turn</code> — individual LLM turn with iterations</li>
+<li>Per-iteration spans with <code>first_token_ms</code>, <code>stream_ms</code>, model info</li>
+<li>Tool execution spans with duration and success/failure</li>
+</ul>
+<h3 id="metrics"><a class="header" href="#metrics">Metrics</a></h3>
+<p>All metrics are pushed via OTLP periodic exporter (30-second flush interval). Metric names use dot notation per OTel convention.</p>
+<h4 id="kernel-metrics-meter-rara-kernel"><a class="header" href="#kernel-metrics-meter-rara-kernel">Kernel Metrics (meter: <code>rara-kernel</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>kernel.session.created</code></td><td>Counter</td><td><code>agent_name</code></td><td>Sessions created</td></tr>
+<tr><td><code>kernel.session.suspended</code></td><td>Counter</td><td><code>agent_name</code>, <code>exit_state</code></td><td>Sessions suspended</td></tr>
+<tr><td><code>kernel.session.active</code></td><td>UpDownCounter</td><td><code>agent_name</code></td><td>Currently active sessions</td></tr>
+<tr><td><code>kernel.turn.total</code></td><td>Counter</td><td><code>agent_name</code>, <code>model</code></td><td>Total LLM turns</td></tr>
+<tr><td><code>kernel.turn.duration</code></td><td>Histogram (s)</td><td><code>agent_name</code>, <code>model</code></td><td>LLM turn duration</td></tr>
+<tr><td><code>kernel.turn.tool_calls</code></td><td>Counter</td><td><code>agent_name</code>, <code>tool_name</code></td><td>Tool calls per tool</td></tr>
+<tr><td><code>kernel.turn.tokens.input</code></td><td>Counter</td><td><code>model</code></td><td>Input tokens consumed</td></tr>
+<tr><td><code>kernel.turn.tokens.output</code></td><td>Counter</td><td><code>model</code></td><td>Output tokens consumed</td></tr>
+<tr><td><code>kernel.tool.duration</code></td><td>Histogram (s)</td><td><code>agent_name</code>, <code>tool_name</code></td><td>Per-tool execution duration</td></tr>
+<tr><td><code>kernel.event.processed</code></td><td>Counter</td><td><code>event_type</code></td><td>Events processed</td></tr>
+<tr><td><code>kernel.syscall.total</code></td><td>Counter</td><td><code>syscall_type</code></td><td>Syscalls executed</td></tr>
+<tr><td><code>kernel.message.inbound</code></td><td>Counter</td><td><code>channel_type</code></td><td>Inbound messages</td></tr>
+<tr><td><code>kernel.message.outbound</code></td><td>Counter</td><td><code>channel_type</code></td><td>Outbound messages</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="worker-metrics-meter-rara-worker"><a class="header" href="#worker-metrics-meter-rara-worker">Worker Metrics (meter: <code>rara-worker</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>worker.started</code></td><td>Counter</td><td><code>worker</code></td><td>Worker starts</td></tr>
+<tr><td><code>worker.stopped</code></td><td>Counter</td><td><code>worker</code></td><td>Worker stops</td></tr>
+<tr><td><code>worker.active</code></td><td>UpDownCounter</td><td><code>worker</code></td><td>Currently active workers</td></tr>
+<tr><td><code>worker.errors</code></td><td>Counter</td><td><code>worker</code></td><td>Total worker errors</td></tr>
+<tr><td><code>worker.start_errors</code></td><td>Counter</td><td><code>worker</code></td><td>Start failures</td></tr>
+<tr><td><code>worker.shutdown_errors</code></td><td>Counter</td><td><code>worker</code></td><td>Shutdown failures</td></tr>
+<tr><td><code>worker.executions</code></td><td>Counter</td><td><code>worker</code></td><td>Execution cycles</td></tr>
+<tr><td><code>worker.execution_errors</code></td><td>Counter</td><td><code>worker</code></td><td>Execution failures</td></tr>
+<tr><td><code>worker.execution.duration</code></td><td>Histogram (s)</td><td><code>worker</code></td><td>Execution cycle duration</td></tr>
+<tr><td><code>worker.paused</code></td><td>Counter</td><td><code>worker</code></td><td>Pause events</td></tr>
+<tr><td><code>worker.resumed</code></td><td>Counter</td><td><code>worker</code></td><td>Resume events</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="http-server-metrics-meter-rara-server"><a class="header" href="#http-server-metrics-meter-rara-server">HTTP Server Metrics (meter: <code>rara-server</code>)</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>http.server.request.duration</code></td><td>Histogram (s)</td><td><code>method</code>, <code>route</code>, <code>status</code></td><td>HTTP request duration</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tape-structured-event-log"><a class="header" href="#tape-structured-event-log">Tape (Structured Event Log)</a></h3>
+<p>In addition to OTel signals, Rara persists a complete event log to local JSONL files (the “tape”). Each tape entry includes typed metadata:</p>
+<ul>
+<li><strong>LLM calls</strong>: model, token usage, latency (<code>stream_ms</code>, <code>first_token_ms</code>), stop reason</li>
+<li><strong>Tool calls</strong>: per-tool <code>duration_ms</code>, success/failure, error messages</li>
+<li><strong>Messages</strong>: full request/response content</li>
+</ul>
+<p>Tape files are the single source of truth for conversation replay and post-hoc token analysis. See <code>crates/kernel/src/memory/</code> for details.</p>
+<h2 id="quick-start-local-setup-with-grafana-alloy"><a class="header" href="#quick-start-local-setup-with-grafana-alloy">Quick Start: Local Setup with Grafana Alloy</a></h2>
+<p>The simplest local setup uses <a href="https://grafana.com/docs/alloy/latest/">Grafana Alloy</a> as the OTLP receiver:</p>
+<h3 id="1-install-alloy"><a class="header" href="#1-install-alloy">1. Install Alloy</a></h3>
+<pre><code class="language-bash">brew install grafana/grafana/alloy    # macOS
 </code></pre>
-<p>The server will automatically start exporting traces and metrics to the configured OpenTelemetry collector.</p>
-<h2 id="kubernetes-integration"><a class="header" href="#kubernetes-integration">Kubernetes Integration</a></h2>
-<p>To integrate with the Kubernetes infrastructure described in the <code>k8s/</code> directory, you will need to deploy an OpenTelemetry collector to your cluster. The collector can be configured to export data to a variety of backends, such as Jaeger, Prometheus, or a cloud-based observability platform.</p>
-<p>Here is an example of a simple OpenTelemetry collector configuration that exports data to Jaeger:</p>
-<pre><code class="language-yaml">apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: otel-collector-conf
-  labels:
-    app: opentelemetry
-    component: otel-collector-conf
-data:
-  otel-collector-config: |
-    receivers:
-      otlp:
-        protocols:
-          grpc:
-          http:
+<h3 id="2-configure-alloy"><a class="header" href="#2-configure-alloy">2. Configure Alloy</a></h3>
+<p>Create <code>alloy-config.alloy</code>:</p>
+<pre><code class="language-hcl">otelcol.receiver.otlp "default" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
 
-    processors:
-      batch:
+  output {
+    traces  = [otelcol.exporter.otlphttp.tempo.input]
+    metrics = [otelcol.exporter.prometheus.default.input]
+  }
+}
 
-    exporters:
-      jaeger:
-        endpoint: jaeger-all-in-one:14250
-        tls:
-          insecure: true
+otelcol.exporter.otlphttp "tempo" {
+  client {
+    endpoint = "http://localhost:3200"
+  }
+}
 
-    service:
-      pipelines:
-        traces:
-          receivers: [otlp]
-          processors: [batch]
-          exporters: [jaeger]
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = "http://localhost:9009/api/v1/push"
+  }
+}
 </code></pre>
-<p>This configuration creates a ConfigMap that contains the OpenTelemetry collector configuration. The collector is configured to receive data over OTLP (gRPC and HTTP) and export it to a Jaeger instance running in the cluster.</p>
-<p>To deploy the collector, you can use the following Kubernetes manifest:</p>
-<pre><code class="language-yaml">apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: otel-collector
-  labels:
-    app: opentelemetry
-    component: otel-collector
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: opentelemetry
-      component: otel-collector
-  template:
-    metadata:
-      labels:
-        app: opentelemetry
-        component: otel-collector
-    spec:
-      containers:
-      - name: otel-collector
-        image: otel/opentelemetry-collector:0.84.0
-        command:
-          - "--config=/conf/otel-collector-config.yaml"
-        volumeMounts:
-        - name: otel-collector-config-vol
-          mountPath: /conf
-        ports:
-        - name: otlp-grpc
-          containerPort: 4317
-        - name: otlp-http
-          containerPort: 4318
-      volumes:
-        - name: otel-collector-config-vol
-          configMap:
-            name: otel-collector-conf
+<h3 id="3-configure-rara"><a class="header" href="#3-configure-rara">3. Configure Rara</a></h3>
+<pre><code class="language-yaml"># config.yaml
+telemetry:
+  otlp_endpoint: "http://localhost:4318"
+  otlp_protocol: "http"
 </code></pre>
-<p>This manifest creates a Deployment that runs the OpenTelemetry collector. The collector is configured to use the ConfigMap created in the previous step.</p>
-<p>Once the collector is deployed, you will need to configure the <code>job</code> server to export data to the collector. You can do this by setting the <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> environment variable to the address of the collector’s OTLP gRPC endpoint.</p>
-<p>For example, if the collector is running in the <code>default</code> namespace, you can set the environment variable to <code>http://otel-collector.default:4317</code>.</p>
+<h3 id="4-start"><a class="header" href="#4-start">4. Start</a></h3>
+<pre><code class="language-bash">alloy run alloy-config.alloy &amp;
+rara server
+</code></pre>
+<p>Traces and metrics will flow to your local Grafana stack. Import the dashboard from <code>deploy/grafana/rara-overview.json</code> for pre-built visualizations.</p>
 
                     </main>
 
