@@ -44,7 +44,7 @@ pub struct BashParams {
 }
 
 /// Typed result returned by the bash tool.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BashResult {
     /// Process exit code (-1 if failed to execute or timed out).
     pub exit_code: i32,

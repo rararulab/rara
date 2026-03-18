@@ -74,6 +74,10 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     /// Create a `ToolOutput` by serializing a typed result struct.
+    ///
+    /// The resulting `ToolOutput` has an empty `resources` list. Tools that
+    /// need to attach binary resources (e.g. screenshots) should use
+    /// `execute_fn` and construct `ToolOutput` directly instead.
     pub fn from_serialize<T: serde::Serialize>(val: &T) -> anyhow::Result<Self> {
         Ok(Self {
             json:      serde_json::to_value(val)?,

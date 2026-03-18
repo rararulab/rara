@@ -132,7 +132,7 @@ pub struct ReadFileParams {
 }
 
 /// Typed result returned by the read-file tool.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReadFileResult {
     /// File content with line number prefixes.
     pub content:     String,

@@ -154,6 +154,9 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             let typed: <Self as crate::tool::ToolExecute>::Params =
                 serde_json::from_value(params)
                     .map_err(|e| anyhow::anyhow!("invalid params for '{}': {e}", self.name()))?;
+            // Note: for `type Output = serde_json::Value` this clones the Value
+            // (serde_json::to_value on a Value is a clone). Acceptable tradeoff
+            // for uniform codegen; typed Output structs serialize exactly once.
             let output = crate::tool::ToolExecute::run(self, typed, context).await?;
             crate::tool::ToolOutput::from_serialize(&output)
         }
