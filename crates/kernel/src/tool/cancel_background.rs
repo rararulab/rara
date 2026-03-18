@@ -13,25 +13,30 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use serde_json::Value;
+use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use tracing::info;
 
 use crate::{
     handle::KernelHandle,
     io::{BackgroundTaskStatus, StreamEvent},
     session::{SessionKey, Signal},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute, ToolOutput},
 };
 
 /// Builtin tool that cancels a running background agent.
+#[derive(ToolDef)]
+#[tool(
+    name = "cancel-background",
+    description = "Cancel a running background task by task_id."
+)]
 pub struct CancelBackgroundTool {
     handle:      KernelHandle,
     session_key: SessionKey,
 }
 
 impl CancelBackgroundTool {
-    pub const NAME: &str = crate::tool_names::CANCEL_BACKGROUND;
-
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
         Self {
             handle,
@@ -40,35 +45,31 @@ impl CancelBackgroundTool {
     }
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CancelBackgroundParams {
+    /// The task_id returned by spawn_background
+    task_id: String,
+    /// Optional reason for cancellation
+    reason:  Option<String>,
+}
+
 #[async_trait]
-impl AgentTool for CancelBackgroundTool {
-    fn name(&self) -> &str { Self::NAME }
+impl ToolExecute for CancelBackgroundTool {
+    type Params = CancelBackgroundParams;
 
-    fn description(&self) -> &str { "Cancel a running background task by task_id." }
-
-    fn parameters_schema(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["task_id"],
-            "properties": {
-                "task_id": { "type": "string", "description": "The task_id returned by spawn_background" },
-                "reason": { "type": "string", "description": "Optional reason for cancellation" }
-            }
-        })
-    }
-
-    async fn execute(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let task_id_str = params["task_id"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: task_id"))?;
-        let task_id = SessionKey::try_from_raw(task_id_str)
-            .map_err(|_| anyhow::anyhow!("invalid task_id: {task_id_str}"))?;
-        let reason = params["reason"].as_str().unwrap_or("cancelled by parent");
+    async fn run(
+        &self,
+        p: CancelBackgroundParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<ToolOutput> {
+        let task_id = SessionKey::try_from_raw(&p.task_id)
+            .map_err(|_| anyhow::anyhow!("invalid task_id: {}", p.task_id))?;
+        let reason = p.reason.as_deref().unwrap_or("cancelled by parent");
 
         if !self.handle.is_background_task(&self.session_key, &task_id) {
             return Ok(serde_json::json!({
                 "error": "task not found or not a background task of this session",
-                "task_id": task_id_str,
+                "task_id": p.task_id,
             })
             .into());
         }
@@ -85,7 +86,7 @@ impl AgentTool for CancelBackgroundTool {
         if let Err(e) = self.handle.send_signal(task_id, Signal::Terminate) {
             return Ok(serde_json::json!({
                 "error": format!("failed to send terminate signal: {e}"),
-                "task_id": task_id_str,
+                "task_id": p.task_id,
             })
             .into());
         }
@@ -105,7 +106,7 @@ impl AgentTool for CancelBackgroundTool {
         );
 
         Ok(serde_json::json!({
-            "task_id": task_id_str,
+            "task_id": p.task_id,
             "status": "cancelled",
             "reason": reason,
         })

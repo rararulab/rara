@@ -43,7 +43,7 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -52,7 +52,7 @@ use crate::{
     handle::KernelHandle,
     io::AgentEvent,
     session::{SessionKey, Signal},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Maximum character length for the compressed result returned to the caller.
@@ -76,6 +76,15 @@ pub(crate) const FOLD_BRANCH_NAME_PREFIX: &str = "fold-branch-";
 /// completion the raw output is compressed via [`ContextFolder::fold_text`]
 /// (if it exceeds [`COMPACT_TARGET_CHARS`]) and returned as a JSON
 /// `ToolResult` to the parent's agent loop.
+#[derive(ToolDef)]
+#[tool(
+    name = "fold-branch",
+    description = "Spawn a child agent for a focused sub-task, wait for completion, and return a \
+                   compressed result. Use this when you need the result inline (synchronous). For \
+                   fire-and-forget tasks, use spawn-background instead.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct FoldBranchTool {
     handle:         KernelHandle,
     session_key:    SessionKey,
@@ -83,8 +92,6 @@ pub struct FoldBranchTool {
 }
 
 impl FoldBranchTool {
-    pub const NAME: &str = crate::tool_names::FOLD_BRANCH;
-
     pub fn new(
         handle: KernelHandle,
         session_key: SessionKey,
@@ -96,19 +103,8 @@ impl FoldBranchTool {
             context_folder,
         }
     }
-}
 
-#[async_trait]
-impl AgentTool for FoldBranchTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Spawn a child agent for a focused sub-task, wait for completion, and return a compressed \
-         result. Use this when you need the result inline (synchronous). For fire-and-forget \
-         tasks, use spawn-background instead."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         serde_json::json!({
             "type": "object",
             "required": ["task", "instruction"],
@@ -138,7 +134,7 @@ impl AgentTool for FoldBranchTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let task = params["task"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: task"))?

@@ -524,7 +524,7 @@ async fn create_plan_via_llm(
     if let Some(tool_call) = response
         .tool_calls
         .iter()
-        .find(|tc| tc.name == crate::tool::create_plan::CreatePlanTool::NAME)
+        .find(|tc| tc.name == crate::tool::create_plan::CreatePlanTool::TOOL_NAME)
     {
         let params: serde_json::Value =
             serde_json::from_str(&tool_call.arguments).map_err(|e| {
@@ -653,7 +653,7 @@ async fn replan_via_llm(
     if let Some(tool_call) = response
         .tool_calls
         .iter()
-        .find(|tc| tc.name == crate::tool::create_plan::CreatePlanTool::NAME)
+        .find(|tc| tc.name == crate::tool::create_plan::CreatePlanTool::TOOL_NAME)
     {
         let params: serde_json::Value =
             serde_json::from_str(&tool_call.arguments).map_err(|e| {

@@ -22,6 +22,8 @@
 //! - `schedule-list` — list all scheduled jobs across sessions
 
 use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -29,7 +31,7 @@ use tracing::debug;
 use crate::{
     event::{KernelEventEnvelope, Syscall},
     schedule::{JobId, Trigger},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{EmptyParams, ToolContext, ToolExecute, ToolOutput},
 };
 
 // -- shared helper ------------------------------------------------------------
@@ -74,60 +76,39 @@ async fn register_job(
 // ScheduleOnceTool
 // ============================================================================
 
+/// Tool for scheduling a one-shot future agent turn.
+#[derive(ToolDef)]
+#[tool(
+    name = "schedule-once",
+    description = "Schedule a one-shot future agent turn. `message` is the prompt that will be \
+                   sent to the LLM when the job fires, so write it like a user instruction and \
+                   name any required skills explicitly."
+)]
 pub struct ScheduleOnceTool;
 
-impl ScheduleOnceTool {
-    pub const NAME: &str = crate::tool_names::SCHEDULE_ONCE;
-}
-
-#[derive(Debug, Deserialize)]
-struct ScheduleOnceParams {
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleOnceParams {
+    /// Fire once after this many seconds
     after_seconds: u64,
+    /// Prompt for the future scheduled agent. This is sent to the LLM when the
+    /// job fires, so write it like a user instruction; if a skill should be
+    /// used, name it explicitly.
     message:       String,
+    /// Routing tags for task report notification matching
+    /// (e.g. `["pr_review", "repo:rararulab/rara"]`)
     #[serde(default)]
     tags:          Vec<String>,
 }
 
 #[async_trait]
-impl AgentTool for ScheduleOnceTool {
-    fn name(&self) -> &str { Self::NAME }
+impl ToolExecute for ScheduleOnceTool {
+    type Params = ScheduleOnceParams;
 
-    fn description(&self) -> &str {
-        "Schedule a one-shot future agent turn. `message` is the prompt that will be sent to the \
-         LLM when the job fires, so write it like a user instruction and name any required skills \
-         explicitly."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["after_seconds", "message"],
-            "properties": {
-                "after_seconds": {
-                    "type": "integer",
-                    "description": "Fire once after this many seconds"
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Prompt for the future scheduled agent. This is sent to the LLM when the job fires, so write it like a user instruction; if a skill should be used, name it explicitly."
-                },
-                "tags": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Routing tags for task report notification matching (e.g. [\"pr_review\", \"repo:rararulab/rara\"])"
-                }
-            }
-        })
-    }
-
-    async fn execute(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: ScheduleOnceParams,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let p: ScheduleOnceParams =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
         if p.after_seconds == 0 {
             return Err(anyhow::anyhow!("after_seconds must be > 0"));
         }
@@ -145,60 +126,39 @@ impl AgentTool for ScheduleOnceTool {
 // ScheduleIntervalTool
 // ============================================================================
 
+/// Tool for scheduling a repeating future agent turn.
+#[derive(ToolDef)]
+#[tool(
+    name = "schedule-interval",
+    description = "Schedule a repeating future agent turn. `message` is the prompt that will be \
+                   sent to the LLM each time the job fires, so write it like a user instruction \
+                   and name any required skills explicitly."
+)]
 pub struct ScheduleIntervalTool;
 
-impl ScheduleIntervalTool {
-    pub const NAME: &str = crate::tool_names::SCHEDULE_INTERVAL;
-}
-
-#[derive(Debug, Deserialize)]
-struct ScheduleIntervalParams {
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleIntervalParams {
+    /// Fire every N seconds (repeating)
     interval_seconds: u64,
+    /// Prompt for the future scheduled agent. This is sent to the LLM every
+    /// time the job fires, so write it like a user instruction; if a skill
+    /// should be used, name it explicitly.
     message:          String,
+    /// Routing tags for task report notification matching
+    /// (e.g. `["pr_review", "repo:rararulab/rara"]`)
     #[serde(default)]
     tags:             Vec<String>,
 }
 
 #[async_trait]
-impl AgentTool for ScheduleIntervalTool {
-    fn name(&self) -> &str { Self::NAME }
+impl ToolExecute for ScheduleIntervalTool {
+    type Params = ScheduleIntervalParams;
 
-    fn description(&self) -> &str {
-        "Schedule a repeating future agent turn. `message` is the prompt that will be sent to the \
-         LLM each time the job fires, so write it like a user instruction and name any required \
-         skills explicitly."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["interval_seconds", "message"],
-            "properties": {
-                "interval_seconds": {
-                    "type": "integer",
-                    "description": "Fire every N seconds (repeating)"
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Prompt for the future scheduled agent. This is sent to the LLM every time the job fires, so write it like a user instruction; if a skill should be used, name it explicitly."
-                },
-                "tags": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Routing tags for task report notification matching (e.g. [\"pr_review\", \"repo:rararulab/rara\"])"
-                }
-            }
-        })
-    }
-
-    async fn execute(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: ScheduleIntervalParams,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let p: ScheduleIntervalParams =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
         if p.interval_seconds == 0 {
             return Err(anyhow::anyhow!("interval_seconds must be > 0"));
         }
@@ -225,60 +185,41 @@ impl AgentTool for ScheduleIntervalTool {
 // ScheduleCronTool
 // ============================================================================
 
+/// Tool for scheduling a future agent turn using a cron expression.
+#[derive(ToolDef)]
+#[tool(
+    name = "schedule-cron",
+    description = "Schedule a future agent turn using a 6-field cron expression: 'sec min hour \
+                   day month weekday'. `message` is the prompt that will be sent to the LLM \
+                   whenever the job fires, so write it like a user instruction and name any \
+                   required skills explicitly."
+)]
 pub struct ScheduleCronTool;
 
-impl ScheduleCronTool {
-    pub const NAME: &str = crate::tool_names::SCHEDULE_CRON;
-}
-
-#[derive(Debug, Deserialize)]
-struct ScheduleCronParams {
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleCronParams {
+    /// 6-field cron expression: 'sec min hour day month weekday' (e.g. '0 0 9 *
+    /// * *' for daily at 9am UTC, '0 */5 * * * *' for every 5 minutes)
     cron:    String,
+    /// Prompt for the future scheduled agent. This is sent to the LLM whenever
+    /// the cron job fires, so write it like a user instruction; if a skill
+    /// should be used, name it explicitly.
     message: String,
+    /// Routing tags for task report notification matching
+    /// (e.g. `["pr_review", "repo:rararulab/rara"]`)
     #[serde(default)]
     tags:    Vec<String>,
 }
 
 #[async_trait]
-impl AgentTool for ScheduleCronTool {
-    fn name(&self) -> &str { Self::NAME }
+impl ToolExecute for ScheduleCronTool {
+    type Params = ScheduleCronParams;
 
-    fn description(&self) -> &str {
-        "Schedule a future agent turn using a 6-field cron expression: 'sec min hour day month \
-         weekday'. `message` is the prompt that will be sent to the LLM whenever the job fires, so \
-         write it like a user instruction and name any required skills explicitly."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["cron", "message"],
-            "properties": {
-                "cron": {
-                    "type": "string",
-                    "description": "6-field cron expression: 'sec min hour day month weekday' (e.g. '0 0 9 * * *' for daily at 9am UTC, '0 */5 * * * *' for every 5 minutes)"
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Prompt for the future scheduled agent. This is sent to the LLM whenever the cron job fires, so write it like a user instruction; if a skill should be used, name it explicitly."
-                },
-                "tags": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Routing tags for task report notification matching (e.g. [\"pr_review\", \"repo:rararulab/rara\"])"
-                }
-            }
-        })
-    }
-
-    async fn execute(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: ScheduleCronParams,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let p: ScheduleCronParams =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
         if p.cron.is_empty() {
             return Err(anyhow::anyhow!("cron expression must not be empty"));
         }
@@ -320,44 +261,28 @@ impl AgentTool for ScheduleCronTool {
 // ============================================================================
 
 /// Tool for removing a scheduled task by ID.
+#[derive(ToolDef)]
+#[tool(
+    name = "schedule-remove",
+    description = "Remove a previously scheduled task by its job ID."
+)]
 pub struct ScheduleRemoveTool;
 
-impl ScheduleRemoveTool {
-    pub const NAME: &str = crate::tool_names::SCHEDULE_REMOVE;
-}
-
-#[derive(Debug, Deserialize)]
-struct ScheduleRemoveParams {
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleRemoveParams {
+    /// The ID of the job to remove
     job_id: String,
 }
 
 #[async_trait]
-impl AgentTool for ScheduleRemoveTool {
-    fn name(&self) -> &str { Self::NAME }
+impl ToolExecute for ScheduleRemoveTool {
+    type Params = ScheduleRemoveParams;
 
-    fn description(&self) -> &str { "Remove a previously scheduled task by its job ID." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["job_id"],
-            "properties": {
-                "job_id": {
-                    "type": "string",
-                    "description": "The ID of the job to remove"
-                }
-            }
-        })
-    }
-
-    async fn execute(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: ScheduleRemoveParams,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let p: ScheduleRemoveParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid schedule-remove params: {e}"))?;
-
         let event_queue = &context.event_queue;
         let session_key = context.session_key;
 
@@ -386,30 +311,18 @@ impl AgentTool for ScheduleRemoveTool {
 // ============================================================================
 
 /// Tool for listing all scheduled tasks across sessions.
+#[derive(ToolDef)]
+#[tool(
+    name = "schedule-list",
+    description = "List all scheduled tasks across sessions."
+)]
 pub struct ScheduleListTool;
 
-impl ScheduleListTool {
-    pub const NAME: &str = crate::tool_names::SCHEDULE_LIST;
-}
-
 #[async_trait]
-impl AgentTool for ScheduleListTool {
-    fn name(&self) -> &str { Self::NAME }
+impl ToolExecute for ScheduleListTool {
+    type Params = EmptyParams;
 
-    fn description(&self) -> &str { "List all scheduled tasks across sessions." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
-
-    async fn execute(
-        &self,
-        _params: serde_json::Value,
-        context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, _p: EmptyParams, context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let event_queue = &context.event_queue;
         let session_key = context.session_key;
 
