@@ -14,20 +14,37 @@
 
 //! Mita-exclusive tool for distilling accumulated user notes into a compact
 //! anchor summary.
-//!
-//! When a user tape has accumulated many notes, Mita can use this tool to
-//! condense them into a single distillation anchor.  After distillation, only
-//! the summary and notes written after the anchor will appear in the user's
-//! LLM context window.
 
+use async_trait::async_trait;
 use rara_kernel::{
     memory::{HandoffState, TapeService},
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use super::notify::push_notification;
+
+/// Input parameters for the distill-user-notes tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DistillUserNotesParams {
+    /// The user identifier whose notes to distill.
+    user_id: String,
+    /// The distilled summary of all accumulated knowledge about this user.
+    summary: String,
+}
+
+/// Typed result returned by the distill-user-notes tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct DistillUserNotesResult {
+    /// Operation status.
+    pub status:  String,
+    /// User identifier.
+    pub user_id: String,
+    /// Human-readable confirmation message.
+    pub message: String,
+}
 
 /// Mita-exclusive tool: distill accumulated user notes into a compact anchor.
 #[derive(ToolDef)]
@@ -44,9 +61,7 @@ use super::notify::push_notification;
                    areas\n\nRules:\n- Preserve all valid information from the previous anchor \
                    summary\n- When information conflicts, prefer the most recent note and note \
                    the change\n- Remove completed TODOs and outdated information\n- Omit sections \
-                   with no information",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   with no information"
 )]
 pub struct DistillUserNotesTool {
     tape_service: TapeService,
@@ -54,49 +69,29 @@ pub struct DistillUserNotesTool {
 
 impl DistillUserNotesTool {
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "user_id": {
-                    "type": "string",
-                    "description": "The user identifier whose notes to distill"
-                },
-                "summary": {
-                    "type": "string",
-                    "description": "The distilled summary of all accumulated knowledge about this user"
-                }
-            },
-            "required": ["user_id", "summary"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for DistillUserNotesTool {
+    type Output = DistillUserNotesResult;
+    type Params = DistillUserNotesParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: DistillUserNotesParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let user_id = params
-            .get("user_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: user_id"))?;
-        let summary = params
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: summary"))?;
-
-        if user_id.trim().is_empty() {
+    ) -> anyhow::Result<DistillUserNotesResult> {
+        if params.user_id.trim().is_empty() {
             anyhow::bail!("user_id must not be empty");
         }
-        if summary.trim().is_empty() {
+        if params.summary.trim().is_empty() {
             anyhow::bail!("summary must not be empty");
         }
 
-        let user_tape = rara_kernel::memory::user_tape_name(user_id);
+        let user_tape = rara_kernel::memory::user_tape_name(&params.user_id);
 
         let handoff_state = HandoffState {
-            summary: Some(summary.to_string()),
+            summary: Some(params.summary),
             owner: Some("mita".into()),
             ..Default::default()
         };
@@ -108,14 +103,19 @@ impl DistillUserNotesTool {
 
         push_notification(
             context,
-            format!("\u{1f5dc}\u{fe0f} User notes distilled for {user_id}"),
+            format!(
+                "\u{1f5dc}\u{fe0f} User notes distilled for {}",
+                params.user_id
+            ),
         );
 
-        Ok(json!({
-            "status": "ok",
-            "user_id": user_id,
-            "message": format!("User notes distilled for '{user_id}'. New anchor created.")
+        Ok(DistillUserNotesResult {
+            status:  "ok".to_owned(),
+            user_id: params.user_id.clone(),
+            message: format!(
+                "User notes distilled for '{}'. New anchor created.",
+                params.user_id
+            ),
         })
-        .into())
     }
 }

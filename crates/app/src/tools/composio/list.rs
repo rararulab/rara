@@ -1,8 +1,20 @@
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 use super::shared::ComposioShared;
+
+/// Input parameters for the composio_list tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ComposioListParams {
+    /// App/toolkit to filter by, e.g. 'gmail', 'notion', 'github', 'slack'.
+    app:   Option<String>,
+    /// Search keyword to filter actions by name or description.
+    query: Option<String>,
+}
 
 /// List available Composio actions, optionally filtered by app and search
 /// query.
@@ -10,9 +22,7 @@ use super::shared::ComposioShared;
 #[tool(
     name = "composio_list",
     description = "List available actions/tools on Composio. Filter by app name (e.g. 'gmail', \
-                   'notion', 'github') and/or search query to find specific actions.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   'notion', 'github') and/or search query to find specific actions."
 )]
 pub(super) struct ComposioListTool {
     shared: ComposioShared,
@@ -20,35 +30,21 @@ pub(super) struct ComposioListTool {
 
 impl ComposioListTool {
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "app": {
-                    "type": "string",
-                    "description": "App/toolkit to filter by, e.g. 'gmail', 'notion', 'github', 'slack'"
-                },
-                "query": {
-                    "type": "string",
-                    "description": "Search keyword to filter actions by name or description"
-                }
-            }
-        })
-    }
+#[async_trait]
+impl ToolExecute for ComposioListTool {
+    type Output = Value;
+    type Params = ComposioListParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: ComposioListParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let app = params.get("app").and_then(|v| v.as_str());
-        let query = params
-            .get("query")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_lowercase());
+    ) -> anyhow::Result<Value> {
+        let query = params.query.as_deref().map(|s| s.trim().to_lowercase());
 
-        match self.shared.client.list_actions(app).await {
+        match self.shared.client.list_actions(params.app.as_deref()).await {
             Ok(mut actions) => {
                 // Client-side query filter when provided
                 if let Some(ref q) = query {
@@ -62,10 +58,9 @@ impl ComposioListTool {
                 Ok(json!({
                     "total": actions.len(),
                     "actions": actions,
-                })
-                .into())
+                }))
             }
-            Err(error) => Ok(json!({ "error": format!("failed to list actions: {error}") }).into()),
+            Err(error) => Ok(json!({ "error": format!("failed to list actions: {error}") })),
         }
     }
 }

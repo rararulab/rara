@@ -16,17 +16,29 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use rara_kernel::{
     handle::KernelHandle,
     memory::TapeService,
     session::SessionKey,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
 use super::notify::push_notification;
+
+/// Input parameters for the dispatch-rara tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DispatchRaraParams {
+    /// The target session key where Rara should act.
+    session_id:  String,
+    /// Specific instruction for Rara.
+    instruction: String,
+}
 
 /// Mita tool that dispatches an instruction to Rara for a given session.
 ///
@@ -41,9 +53,7 @@ use super::notify::push_notification;
     description = "Dispatch a proactive instruction to Rara for a specific session. Rara will \
                    receive the instruction as a system-level directive and generate an \
                    appropriate response to the user. Use this when you determine a user needs \
-                   proactive attention.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   proactive attention."
 )]
 pub struct DispatchRaraTool {
     kernel_handle: Arc<RwLock<Option<KernelHandle>>>,
@@ -65,51 +75,29 @@ impl DispatchRaraTool {
     pub fn handle_ref(&self) -> Arc<RwLock<Option<KernelHandle>>> {
         Arc::clone(&self.kernel_handle)
     }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "The target session key where Rara should act"
-                },
-                "instruction": {
-                    "type": "string",
-                    "description": "Specific instruction for Rara (e.g., 'Follow up on the deadline the user mentioned for their project report')"
-                }
-            },
-            "required": ["session_id", "instruction"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for DispatchRaraTool {
+    type Output = Value;
+    type Params = DispatchRaraParams;
 
-    async fn exec(&self, params: Value, ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let session_id_str = params
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: session_id"))?;
-
-        let instruction = params
-            .get("instruction")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: instruction"))?;
-
+    async fn run(&self, params: DispatchRaraParams, ctx: &ToolContext) -> anyhow::Result<Value> {
         let handle = self.kernel_handle.read().await;
         let handle = handle
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("kernel handle not yet available"))?;
 
-        let session_key = SessionKey::try_from_raw(session_id_str)
-            .map_err(|_| anyhow::anyhow!("invalid session key: {session_id_str}"))?;
+        let session_key = SessionKey::try_from_raw(&params.session_id)
+            .map_err(|_| anyhow::anyhow!("invalid session key: {}", params.session_id))?;
 
         // Verify target session is alive before recording dispatch.
         if !handle.process_table().contains(&session_key) {
             return Ok(json!({
                 "status": "error",
-                "target_session": session_id_str,
-                "message": format!("Target session '{session_id_str}' is not active. Dispatch skipped.")
-            })
-            .into());
+                "target_session": params.session_id,
+                "message": format!("Target session '{}' is not active. Dispatch skipped.", params.session_id)
+            }));
         }
 
         // Record the dispatch in Mita's tape for future reference (avoid repeats).
@@ -119,30 +107,35 @@ impl DispatchRaraTool {
                 mita_tape,
                 "dispatch-rara",
                 json!({
-                    "target_session": session_id_str,
-                    "instruction": instruction,
+                    "target_session": params.session_id,
+                    "instruction": params.instruction,
                 }),
             )
             .await
             .map_err(|e| anyhow::anyhow!("failed to record dispatch event: {e}"))?;
 
         handle
-            .dispatch_directive(session_key, instruction.to_string())
+            .dispatch_directive(session_key, params.instruction.clone())
             .map_err(|e| {
-                anyhow::anyhow!("failed to dispatch directive to session '{session_id_str}': {e}")
+                anyhow::anyhow!(
+                    "failed to dispatch directive to session '{}': {e}",
+                    params.session_id
+                )
             })?;
 
         push_notification(
             ctx,
-            format!("\u{1f4e8} Mita \u{2192} Rara [{session_id_str}]: {instruction}"),
+            format!(
+                "\u{1f4e8} Mita \u{2192} Rara [{}]: {}",
+                params.session_id, params.instruction
+            ),
         );
 
         Ok(json!({
             "status": "dispatched",
-            "target_session": session_id_str,
-            "instruction": instruction,
-            "message": format!("Instruction dispatched to Rara in session '{session_id_str}'.")
-        })
-        .into())
+            "target_session": params.session_id,
+            "instruction": params.instruction,
+            "message": format!("Instruction dispatched to Rara in session '{}'.", params.session_id)
+        }))
     }
 }

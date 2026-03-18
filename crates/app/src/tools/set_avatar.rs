@@ -16,93 +16,69 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetAvatarParams {
+    /// Image filename in the images directory (e.g. 'avatar.jpg').
+    filename: String,
+}
 
 /// Change the Telegram bot's profile photo from the images directory.
 #[derive(ToolDef)]
 #[tool(
     name = "set-avatar",
     description = "Change the Telegram bot's profile photo. The image file must be placed in the \
-                   images directory beforehand. Use a filename relative to the images directory.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   images directory beforehand. Use a filename relative to the images directory."
 )]
 pub struct SetAvatarTool {
     settings: Arc<dyn SettingsProvider>,
 }
-
 impl SetAvatarTool {
     pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "filename": {
-                    "type": "string",
-                    "description": "Image filename in the images directory (e.g. 'avatar.jpg')"
-                }
-            },
-            "required": ["filename"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for SetAvatarTool {
+    type Output = Value;
+    type Params = SetAvatarParams;
 
-    async fn exec(
-        &self,
-        params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let filename = params
-            .get("filename")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: filename"))?;
-
-        // Validate extension.
-        let ext = std::path::Path::new(filename)
+    async fn run(&self, params: SetAvatarParams, _context: &ToolContext) -> anyhow::Result<Value> {
+        let ext = std::path::Path::new(&params.filename)
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .unwrap_or_default();
-
         let mime = match ext.as_str() {
             "jpg" | "jpeg" => "image/jpeg",
             "png" => "image/png",
             _ => {
-                return Ok(json!({
-                    "error": "unsupported image format; only jpg, jpeg, and png are allowed"
-                })
-                .into());
+                return Ok(
+                    serde_json::json!({"error": "unsupported image format; only jpg, jpeg, and png are allowed"}),
+                );
             }
         };
-
-        // Resolve full path.
-        let path = rara_paths::images_dir().join(filename);
+        let path = rara_paths::images_dir().join(&params.filename);
         if !path.is_file() {
-            return Ok(json!({
-                "error": format!("file not found: {}", path.display())
-            })
-            .into());
+            return Ok(serde_json::json!({"error": format!("file not found: {}", path.display())}));
         }
-
-        // Read image bytes.
         let data = tokio::fs::read(&path)
             .await
             .map_err(|e| anyhow::anyhow!("failed to read file '{}': {e}", path.display()))?;
-
-        // Read bot token from settings.
         let token = self
             .settings
             .get(keys::TELEGRAM_BOT_TOKEN)
             .await
             .ok_or_else(|| anyhow::anyhow!("telegram.bot_token not configured"))?;
-
-        // Build multipart form for Telegram setMyProfilePhoto API.
         let url = format!("https://api.telegram.org/bot{token}/setMyProfilePhoto");
         let photo_part = reqwest::multipart::Part::bytes(data)
-            .file_name(filename.to_string())
+            .file_name(params.filename.clone())
             .mime_str(mime)?;
         let form = reqwest::multipart::Form::new()
             .text(
@@ -110,7 +86,6 @@ impl SetAvatarTool {
                 r#"{"type":"static","photo":"attach://photo_file"}"#,
             )
             .part("photo_file", photo_part);
-
         let client = reqwest::Client::new();
         let resp = client
             .post(&url)
@@ -118,30 +93,21 @@ impl SetAvatarTool {
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("telegram API request failed: {e}"))?;
-
         let status = resp.status();
-        let body: serde_json::Value = resp
+        let body: Value = resp
             .json()
             .await
             .map_err(|e| anyhow::anyhow!("failed to parse telegram response: {e}"))?;
-
         if status.is_success() && body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-            tracing::info!(filename = %filename, "bot profile photo updated");
-            Ok(json!({
-                "status": "updated",
-                "filename": filename,
-            })
-            .into())
+            tracing::info!(filename = %params.filename, "bot profile photo updated");
+            Ok(serde_json::json!({"status": "updated", "filename": params.filename}))
         } else {
             let description = body
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown error");
-            tracing::error!(filename = %filename, error = %description, "failed to set profile photo");
-            Ok(json!({
-                "error": format!("telegram API error: {description}"),
-            })
-            .into())
+            tracing::error!(filename = %params.filename, error = %description, "failed to set profile photo");
+            Ok(serde_json::json!({"error": format!("telegram API error: {description}")}))
         }
     }
 }

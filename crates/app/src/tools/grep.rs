@@ -19,9 +19,11 @@
 //! not installed.
 
 use anyhow::{Context, bail};
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -29,89 +31,75 @@ const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 /// Maximum number of matches to return.
 const MAX_MATCHES: usize = 100;
 
+/// Input parameters for the grep tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GrepParams {
+    /// Regex pattern to search for.
+    pattern:     String,
+    /// File or directory to search in (default '.').
+    path:        Option<String>,
+    /// Glob pattern to filter files (e.g. '*.rs', '*.{ts,tsx}').
+    glob:        Option<String>,
+    /// Number of context lines to show around each match (default 0).
+    context:     Option<u64>,
+    /// Enable case-insensitive search (default false).
+    ignore_case: Option<bool>,
+}
+
+/// Typed result returned by the grep tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct GrepResult {
+    /// Matching lines output.
+    pub matches:     String,
+    /// Number of matching lines.
+    pub match_count: usize,
+    /// Whether the output was truncated.
+    pub truncated:   bool,
+}
+
 /// Layer 1 primitive: regex search across files.
 #[derive(ToolDef)]
 #[tool(
     name = "grep",
     description = "Search file contents using a regex pattern via ripgrep (rg). Supports file \
                    type filtering with glob patterns, context lines, and case-insensitive search. \
-                   Output is truncated to 50KB / 100 matches.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   Output is truncated to 50KB / 100 matches."
 )]
 pub struct GrepTool;
 
 impl GrepTool {
     pub fn new() -> Self { Self }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regex pattern to search for"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "File or directory to search in (default '.')"
-                },
-                "glob": {
-                    "type": "string",
-                    "description": "Glob pattern to filter files (e.g. '*.rs', '*.{ts,tsx}')"
-                },
-                "context": {
-                    "type": "number",
-                    "description": "Number of context lines to show around each match (default 0)"
-                },
-                "ignore_case": {
-                    "type": "boolean",
-                    "description": "Enable case-insensitive search (default false)"
-                }
-            },
-            "required": ["pattern"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for GrepTool {
+    type Output = GrepResult;
+    type Params = GrepParams;
 
-    async fn exec(
-        &self,
-        params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let pattern = params
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: pattern"))?;
-
+    async fn run(&self, params: GrepParams, _context: &ToolContext) -> anyhow::Result<GrepResult> {
         let workspace = rara_paths::workspace_dir();
-        let raw_path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let raw_path = params.path.as_deref().unwrap_or(".");
         let resolved = if std::path::Path::new(raw_path).is_absolute() {
             std::path::PathBuf::from(raw_path)
         } else {
             workspace.join(raw_path)
         };
         let path = resolved.to_str().unwrap_or(".");
+        let ignore_case = params.ignore_case.unwrap_or(false);
+        let context_lines = params.context.unwrap_or(0);
 
-        let glob_filter = params.get("glob").and_then(|v| v.as_str());
-
-        let context = params.get("context").and_then(|v| v.as_u64()).unwrap_or(0);
-
-        let ignore_case = params
-            .get("ignore_case")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // Try ripgrep first, fall back to grep.
-        let result = try_ripgrep(pattern, path, glob_filter, context, ignore_case).await;
+        let result = try_ripgrep(
+            &params.pattern,
+            path,
+            params.glob.as_deref(),
+            context_lines,
+            ignore_case,
+        )
+        .await;
 
         match result {
-            Ok(output) => Ok(output.into()),
-            Err(_) => {
-                // Fallback to grep -rn.
-                try_grep_fallback(pattern, path, ignore_case)
-                    .await
-                    .map(Into::into)
-            }
+            Ok(output) => Ok(output),
+            Err(_) => try_grep_fallback(&params.pattern, path, ignore_case).await,
         }
     }
 }
@@ -122,37 +110,29 @@ async fn try_ripgrep(
     glob_filter: Option<&str>,
     context: u64,
     ignore_case: bool,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<GrepResult> {
     let mut cmd = tokio::process::Command::new("rg");
-    cmd.arg("-n"); // line numbers
-    cmd.arg("--max-count").arg(MAX_MATCHES.to_string());
-
+    cmd.arg("-n")
+        .arg("--max-count")
+        .arg(MAX_MATCHES.to_string());
     if ignore_case {
         cmd.arg("-i");
     }
-
     if context > 0 {
         cmd.arg("-C").arg(context.to_string());
     }
-
     if let Some(g) = glob_filter {
         cmd.arg("--glob").arg(g);
     }
-
     cmd.arg("--").arg(pattern).arg(path);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
-
     let output = cmd.output().await.context("failed to run rg")?;
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // rg returns exit code 1 when no matches found, which is fine.
     if output.status.code() == Some(2) {
         bail!("rg error: {stderr}");
     }
-
     format_grep_output(&stdout)
 }
 
@@ -160,29 +140,24 @@ async fn try_grep_fallback(
     pattern: &str,
     path: &str,
     ignore_case: bool,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<GrepResult> {
     let mut cmd = tokio::process::Command::new("grep");
     cmd.arg("-rn");
-
     if ignore_case {
         cmd.arg("-i");
     }
-
     cmd.arg("--").arg(pattern).arg(path);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
-
     let output = cmd.output().await.context("failed to run grep")?;
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     format_grep_output(&stdout)
 }
 
-fn format_grep_output(stdout: &str) -> anyhow::Result<serde_json::Value> {
+fn format_grep_output(stdout: &str) -> anyhow::Result<GrepResult> {
     let lines: Vec<&str> = stdout.lines().collect();
     let match_count = lines.len();
     let mut truncated = false;
-
     let output = if stdout.len() > MAX_OUTPUT_BYTES {
         truncated = true;
         let safe_end = stdout.floor_char_boundary(MAX_OUTPUT_BYTES);
@@ -190,14 +165,12 @@ fn format_grep_output(stdout: &str) -> anyhow::Result<serde_json::Value> {
     } else {
         stdout.to_owned()
     };
-
     if match_count > MAX_MATCHES {
         truncated = true;
     }
-
-    Ok(json!({
-        "matches": output,
-        "match_count": match_count,
-        "truncated": truncated,
-    }))
+    Ok(GrepResult {
+        matches: output,
+        match_count,
+        truncated,
+    })
 }
