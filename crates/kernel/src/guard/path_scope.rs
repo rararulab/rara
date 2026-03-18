@@ -17,6 +17,14 @@
 //! Ensures that file-manipulating tools (read, write, edit, grep, etc.) only
 //! operate within the configured workspace root or explicitly whitelisted
 //! paths. Paths outside scope are blocked and routed to human approval.
+//!
+//! # Scope
+//!
+//! This guard only intercepts **structured file-access tools** (read-file,
+//! write-file, etc.). It does **not** inspect `bash` / `shell_exec` commands,
+//! so a `cat /etc/passwd` via bash bypasses this layer entirely. Shell tools
+//! are gated by Layers 1–2 (taint + pattern) and the approval policy instead.
+//! Defense-in-depth means no single layer is expected to catch everything.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -40,11 +48,11 @@ pub const PATH_TOOLS: &[&str] = &["grep", "list-directory", "find-files"];
 ///
 /// # Security Limitations
 ///
-/// This guard uses **lexical** path normalization (no filesystem access).
-/// Symlinks inside the workspace pointing to external paths will not be
-/// detected. If the threat model includes symlink-based escapes, consider
-/// adding an optional `std::fs::canonicalize` pass for paths that exist on
-/// disk (tracked as a follow-up).
+/// - **Symlinks**: This guard uses **lexical** path normalization (no
+///   filesystem access). Symlinks inside the workspace pointing to external
+///   paths will not be detected (tracked in issue #584).
+/// - **Case sensitivity**: On macOS/Windows (case-insensitive filesystems),
+///   path comparison is lowercased to prevent case-variant bypasses.
 pub struct PathScopeGuard {
     workspace: PathBuf,
     whitelist: Vec<PathBuf>,
@@ -80,8 +88,16 @@ impl PathScopeGuard {
 
         let raw_path = match args.get(param_name).and_then(|v| v.as_str()) {
             Some(p) => p,
-            // Missing path arg — let the tool itself handle validation.
-            None => return None,
+            None => {
+                // Missing or non-string path arg — let the tool itself handle
+                // validation. Log a warning so this is visible in traces.
+                tracing::warn!(
+                    tool = tool_name,
+                    param = param_name,
+                    "path-scope guard: file tool missing expected path param"
+                );
+                return None;
+            }
         };
 
         let resolved = if Path::new(raw_path).is_absolute() {
@@ -99,12 +115,12 @@ impl PathScopeGuard {
             "path-scope guard checking file access"
         );
 
-        if resolved.starts_with(&self.workspace) {
+        if path_starts_with(&resolved, &self.workspace) {
             return None;
         }
 
         for allowed in &self.whitelist {
-            if resolved.starts_with(allowed) {
+            if path_starts_with(&resolved, allowed) {
                 return None;
             }
         }
@@ -117,10 +133,35 @@ impl PathScopeGuard {
     }
 }
 
+/// Case-aware `starts_with` check.
+///
+/// On case-insensitive filesystems (macOS, Windows) this lowercases both paths
+/// before comparison to prevent bypasses like `/Users/Ryan/..` vs
+/// `/Users/ryan/..`. On Linux, uses the standard component-aware comparison.
+fn path_starts_with(path: &Path, base: &Path) -> bool {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        // Lowercase both sides and compare component-by-component.
+        let path_lower = PathBuf::from(path.to_string_lossy().to_lowercase());
+        let base_lower = PathBuf::from(base.to_string_lossy().to_lowercase());
+        path_lower.starts_with(&base_lower)
+    } else {
+        path.starts_with(base)
+    }
+}
+
 /// Normalize a path lexically by resolving `.` and `..` components without
 /// touching the filesystem. This is intentional — the guard must work on paths
 /// that may not yet exist.
+///
+/// Expects an **absolute** path. For relative paths, `..` components that
+/// escape the root are preserved as-is, which is likely not what you want.
+/// Callers should join relative paths to an absolute root before calling this.
 pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+    debug_assert!(
+        path.is_absolute(),
+        "normalize_path expects absolute paths, got: {}",
+        path.display()
+    );
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -190,10 +231,10 @@ mod tests {
     }
 
     #[test]
-    fn normalize_relative_path() {
+    fn normalize_absolute_with_multiple_dotdot() {
         assert_eq!(
-            normalize_path(Path::new("src/../lib.rs")),
-            PathBuf::from("lib.rs")
+            normalize_path(Path::new("/a/b/c/../../d")),
+            PathBuf::from("/a/d")
         );
     }
 
@@ -335,6 +376,23 @@ mod tests {
         // because `starts_with` on `PathBuf` checks component boundaries.
         let g = guard();
         let args = json!({"file_path": "/home/user/project-evil/exploit.sh"});
+        assert!(g.check("read-file", &args).is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn case_variant_inside_workspace_passes() {
+        // macOS is case-insensitive: /Home/User/Project == /home/user/project
+        let g = guard();
+        let args = json!({"file_path": "/Home/User/Project/src/main.rs"});
+        assert_eq!(g.check("read-file", &args), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn case_variant_outside_workspace_blocked() {
+        let g = guard();
+        let args = json!({"file_path": "/Home/User/OTHER/secret.txt"});
         assert!(g.check("read-file", &args).is_some());
     }
 
