@@ -134,6 +134,7 @@ members = [
     "crates/symphony",
     "crates/rara-vault",
     "crates/rara-dock",
+    "crates/rara-acp",
 ]
 
 [workspace.dependencies]
@@ -238,6 +239,7 @@ common-telemetry = { path = "crates/common/telemetry" }
 common-worker = { path = "crates/common/worker" }
 crawl4ai = { path = "crates/common/crawl4ai" }
 
+rara-acp = { path = "crates/rara-acp" }
 rara-agents = { path = "crates/agents" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
