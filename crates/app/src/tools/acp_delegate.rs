@@ -21,15 +21,88 @@
 
 use std::{future::Future, path::PathBuf, pin::Pin};
 
+use async_trait::async_trait;
 use rara_acp::{
     AcpThread, PermissionRequestInfo, RequestPermissionOutcome, SelectedPermissionOutcome,
     events::{AcpEvent, StopReason, ToolCallStatus},
     registry::AcpRegistryRef,
 };
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+
+/// Parameters for delegating a task to an ACP agent.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AcpDelegateParams {
+    /// Name of the ACP agent to delegate to (e.g. 'claude', 'codex', 'gemini',
+    /// or any custom agent).
+    agent:  String,
+    /// The task instruction to send to the agent.
+    prompt: String,
+    /// Working directory for the agent subprocess (defaults to workspace root).
+    cwd:    Option<String>,
+}
+
+/// A tool call event from the delegated agent.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolCallEvent {
+    /// The agent started a new tool call.
+    Started { id: String, title: String },
+    /// A progress or completion update for an in-flight tool call.
+    Updated {
+        id:     String,
+        status: DelegateToolCallStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+}
+
+/// Status of a tool call within a delegated agent session.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateToolCallStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+/// File operation performed by the delegated agent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateFileOp {
+    Read,
+    Write,
+}
+
+/// Summary of a file access by the delegated agent.
+#[derive(Debug, Serialize)]
+pub struct FileAccessSummary {
+    path:      String,
+    operation: DelegateFileOp,
+}
+
+/// Why the delegated agent stopped.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateStopReason {
+    EndTurn,
+    MaxTokens,
+    Refusal,
+    Cancelled,
+    Error,
+}
+
+/// Result of an ACP delegation.
+#[derive(Debug, Serialize)]
+pub struct AcpDelegateResult {
+    text:           String,
+    stop_reason:    DelegateStopReason,
+    tool_calls:     Vec<ToolCallEvent>,
+    files_accessed: Vec<FileAccessSummary>,
+}
 
 /// Tool that delegates a task to an external coding agent via ACP.
 ///
@@ -43,9 +116,7 @@ use tracing::{debug, warn};
     name = "acp-delegate",
     description = "Delegate a task to an external coding agent via the Agent Communication \
                    Protocol. The agent runs as a subprocess, executes the prompt, and returns its \
-                   text output and tool call summary. Use list-acp-agents to see available agents.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   text output and tool call summary. Use list-acp-agents to see available agents."
 )]
 pub struct AcpDelegateTool {
     registry: AcpRegistryRef,
@@ -54,82 +125,56 @@ pub struct AcpDelegateTool {
 impl AcpDelegateTool {
     /// Create a new instance backed by the given agent registry.
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "agent": {
-                    "type": "string",
-                    "description": "Name of the ACP agent to delegate to (e.g. 'claude', 'codex', 'gemini', or any custom agent)"
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "The task instruction to send to the agent"
-                },
-                "cwd": {
-                    "type": "string",
-                    "description": "Working directory for the agent subprocess (defaults to workspace root)"
-                }
-            },
-            "required": ["agent", "prompt"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for AcpDelegateTool {
+    type Output = AcpDelegateResult;
+    type Params = AcpDelegateParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: AcpDelegateParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let agent_name = params
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: agent"))?;
-
-        let prompt = params
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: prompt"))?;
-
+    ) -> anyhow::Result<AcpDelegateResult> {
         let cwd = params
-            .get("cwd")
-            .and_then(|v| v.as_str())
+            .cwd
             .map(PathBuf::from)
             .unwrap_or_else(|| rara_paths::workspace_dir().clone());
 
         // Resolve agent from registry.
         let config = self
             .registry
-            .get(agent_name)
+            .get(&params.agent)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to look up agent '{agent_name}': {e}"))?
+            .map_err(|e| anyhow::anyhow!("failed to look up agent '{}': {e}", params.agent))?
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown ACP agent '{agent_name}'. Use list-acp-agents to see available \
-                     agents."
+                    "unknown ACP agent '{}'. Use list-acp-agents to see available agents.",
+                    params.agent
                 )
             })?;
 
         if !config.enabled {
-            return Err(anyhow::anyhow!("ACP agent '{agent_name}' is disabled"));
+            return Err(anyhow::anyhow!("ACP agent '{}' is disabled", params.agent));
         }
 
         let command = config.to_agent_command();
 
         // Spawn the AcpThread — handles subprocess, handshake, and session
         // creation internally.
-        let mut thread = AcpThread::spawn(agent_name, command, cwd)
+        let mut thread = AcpThread::spawn(&params.agent, command, cwd)
             .await
             .map_err(|e| anyhow::anyhow!("ACP spawn failed: {e}"))?;
 
         // Collect streaming events into structured output.
         let mut text_chunks: Vec<String> = Vec::new();
-        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-        let mut files_accessed: Vec<serde_json::Value> = Vec::new();
+        let mut tool_calls: Vec<ToolCallEvent> = Vec::new();
+        let mut files_accessed: Vec<FileAccessSummary> = Vec::new();
 
         let stop_reason = thread
             .prompt(
-                prompt,
+                &params.prompt,
                 |event| {
                     collect_event(
                         event,
@@ -151,22 +196,20 @@ impl AcpDelegateTool {
             warn!(error = %e, "ACP shutdown error (non-fatal)");
         }
 
-        let stop_reason_str = match &stop_reason {
-            StopReason::EndTurn => "end_turn",
-            StopReason::MaxTokens => "max_tokens",
-            StopReason::Refusal => "refusal",
-            StopReason::Cancelled => "cancelled",
-            StopReason::Error(_) => "error",
+        let delegate_stop = match &stop_reason {
+            StopReason::EndTurn => DelegateStopReason::EndTurn,
+            StopReason::MaxTokens => DelegateStopReason::MaxTokens,
+            StopReason::Refusal => DelegateStopReason::Refusal,
+            StopReason::Cancelled => DelegateStopReason::Cancelled,
+            StopReason::Error(_) => DelegateStopReason::Error,
         };
 
-        let combined_text = text_chunks.join("");
-        Ok(json!({
-            "text": combined_text,
-            "stop_reason": stop_reason_str,
-            "tool_calls": tool_calls,
-            "files_accessed": files_accessed,
+        Ok(AcpDelegateResult {
+            text: text_chunks.join(""),
+            stop_reason: delegate_stop,
+            tool_calls,
+            files_accessed,
         })
-        .into())
     }
 }
 
@@ -201,39 +244,38 @@ fn auto_approve_resolver(
 fn collect_event(
     event: &AcpEvent,
     text_chunks: &mut Vec<String>,
-    tool_calls: &mut Vec<serde_json::Value>,
-    files_accessed: &mut Vec<serde_json::Value>,
+    tool_calls: &mut Vec<ToolCallEvent>,
+    files_accessed: &mut Vec<FileAccessSummary>,
 ) {
     match event {
         AcpEvent::Text(text) => text_chunks.push(text.clone()),
         AcpEvent::ToolCallStarted { id, title } => {
-            tool_calls.push(json!({
-                "id": id,
-                "title": title,
-                "status": "started",
-            }));
+            tool_calls.push(ToolCallEvent::Started {
+                id:    id.clone(),
+                title: title.clone(),
+            });
         }
         AcpEvent::ToolCallUpdate { id, status, output } => {
-            let status_str = match status {
-                ToolCallStatus::Running => "running",
-                ToolCallStatus::Completed => "completed",
-                ToolCallStatus::Failed => "failed",
+            let status = match status {
+                ToolCallStatus::Running => DelegateToolCallStatus::Running,
+                ToolCallStatus::Completed => DelegateToolCallStatus::Completed,
+                ToolCallStatus::Failed => DelegateToolCallStatus::Failed,
             };
-            tool_calls.push(json!({
-                "id": id,
-                "status": status_str,
-                "output": output,
-            }));
+            tool_calls.push(ToolCallEvent::Updated {
+                id: id.clone(),
+                status,
+                output: output.clone(),
+            });
         }
         AcpEvent::FileAccess { path, operation } => {
             let op = match operation {
-                rara_acp::events::FileOperation::Read => "read",
-                rara_acp::events::FileOperation::Write => "write",
+                rara_acp::events::FileOperation::Read => DelegateFileOp::Read,
+                rara_acp::events::FileOperation::Write => DelegateFileOp::Write,
             };
-            files_accessed.push(json!({
-                "path": path.display().to_string(),
-                "operation": op,
-            }));
+            files_accessed.push(FileAccessSummary {
+                path:      path.display().to_string(),
+                operation: op,
+            });
         }
         AcpEvent::Plan { title, steps } => {
             debug!(title = ?title, steps = steps.len(), "agent plan received");
