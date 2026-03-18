@@ -129,6 +129,16 @@ impl TraceService {
         }
     }
 
+    /// Retrieve the session_id associated with a trace.
+    pub async fn get_session_id(&self, id: &str) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT session_id FROM execution_traces WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|(s,)| s))
+    }
+
     /// Delete traces older than `retention_days`. Returns the number of rows
     /// removed.
     pub async fn cleanup(&self, retention_days: u32) -> Result<u64, sqlx::Error> {

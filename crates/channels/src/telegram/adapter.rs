@@ -629,6 +629,79 @@ fn render_trace_detail(trace: &ExecutionTrace) -> String {
     text
 }
 
+/// Render a cascade trace as Telegram HTML for sending as a new message.
+///
+/// Each tick is rendered with its entries (UserInput, Thought, Action,
+/// Observation) using emoji prefixes and `<blockquote>` blocks. Content is
+/// truncated per-entry and the total output is capped at 4000 chars.
+fn render_cascade_html(cascade: &rara_kernel::cascade::CascadeTrace) -> String {
+    use rara_kernel::cascade::CascadeEntryKind;
+
+    const MAX_ENTRY_CHARS: usize = 300;
+    const MAX_TOTAL_CHARS: usize = 4000;
+
+    let mut text = String::from("\u{1f50d} <b>Cascade Trace</b>\n");
+    text.push_str(&format!(
+        "<i>{} ticks \u{00b7} {} tool calls \u{00b7} {} entries</i>\n",
+        cascade.summary.tick_count, cascade.summary.tool_call_count, cascade.summary.total_entries,
+    ));
+
+    for tick in &cascade.ticks {
+        if text.len() > MAX_TOTAL_CHARS {
+            text.push_str("\n\u{2026}(truncated)");
+            break;
+        }
+
+        text.push_str(&format!("\n\u{25b6} <b>TICK {}</b>\n", tick.index + 1));
+
+        for entry in &tick.entries {
+            if text.len() > MAX_TOTAL_CHARS {
+                break;
+            }
+
+            let (emoji, label) = match entry.kind {
+                CascadeEntryKind::UserInput => ("\u{1f4ac}", "User Input"),
+                CascadeEntryKind::Thought => ("\u{1f9e0}", "Thought"),
+                CascadeEntryKind::Action => ("\u{26a1}", "Action"),
+                CascadeEntryKind::Observation => ("\u{1f441}", "Observation"),
+            };
+
+            let content = if entry.content.len() > MAX_ENTRY_CHARS {
+                let truncate_at = entry
+                    .content
+                    .char_indices()
+                    .take_while(|(i, _)| *i <= MAX_ENTRY_CHARS)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(MAX_ENTRY_CHARS.min(entry.content.len()));
+                format!("{}\u{2026}", &entry.content[..truncate_at])
+            } else {
+                entry.content.clone()
+            };
+
+            text.push_str(&format!(
+                "  {emoji} <b>{label}</b> \u{00b7} <code>{}</code>\n<blockquote>{}</blockquote>\n",
+                trace_html_escape(&entry.id),
+                trace_html_escape(&content),
+            ));
+        }
+    }
+
+    // Hard-truncate to stay within Telegram's 4096-char message limit.
+    if text.len() > MAX_TOTAL_CHARS {
+        let truncate_at = text
+            .char_indices()
+            .take_while(|(i, _)| *i <= 3990)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(3990.min(text.len()));
+        text.truncate(truncate_at);
+        text.push_str("\n\u{2026}(truncated)");
+    }
+
+    text
+}
+
 /// Minimal HTML escaping for text embedded in trace display.
 fn trace_html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1621,16 +1694,106 @@ async fn handle_trace_callback(
     };
 
     if let (Ok(cid), Ok(mid)) = (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>()) {
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-            button_text,
-            next_action,
-        )]]);
+        let cascade_callback = format!("cas:{chat_id_str}:{msg_id_str}:{trace_id}");
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback(button_text, next_action),
+            InlineKeyboardButton::callback("\u{1f50d} Cascade", cascade_callback),
+        ]]);
         let _ = bot
             .edit_message_text(ChatId(cid), MessageId(mid), &text)
             .parse_mode(ParseMode::Html)
             .reply_markup(keyboard)
             .await;
     }
+}
+
+/// Handle a cascade callback: fetch tape entries, build cascade trace, and
+/// send as a new message.
+///
+/// Callback data format: `"cas:{chat_id}:{msg_id}:{trace_id}"`
+async fn handle_cascade_callback(
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    handle: &KernelHandle,
+) {
+    let parts: Vec<&str> = data.splitn(4, ':').collect();
+    if parts.len() != 4 {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Invalid cascade callback")
+            .await;
+        return;
+    }
+
+    let chat_id_str = parts[1];
+    let trace_id = parts[3];
+
+    // Answer callback immediately to dismiss the Telegram spinner.
+    let _ = bot.answer_callback_query(callback.id.clone()).await;
+
+    let Ok(cid) = chat_id_str.parse::<i64>() else {
+        return;
+    };
+
+    // Look up the session_id from the trace record.
+    let session_id = match handle.trace_service().get_session_id(trace_id).await {
+        Ok(Some(s)) => s,
+        _ => {
+            let _ = bot
+                .send_message(ChatId(cid), "Cascade trace not available: trace not found.")
+                .await;
+            return;
+        }
+    };
+
+    // Read tape entries for the session.
+    let entries = match handle.tape().entries(&session_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(error = %e, "cascade: failed to read tape entries");
+            let _ = bot
+                .send_message(ChatId(cid), "Cascade trace not available: tape read error.")
+                .await;
+            return;
+        }
+    };
+
+    // Look up the rara_message_id from the execution trace for labelling.
+    let rara_message_id = match handle.trace_service().get(trace_id).await {
+        Ok(Some(t)) => t.rara_message_id,
+        _ => String::new(),
+    };
+
+    // Extract only the turn that corresponds to this trace.  The ULID
+    // trace_id encodes a creation timestamp; we use it to find the user
+    // message that started the turn.
+    let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
+    let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
+        let ts_ms = ulid.timestamp_ms() as i64;
+        let target =
+            jiff::Timestamp::from_millisecond(ts_ms).unwrap_or_else(|_| jiff::Timestamp::now());
+        let turn = rara_kernel::cascade::find_turn_by_timestamp(&entries, &boundaries, target);
+        rara_kernel::cascade::turn_slice(&entries, &boundaries, turn)
+    } else {
+        // Fallback: use all entries if ULID parsing fails.
+        &entries
+    };
+
+    let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
+
+    if cascade.ticks.is_empty() {
+        let _ = bot
+            .send_message(ChatId(cid), "Cascade trace is empty — no ticks recorded.")
+            .await;
+        return;
+    }
+
+    let html = render_cascade_html(&cascade);
+    let _ = bot
+        .send_message(ChatId(cid), &html)
+        .parse_mode(ParseMode::Html)
+        .await;
 }
 
 /// Listens for new approval requests and sends inline keyboard messages
@@ -1729,23 +1892,21 @@ async fn handle_update(
     //   other      → TODO: convert to RawPlatformMessage for kernel processing
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
+            // guard: callbacks do their own user-level auth internally,
+            // so they are routed before the chat-level check.
             if data.starts_with("guard:") {
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
+            // limit: callbacks do their own chat-level auth internally.
             if data.starts_with("limit:") {
                 handle_tool_call_limit_callback(handle, bot, callback, data, allowed_chat_ids)
                     .await;
                 return;
             }
-            if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, handle.trace_service()).await;
-                return;
-            }
 
-            // Dispatch to registered callback handlers by prefix match.
-            // Enforce the same authorization as normal messages: both
-            // allowed_chat_ids and allowed_group_chat_id are checked.
+            // Chat-level authorization — applies to trace:, cas:, and all
+            // other callback prefixes uniformly.
             let cb_chat_id = callback
                 .message
                 .as_ref()
@@ -1777,6 +1938,16 @@ async fn handle_update(
                         return;
                     }
                 }
+            }
+
+            // Prefix-routed callbacks (now behind auth).
+            if data.starts_with("trace:") {
+                handle_trace_callback(bot, callback, data, handle.trace_service()).await;
+                return;
+            }
+            if data.starts_with("cas:") {
+                handle_cascade_callback(bot, callback, data, handle).await;
+                return;
             }
 
             for handler in callback_handlers {
@@ -2645,10 +2816,18 @@ fn spawn_stream_forwarder(
                                             "trace:show:{}:{}:{trace_id}",
                                             chat_id, mid.0,
                                         );
+                                        let cascade_cb = format!(
+                                            "cas:{}:{}:{trace_id}",
+                                            chat_id, mid.0,
+                                        );
                                         let keyboard = InlineKeyboardMarkup::new(vec![vec![
                                             InlineKeyboardButton::callback(
                                                 "\u{1f4ca} \u{8be6}\u{60c5}",
                                                 callback_data,
+                                            ),
+                                            InlineKeyboardButton::callback(
+                                                "\u{1f50d} Cascade",
+                                                cascade_cb,
                                             ),
                                         ]]);
 

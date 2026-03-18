@@ -36,6 +36,8 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { MessageTracePanel } from "@/components/MessageTracePanel";
+import type { CascadeStreamState } from "@/hooks/use-cascade";
 import { api } from "@/api/client";
 import type {
   ChatMessageData,
@@ -563,7 +565,7 @@ function ImageBlock({ src }: { src: string }) {
   );
 }
 
-function MessageBubble({ msg, metrics }: { msg: ChatMessageData; metrics?: TurnMetrics | null }) {
+function MessageBubble({ msg, metrics, onClick }: { msg: ChatMessageData; metrics?: TurnMetrics | null; onClick?: () => void }) {
   const isUser = msg.role === "user";
   const isSystem = msg.role === "system";
   const isMultimodal = Array.isArray(msg.content);
@@ -579,7 +581,8 @@ function MessageBubble({ msg, metrics }: { msg: ChatMessageData; metrics?: TurnM
 
   return (
     <div
-      className={cn("group flex gap-3", isUser ? "flex-row-reverse" : "flex-row")}
+      className={cn("group flex gap-3 cursor-pointer", isUser ? "flex-row-reverse" : "flex-row")}
+      onClick={() => onClick?.()}
     >
       {/* Avatar */}
       <div
@@ -1182,6 +1185,8 @@ function ChatThread({
   onTogglePanel,
   initialDraft,
   onInitialDraftConsumed,
+  onMessageClick,
+  onStreamStateChange,
 }: {
   session: ChatSession;
   onClearMessages: () => void;
@@ -1189,6 +1194,8 @@ function ChatThread({
   onTogglePanel: () => void;
   initialDraft?: PendingDraft | null;
   onInitialDraftConsumed?: () => void;
+  onMessageClick?: (seq: number) => void;
+  onStreamStateChange?: (isStreaming: boolean, state: CascadeStreamState) => void;
 }) {
   const sessionKey = session.key;
   const queryClient = useQueryClient();
@@ -1204,6 +1211,15 @@ function ChatThread({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Notify parent of stream state changes for cascade viewer
+  useEffect(() => {
+    onStreamStateChange?.(stream.isStreaming, {
+      reasoning: stream.reasoning,
+      activeTools: stream.activeTools,
+      completedTools: stream.completedTools,
+    });
+  }, [stream.isStreaming, stream.reasoning, stream.activeTools, stream.completedTools, onStreamStateChange]);
 
   const messagesQuery = useQuery({
     queryKey: ["chat-messages", sessionKey],
@@ -1591,6 +1607,7 @@ function ChatThread({
                   key={msg.seq}
                   msg={msg}
                   metrics={isLastAssistant ? latestMetrics : undefined}
+                  onClick={() => onMessageClick?.(msg.seq)}
                 />
               );
             })}
@@ -1839,6 +1856,27 @@ export default function Chat({
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
+  const [cascadeSeq, setCascadeSeq] = useState<number | null>(null);
+  const [threadStreaming, setThreadStreaming] = useState(false);
+  const [threadStreamState, setThreadStreamState] = useState<CascadeStreamState>({
+    reasoning: "",
+    activeTools: [],
+    completedTools: [],
+  });
+
+  const handleStreamStateChange = useCallback(
+    (isStreaming: boolean, state: CascadeStreamState) => {
+      setThreadStreaming(isStreaming);
+      setThreadStreamState(state);
+    },
+    [],
+  );
+
+  // Clear cascade panel when switching sessions
+  const switchSession = useCallback((key: string | null) => {
+    setActiveKey(key);
+    setCascadeSeq(null);
+  }, []);
 
   const sessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
@@ -1863,7 +1901,7 @@ export default function Chat({
         return [session, ...next];
       });
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-      setActiveKey(session.key);
+      switchSession(session.key);
     },
   });
 
@@ -1875,7 +1913,7 @@ export default function Chat({
         queryKey: ["chat-messages", deletedKey],
       });
       if (activeKey === deletedKey) {
-        setActiveKey(null);
+        switchSession(null);
       }
     },
   });
@@ -1947,7 +1985,7 @@ export default function Chat({
       <SessionList
         sessions={sessions}
         activeKey={activeKey}
-        onSelect={setActiveKey}
+        onSelect={switchSession}
         onDelete={handleDelete}
         isLoading={sessionsQuery.isLoading}
         collapsed={panelCollapsed}
@@ -1964,15 +2002,30 @@ export default function Chat({
         <div className="flex min-w-0 flex-1 overflow-hidden rounded-2xl bg-transparent">
           {/* Right panel: chat thread or empty state */}
           {activeSession ? (
-            <ChatThread
-              key={activeKey}
-              session={activeSession}
-              onClearMessages={handleClearMessages}
-              panelCollapsed={panelCollapsed}
-              onTogglePanel={() => setPanelCollapsed((p) => !p)}
-              initialDraft={pendingDraft}
-              onInitialDraftConsumed={() => setPendingDraft(null)}
-            />
+            <div className="flex min-w-0 flex-1 overflow-hidden">
+              <div className="min-w-0 flex-1">
+                <ChatThread
+                  key={activeKey}
+                  session={activeSession}
+                  onClearMessages={handleClearMessages}
+                  panelCollapsed={panelCollapsed}
+                  onTogglePanel={() => setPanelCollapsed((p) => !p)}
+                  initialDraft={pendingDraft}
+                  onInitialDraftConsumed={() => setPendingDraft(null)}
+                  onMessageClick={(seq) => setCascadeSeq(seq)}
+                  onStreamStateChange={handleStreamStateChange}
+                />
+              </div>
+              {cascadeSeq !== null && activeKey && (
+                <MessageTracePanel
+                  sessionKey={activeKey}
+                  messageSeq={cascadeSeq}
+                  isStreaming={threadStreaming}
+                  streamState={threadStreamState}
+                  onClose={() => setCascadeSeq(null)}
+                />
+              )}
+            </div>
           ) : (
             <EmptyState
               onSendFirstMessage={handleStartFromEmpty}

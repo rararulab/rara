@@ -26,8 +26,15 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::{memory::TapeService, session::SessionIndexRef};
+use rara_kernel::{
+    cascade::{CascadeTrace, build_cascade, find_turn_boundaries, turn_slice},
+    channel::types::{ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall},
+    llm::{Message, Role},
+    memory::{TapEntry, TapEntryKind, TapeService},
+    session::SessionIndexRef,
+};
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
+use serde_json::Value;
 use tracing::{info, instrument};
 
 use crate::chat::{
@@ -231,6 +238,103 @@ impl SessionService {
         }
     }
 
+    // -- messages (tape-backed) ---------------------------------------------
+
+    /// List conversational messages for a session by reading tape entries.
+    ///
+    /// Only `Message`, `ToolCall`, and `ToolResult` entries are converted to
+    /// [`ChatMessage`] structs. Non-conversational kinds are skipped.
+    #[instrument(skip(self))]
+    pub async fn list_messages(
+        &self,
+        key: &SessionKey,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>, ChatError> {
+        let tape_name = key.to_string();
+        let entries =
+            self.tape_service
+                .entries(&tape_name)
+                .await
+                .map_err(|e| ChatError::SessionError {
+                    message: format!("failed to read tape: {e}"),
+                })?;
+
+        let messages = tap_entries_to_chat_messages(&entries);
+        let total = messages.len();
+        // Return the last `limit` messages (most recent).
+        let start = total.saturating_sub(limit);
+        Ok(messages[start..].to_vec())
+    }
+
+    /// Clear all tape entries for a session (reset the tape).
+    #[instrument(skip(self))]
+    pub async fn clear_messages(&self, key: &SessionKey) -> Result<(), ChatError> {
+        let tape_name = key.to_string();
+        self.tape_service
+            .reset(&tape_name, false)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to clear tape: {e}"),
+            })?;
+        info!(key = %key, "messages cleared");
+        Ok(())
+    }
+
+    // -- cascade trace ------------------------------------------------------
+
+    /// Build a cascade execution trace for a specific turn in the session.
+    ///
+    /// The `message_seq` identifies the user message that starts the turn.
+    /// All entries from that user message until the next user message (or
+    /// end of tape) are collected and passed to the cascade builder.
+    #[instrument(skip(self))]
+    pub async fn get_cascade_trace(
+        &self,
+        key: &SessionKey,
+        message_seq: usize,
+    ) -> Result<CascadeTrace, ChatError> {
+        let tape_name = key.to_string();
+        let entries =
+            self.tape_service
+                .entries(&tape_name)
+                .await
+                .map_err(|e| ChatError::SessionError {
+                    message: format!("failed to read tape: {e}"),
+                })?;
+
+        // Convert tape → chat messages so we can map the 1-based message_seq
+        // back to the owning user-message turn.  The seq values in ChatMessage
+        // can skip numbers (e.g. a ToolResult with N results increments seq
+        // by N), so a direct index into tape entries is unreliable.
+        let chat_msgs = tap_entries_to_chat_messages(&entries);
+
+        let i_seq = message_seq as i64;
+        // Find the last user message whose seq <= the clicked message_seq.
+        let owning_user = chat_msgs
+            .iter()
+            .rfind(|m| m.role == MessageRole::User && m.seq <= i_seq);
+
+        let Some(owner) = owning_user else {
+            return Err(ChatError::InvalidRequest {
+                message: format!("no user message found for seq {message_seq}"),
+            });
+        };
+
+        // Determine the 0-based ordinal of this user message.
+        let user_ordinal = chat_msgs
+            .iter()
+            .filter(|m| m.role == MessageRole::User)
+            .position(|m| m.seq == owner.seq)
+            .unwrap_or(0);
+
+        // Use turn boundary helpers to extract the right slice of tape entries.
+        let boundaries = find_turn_boundaries(&entries);
+        let turn_entries = turn_slice(&entries, &boundaries, user_ordinal);
+        let message_id = format!("{}-{}", key, message_seq);
+        let trace = build_cascade(turn_entries, &message_id);
+        Ok(trace)
+    }
+
     // -- channel bindings ---------------------------------------------------
 
     /// Bind an external channel (e.g. Telegram chat) to a session key.
@@ -272,4 +376,127 @@ impl std::fmt::Debug for SessionService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionService").finish_non_exhaustive()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tape → ChatMessage conversion
+// ---------------------------------------------------------------------------
+
+/// Convert tape entries into a flat list of [`ChatMessage`] structs.
+///
+/// Mirrors the logic in `memory/context.rs` but targets the channel-layer
+/// `ChatMessage` type instead of `llm::Message`.
+fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
+    let mut messages = Vec::new();
+    let mut seq: i64 = 0;
+    let mut pending_calls: Vec<(String, String)> = Vec::new(); // (id, name)
+
+    for entry in entries {
+        match entry.kind {
+            TapEntryKind::Message => {
+                if let Ok(msg) = serde_json::from_value::<Message>(entry.payload.clone()) {
+                    seq += 1;
+                    let role = match msg.role {
+                        Role::System => MessageRole::System,
+                        Role::User => MessageRole::User,
+                        Role::Assistant => MessageRole::Assistant,
+                        Role::Tool => MessageRole::Tool,
+                    };
+                    let content = MessageContent::Text(msg.content.as_text().to_owned());
+                    let tool_calls: Vec<ChannelToolCall> = msg
+                        .tool_calls
+                        .iter()
+                        .map(|tc| ChannelToolCall {
+                            id:        tc.id.clone().into(),
+                            name:      tc.name.clone().into(),
+                            arguments: serde_json::from_str(&tc.arguments)
+                                .unwrap_or(Value::String(tc.arguments.clone())),
+                        })
+                        .collect();
+                    messages.push(ChatMessage {
+                        seq,
+                        role,
+                        content,
+                        tool_calls,
+                        tool_call_id: msg.tool_call_id.clone(),
+                        tool_name: None,
+                        created_at: entry.timestamp,
+                    });
+                }
+            }
+            TapEntryKind::ToolCall => {
+                pending_calls.clear();
+                if let Some(calls) = entry.payload.get("calls").and_then(Value::as_array) {
+                    let mut tc_list = Vec::new();
+                    for call in calls {
+                        let id = call
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned();
+                        let func = call.get("function").and_then(Value::as_object);
+                        let name = func
+                            .and_then(|f| f.get("name"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned();
+                        let arguments = func
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        let args_val: Value = serde_json::from_str(arguments)
+                            .unwrap_or(Value::String(arguments.to_owned()));
+                        pending_calls.push((id.clone(), name.clone()));
+                        tc_list.push(ChannelToolCall {
+                            id:        id.into(),
+                            name:      name.into(),
+                            arguments: args_val,
+                        });
+                    }
+                    seq += 1;
+                    messages.push(ChatMessage {
+                        seq,
+                        role: MessageRole::Assistant,
+                        content: MessageContent::Text(String::new()),
+                        tool_calls: tc_list,
+                        tool_call_id: None,
+                        tool_name: None,
+                        created_at: entry.timestamp,
+                    });
+                }
+            }
+            TapEntryKind::ToolResult => {
+                if let Some(results) = entry.payload.get("results").and_then(Value::as_array) {
+                    for (i, result) in results.iter().enumerate() {
+                        let content_str = match result {
+                            Value::String(s) => s.clone(),
+                            other => serde_json::to_string(other).unwrap_or_default(),
+                        };
+                        let (call_id, tool_name) =
+                            pending_calls.get(i).cloned().unwrap_or_default();
+                        seq += 1;
+                        messages.push(ChatMessage {
+                            seq,
+                            role: MessageRole::ToolResult,
+                            content: MessageContent::Text(content_str),
+                            tool_calls: Vec::new(),
+                            tool_call_id: if call_id.is_empty() {
+                                None
+                            } else {
+                                Some(call_id)
+                            },
+                            tool_name: if tool_name.is_empty() {
+                                None
+                            } else {
+                                Some(tool_name)
+                            },
+                            created_at: entry.timestamp,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    messages
 }
