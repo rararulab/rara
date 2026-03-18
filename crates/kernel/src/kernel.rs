@@ -227,7 +227,10 @@ impl Kernel {
         let event_queue: EventQueueRef = sharded_queue.clone();
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
-        let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new());
+        let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new(
+            rara_paths::workspace_dir().clone(),
+            vec![rara_paths::config_dir().clone()],
+        ));
 
         let syscall = SyscallDispatcher::new(
             SharedKv::new(
