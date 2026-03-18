@@ -1755,11 +1755,19 @@ async fn handle_cascade_callback(
                 InlineKeyboardButton::callback("\u{1f4ca} \u{8be6}\u{60c5}", trace_cb),
                 InlineKeyboardButton::callback("\u{1f50d} Cascade", cascade_cb),
             ]]);
-            let _ = bot
+            if let Err(e) = bot
                 .edit_message_text(ChatId(cid), MessageId(mid), &compact)
                 .parse_mode(ParseMode::Html)
                 .reply_markup(keyboard)
-                .await;
+                .await
+            {
+                warn!(
+                    error = %e,
+                    chat_id = cid,
+                    msg_id = mid,
+                    "cascade: failed to restore compact summary"
+                );
+            }
         }
 
         // "show" → build cascade trace and display in-place.
@@ -1825,11 +1833,20 @@ async fn handle_cascade_callback(
                 "\u{1f50d} \u{6536}\u{8d77}",
                 hide_cb,
             )]]);
-            let _ = bot
+            if let Err(e) = bot
                 .edit_message_text(ChatId(cid), MessageId(mid), &html)
                 .parse_mode(ParseMode::Html)
                 .reply_markup(keyboard)
-                .await;
+                .await
+            {
+                warn!(
+                    error = %e,
+                    chat_id = cid,
+                    msg_id = mid,
+                    html_len = html.len(),
+                    "cascade: failed to edit message with cascade view"
+                );
+            }
         }
     }
 }

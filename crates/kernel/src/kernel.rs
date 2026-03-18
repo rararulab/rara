@@ -1691,7 +1691,7 @@ impl Kernel {
     /// Priority order:
     /// 1. Session-level override (set via `/msg_version`) — highest priority.
     /// 2. Agent manifest `default_execution_mode` — agent-level default.
-    /// 3. Fall back to `ExecutionMode::Reactive` (v1).
+    /// 3. Fall back to `ExecutionMode::default()` (plan-execute v2).
     fn resolve_execution_mode(&self, session_key: &SessionKey) -> ExecutionMode {
         // Check session-level override first.
         if let Some(mode) = self
@@ -1711,8 +1711,8 @@ impl Kernel {
             return mode;
         }
 
-        // Default: plan-execute (v2).
-        ExecutionMode::Plan
+        // Default: plan-execute (v2), consistent with ExecutionMode::default().
+        ExecutionMode::default()
     }
 
     /// # What this method does
