@@ -143,6 +143,9 @@ pub use context::{
     anchor_context, anchor_summary_from_entries, default_tape_context, user_tape_context,
 };
 pub use error::{TapError, TapResult};
+// Re-export typed metadata structs for use in the agent loop.
+// These are defined here (alongside `TapEntry`) because they describe the
+// schema of the `metadata` field on tape entries.
 pub use fork_metadata::{ForkMetadata, get_fork_metadata, set_fork_metadata};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -190,6 +193,72 @@ pub enum TapEntryKind {
     Plan,
     /// Structured task report from background/scheduled tasks.
     TaskReport,
+}
+
+// ---------------------------------------------------------------------------
+// Typed tape metadata
+// ---------------------------------------------------------------------------
+
+/// Metadata attached to `Message` and `ToolCall` tape entries produced by the
+/// agent loop.  Captures timing and model information alongside token usage so
+/// that the tape alone is sufficient for post-hoc observability analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmEntryMetadata {
+    /// Internal message ID for end-to-end correlation.
+    pub rara_message_id: String,
+    /// Token consumption for this LLM iteration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage:           Option<crate::llm::Usage>,
+    /// Model identifier used for this completion.
+    pub model:           String,
+    /// Zero-based iteration index within the turn.
+    pub iteration:       usize,
+    /// Wall-clock duration of the streaming response in milliseconds.
+    pub stream_ms:       u64,
+    /// Time-to-first-token in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_token_ms:  Option<u64>,
+}
+
+/// Metadata attached to `ToolResult` tape entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultMetadata {
+    /// Internal message ID for end-to-end correlation.
+    pub rara_message_id: String,
+    /// Per-tool execution metrics.
+    pub tool_metrics:    Vec<ToolMetric>,
+}
+
+/// Execution metrics for a single tool call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolMetric {
+    /// Tool name.
+    pub name:        String,
+    /// Execution duration in milliseconds.
+    pub duration_ms: u64,
+    /// Whether the tool call succeeded.
+    pub success:     bool,
+    /// Error message (only present on failure).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error:       Option<String>,
+}
+
+/// Data payload for the `llm.run` event entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmRunEvent {
+    /// Token consumption.
+    pub usage:          crate::llm::Usage,
+    /// Model identifier.
+    pub model:          String,
+    /// Why the LLM stopped generating.
+    pub stop_reason:    crate::llm::StopReason,
+    /// Zero-based iteration index within the turn.
+    pub iteration:      usize,
+    /// Wall-clock duration of the streaming response in milliseconds.
+    pub stream_ms:      u64,
+    /// Time-to-first-token in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_token_ms: Option<u64>,
 }
 
 /// Canonical tape name prefix for per-user tapes.
