@@ -62,7 +62,7 @@ impl AgentTool for AcpDelegateTool {
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "Agent to delegate to: 'claude', 'codex', 'gemini', or a custom agent name",
+                    "description": "Agent to delegate to: 'claude', 'codex', or 'gemini'",
                     "enum": ["claude", "codex", "gemini"]
                 },
                 "prompt": {
@@ -99,20 +99,27 @@ impl AgentTool for AcpDelegateTool {
             .map(PathBuf::from)
             .unwrap_or_else(|| rara_paths::workspace_dir().clone());
 
-        // Resolve agent kind from the string parameter.
+        // Resolve agent kind from the string parameter.  Only built-in
+        // agents are supported — the enum in parameters_schema() enforces
+        // this, but we validate here too for defense in depth.
         let agent_kind = match agent_name {
             "claude" => AgentKind::Claude,
             "codex" => AgentKind::Codex,
             "gemini" => AgentKind::Gemini,
-            other => AgentKind::Custom(other.to_string()),
+            other => {
+                return Err(anyhow::anyhow!(
+                    "unsupported agent '{other}': only 'claude', 'codex', and 'gemini' are \
+                     supported"
+                ));
+            }
         };
 
-        // Resolve agent command from the default registry.
         let registry = AgentRegistry::with_defaults();
-        let command = registry.resolve(&agent_kind).ok_or_else(|| {
-            anyhow::anyhow!("unknown agent: {agent_name} — not found in ACP registry")
-        })?;
-        let command = command.clone();
+        // Safe to unwrap: built-in agents are always in the default registry.
+        let command = registry
+            .resolve(&agent_kind)
+            .expect("built-in agent missing from default registry — this is a bug")
+            .clone();
 
         let prompt = prompt.to_string();
 
@@ -163,67 +170,90 @@ async fn run_acp_session(
         .await
         .map_err(|e| anyhow::anyhow!("ACP new_session failed: {e}"))?;
 
-    // Send the prompt (this blocks until the agent's turn completes).
+    // Collect events concurrently while the prompt is running.  The
+    // delegate emits events via `send().await` with backpressure, so we
+    // must actively drain the channel to avoid stalling the agent.
+    let mut text_chunks: Vec<String> = Vec::new();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut files_accessed: Vec<serde_json::Value> = Vec::new();
+
+    let collector = tokio::task::spawn_local({
+        async move {
+            let mut texts = Vec::new();
+            let mut tools = Vec::new();
+            let mut files = Vec::new();
+
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    AcpEvent::Text(text) => texts.push(text),
+                    AcpEvent::Thinking(_) => {}
+                    AcpEvent::ToolCallStarted { id, title } => {
+                        tools.push(json!({
+                            "id": id,
+                            "title": title,
+                            "status": "started",
+                        }));
+                    }
+                    AcpEvent::ToolCallUpdate { id, status, output } => {
+                        let status_str = match status {
+                            rara_acp::events::ToolCallStatus::Running => "running",
+                            rara_acp::events::ToolCallStatus::Completed => "completed",
+                            rara_acp::events::ToolCallStatus::Failed => "failed",
+                        };
+                        tools.push(json!({
+                            "id": id,
+                            "status": status_str,
+                            "output": output,
+                        }));
+                    }
+                    AcpEvent::FileAccess { path, operation } => {
+                        let op = match operation {
+                            rara_acp::events::FileOperation::Read => "read",
+                            rara_acp::events::FileOperation::Write => "write",
+                        };
+                        files.push(json!({
+                            "path": path.display().to_string(),
+                            "operation": op,
+                        }));
+                    }
+                    AcpEvent::Plan { title, steps } => {
+                        debug!(title = ?title, steps = steps.len(), "agent plan received");
+                    }
+                    AcpEvent::PermissionAutoApproved { description } => {
+                        debug!(description, "permission auto-approved");
+                    }
+                    // Stop collecting once the process exits or the turn ends
+                    // with no more events to follow.
+                    AcpEvent::ProcessExited { .. } => break,
+                    AcpEvent::TurnComplete { .. } => {}
+                }
+            }
+            (texts, tools, files)
+        }
+    });
+
+    // Send the prompt — runs concurrently with the event collector above.
     let response = conn
         .send_prompt(prompt)
         .await
         .map_err(|e| anyhow::anyhow!("ACP prompt failed: {e}"))?;
 
-    // Drain all pending events from the delegate channel.
-    let mut text_chunks: Vec<String> = Vec::new();
-    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-    let mut files_accessed: Vec<serde_json::Value> = Vec::new();
-
-    while let Ok(event) = event_rx.try_recv() {
-        match event {
-            AcpEvent::Text(text) => {
-                text_chunks.push(text);
-            }
-            AcpEvent::Thinking(_) => {
-                // Thinking chunks are internal reasoning; skip in output.
-            }
-            AcpEvent::ToolCallStarted { id, title } => {
-                tool_calls.push(json!({
-                    "id": id,
-                    "title": title,
-                    "status": "started",
-                }));
-            }
-            AcpEvent::ToolCallUpdate { id, status, output } => {
-                let status_str = match status {
-                    rara_acp::events::ToolCallStatus::Running => "running",
-                    rara_acp::events::ToolCallStatus::Completed => "completed",
-                    rara_acp::events::ToolCallStatus::Failed => "failed",
-                };
-                tool_calls.push(json!({
-                    "id": id,
-                    "status": status_str,
-                    "output": output,
-                }));
-            }
-            AcpEvent::FileAccess { path, operation } => {
-                let op = match operation {
-                    rara_acp::events::FileOperation::Read => "read",
-                    rara_acp::events::FileOperation::Write => "write",
-                };
-                files_accessed.push(json!({
-                    "path": path.display().to_string(),
-                    "operation": op,
-                }));
-            }
-            AcpEvent::Plan { title, steps } => {
-                debug!(title = ?title, steps = steps.len(), "agent plan received");
-            }
-            AcpEvent::PermissionAutoApproved { description } => {
-                debug!(description, "permission auto-approved");
-            }
-            AcpEvent::TurnComplete { .. } | AcpEvent::ProcessExited { .. } => {}
-        }
-    }
-
-    // Clean shutdown of the agent subprocess.
+    // Shut down the agent — this kills the child and reaps the process,
+    // which closes the event channel and lets the collector finish.
     if let Err(e) = conn.shutdown().await {
         warn!(error = %e, "ACP shutdown error (non-fatal)");
+    }
+
+    // Wait for the collector to drain remaining events.
+    match collector.await {
+        Ok((texts, tools, files)) => {
+            text_chunks = texts;
+            tool_calls = tools;
+            files_accessed = files;
+        }
+        Err(e) => {
+            warn!(error = %e, "event collector task failed");
+        }
     }
 
     let stop_reason = format!("{:?}", response.stop_reason);
