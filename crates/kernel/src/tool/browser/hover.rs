@@ -14,24 +14,22 @@
 
 //! Hover over an element (stub — not yet implemented).
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
-use crate::tool::{AgentTool, ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolOutput};
 
 /// Hover over an element by ref ID. Stub — pending Lightpanda support.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-hover",
+    description = "Hover over an element on the page using its ref ID.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserHoverTool;
 
 impl BrowserHoverTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_HOVER;
-}
-
-#[async_trait]
-impl AgentTool for BrowserHoverTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Hover over an element on the page using its ref ID." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["ref"],
@@ -48,7 +46,7 @@ impl AgentTool for BrowserHoverTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

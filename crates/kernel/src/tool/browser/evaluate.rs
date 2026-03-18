@@ -14,39 +14,31 @@
 
 //! Evaluate a JavaScript expression in the active browser page.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Evaluate a JavaScript expression and return the result.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-evaluate",
+    description = "Evaluate a JavaScript expression in the active browser page and return the \
+                   result.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserEvaluateTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserEvaluateTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_EVALUATE;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    expression: String,
-}
-
-#[async_trait]
-impl AgentTool for BrowserEvaluateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Evaluate a JavaScript expression in the active browser page and return the result."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["expression"],
@@ -59,7 +51,7 @@ impl AgentTool for BrowserEvaluateTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -75,4 +67,9 @@ impl AgentTool for BrowserEvaluateTool {
 
         Ok(serde_json::json!({ "result": result }).into())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    expression: String,
 }

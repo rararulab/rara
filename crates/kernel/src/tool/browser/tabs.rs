@@ -14,55 +14,32 @@
 
 //! Manage browser tabs — list, select, close, or create new tabs.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Manage browser tabs: list, select, close, or create new tabs.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-tabs",
+    description = "Manage browser tabs. Actions: 'list' — list all tabs; 'select' — switch to a \
+                   tab by index; 'close' — close a tab by index (or the active tab); 'new' — open \
+                   a new blank tab.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserTabsTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserTabsTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_TABS;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    action: String,
-    #[serde(default)]
-    index:  Option<usize>,
-}
-
-/// Serialize a list of tabs into JSON.
-fn tabs_json(tabs: &[crate::browser::TabInfo]) -> Vec<serde_json::Value> {
-    tabs.iter()
-        .map(|t| {
-            serde_json::json!({
-                "index": t.index,
-                "tab_id": t.tab_id,
-                "is_active": t.is_active,
-            })
-        })
-        .collect()
-}
-
-#[async_trait]
-impl AgentTool for BrowserTabsTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Manage browser tabs. Actions: 'list' — list all tabs; 'select' — switch to a tab by \
-         index; 'close' — close a tab by index (or the active tab); 'new' — open a new blank tab."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["action"],
@@ -80,7 +57,7 @@ impl AgentTool for BrowserTabsTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -131,4 +108,24 @@ impl AgentTool for BrowserTabsTool {
             )),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    action: String,
+    #[serde(default)]
+    index:  Option<usize>,
+}
+
+/// Serialize a list of tabs into JSON.
+fn tabs_json(tabs: &[crate::browser::TabInfo]) -> Vec<serde_json::Value> {
+    tabs.iter()
+        .map(|t| {
+            serde_json::json!({
+                "index": t.index,
+                "tab_id": t.tab_id,
+                "is_active": t.is_active,
+            })
+        })
+        .collect()
 }

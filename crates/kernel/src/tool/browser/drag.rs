@@ -14,25 +14,23 @@
 
 //! Drag an element (stub — not yet implemented).
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
-use crate::tool::{AgentTool, ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolOutput};
 
 /// Drag an element from one position to another. Stub — pending Lightpanda
 /// support.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-drag",
+    description = "Drag an element from one position to another on the page.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserDragTool;
 
 impl BrowserDragTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_DRAG;
-}
-
-#[async_trait]
-impl AgentTool for BrowserDragTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Drag an element from one position to another on the page." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["startRef", "endRef"],
@@ -49,7 +47,7 @@ impl AgentTool for BrowserDragTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

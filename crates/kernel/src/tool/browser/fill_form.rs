@@ -14,26 +14,22 @@
 
 //! Fill a form with multiple values (stub — not yet implemented).
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
-use crate::tool::{AgentTool, ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolOutput};
 
 /// Fill multiple form fields at once. Stub — pending Lightpanda support.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-fill-form",
+    description = "Fill multiple form fields at once by providing a mapping of ref IDs to values.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserFillFormTool;
 
 impl BrowserFillFormTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_FILL_FORM;
-}
-
-#[async_trait]
-impl AgentTool for BrowserFillFormTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Fill multiple form fields at once by providing a mapping of ref IDs to values."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["fields"],
@@ -50,7 +46,7 @@ impl AgentTool for BrowserFillFormTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

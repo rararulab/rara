@@ -14,45 +14,31 @@
 
 //! Type text into an element in the active browser page.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Type text into an input element identified by its ref ID.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-type",
+    description = "Type text into an input element on the page. Optionally submit the form by \
+                   pressing Enter after typing.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserTypeTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserTypeTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_TYPE;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    r#ref:   String,
-    text:    String,
-    #[serde(default)]
-    submit:  bool,
-    #[serde(default)]
-    element: Option<String>,
-}
-
-#[async_trait]
-impl AgentTool for BrowserTypeTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Type text into an input element on the page. Optionally submit the form by pressing Enter \
-         after typing."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["ref", "text"],
@@ -77,7 +63,7 @@ impl AgentTool for BrowserTypeTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -93,4 +79,14 @@ impl AgentTool for BrowserTypeTool {
 
         Ok(serde_json::json!({ "snapshot": snapshot }).into())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    r#ref:   String,
+    text:    String,
+    #[serde(default)]
+    submit:  bool,
+    #[serde(default)]
+    element: Option<String>,
 }

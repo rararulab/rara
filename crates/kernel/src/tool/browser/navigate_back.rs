@@ -14,40 +14,37 @@
 
 //! Navigate back in the active browser tab.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Navigate back in the active tab's history.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-navigate-back",
+    description = "Navigate back in the active browser tab. Returns a fresh accessibility \
+                   snapshot.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserNavigateBackTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserNavigateBackTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_NAVIGATE_BACK;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[async_trait]
-impl AgentTool for BrowserNavigateBackTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Navigate back in the active browser tab. Returns a fresh accessibility snapshot."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {}
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

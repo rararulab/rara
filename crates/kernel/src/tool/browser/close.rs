@@ -14,38 +14,36 @@
 
 //! Close all browser tabs.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Close all browser tabs and reset the browser state.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-close",
+    description = "Close all browser tabs and reset the browser state.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserCloseTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserCloseTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_CLOSE;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[async_trait]
-impl AgentTool for BrowserCloseTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Close all browser tabs and reset the browser state." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {}
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,
