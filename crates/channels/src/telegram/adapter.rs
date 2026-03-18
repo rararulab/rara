@@ -1431,6 +1431,135 @@ async fn handle_guard_callback(
     }
 }
 
+/// Handle a tool-call-limit callback query (continue/stop) from a Telegram
+/// inline keyboard button.
+///
+/// ## Callback data protocol
+///
+/// Format: `"limit:{action}:{session_key}:{limit_id}"`
+///
+/// - `action`      — `"continue"` (resume loop) or `"stop"` (graceful stop)
+/// - `session_key`  — identifies the session whose agent loop is paused
+/// - `limit_id` — monotonic counter binding this button to a specific limit
+///   instance. Stale IDs are rejected by
+///   `KernelHandle::resolve_tool_call_limit`.
+///
+/// ## Authorization
+///
+/// Uses **chat-based auth** (`callback.message.chat().id`) checked against
+/// `allowed_chat_ids`, matching the same authorization used for inbound
+/// messages. This is intentional: in group chats any member of the allowed
+/// chat can resolve the limit, not just the user who triggered it.
+///
+/// ## UI feedback
+///
+/// After resolving, the original inline keyboard message is edited to show
+/// who made the decision and what action was taken.
+async fn handle_tool_call_limit_callback(
+    handle: &KernelHandle,
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    allowed_chat_ids: &[i64],
+) {
+    // Verify authorization: check that the callback originates from an
+    // allowed chat (same list used for message authorization).
+    let cb_chat_id = callback
+        .message
+        .as_ref()
+        .map(|m| m.chat().id.0)
+        .unwrap_or(0);
+    if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&cb_chat_id) {
+        warn!(
+            chat_id = cb_chat_id,
+            "tool call limit callback: unauthorized chat"
+        );
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("⚠️ Unauthorized")
+            .await;
+        return;
+    }
+
+    // Parse "limit:continue:{session_key}:{limit_id}" or
+    // "limit:stop:{session_key}:{limit_id}"
+    let parts: Vec<&str> = data.splitn(4, ':').collect();
+    if parts.len() != 4 {
+        warn!(data, "tool call limit callback: malformed data");
+        return;
+    }
+
+    let (action, session_key_str, limit_id_str) = (parts[1], parts[2], parts[3]);
+    let session_key = match rara_kernel::session::SessionKey::try_from_raw(session_key_str) {
+        Ok(k) => k,
+        Err(e) => {
+            warn!(error = %e, "tool call limit callback: invalid session key");
+            return;
+        }
+    };
+    let limit_id: u64 = match limit_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            warn!(limit_id_str, "tool call limit callback: invalid limit_id");
+            return;
+        }
+    };
+
+    let decision = match action {
+        "continue" => rara_kernel::io::ToolCallLimitDecision::Continue,
+        "stop" => rara_kernel::io::ToolCallLimitDecision::Stop,
+        _ => {
+            warn!(action, "tool call limit callback: unknown action");
+            return;
+        }
+    };
+
+    let resolved = handle.resolve_tool_call_limit(&session_key, limit_id, decision);
+
+    let answer_text = match decision {
+        rara_kernel::io::ToolCallLimitDecision::Continue => "▶️ Continuing",
+        rara_kernel::io::ToolCallLimitDecision::Stop => "⏹ Stopped",
+    };
+    let _ = bot
+        .answer_callback_query(callback.id.clone())
+        .text(answer_text)
+        .await;
+
+    // Edit message to show decision, remove buttons.
+    if let Some(msg) = &callback.message {
+        let decided_by = callback.from.username.as_deref().unwrap_or("unknown");
+        let (msg_id, chat_id, original_text) = match msg {
+            teloxide::types::MaybeInaccessibleMessage::Regular(m) => (
+                m.id,
+                m.chat.id,
+                m.text().unwrap_or("Pause decision").to_owned(),
+            ),
+            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => {
+                (m.message_id, m.chat.id, "Pause decision".to_owned())
+            }
+        };
+
+        let status = if resolved {
+            match decision {
+                rara_kernel::io::ToolCallLimitDecision::Continue => {
+                    format!("▶️ <b>Continued</b> by @{decided_by}")
+                }
+                rara_kernel::io::ToolCallLimitDecision::Stop => {
+                    format!("⏹ <b>Stopped</b> by @{decided_by}")
+                }
+            }
+        } else {
+            "⚠️ Decision expired (agent already finished or timed out)".to_string()
+        };
+
+        let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
+        let _ = bot
+            .edit_message_text(chat_id, msg_id, new_text)
+            .parse_mode(ParseMode::Html)
+            .await;
+    }
+}
+
 /// Handle a trace show/hide callback query from an inline keyboard button.
 ///
 /// Callback data format: `"trace:{action}:{chat_id}:{msg_id}"`
@@ -1602,6 +1731,11 @@ async fn handle_update(
         if let Some(data) = &callback.data {
             if data.starts_with("guard:") {
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
+                return;
+            }
+            if data.starts_with("limit:") {
+                handle_tool_call_limit_callback(handle, bot, callback, data, allowed_chat_ids)
+                    .await;
                 return;
             }
             if data.starts_with("trace:") {
@@ -2404,6 +2538,38 @@ fn spawn_stream_forwarder(
                             // stash for the ExecutionTrace built in RecvError::Closed.
                             progress.model = model;
                             progress.iterations = iterations;
+                        }
+                        // Tool call limit: send inline keyboard with continue/stop
+                        // buttons. The callback data encodes session_key and
+                        // limit_id so handle_tool_call_limit_callback can route the
+                        // decision back to the correct oneshot channel.
+                        Ok(StreamEvent::ToolCallLimit { session_key, limit_id, tool_calls_made, elapsed_secs }) => {
+                            let text = format!(
+                                "⚠️ <b>Agent Paused</b>\n\n\
+                                 已执行 <b>{tool_calls_made}</b> 次工具调用（耗时 {elapsed_secs}s）。\n\
+                                 是否继续？",
+                            );
+                            let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                InlineKeyboardButton::callback(
+                                    "▶️ 继续",
+                                    format!("limit:continue:{session_key}:{limit_id}"),
+                                ),
+                                InlineKeyboardButton::callback(
+                                    "⏹ 停止",
+                                    format!("limit:stop:{session_key}:{limit_id}"),
+                                ),
+                            ]]);
+                            let result = bot
+                                .send_message(ChatId(chat_id), &text)
+                                .parse_mode(ParseMode::Html)
+                                .reply_markup(keyboard)
+                                .await;
+                            if let Err(e) = result {
+                                warn!(error = %e, "forward_stream: failed to send tool call limit prompt");
+                            }
+                        }
+                        Ok(StreamEvent::ToolCallLimitResolved { .. }) => {
+                            // Informational only — already handled by callback.
                         }
                         Ok(_) => {} // Ignore: Progress (stage changes have no TG UX)
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

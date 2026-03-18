@@ -294,6 +294,8 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
                 selected_anchor,
             })
         }
+        StreamEvent::ToolCallLimit { .. } => None, // handled by dedicated channel listener
+        StreamEvent::ToolCallLimitResolved { .. } => None, // informational only
     }
 }
 

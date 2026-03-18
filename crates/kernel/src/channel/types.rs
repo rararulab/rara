@@ -433,6 +433,19 @@ pub enum StreamEvent {
     Done { text: String },
     /// Streaming terminated with an error.
     Error { message: String },
+    /// Agent loop paused at tool call limit — adapter should prompt user.
+    ToolCallLimit {
+        session_key:     String,
+        limit_id:        u64,
+        tool_calls_made: usize,
+        elapsed_secs:    u64,
+    },
+    /// Tool call limit resolved by user.
+    ToolCallLimitResolved {
+        session_key: String,
+        limit_id:    u64,
+        continued:   bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

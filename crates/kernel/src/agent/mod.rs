@@ -221,6 +221,21 @@ pub struct AgentManifest {
     /// unless overridden by session-level `/msg_version`.
     #[serde(default)]
     pub default_execution_mode: Option<ExecutionMode>,
+    /// Per-turn tool call ceiling that triggers a limit requiring user
+    /// confirmation before the agent loop continues.
+    ///
+    /// When cumulative `tool_calls_made >= tool_call_limit`, the loop
+    /// emits a [`StreamEvent::ToolCallLimit`] and blocks on a oneshot channel
+    /// for up to 120 seconds. If the user continues, the next limit fires
+    /// after another `tool_call_limit` calls (i.e. the threshold is
+    /// additive, not reset to zero).
+    ///
+    /// **Default: `0` (disabled).** Set to a positive value in the agent
+    /// manifest YAML to enable. Only channels with interactive decision UI
+    /// (e.g. Telegram inline keyboard) should enable this; channels without
+    /// UI would hit the 120s timeout and silently stop.
+    #[serde(default)]
+    pub tool_call_limit:        Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.
@@ -887,6 +902,20 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    // ── Tool call limit circuit breaker ──────────────────────────────────
+    // Prevents runaway tool loops by pausing execution every N tool calls
+    // and asking the user whether to continue. 0 = disabled (default).
+    let limit_interval = manifest.tool_call_limit.unwrap_or(0);
+    // Absolute tool call count at which the next limit fires. After each
+    // continue decision this advances by `limit_interval` (additive).
+    let mut next_limit_at: usize = limit_interval;
+    // Monotonically increasing counter ensuring each limit event has a
+    // unique ID. Prevents stale Telegram inline buttons from resolving a
+    // newer limit (handle.resolve_tool_call_limit checks ID match).
+    let mut limit_id_counter: u64 = 0;
+    // Distinguishes "user stopped via limit" from "max iterations exhausted"
+    // in the post-loop exit logic — they produce different user messages.
+    let mut stopped_by_limit = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1817,6 +1846,81 @@ pub(crate) async fn run_agent_loop(
             });
         }
 
+        // ── Tool call limit circuit breaker ──────────────────────────────
+        // When cumulative tool calls reach the ceiling, pause execution and
+        // wait for the user to decide whether to continue or stop.
+        //
+        // Flow:
+        //   1. Emit ToolCallLimit → adapter shows inline buttons to the user.
+        //   2. Register a oneshot channel on the session (keyed by limit_id).
+        //   3. Await the oneshot with a 120s hard timeout.
+        //   4a. Continue → advance next_limit_at by limit_interval.
+        //   4b. Stop / Timeout / channel closed → set stopped_by_limit, break.
+        //
+        // The 120s timeout prevents the agent loop from hanging indefinitely
+        // if the user walks away or the adapter lacks decision UI.
+        if limit_interval > 0 && tool_calls_made >= next_limit_at {
+            limit_id_counter += 1;
+            let current_limit_id = limit_id_counter;
+            let elapsed_secs = turn_start.elapsed().as_secs();
+            stream_handle.emit(StreamEvent::ToolCallLimit {
+                session_key: session_key.to_string(),
+                limit_id: current_limit_id,
+                tool_calls_made,
+                elapsed_secs,
+            });
+
+            // Register the oneshot sender on the session so that the adapter
+            // (e.g. Telegram callback handler) can deliver the user's decision.
+            // Uses the same oneshot pattern as the guard approval system.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle.register_tool_call_limit(&session_key, current_limit_id, tx);
+
+            info!(
+                tool_calls_made,
+                next_limit_at,
+                limit_id = current_limit_id,
+                elapsed_secs,
+                "agent loop paused at tool call limit, awaiting user decision"
+            );
+
+            // 120s hard timeout — treats expiry the same as an explicit Stop.
+            let decision = tokio::select! {
+                result = tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    rx,
+                ) => result,
+                _ = turn_cancel.cancelled() => {
+                    return Err(KernelError::Interrupted);
+                }
+            };
+
+            match decision {
+                Ok(Ok(crate::io::ToolCallLimitDecision::Continue)) => {
+                    info!(tool_calls_made, "user chose to continue agent loop");
+                    // Additive: next limit fires after another full interval.
+                    next_limit_at = tool_calls_made + limit_interval;
+                    stream_handle.emit(StreamEvent::ToolCallLimitResolved {
+                        session_key: session_key.to_string(),
+                        limit_id:    current_limit_id,
+                        continued:   true,
+                    });
+                }
+                _ => {
+                    // Explicit Stop, 120s timeout, or oneshot dropped — all
+                    // treated as a graceful stop. NOT max-iteration exhaustion.
+                    warn!(tool_calls_made, "agent loop stopped by user or timeout");
+                    stream_handle.emit(StreamEvent::ToolCallLimitResolved {
+                        session_key: session_key.to_string(),
+                        limit_id:    current_limit_id,
+                        continued:   false,
+                    });
+                    stopped_by_limit = true;
+                    break;
+                }
+            }
+        }
+
         // ── Runtime context guard ──────────────────────────────────────
         // Evaluate context pressure from the tape's estimated token count
         // (which reflects actual usage metadata) rather than from the
@@ -1865,26 +1969,46 @@ pub(crate) async fn run_agent_loop(
         }
     }
 
-    // Max iterations exhausted — return partial results with failure markers
-    warn!(
-        max_iterations,
-        tool_calls_made, "inline agent loop hit max iterations limit, returning partial results"
-    );
-    let exhaustion_error = format!(
-        "max iterations exhausted ({max_iterations} iterations, {tool_calls_made} tool calls)"
-    );
-    // Emit a stream warning so adapters (Telegram, SSE) can surface it to the
-    // user immediately.
-    stream_handle.emit(StreamEvent::Progress {
-        stage: format!("[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"),
-    });
-    // If the agent spent the entire turn doing tool calls and produced no
-    // visible text, synthesise a fallback message so the user is not left with
-    // a blank response.
-    if last_accumulated_text.is_empty() {
-        last_accumulated_text =
-            format!("[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]");
-    }
+    // Determine exit reason and build appropriate error/message.
+    let exhaustion_error = if stopped_by_limit {
+        // User clicked "stop" or tool call limit timed out — not an exhaustion error.
+        let msg = format!("agent stopped by user/timeout after {tool_calls_made} tool calls");
+        warn!(
+            tool_calls_made,
+            "agent loop stopped by tool call limit decision"
+        );
+        stream_handle.emit(StreamEvent::Progress {
+            stage: format!("[已停止] 已执行 {tool_calls_made} 次工具调用。"),
+        });
+        if last_accumulated_text.is_empty() {
+            last_accumulated_text = format!("[已停止，已执行 {tool_calls_made} 次工具调用。]");
+        }
+        msg
+    } else {
+        // Max iterations exhausted — return partial results with failure markers
+        warn!(
+            max_iterations,
+            tool_calls_made,
+            "inline agent loop hit max iterations limit, returning partial results"
+        );
+        let msg = format!(
+            "max iterations exhausted ({max_iterations} iterations, {tool_calls_made} tool calls)"
+        );
+        // Emit a stream warning so adapters (Telegram, SSE) can surface it to the
+        // user immediately.
+        stream_handle.emit(StreamEvent::Progress {
+            stage: format!("[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"),
+        });
+        // If the agent spent the entire turn doing tool calls and produced no
+        // visible text, synthesise a fallback message so the user is not left with
+        // a blank response.
+        if last_accumulated_text.is_empty() {
+            last_accumulated_text =
+                format!("[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]");
+        }
+        msg
+    };
+    let actual_iterations = iteration_traces.len();
     let trace = TurnTrace {
         duration_ms: turn_start.elapsed().as_millis() as u64,
         model: model.clone(),
@@ -1911,7 +2035,7 @@ pub(crate) async fn run_agent_loop(
 
     Ok(AgentTurnResult {
         text: last_accumulated_text,
-        iterations: max_iterations,
+        iterations: actual_iterations,
         tool_calls: tool_calls_made,
         model: model.clone(),
         trace,
