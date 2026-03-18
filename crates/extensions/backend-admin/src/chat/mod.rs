@@ -18,6 +18,6 @@ mod router;
 pub mod service;
 
 pub use router::{
-    BindChannelRequest, CreateSessionRequest, ListSessionsQuery, SetFavoritesRequest,
-    UpdateSessionRequest, routes,
+    BindChannelRequest, CreateSessionRequest, GetTraceQuery, ListMessagesQuery, ListSessionsQuery,
+    SetFavoritesRequest, UpdateSessionRequest, routes,
 };
