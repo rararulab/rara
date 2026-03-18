@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/rararulab/rara/scripts/internal/deps"
 	"github.com/rararulab/rara/scripts/internal/worktree"
 	"github.com/urfave/cli/v3"
 )
@@ -16,6 +17,7 @@ func main() {
 		Usage: "Unified developer toolkit for rara",
 		Commands: []*cli.Command{
 			worktree.Cmd(),
+			deps.Cmd(),
 		},
 	}
 

@@ -80,9 +80,9 @@ test:
 
 alias t := test
 
-[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny)")]
+[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, check-deps)")]
 [group("👆 Code Quality")]
-lint:
+lint: check-deps
     @echo "🔍 Running clippy..."
     cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
     @echo "📚 Building documentation..."
@@ -316,6 +316,11 @@ devtool-build:
 [group("🌳 Worktree")]
 wt: devtool-build
     @{{DEVTOOL}} wt
+
+[doc("check crate dependency direction rules")]
+[group("👆 Code Quality")]
+check-deps: devtool-build
+    @{{DEVTOOL}} check-deps
 
 # ========================================================================================
 # Dependency Management

@@ -45,19 +45,42 @@ jobs:
       - name: Buf format check
         run: cd api && buf format --diff --exit-code
 
+  check-deps:
+    name: Crate Dependency Direction
+    runs-on: arc-runner-set
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: scripts/go.mod
+          cache-dependency-path: scripts/go.sum
+
+      - name: Build devtool
+        run: cd scripts && go build -o bin/devtool ./cmd/devtool/
+
+      - name: Check crate dependency direction
+        run: scripts/bin/devtool check-deps
+
   lint-success:
     name: Lint Success
     runs-on: arc-runner-set
-    needs: [rust-format, proto-lint]
+    needs: [rust-format, proto-lint, check-deps]
     if: always()
     steps:
       - name: Check all lint jobs status
         env:
           RUST_FORMAT_RESULT: ${{ needs.rust-format.result }}
           PROTO_LINT_RESULT: ${{ needs.proto-lint.result }}
+          CHECK_DEPS_RESULT: ${{ needs.check-deps.result }}
         run: |
           if [[ "$RUST_FORMAT_RESULT" != "success" || \
-                "$PROTO_LINT_RESULT" != "success" ]]; then
+                "$PROTO_LINT_RESULT" != "success" || \
+                "$CHECK_DEPS_RESULT" != "success" ]]; then
             echo "One or more lint jobs failed"
             exit 1
           fi
