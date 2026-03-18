@@ -28,6 +28,7 @@
 
 # Development
 
+- [Harness Engineering](harness-engineering.md)
 - [Module Quality Matrix](quality-matrix.md)
 
 # Diary
