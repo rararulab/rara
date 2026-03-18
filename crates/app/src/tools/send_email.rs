@@ -13,20 +13,31 @@
 // limitations under the License.
 
 //! Send email primitive via Gmail SMTP.
-//!
-//! Reads Gmail credentials from runtime settings at call time,
-//! checks `auto_send_enabled`, and sends via `smtp.gmail.com:587` with
-//! STARTTLS + App Password authentication.
 
+use async_trait::async_trait;
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     message::{Attachment, MultiPart, SinglePart, header::ContentType},
     transport::smtp::authentication::Credentials,
 };
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SendEmailParams {
+    /// Recipient email address.
+    to:              String,
+    /// Email subject line.
+    subject:         String,
+    /// Email body text (plain text).
+    body:            String,
+    /// Optional absolute path to a PDF file to attach.
+    attachment_path: Option<String>,
+}
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
 #[derive(ToolDef)]
@@ -34,83 +45,37 @@ use serde_json::json;
     name = "send-email",
     description = "Send an email via Gmail SMTP. Requires Gmail address and App Password to be \
                    configured in settings, and auto_send_enabled must be true. Supports optional \
-                   PDF file attachment by providing the absolute path to the file on disk.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   PDF file attachment by providing the absolute path to the file on disk."
 )]
 pub struct SendEmailTool {
     settings: std::sync::Arc<dyn SettingsProvider>,
 }
-
 impl SendEmailTool {
     pub fn new(settings: std::sync::Arc<dyn SettingsProvider>) -> Self { Self { settings } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "to": {
-                    "type": "string",
-                    "description": "Recipient email address"
-                },
-                "subject": {
-                    "type": "string",
-                    "description": "Email subject line"
-                },
-                "body": {
-                    "type": "string",
-                    "description": "Email body text (plain text)"
-                },
-                "attachment_path": {
-                    "type": "string",
-                    "description": "Optional absolute path to a PDF file to attach"
-                }
-            },
-            "required": ["to", "subject", "body"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for SendEmailTool {
+    type Output = Value;
+    type Params = SendEmailParams;
 
-    async fn exec(
-        &self,
-        params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let to = params
-            .get("to")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: to"))?;
-
-        let subject = params
-            .get("subject")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: subject"))?;
-
-        let body = params
-            .get("body")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: body"))?;
-
-        let attachment_path = params.get("attachment_path").and_then(|v| v.as_str());
-
-        // Read gmail settings at call time.
+    async fn run(&self, params: SendEmailParams, _context: &ToolContext) -> anyhow::Result<Value> {
         let auto_send = self.settings.get(keys::GMAIL_AUTO_SEND_ENABLED).await;
         if auto_send.as_deref() != Some("true") {
-            return Ok(json!({ "error": "auto send is disabled" }).into());
+            return Ok(serde_json::json!({"error": "auto send is disabled"}));
         }
-
         let from_address = match self.settings.get(keys::GMAIL_ADDRESS).await {
             Some(addr) if !addr.is_empty() => addr,
-            _ => return Ok(json!({ "error": "gmail not configured: missing address" }).into()),
+            _ => return Ok(serde_json::json!({"error": "gmail not configured: missing address"})),
         };
-
         let app_password = match self.settings.get(keys::GMAIL_APP_PASSWORD).await {
             Some(pw) if !pw.is_empty() => pw,
             _ => {
-                return Ok(json!({ "error": "gmail not configured: missing app_password" }).into());
+                return Ok(
+                    serde_json::json!({"error": "gmail not configured: missing app_password"}),
+                );
             }
         };
-
-        // Parse addresses.
         let from_mailbox: lettre::Address =
             from_address
                 .parse()
@@ -118,87 +83,59 @@ impl SendEmailTool {
                     anyhow::anyhow!("invalid from address: {e}")
                 })?;
         let to_mailbox: lettre::Address =
-            to.parse().map_err(|e: lettre::address::AddressError| {
-                anyhow::anyhow!("invalid to address: {e}")
-            })?;
-
-        // Build the message.
+            params
+                .to
+                .parse()
+                .map_err(|e: lettre::address::AddressError| {
+                    anyhow::anyhow!("invalid to address: {e}")
+                })?;
         let from_header = lettre::message::Mailbox::new(None, from_mailbox);
         let to_header = lettre::message::Mailbox::new(None, to_mailbox);
-
-        let message = if let Some(path) = attachment_path {
-            // Read attachment file.
+        let message = if let Some(ref path) = params.attachment_path {
             let file_bytes = tokio::fs::read(path)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to read attachment '{}': {}", path, e))?;
-
             let filename = std::path::Path::new(path).file_name().map_or_else(
                 || "attachment.pdf".to_owned(),
                 |n| n.to_string_lossy().into_owned(),
             );
-
             let attachment = Attachment::new(filename).body(
                 file_bytes,
                 ContentType::parse("application/pdf").unwrap_or(ContentType::TEXT_PLAIN),
             );
-
             let multipart = MultiPart::mixed()
-                .singlepart(SinglePart::plain(body.to_owned()))
+                .singlepart(SinglePart::plain(params.body.clone()))
                 .singlepart(attachment);
-
             lettre::Message::builder()
                 .from(from_header)
                 .to(to_header)
-                .subject(subject)
+                .subject(&params.subject)
                 .multipart(multipart)
                 .map_err(|e| anyhow::anyhow!("failed to build email message: {e}"))?
         } else {
             lettre::Message::builder()
                 .from(from_header)
                 .to(to_header)
-                .subject(subject)
-                .body(body.to_owned())
+                .subject(&params.subject)
+                .body(params.body.clone())
                 .map_err(|e| anyhow::anyhow!("failed to build email message: {e}"))?
         };
-
-        // Build SMTP transport.
         let creds = Credentials::new(from_address.clone(), app_password);
-
         let mailer = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay("smtp.gmail.com")
             .map_err(|e| anyhow::anyhow!("failed to create SMTP transport: {e}"))?
             .credentials(creds)
             .port(587)
             .build();
-
-        // Send.
         match mailer.send(message).await {
             Ok(response) => {
-                tracing::info!(
-                    from = %from_address,
-                    to = %to,
-                    subject = %subject,
-                    "email sent successfully"
-                );
-                Ok(json!({
-                    "sent": true,
-                    "from": from_address,
-                    "to": to,
-                    "subject": subject,
-                    "smtp_code": response.code().to_string(),
-                })
-                .into())
+                tracing::info!(from = %from_address, to = %params.to, subject = %params.subject, "email sent successfully");
+                Ok(
+                    serde_json::json!({"sent": true, "from": from_address, "to": params.to, "subject": params.subject, "smtp_code": response.code().to_string()}),
+                )
             }
             Err(e) => {
-                tracing::error!(
-                    from = %from_address,
-                    to = %to,
-                    error = %e,
-                    "failed to send email"
-                );
-                Ok(json!({
-                    "error": format!("smtp error: {e}"),
-                })
-                .into())
+                tracing::error!(from = %from_address, to = %params.to, error = %e, "failed to send email");
+                Ok(serde_json::json!({"error": format!("smtp error: {e}")}))
             }
         }
     }

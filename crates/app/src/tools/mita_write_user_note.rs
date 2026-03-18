@@ -16,18 +16,46 @@
 //!
 //! Unlike [`super::user_note::UserNoteTool`] which derives the user identity
 //! from `ToolContext` (enforcing per-session security), this tool accepts an
-//! explicit `user_id` parameter.  It is intended only for Mita — the
-//! system-level background agent — which needs to write cross-session
+//! explicit `user_id` parameter.  It is intended only for Mita -- the
+//! system-level background agent -- which needs to write cross-session
 //! observations into arbitrary user tapes during heartbeat analysis.
 
+use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use super::{notify::push_notification, user_note::NOTE_CATEGORIES};
+
+/// Input parameters for the write-user-note tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WriteUserNoteParams {
+    /// The user identifier whose tape to write to.
+    user_id:  String,
+    /// Category of the note.
+    category: String,
+    /// The note content to record.
+    content:  String,
+}
+
+/// Typed result returned by the write-user-note tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct WriteUserNoteResult {
+    /// Operation status.
+    pub status:   String,
+    /// Unique identifier for the created note.
+    pub note_id:  String,
+    /// User identifier.
+    pub user_id:  String,
+    /// Note category.
+    pub category: String,
+    /// Human-readable confirmation message.
+    pub message:  String,
+}
 
 /// Mita-exclusive tool: write a structured note into any user's tape.
 ///
@@ -42,9 +70,7 @@ use super::{notify::push_notification, user_note::NOTE_CATEGORIES};
                    user_id.\n\nCategories:\n- preference: User preferences (language, style, \
                    tools they like)\n- fact: Important facts about the user (name, role, \
                    projects)\n- todo: Tasks or reminders for the user\n- general: Anything else \
-                   worth remembering",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   worth remembering"
 )]
 pub struct MitaWriteUserNoteTool {
     tape_service: TapeService,
@@ -52,84 +78,57 @@ pub struct MitaWriteUserNoteTool {
 
 impl MitaWriteUserNoteTool {
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
+}
 
-    fn schema() -> serde_json::Value {
-        let categories: Vec<serde_json::Value> = NOTE_CATEGORIES
-            .iter()
-            .map(|c| serde_json::Value::String((*c).to_owned()))
-            .collect();
-        json!({
-            "type": "object",
-            "properties": {
-                "user_id": {
-                    "type": "string",
-                    "description": "The user identifier whose tape to write to"
-                },
-                "category": {
-                    "type": "string",
-                    "enum": categories,
-                    "description": "Category of the note"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The note content to record"
-                }
-            },
-            "required": ["user_id", "category", "content"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for MitaWriteUserNoteTool {
+    type Output = WriteUserNoteResult;
+    type Params = WriteUserNoteParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: WriteUserNoteParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let user_id = params
-            .get("user_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: user_id"))?;
-        let category = params
-            .get("category")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: category"))?;
-        let content = params
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
-
-        if user_id.trim().is_empty() {
+    ) -> anyhow::Result<WriteUserNoteResult> {
+        if params.user_id.trim().is_empty() {
             anyhow::bail!("user_id must not be empty");
         }
 
-        if !NOTE_CATEGORIES.contains(&category) {
+        if !NOTE_CATEGORIES.contains(&params.category.as_str()) {
             anyhow::bail!(
-                "invalid category '{category}': must be one of {}",
+                "invalid category '{}': must be one of {}",
+                params.category,
                 NOTE_CATEGORIES.join(", ")
             );
         }
 
-        if content.trim().is_empty() {
+        if params.content.trim().is_empty() {
             anyhow::bail!("content must not be empty");
         }
 
         let entry = self
             .tape_service
-            .append_user_note(user_id, category, content)
+            .append_user_note(&params.user_id, &params.category, &params.content)
             .await
             .map_err(|e| anyhow::anyhow!("failed to write user note: {e}"))?;
 
         push_notification(
             context,
-            format!("\u{1f4dd} User note [{category}] for {user_id}: {content}"),
+            format!(
+                "\u{1f4dd} User note [{}] for {}: {}",
+                params.category, params.user_id, params.content
+            ),
         );
 
-        Ok(json!({
-            "status": "ok",
-            "note_id": entry.id,
-            "user_id": user_id,
-            "category": category,
-            "message": format!("Note recorded for user '{user_id}' under category '{category}'.")
+        Ok(WriteUserNoteResult {
+            status:   "ok".to_owned(),
+            note_id:  entry.id.to_string(),
+            user_id:  params.user_id.clone(),
+            category: params.category,
+            message:  format!(
+                "Note recorded for user '{}' under category '{}'.",
+                params.user_id, "category"
+            ),
         })
-        .into())
     }
 }

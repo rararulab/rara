@@ -14,12 +14,26 @@
 
 //! Mita-exclusive tool: read tape entries from a specific session.
 
+use async_trait::async_trait;
 use rara_kernel::{
     memory::{TapeService, user_tape_name},
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
+
+/// Input parameters for the read-tape tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadTapeParams {
+    /// The session key to read tape from.
+    session_id: Option<String>,
+    /// Read the user's personal tape. Mutually exclusive with session_id.
+    user_id:    Option<String>,
+    /// Only return the most recent N entries (default: all from last anchor).
+    recent_n:   Option<u64>,
+}
 
 /// Mita tool that reads tape entries from a specified session.
 ///
@@ -31,9 +45,7 @@ use serde_json::{Value, json};
     description = "Read tape entries from a session or user tape. Returns message history \
                    including user messages, assistant responses, and tool calls. Use `recent_n` \
                    to limit to the most recent entries. Provide either `session_id` or `user_id`, \
-                   not both.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   not both."
 )]
 pub struct ReadTapeTool {
     tape_service: TapeService,
@@ -41,33 +53,15 @@ pub struct ReadTapeTool {
 
 impl ReadTapeTool {
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "The session key to read tape from"
-                },
-                "user_id": {
-                    "type": "string",
-                    "description": "Read the user's personal tape (contains notes, preferences, facts). Mutually exclusive with session_id."
-                },
-                "recent_n": {
-                    "type": "integer",
-                    "description": "Only return the most recent N entries (default: all entries from last anchor)"
-                }
-            },
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for ReadTapeTool {
+    type Output = Value;
+    type Params = ReadTapeParams;
 
-    async fn exec(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let session_id = params.get("session_id").and_then(|v| v.as_str());
-        let user_id = params.get("user_id").and_then(|v| v.as_str());
-
-        let tape_name = match (session_id, user_id) {
+    async fn run(&self, params: ReadTapeParams, _ctx: &ToolContext) -> anyhow::Result<Value> {
+        let tape_name = match (params.session_id.as_deref(), params.user_id.as_deref()) {
             (Some(_), Some(_)) => {
                 anyhow::bail!("session_id and user_id are mutually exclusive");
             }
@@ -78,8 +72,6 @@ impl ReadTapeTool {
             }
         };
 
-        let recent_n = params.get("recent_n").and_then(|v| v.as_u64());
-
         // Read entries from the last anchor onward (the current conversation context).
         let entries = self
             .tape_service
@@ -88,7 +80,7 @@ impl ReadTapeTool {
             .map_err(|e| anyhow::anyhow!("failed to read tape '{tape_name}': {e}"))?;
 
         // Apply recent_n limit if specified.
-        let entries = if let Some(n) = recent_n {
+        let entries = if let Some(n) = params.recent_n {
             let n = n as usize;
             if entries.len() > n {
                 entries[entries.len() - n..].to_vec()
@@ -119,7 +111,6 @@ impl ReadTapeTool {
             "tape_name": tape_name,
             "entry_count": formatted.len(),
             "entries": formatted,
-        })
-        .into())
+        }))
     }
 }
