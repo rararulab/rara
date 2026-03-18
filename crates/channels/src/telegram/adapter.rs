@@ -227,8 +227,9 @@ struct ProgressMessage {
     plan_steps:        Option<Vec<PlanStepState>>,
     /// Goal description for the plan header.
     plan_goal:         Option<String>,
-    /// Index of the currently executing step (0-based).
-    plan_current_step: usize,
+    /// Index of the currently executing step (0-based), `None` before first
+    /// step starts.
+    plan_current_step: Option<usize>,
 }
 
 impl ProgressMessage {
@@ -251,7 +252,17 @@ impl ProgressMessage {
             loading_hint: rara_kernel::io::loading_hints::random_hint().to_string(),
             plan_steps: None,
             plan_goal: None,
-            plan_current_step: 0,
+            plan_current_step: None,
+        }
+    }
+
+    /// Render the current progress text, dispatching to plan or reactive
+    /// format.
+    fn render_text(&self) -> String {
+        if self.plan_steps.is_some() {
+            render_plan_progress(self)
+        } else {
+            render_progress(&self.tools, self.turn_started.elapsed(), self)
         }
     }
 }
@@ -451,13 +462,12 @@ fn render_progress(
 
 /// Render plan-mode progress: steps as primary structure, tool calls
 /// nested under the current running step.
-fn render_plan_progress(
-    plan_goal: &str,
-    steps: &[PlanStepState],
-    tools: &[ToolProgress],
-    turn_elapsed: std::time::Duration,
-    progress: &ProgressMessage,
-) -> String {
+fn render_plan_progress(progress: &ProgressMessage) -> String {
+    let plan_goal = progress.plan_goal.as_deref().unwrap_or("Plan");
+    let steps = progress.plan_steps.as_deref().unwrap_or_default();
+    let tools = &progress.tools;
+    let turn_elapsed = progress.turn_started.elapsed();
+
     let total = steps.len();
     let mut lines = vec![format!(
         "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
@@ -2592,17 +2602,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = if progress.plan_steps.is_some() {
-                                render_plan_progress(
-                                    progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                    progress.plan_steps.as_deref().unwrap_or_default(),
-                                    &progress.tools,
-                                    progress.turn_started.elapsed(),
-                                    &progress,
-                                )
-                            } else {
-                                render_progress(&progress.tools, progress.turn_started.elapsed(), &progress)
-                            };
+                            let text = progress.render_text();
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -2633,17 +2633,7 @@ fn spawn_stream_forwarder(
                                 tp.error = error;
                             }
 
-                            let text = if progress.plan_steps.is_some() {
-                                render_plan_progress(
-                                    progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                    progress.plan_steps.as_deref().unwrap_or_default(),
-                                    &progress.tools,
-                                    progress.turn_started.elapsed(),
-                                    &progress,
-                                )
-                            } else {
-                                render_progress(&progress.tools, progress.turn_started.elapsed(), &progress)
-                            };
+                            let text = progress.render_text();
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -2712,13 +2702,7 @@ fn spawn_stream_forwarder(
                             progress.plan_goal = Some(goal.clone());
 
                             // Send initial plan message immediately.
-                            let text = render_plan_progress(
-                                &goal,
-                                progress.plan_steps.as_deref().unwrap_or_default(),
-                                &progress.tools,
-                                progress.turn_started.elapsed(),
-                                &progress,
-                            );
+                            let text = progress.render_text();
                             if !text.is_empty() {
                                 match bot.send_message(ChatId(chat_id), &text).await {
                                     Ok(msg) => { progress.message_id = Some(msg.id); }
@@ -2730,17 +2714,23 @@ fn spawn_stream_forwarder(
                         Ok(StreamEvent::PlanProgress { current_step, status_text, .. }) => {
                             if progress.plan_steps.is_some() {
                                 // Detect step transition: clear tools when step changes.
-                                if current_step != progress.plan_current_step {
+                                if Some(current_step) != progress.plan_current_step {
                                     if let Some(ref mut steps) = progress.plan_steps {
-                                        if let Some(prev) = steps.get_mut(progress.plan_current_step) {
-                                            if matches!(prev.status, StepStatus::Running) {
-                                                prev.status = StepStatus::Done;
+                                        if let Some(prev_idx) = progress.plan_current_step {
+                                            if let Some(prev) = steps.get_mut(prev_idx) {
+                                                if matches!(prev.status, StepStatus::Running) {
+                                                    prev.status = StepStatus::Done;
+                                                }
                                             }
                                         }
                                     }
                                     progress.tools.clear();
-                                    progress.plan_current_step = current_step;
+                                    progress.plan_current_step = Some(current_step);
                                 }
+
+                                // TODO(#580): status detection relies on Chinese string matching
+                                // ("完成"/"失败"/full-width colon). Ideally StreamEvent::PlanProgress
+                                // should carry a structured StepStatus enum instead of free-text.
 
                                 // Update current step.
                                 if let Some(ref mut steps) = progress.plan_steps {
@@ -2768,13 +2758,7 @@ fn spawn_stream_forwarder(
                                 }
 
                                 // Render and edit with throttle + dirty flag.
-                                let text = render_plan_progress(
-                                    progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                    progress.plan_steps.as_deref().unwrap_or_default(),
-                                    &progress.tools,
-                                    progress.turn_started.elapsed(),
-                                    &progress,
-                                );
+                                let text = progress.render_text();
                                 if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                     if let Some(mid) = progress.message_id {
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
@@ -2788,18 +2772,12 @@ fn spawn_stream_forwarder(
                         }
                         Ok(StreamEvent::PlanReplan { reason }) => {
                             if progress.plan_steps.is_some() {
-                                if let Some(ref mut steps) = progress.plan_steps {
-                                    if let Some(step) = steps.get_mut(progress.plan_current_step) {
+                                if let (Some(steps), Some(cur)) = (&mut progress.plan_steps, progress.plan_current_step) {
+                                    if let Some(step) = steps.get_mut(cur) {
                                         step.status = StepStatus::Failed(reason.clone());
                                     }
                                 }
-                                let text = render_plan_progress(
-                                    progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                    progress.plan_steps.as_deref().unwrap_or_default(),
-                                    &progress.tools,
-                                    progress.turn_started.elapsed(),
-                                    &progress,
-                                );
+                                let text = progress.render_text();
                                 if let Some(mid) = progress.message_id {
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                 }
@@ -2808,10 +2786,12 @@ fn spawn_stream_forwarder(
                         }
                         Ok(StreamEvent::PlanCompleted { summary: _ }) => {
                             if progress.plan_steps.is_some() {
-                                // Mark all remaining steps as done.
+                                // Mark running steps as done; leave pending steps as-is
+                                // (they were never started, so marking them "done" would
+                                // be misleading).
                                 if let Some(ref mut steps) = progress.plan_steps {
                                     for step in steps.iter_mut() {
-                                        if matches!(step.status, StepStatus::Running | StepStatus::Pending) {
+                                        if matches!(step.status, StepStatus::Running) {
                                             step.status = StepStatus::Done;
                                         }
                                     }
@@ -2830,13 +2810,7 @@ fn spawn_stream_forwarder(
                                 }
 
                                 // Final render.
-                                let text = render_plan_progress(
-                                    progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                    progress.plan_steps.as_deref().unwrap_or_default(),
-                                    &progress.tools,
-                                    progress.turn_started.elapsed(),
-                                    &progress,
-                                );
+                                let text = progress.render_text();
                                 if let Some(mid) = progress.message_id {
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                 }
@@ -2848,17 +2822,7 @@ fn spawn_stream_forwarder(
                             progress.thinking_ms = thinking_ms;
                             // Trigger a progress re-render if we have a message
                             if progress.message_id.is_some() || !progress.tools.is_empty() {
-                                let text = if progress.plan_steps.is_some() {
-                                    render_plan_progress(
-                                        progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                        progress.plan_steps.as_deref().unwrap_or_default(),
-                                        &progress.tools,
-                                        progress.turn_started.elapsed(),
-                                        &progress,
-                                    )
-                                } else {
-                                    render_progress(&progress.tools, progress.turn_started.elapsed(), &progress)
-                                };
+                                let text = progress.render_text();
                                 if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                     if let Some(mid) = progress.message_id {
                                         let _ = bot
@@ -3059,17 +3023,7 @@ fn spawn_stream_forwarder(
                     // timer keeps ticking even without new stream events.
                     let has_running = progress.tools.iter().any(|t| !t.finished);
                     if (progress_dirty || has_running) && !progress.tools.is_empty() {
-                        let text = if progress.plan_steps.is_some() {
-                            render_plan_progress(
-                                progress.plan_goal.as_deref().unwrap_or("Plan"),
-                                progress.plan_steps.as_deref().unwrap_or_default(),
-                                &progress.tools,
-                                progress.turn_started.elapsed(),
-                                &progress,
-                            )
-                        } else {
-                            render_progress(&progress.tools, progress.turn_started.elapsed(), &progress)
-                        };
+                        let text = progress.render_text();
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot
