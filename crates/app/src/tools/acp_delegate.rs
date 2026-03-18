@@ -45,30 +45,62 @@ pub struct AcpDelegateParams {
     cwd:    Option<String>,
 }
 
-/// Summary of a tool call made by the delegated agent.
+/// A tool call event from the delegated agent.
 #[derive(Debug, Serialize)]
-pub struct ToolCallSummary {
-    id:     String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    title:  Option<String>,
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<String>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolCallEvent {
+    /// The agent started a new tool call.
+    Started { id: String, title: String },
+    /// A progress or completion update for an in-flight tool call.
+    Updated {
+        id:     String,
+        status: DelegateToolCallStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+}
+
+/// Status of a tool call within a delegated agent session.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateToolCallStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+/// File operation performed by the delegated agent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateFileOp {
+    Read,
+    Write,
 }
 
 /// Summary of a file access by the delegated agent.
 #[derive(Debug, Serialize)]
 pub struct FileAccessSummary {
     path:      String,
-    operation: String,
+    operation: DelegateFileOp,
+}
+
+/// Why the delegated agent stopped.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateStopReason {
+    EndTurn,
+    MaxTokens,
+    Refusal,
+    Cancelled,
+    Error,
 }
 
 /// Result of an ACP delegation.
 #[derive(Debug, Serialize)]
 pub struct AcpDelegateResult {
     text:           String,
-    stop_reason:    String,
-    tool_calls:     Vec<ToolCallSummary>,
+    stop_reason:    DelegateStopReason,
+    tool_calls:     Vec<ToolCallEvent>,
     files_accessed: Vec<FileAccessSummary>,
 }
 
@@ -137,7 +169,7 @@ impl ToolExecute for AcpDelegateTool {
 
         // Collect streaming events into structured output.
         let mut text_chunks: Vec<String> = Vec::new();
-        let mut tool_calls: Vec<ToolCallSummary> = Vec::new();
+        let mut tool_calls: Vec<ToolCallEvent> = Vec::new();
         let mut files_accessed: Vec<FileAccessSummary> = Vec::new();
 
         let stop_reason = thread
@@ -164,17 +196,17 @@ impl ToolExecute for AcpDelegateTool {
             warn!(error = %e, "ACP shutdown error (non-fatal)");
         }
 
-        let stop_reason_str = match &stop_reason {
-            StopReason::EndTurn => "end_turn",
-            StopReason::MaxTokens => "max_tokens",
-            StopReason::Refusal => "refusal",
-            StopReason::Cancelled => "cancelled",
-            StopReason::Error(_) => "error",
+        let delegate_stop = match &stop_reason {
+            StopReason::EndTurn => DelegateStopReason::EndTurn,
+            StopReason::MaxTokens => DelegateStopReason::MaxTokens,
+            StopReason::Refusal => DelegateStopReason::Refusal,
+            StopReason::Cancelled => DelegateStopReason::Cancelled,
+            StopReason::Error(_) => DelegateStopReason::Error,
         };
 
         Ok(AcpDelegateResult {
             text: text_chunks.join(""),
-            stop_reason: stop_reason_str.to_owned(),
+            stop_reason: delegate_stop,
             tool_calls,
             files_accessed,
         })
@@ -212,40 +244,37 @@ fn auto_approve_resolver(
 fn collect_event(
     event: &AcpEvent,
     text_chunks: &mut Vec<String>,
-    tool_calls: &mut Vec<ToolCallSummary>,
+    tool_calls: &mut Vec<ToolCallEvent>,
     files_accessed: &mut Vec<FileAccessSummary>,
 ) {
     match event {
         AcpEvent::Text(text) => text_chunks.push(text.clone()),
         AcpEvent::ToolCallStarted { id, title } => {
-            tool_calls.push(ToolCallSummary {
-                id:     id.clone(),
-                title:  Some(title.clone()),
-                status: "started".to_owned(),
-                output: None,
+            tool_calls.push(ToolCallEvent::Started {
+                id:    id.clone(),
+                title: title.clone(),
             });
         }
         AcpEvent::ToolCallUpdate { id, status, output } => {
-            let status_str = match status {
-                ToolCallStatus::Running => "running",
-                ToolCallStatus::Completed => "completed",
-                ToolCallStatus::Failed => "failed",
+            let status = match status {
+                ToolCallStatus::Running => DelegateToolCallStatus::Running,
+                ToolCallStatus::Completed => DelegateToolCallStatus::Completed,
+                ToolCallStatus::Failed => DelegateToolCallStatus::Failed,
             };
-            tool_calls.push(ToolCallSummary {
-                id:     id.clone(),
-                title:  None,
-                status: status_str.to_owned(),
+            tool_calls.push(ToolCallEvent::Updated {
+                id: id.clone(),
+                status,
                 output: output.clone(),
             });
         }
         AcpEvent::FileAccess { path, operation } => {
             let op = match operation {
-                rara_acp::events::FileOperation::Read => "read",
-                rara_acp::events::FileOperation::Write => "write",
+                rara_acp::events::FileOperation::Read => DelegateFileOp::Read,
+                rara_acp::events::FileOperation::Write => DelegateFileOp::Write,
             };
             files_accessed.push(FileAccessSummary {
                 path:      path.display().to_string(),
-                operation: op.to_owned(),
+                operation: op,
             });
         }
         AcpEvent::Plan { title, steps } => {
