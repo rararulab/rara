@@ -14,12 +14,14 @@
 
 //! Manage browser tabs — list, select, close, or create new tabs.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Manage browser tabs: list, select, close, or create new tabs.
@@ -28,9 +30,7 @@ use crate::{
     name = "browser-tabs",
     description = "Manage browser tabs. Actions: 'list' — list all tabs; 'select' — switch to a \
                    tab by index; 'close' — close a tab by index (or the active tab); 'new' — open \
-                   a new blank tab.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   a new blank tab."
 )]
 pub struct BrowserTabsTool {
     manager: BrowserManagerRef,
@@ -38,37 +38,56 @@ pub struct BrowserTabsTool {
 
 impl BrowserTabsTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["action"],
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["list", "new", "close", "select"],
-                    "description": "The tab action to perform"
-                },
-                "index": {
-                    "type": "integer",
-                    "description": "Tab index for 'select' or 'close' actions"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-tabs tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserTabsParams {
+    /// The tab action to perform: list, new, close, or select
+    action: String,
+    /// Tab index for 'select' or 'close' actions
+    #[serde(default)]
+    index:  Option<usize>,
+}
 
-    async fn exec(
+/// Serializable tab information for tool output.
+#[derive(Debug, Clone, Serialize)]
+pub struct TabEntry {
+    /// Tab position index
+    index:     usize,
+    /// Unique tab identifier
+    tab_id:    String,
+    /// Whether this is the currently active tab
+    is_active: bool,
+}
+
+/// Result of the browser-tabs tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserTabsResult {
+    /// List of tabs after the action
+    tabs:   Vec<TabEntry>,
+    /// Tab ID of the newly created tab (only for 'new' action)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tab_id: Option<String>,
+}
+
+#[async_trait]
+impl ToolExecute for BrowserTabsTool {
+    type Output = BrowserTabsResult;
+    type Params = BrowserTabsParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BrowserTabsParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let p: Params =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
+    ) -> anyhow::Result<BrowserTabsResult> {
         match p.action.as_str() {
             "list" => {
                 let tabs = self.manager.list_tabs().await;
-                Ok(serde_json::json!({ "tabs": tabs_json(&tabs) }).into())
+                Ok(BrowserTabsResult {
+                    tabs:   to_entries(&tabs),
+                    tab_id: None,
+                })
             }
             "new" => {
                 // Open about:blank as a new tab.
@@ -78,11 +97,10 @@ impl BrowserTabsTool {
                     .await
                     .map_err(|e| anyhow::anyhow!("new tab failed: {e}"))?;
                 let tabs = self.manager.list_tabs().await;
-                Ok(serde_json::json!({
-                    "tab_id": result.tab_id,
-                    "tabs": tabs_json(&tabs),
+                Ok(BrowserTabsResult {
+                    tabs:   to_entries(&tabs),
+                    tab_id: Some(result.tab_id),
                 })
-                .into())
             }
             "select" => {
                 let index = p.index.ok_or_else(|| {
@@ -93,7 +111,10 @@ impl BrowserTabsTool {
                     .await
                     .map_err(|e| anyhow::anyhow!("select_tab failed: {e}"))?;
                 let tabs = self.manager.list_tabs().await;
-                Ok(serde_json::json!({ "tabs": tabs_json(&tabs) }).into())
+                Ok(BrowserTabsResult {
+                    tabs:   to_entries(&tabs),
+                    tab_id: None,
+                })
             }
             "close" => {
                 let tabs = self
@@ -101,7 +122,10 @@ impl BrowserTabsTool {
                     .close_tab(p.index)
                     .await
                     .map_err(|e| anyhow::anyhow!("close_tab failed: {e}"))?;
-                Ok(serde_json::json!({ "tabs": tabs_json(&tabs) }).into())
+                Ok(BrowserTabsResult {
+                    tabs:   to_entries(&tabs),
+                    tab_id: None,
+                })
             }
             other => Err(anyhow::anyhow!(
                 "unknown tab action '{other}'; expected one of: list, new, select, close"
@@ -110,22 +134,13 @@ impl BrowserTabsTool {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    action: String,
-    #[serde(default)]
-    index:  Option<usize>,
-}
-
-/// Serialize a list of tabs into JSON.
-fn tabs_json(tabs: &[crate::browser::TabInfo]) -> Vec<serde_json::Value> {
+/// Convert internal tab info to serializable entries.
+fn to_entries(tabs: &[crate::browser::TabInfo]) -> Vec<TabEntry> {
     tabs.iter()
-        .map(|t| {
-            serde_json::json!({
-                "index": t.index,
-                "tab_id": t.tab_id,
-                "is_active": t.is_active,
-            })
+        .map(|t| TabEntry {
+            index:     t.index,
+            tab_id:    t.tab_id.clone(),
+            is_active: t.is_active,
         })
         .collect()
 }

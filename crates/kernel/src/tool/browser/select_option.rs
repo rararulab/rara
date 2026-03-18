@@ -14,44 +14,41 @@
 
 //! Select an option from a dropdown (stub — not yet implemented).
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
 
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Select an option from a dropdown element. Stub — pending Lightpanda support.
 #[derive(ToolDef)]
 #[tool(
     name = "browser-select-option",
-    description = "Select an option from a dropdown (select) element on the page.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+    description = "Select an option from a dropdown (select) element on the page."
 )]
 pub struct BrowserSelectOptionTool;
 
-impl BrowserSelectOptionTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["ref", "values"],
-            "properties": {
-                "ref": {
-                    "type": "string",
-                    "description": "The ref ID of the select element"
-                },
-                "values": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "The option values to select"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-select-option tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserSelectOptionParams {
+    /// The ref ID of the select element
+    r#ref:  String,
+    /// The option values to select
+    values: Vec<String>,
+}
 
-    async fn exec(
+#[async_trait]
+impl ToolExecute for BrowserSelectOptionTool {
+    type Output = Value;
+    type Params = BrowserSelectOptionParams;
+
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _p: BrowserSelectOptionParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-select-option is not yet implemented — will be added when Lightpanda \
              supports this feature"
