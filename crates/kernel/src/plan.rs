@@ -468,6 +468,8 @@ pub(crate) async fn run_plan_loop(
                 &remaining_steps,
                 &reason,
                 &tool_context,
+                &agent_prompt,
+                &tools_for_plan,
             )
             .await
             {
@@ -703,6 +705,8 @@ async fn replan_via_llm(
     remaining_steps: &[&PlanStep],
     failure_reason: &str,
     tool_context: &crate::tool::ToolContext,
+    agent_system_prompt: &str,
+    tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
     let (driver, model) = handle
         .session_resolve_driver(session_key)
@@ -753,8 +757,19 @@ async fn replan_via_llm(
         },
     );
 
+    // Compose replan prompt with agent identity and available tools so
+    // the replanner understands the agent's capabilities.
+    let tool_summary = build_tool_summary(tools);
+    let mut replan_prompt = format!(
+        "{REPLAN_SYSTEM_PROMPT}\n\n<agent_context>\n{agent_system_prompt}\n</agent_context>"
+    );
+    if !tool_summary.is_empty() {
+        replan_prompt.push_str("\n\n");
+        replan_prompt.push_str(&tool_summary);
+    }
+
     let messages = vec![
-        llm::Message::system(REPLAN_SYSTEM_PROMPT),
+        llm::Message::system(&replan_prompt),
         llm::Message::user(replan_context),
     ];
 
