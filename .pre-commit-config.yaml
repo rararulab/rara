@@ -35,14 +35,14 @@ repos:
 
       - id: quality-matrix
         name: quality matrix
-        entry: bash -c 'scripts/bin/devtool quality-matrix --output docs/src/quality-matrix.md && git diff --quiet docs/src/quality-matrix.md || { echo "quality-matrix.md updated — please git add and re-commit"; exit 1; }'
+        entry: bash -c 'go run ./scripts/cmd/devtool/ quality-matrix --output docs/src/quality-matrix.md && git diff --quiet docs/src/quality-matrix.md || { echo "quality-matrix.md updated — please git add and re-commit"; exit 1; }'
         language: system
         pass_filenames: false
         files: ^(crates/|scripts/internal/quality/)
 
       - id: check-agent-md
         name: check AGENT.md presence
-        entry: scripts/bin/devtool check-agent-md
+        entry: go run ./scripts/cmd/devtool/ check-agent-md
         language: system
         pass_filenames: false
         files: ^crates/
