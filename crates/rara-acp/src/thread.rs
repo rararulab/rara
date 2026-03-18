@@ -28,8 +28,6 @@ pub(crate) enum AcpCommand {
         text:     String,
         reply_tx: oneshot::Sender<Result<StopReason, AcpError>>,
     },
-    /// Cancel the current turn.
-    Cancel,
     /// Gracefully shut down the connection.
     Shutdown { reply_tx: oneshot::Sender<()> },
 }
@@ -108,7 +106,7 @@ pub enum AcpToolCallStatus {
     WaitingForConfirmation {
         /// Available options.
         options:  Vec<PermissionOptionInfo>,
-        /// Oneshot sender for the user's decision.
+        /// Oneshot sender for the user's decision back to the ACP delegate.
         reply_tx: oneshot::Sender<RequestPermissionOutcome>,
     },
     /// Currently executing.
@@ -119,6 +117,21 @@ pub enum AcpToolCallStatus {
     Failed,
     /// User rejected the permission request.
     Rejected,
+}
+
+/// Information about a permission request, passed to the resolver callback.
+///
+/// This is the `Send`-safe subset of [`PermissionBridge`] — the `reply_tx`
+/// oneshot is stored internally in the [`AcpToolCall`] and sent automatically
+/// when the resolver returns.
+#[derive(Debug, Clone)]
+pub struct PermissionRequestInfo {
+    /// Tool call ID for correlation.
+    pub tool_call_id: String,
+    /// Human-readable title of the tool call requesting permission.
+    pub tool_title:   String,
+    /// Available permission options (simplified for display).
+    pub options:      Vec<PermissionOptionInfo>,
 }
 
 /// A `Send + Sync` handle to an ACP agent conversation.
@@ -203,14 +216,18 @@ impl AcpThread {
     /// and calls `on_event` for each event so the caller can forward streaming
     /// updates to the user.
     ///
-    /// For permission requests, `resolve_permission` is called with the
-    /// [`PermissionBridge`]. The returned future must resolve to the user's
-    /// decision. The prompt loop awaits it alongside events.
+    /// For permission requests, `resolve_permission` is called with a
+    /// [`PermissionRequestInfo`] (the `reply_tx` is stored internally). The
+    /// returned future must resolve to the user's decision
+    /// ([`RequestPermissionOutcome`]). The prompt loop sends the outcome back
+    /// to the ACP delegate automatically.
     pub async fn prompt(
         &mut self,
         text: &str,
         mut on_event: impl FnMut(&AcpEvent),
-        resolve_permission: impl Fn(PermissionBridge) -> BoxFuture<'static, RequestPermissionOutcome>,
+        resolve_permission: impl Fn(
+            PermissionRequestInfo,
+        ) -> BoxFuture<'static, RequestPermissionOutcome>,
     ) -> Result<StopReason, AcpError> {
         self.entries
             .push(AcpThreadEntry::UserMessage(text.to_string()));
@@ -300,6 +317,26 @@ impl AcpThread {
                     let tool_title = bridge.tool_title.clone();
                     let options = bridge.options.clone();
 
+                    // Store the reply_tx in the tool call so
+                    // resolve_permission_outcome() can send the decision back.
+                    if let Some(tc) = self.tool_calls.get_mut(&tool_call_id) {
+                        tc.status = AcpToolCallStatus::WaitingForConfirmation {
+                            options: options.clone(),
+                            reply_tx: bridge.reply_tx,
+                        };
+                    } else {
+                        // Tool call not yet registered — create it.
+                        self.tool_calls.insert(tool_call_id.clone(), AcpToolCall {
+                            id: tool_call_id.clone(),
+                            title: tool_title.clone(),
+                            status: AcpToolCallStatus::WaitingForConfirmation {
+                                options: options.clone(),
+                                reply_tx: bridge.reply_tx,
+                            },
+                            output: None,
+                        });
+                    }
+
                     self.status = AcpThreadStatus::WaitingForConfirmation {
                         tool_call_id: tool_call_id.clone(),
                         tool_title: tool_title.clone(),
@@ -309,15 +346,22 @@ impl AcpThread {
                     // Notify the caller.
                     let perm_event = AcpEvent::PermissionRequested {
                         tool_call_id: tool_call_id.clone(),
-                        tool_title,
-                        options,
+                        tool_title: tool_title.clone(),
+                        options: options.clone(),
                     };
                     on_event(&perm_event);
 
-                    // Spawn the resolver as a tokio task so we can continue
-                    // processing events while waiting for the user's decision.
+                    // Build the info struct (without reply_tx) for the resolver.
+                    let info = PermissionRequestInfo {
+                        tool_call_id: tool_call_id.clone(),
+                        tool_title,
+                        options,
+                    };
+
+                    // Spawn the resolver so we can continue processing events
+                    // while waiting for the user's decision.
                     let tc_id = tool_call_id.clone();
-                    let future = resolve_permission(bridge);
+                    let future = resolve_permission(info);
                     let handle = tokio::spawn(async move {
                         let outcome = future.await;
                         (tc_id, outcome)
@@ -361,8 +405,8 @@ impl AcpThread {
         }
     }
 
-    /// Internally resolve a permission outcome by sending the reply back
-    /// to the delegate.
+    /// Send the user's permission decision back to the ACP delegate via the
+    /// stored oneshot channel.
     fn resolve_permission_outcome(
         &mut self,
         tool_call_id: &str,
@@ -385,34 +429,53 @@ impl AcpThread {
             }
             self.status = AcpThreadStatus::Generating;
         } else {
+            // Restore the previous status since we didn't consume a reply_tx.
+            tc.status = prev;
             warn!(
                 tool_call_id,
-                "tool call not in WaitingForConfirmation state"
+                "tool call not in WaitingForConfirmation state — ignoring outcome"
             );
         }
     }
 
-    /// Resolve a pending permission request.
+    /// Resolve a pending permission request externally.
     ///
     /// Called after the user approves/denies in the UI. Sends the outcome back
     /// to the delegate via the stored oneshot channel.
+    ///
+    /// Returns an error if the tool call does not exist or is not waiting for
+    /// confirmation.
     pub fn authorize_tool_call(
         &mut self,
         tool_call_id: &str,
         outcome: RequestPermissionOutcome,
     ) -> Result<(), AcpError> {
-        self.resolve_permission_outcome(tool_call_id, outcome);
-        Ok(())
-    }
+        let tc =
+            self.tool_calls
+                .get_mut(tool_call_id)
+                .ok_or_else(|| AcpError::SessionNotFound {
+                    session_id: tool_call_id.into(),
+                })?;
 
-    /// Cancel the current turn.
-    pub async fn cancel(&self) -> Result<(), AcpError> {
-        self.command_tx
-            .send(AcpCommand::Cancel)
-            .await
-            .map_err(|_| AcpError::Handshake {
-                message: "command channel closed".into(),
+        let prev = std::mem::replace(&mut tc.status, AcpToolCallStatus::Running);
+
+        if let AcpToolCallStatus::WaitingForConfirmation { reply_tx, .. } = prev {
+            let is_rejection = matches!(&outcome, RequestPermissionOutcome::Cancelled);
+            if is_rejection {
+                tc.status = AcpToolCallStatus::Rejected;
+            }
+            if reply_tx.send(outcome).is_err() {
+                warn!(tool_call_id, "permission reply channel already closed");
+            }
+            self.status = AcpThreadStatus::Generating;
+            Ok(())
+        } else {
+            // Restore previous status.
+            tc.status = prev;
+            Err(AcpError::Protocol {
+                message: format!("tool call '{tool_call_id}' is not waiting for confirmation"),
             })
+        }
     }
 
     /// Gracefully shut down: close session, kill subprocess, reap.
@@ -503,9 +566,6 @@ async fn run_connection_actor(
                     _ => StopReason::EndTurn,
                 });
                 let _ = reply_tx.send(mapped);
-            }
-            AcpCommand::Cancel => {
-                debug!("cancel requested (not yet implemented at protocol level)");
             }
             AcpCommand::Shutdown { reply_tx } => {
                 let _ = conn.shutdown().await;
