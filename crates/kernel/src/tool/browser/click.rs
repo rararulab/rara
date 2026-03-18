@@ -14,12 +14,14 @@
 
 //! Click an element in the active browser page.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Click an element identified by its ref ID from the accessibility snapshot.
@@ -27,9 +29,7 @@ use crate::{
 #[tool(
     name = "browser-click",
     description = "Click an element on the page using its ref ID from the accessibility snapshot. \
-                   Returns a fresh snapshot after clicking.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   Returns a fresh snapshot after clicking."
 )]
 pub struct BrowserClickTool {
     manager: BrowserManagerRef,
@@ -37,45 +37,41 @@ pub struct BrowserClickTool {
 
 impl BrowserClickTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["ref"],
-            "properties": {
-                "ref": {
-                    "type": "string",
-                    "description": "The ref ID of the element to click (from the accessibility snapshot)"
-                },
-                "element": {
-                    "type": "string",
-                    "description": "Human-readable description of the element being clicked (for logging)"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-click tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserClickParams {
+    /// The ref ID of the element to click (from the accessibility snapshot)
+    r#ref:   String,
+    /// Human-readable description of the element being clicked (for logging)
+    #[serde(default)]
+    element: Option<String>,
+}
 
-    async fn exec(
+/// Result of the browser-click tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserClickResult {
+    /// Accessibility tree snapshot after clicking
+    snapshot: String,
+}
+
+#[async_trait]
+impl ToolExecute for BrowserClickTool {
+    type Output = BrowserClickResult;
+    type Params = BrowserClickParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BrowserClickParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let p: Params =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
+    ) -> anyhow::Result<BrowserClickResult> {
         let snapshot = self
             .manager
             .click(&p.r#ref)
             .await
             .map_err(|e| anyhow::anyhow!("click failed: {e}"))?;
 
-        Ok(serde_json::json!({ "snapshot": snapshot }).into())
+        Ok(BrowserClickResult { snapshot })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct Params {
-    r#ref:   String,
-    #[serde(default)]
-    element: Option<String>,
 }

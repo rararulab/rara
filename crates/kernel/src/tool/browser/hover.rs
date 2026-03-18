@@ -14,43 +14,38 @@
 
 //! Hover over an element (stub — not yet implemented).
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
 
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Hover over an element by ref ID. Stub — pending Lightpanda support.
 #[derive(ToolDef)]
 #[tool(
     name = "browser-hover",
-    description = "Hover over an element on the page using its ref ID.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+    description = "Hover over an element on the page using its ref ID."
 )]
 pub struct BrowserHoverTool;
 
-impl BrowserHoverTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["ref"],
-            "properties": {
-                "ref": {
-                    "type": "string",
-                    "description": "The ref ID of the element to hover over"
-                },
-                "element": {
-                    "type": "string",
-                    "description": "Human-readable description of the element"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-hover tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserHoverParams {
+    /// The ref ID of the element to hover over
+    r#ref:   String,
+    /// Human-readable description of the element
+    #[serde(default)]
+    element: Option<String>,
+}
 
-    async fn exec(
-        &self,
-        _params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+#[async_trait]
+impl ToolExecute for BrowserHoverTool {
+    type Output = Value;
+    type Params = BrowserHoverParams;
+
+    async fn run(&self, _p: BrowserHoverParams, _context: &ToolContext) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-hover is not yet implemented — will be added when Lightpanda supports this \
              feature"

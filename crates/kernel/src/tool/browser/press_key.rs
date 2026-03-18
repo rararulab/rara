@@ -14,12 +14,14 @@
 
 //! Press a keyboard key in the active browser page.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Press a keyboard key (e.g. Enter, Escape, ArrowDown) in the active page.
@@ -27,9 +29,7 @@ use crate::{
 #[tool(
     name = "browser-press-key",
     description = "Press a keyboard key in the active browser page. Use key names like 'Enter', \
-                   'Escape', 'Tab', 'ArrowDown', etc.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   'Escape', 'Tab', 'ArrowDown', etc."
 )]
 pub struct BrowserPressKeyTool {
     manager: BrowserManagerRef,
@@ -37,38 +37,39 @@ pub struct BrowserPressKeyTool {
 
 impl BrowserPressKeyTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["key"],
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The key to press (e.g. 'Enter', 'Escape', 'Tab', 'ArrowDown', 'a')"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-press-key tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserPressKeyParams {
+    /// The key to press (e.g. 'Enter', 'Escape', 'Tab', 'ArrowDown', 'a')
+    key: String,
+}
 
-    async fn exec(
+/// Result of the browser-press-key tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserPressKeyResult {
+    /// Status indicator
+    status: String,
+}
+
+#[async_trait]
+impl ToolExecute for BrowserPressKeyTool {
+    type Output = BrowserPressKeyResult;
+    type Params = BrowserPressKeyParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BrowserPressKeyParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let p: Params =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
+    ) -> anyhow::Result<BrowserPressKeyResult> {
         self.manager
             .press_key(&p.key)
             .await
             .map_err(|e| anyhow::anyhow!("press_key failed: {e}"))?;
 
-        Ok(serde_json::json!({ "status": "ok" }).into())
+        Ok(BrowserPressKeyResult {
+            status: "ok".to_string(),
+        })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct Params {
-    key: String,
 }

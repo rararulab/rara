@@ -14,12 +14,15 @@
 
 //! Evaluate a JavaScript expression in the active browser page.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Evaluate a JavaScript expression and return the result.
@@ -27,9 +30,7 @@ use crate::{
 #[tool(
     name = "browser-evaluate",
     description = "Evaluate a JavaScript expression in the active browser page and return the \
-                   result.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   result."
 )]
 pub struct BrowserEvaluateTool {
     manager: BrowserManagerRef,
@@ -37,39 +38,38 @@ pub struct BrowserEvaluateTool {
 
 impl BrowserEvaluateTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["expression"],
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "The JavaScript expression to evaluate"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-evaluate tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserEvaluateParams {
+    /// The JavaScript expression to evaluate
+    expression: String,
+}
 
-    async fn exec(
+/// Result of the browser-evaluate tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserEvaluateResult {
+    /// The evaluation result
+    result: Value,
+}
+
+#[async_trait]
+impl ToolExecute for BrowserEvaluateTool {
+    type Output = BrowserEvaluateResult;
+    type Params = BrowserEvaluateParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BrowserEvaluateParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let p: Params =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
+    ) -> anyhow::Result<BrowserEvaluateResult> {
         let result = self
             .manager
             .evaluate(&p.expression)
             .await
             .map_err(|e| anyhow::anyhow!("evaluate failed: {e}"))?;
 
-        Ok(serde_json::json!({ "result": result }).into())
+        Ok(BrowserEvaluateResult { result })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct Params {
-    expression: String,
 }
