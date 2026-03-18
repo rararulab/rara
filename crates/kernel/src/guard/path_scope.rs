@@ -133,16 +133,25 @@ impl PathScopeGuard {
         }
 
         // Check user-approved paths from earlier approvals in this session.
-        if let Ok(approved) = self.approved_prefixes.read() {
-            for prefix in approved.iter() {
-                if path_starts_with(&resolved, prefix) {
-                    tracing::debug!(
-                        path = %resolved.display(),
-                        approved_prefix = %prefix.display(),
-                        "path allowed by dynamic approval"
-                    );
-                    return None;
+        // Fail-closed: if the lock is poisoned we skip dynamic approvals and
+        // fall through to the "blocked" path, which is the safe default.
+        match self.approved_prefixes.read() {
+            Ok(approved) => {
+                for prefix in approved.iter() {
+                    if path_starts_with(&resolved, prefix) {
+                        tracing::debug!(
+                            path = %resolved.display(),
+                            approved_prefix = %prefix.display(),
+                            "path allowed by dynamic approval"
+                        );
+                        return None;
+                    }
                 }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "approved_prefixes lock poisoned, skipping dynamic approvals (fail-closed)"
+                );
             }
         }
 
@@ -203,6 +212,9 @@ impl PathScopeGuard {
         {
             return;
         }
+
+        // Prune narrower entries that are now covered by the new broader prefix.
+        approved.retain(|existing| !path_starts_with(existing, &prefix));
 
         tracing::info!(
             prefix = %prefix.display(),
@@ -507,6 +519,22 @@ mod tests {
         g.approve_path("list-directory", &json!({"path": "/tmp/root/sub"}));
         let approved = g.approved_prefixes.read().unwrap();
         assert_eq!(approved.len(), 1);
+    }
+
+    #[test]
+    fn broader_prefix_prunes_narrower_entries() {
+        let g = guard();
+        // Approve a narrow path first.
+        g.approve_path("list-directory", &json!({"path": "/tmp/root/sub"}));
+        assert_eq!(g.approved_prefixes.read().unwrap().len(), 1);
+        // Approve a broader parent — should replace the narrow entry.
+        g.approve_path("list-directory", &json!({"path": "/tmp/root"}));
+        let approved = g.approved_prefixes.read().unwrap();
+        assert_eq!(approved.len(), 1);
+        assert_eq!(approved[0], PathBuf::from("/tmp/root"));
+        // Sub-path still works.
+        let sub_args = json!({"path": "/tmp/root/sub/deep"});
+        assert_eq!(g.check("list-directory", &sub_args), None);
     }
 
     // ── edge cases ──────────────────────────────────────────────────
