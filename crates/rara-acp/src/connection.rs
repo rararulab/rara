@@ -1,7 +1,7 @@
 //! ACP connection lifecycle — spawn, handshake, prompt, teardown.
 //!
 //! [`AcpConnection`] owns a child agent process and a
-//! [`ClientSideConnection`] that speaks the ACP JSON-RPC protocol over
+//! `ClientSideConnection` that speaks the ACP JSON-RPC protocol over
 //! stdin/stdout.  The connection is `!Send` because the upstream ACP crate
 //! uses `async_trait(?Send)` and `LocalBoxFuture`.
 
