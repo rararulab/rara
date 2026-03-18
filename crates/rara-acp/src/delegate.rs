@@ -1,8 +1,8 @@
 //! ACP client delegate that handles requests from the agent subprocess.
 //!
-//! The delegate implements the `acp::Client` trait, auto-approving all
-//! permission requests, performing direct file I/O, and forwarding session
-//! notifications as [`AcpEvent`]s through an mpsc channel.
+//! The delegate implements the `acp::Client` trait, supporting both
+//! auto-approve mode (for backward compatibility) and interactive permission
+//! forwarding via [`PermissionBridge`].
 
 use std::path::PathBuf;
 
@@ -18,7 +18,17 @@ use agent_client_protocol::{
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-use crate::events::{AcpEvent, FileOperation, ToolCallStatus};
+use crate::events::{
+    AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, ToolCallStatus,
+};
+
+/// Permission handling mode for the delegate.
+enum PermissionMode {
+    /// Auto-approve all permission requests (original behaviour).
+    AutoApprove,
+    /// Forward permission requests via a channel for interactive resolution.
+    Interactive(mpsc::Sender<PermissionBridge>),
+}
 
 /// ACP client delegate that bridges agent requests to rara's event system.
 ///
@@ -26,56 +36,71 @@ use crate::events::{AcpEvent, FileOperation, ToolCallStatus};
 /// a single-threaded `LocalSet` because the upstream trait is `!Send`.
 ///
 /// Behaviour summary:
-/// - **Permissions**: auto-approve by selecting the first `AllowAlways` (or
-///   `AllowOnce`) option from the agent's permission request.
+/// - **Permissions**: either auto-approve or forward via [`PermissionBridge`].
 /// - **File I/O**: directly reads / writes files using `tokio::fs`.
 /// - **Session notifications**: converted to [`AcpEvent`] and forwarded via the
 ///   provided mpsc sender.
 /// - **Terminals**: not supported — returns `method_not_found`.
 pub struct RaraDelegate {
     /// Channel for forwarding ACP events to the kernel.
-    event_tx: mpsc::Sender<AcpEvent>,
-    /// Working directory for resolving relative paths (currently unused but
-    /// reserved for future sandboxing).
+    event_tx:        mpsc::Sender<AcpEvent>,
+    /// How to handle permission requests.
+    permission_mode: PermissionMode,
+    /// Working directory for resolving relative paths.
     #[allow(dead_code)]
-    cwd:      PathBuf,
+    cwd:             PathBuf,
 }
 
 impl RaraDelegate {
-    /// Create a new delegate that sends events to `event_tx`.
+    /// Create a delegate that forwards permissions interactively.
     ///
-    /// `cwd` is the working directory of the agent session, used for context
-    /// when emitting file-access events.
-    pub fn new(event_tx: mpsc::Sender<AcpEvent>, cwd: PathBuf) -> Self { Self { event_tx, cwd } }
+    /// Permission requests are sent via `perm_tx` as [`PermissionBridge`]
+    /// messages. The handler must reply via the oneshot channel; dropping it
+    /// causes `Cancelled`.
+    pub fn new(
+        event_tx: mpsc::Sender<AcpEvent>,
+        perm_tx: mpsc::Sender<PermissionBridge>,
+        cwd: PathBuf,
+    ) -> Self {
+        Self {
+            event_tx,
+            permission_mode: PermissionMode::Interactive(perm_tx),
+            cwd,
+        }
+    }
+
+    /// Create a delegate that auto-approves all permission requests.
+    ///
+    /// This preserves the original behaviour for callers that do not need
+    /// interactive permission handling.
+    pub fn new_auto_approve(event_tx: mpsc::Sender<AcpEvent>, cwd: PathBuf) -> Self {
+        Self {
+            event_tx,
+            permission_mode: PermissionMode::AutoApprove,
+            cwd,
+        }
+    }
 
     /// Send an event with backpressure.
-    ///
-    /// Uses `send().await` so that a slow consumer causes the delegate to
-    /// block rather than silently dropping events.  Falls back to a warning
-    /// only when the receiver has been dropped entirely.
     async fn emit(&self, event: AcpEvent) {
         if self.event_tx.send(event).await.is_err() {
             warn!("ACP event channel closed — dropping event");
         }
     }
 
-    /// Extract plain text from a [`ContentBlock`], returning an empty string
-    /// for non-text variants.
+    /// Extract plain text from a [`ContentBlock`].
     fn text_from_content(block: &ContentBlock) -> String {
         match block {
             ContentBlock::Text(tc) => tc.text.clone(),
             _ => String::new(),
         }
     }
-}
 
-#[async_trait::async_trait(?Send)]
-impl Client for RaraDelegate {
-    async fn request_permission(
+    /// Auto-approve a permission request by selecting the best "allow" option.
+    async fn auto_approve(
         &self,
-        args: RequestPermissionRequest,
+        args: &RequestPermissionRequest,
     ) -> Result<RequestPermissionResponse> {
-        // Pick the first "allow" option, preferring AllowAlways > AllowOnce.
         let selected = args
             .options
             .iter()
@@ -89,12 +114,9 @@ impl Client for RaraDelegate {
         let option_id = match selected {
             Some(opt) => opt.option_id.clone(),
             None => {
-                // Fallback: pick the first option regardless of kind.
                 if let Some(first) = args.options.first() {
                     first.option_id.clone()
                 } else {
-                    // No options available — should not happen per protocol,
-                    // but cancel gracefully.
                     return Ok(RequestPermissionResponse::new(
                         RequestPermissionOutcome::Cancelled,
                     ));
@@ -114,6 +136,74 @@ impl Client for RaraDelegate {
         Ok(RequestPermissionResponse::new(
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id)),
         ))
+    }
+
+    /// Forward a permission request interactively via the bridge channel.
+    async fn interactive_permission(
+        &self,
+        perm_tx: &mpsc::Sender<PermissionBridge>,
+        args: &RequestPermissionRequest,
+    ) -> Result<RequestPermissionResponse> {
+        let tool_call_id = args.tool_call.tool_call_id.to_string();
+        let tool_title = args
+            .tool_call
+            .fields
+            .title
+            .clone()
+            .unwrap_or_else(|| "unknown".into());
+
+        let options: Vec<PermissionOptionInfo> = args
+            .options
+            .iter()
+            .map(|o| PermissionOptionInfo {
+                id:    o.option_id.to_string(),
+                label: o.name.clone(),
+                kind:  format!("{:?}", o.kind),
+            })
+            .collect();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+
+        let bridge = PermissionBridge {
+            tool_title,
+            tool_call_id,
+            options,
+            reply_tx,
+        };
+
+        if perm_tx.send(bridge).await.is_err() {
+            warn!("permission bridge channel closed — cancelling");
+            return Ok(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled,
+            ));
+        }
+
+        // Await the user's decision. If the reply channel is dropped, treat
+        // it as a cancellation.
+        match reply_rx.await {
+            Ok(outcome) => Ok(RequestPermissionResponse::new(outcome)),
+            Err(_) => {
+                warn!("permission reply channel dropped — returning Cancelled");
+                Ok(RequestPermissionResponse::new(
+                    RequestPermissionOutcome::Cancelled,
+                ))
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Client for RaraDelegate {
+    async fn request_permission(
+        &self,
+        args: RequestPermissionRequest,
+    ) -> Result<RequestPermissionResponse> {
+        match &self.permission_mode {
+            PermissionMode::AutoApprove => self.auto_approve(&args).await,
+            PermissionMode::Interactive(perm_tx) => {
+                self.interactive_permission(perm_tx, &args).await
+            }
+        }
     }
 
     async fn session_notification(&self, args: SessionNotification) -> Result<()> {
@@ -144,8 +234,6 @@ impl Client for RaraDelegate {
                     Some(AcpToolCallStatus::InProgress) => ToolCallStatus::Running,
                     _ => ToolCallStatus::Running,
                 };
-                // Prefer raw_output (the actual tool result) over title
-                // (which is just a human-readable label).
                 let output = update
                     .fields
                     .raw_output
@@ -167,7 +255,6 @@ impl Client for RaraDelegate {
                     .collect();
                 self.emit(AcpEvent::Plan { title: None, steps }).await;
             }
-            // Ignore updates we don't translate yet (mode changes, commands, etc.)
             _ => {
                 debug!(update = ?args.update, "ignoring unhandled session update variant");
             }
@@ -189,7 +276,6 @@ impl Client for RaraDelegate {
                 .data(format!("failed to read {}: {e}", path.display()))
         })?;
 
-        // Handle optional line/limit slicing.
         let content = if args.line.is_some() || args.limit.is_some() {
             let lines: Vec<&str> = content.lines().collect();
             let start = args.line.unwrap_or(1).saturating_sub(1) as usize;
@@ -218,7 +304,6 @@ impl Client for RaraDelegate {
         })
         .await;
 
-        // Ensure parent directory exists.
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 agent_client_protocol::Error::internal_error().data(format!(
@@ -235,11 +320,6 @@ impl Client for RaraDelegate {
 
         Ok(WriteTextFileResponse::new())
     }
-
-    // Terminal methods are not supported — the default implementations in the
-    // trait already return `Error::method_not_found()`.  We explicitly list
-    // them here for clarity and to prevent accidental future breakage if the
-    // upstream trait removes default impls.
 
     async fn create_terminal(
         &self,

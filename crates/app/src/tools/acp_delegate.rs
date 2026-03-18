@@ -161,7 +161,7 @@ async fn run_acp_session(
     prompt: &str,
 ) -> anyhow::Result<serde_json::Value> {
     // Connect and perform handshake.
-    let (mut conn, mut event_rx) = AcpConnection::connect(command, cwd)
+    let (mut conn, mut event_rx) = AcpConnection::connect(command, cwd, None)
         .await
         .map_err(|e| anyhow::anyhow!("ACP connect failed: {e}"))?;
 
@@ -226,7 +226,9 @@ async fn run_acp_session(
                     // may still be events queued behind them from the delegate.
                     // The collector exits when the channel closes (all senders
                     // dropped after shutdown).
-                    AcpEvent::ProcessExited { .. } | AcpEvent::TurnComplete { .. } => {}
+                    AcpEvent::ProcessExited { .. }
+                    | AcpEvent::TurnComplete { .. }
+                    | AcpEvent::PermissionRequested { .. } => {}
                 }
             }
             (texts, tools, files)
