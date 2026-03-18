@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/rararulab/rara/scripts/internal/agentmd"
+	"github.com/rararulab/rara/scripts/internal/deps"
 	"github.com/rararulab/rara/scripts/internal/worktree"
 	"github.com/urfave/cli/v3"
 )
@@ -18,6 +19,7 @@ func main() {
 		Commands: []*cli.Command{
 			agentmd.Cmd(),
 			worktree.Cmd(),
+			deps.Cmd(),
 		},
 	}
 
