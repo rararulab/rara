@@ -167,6 +167,9 @@ You MUST call the `create-plan` tool with the revised plan."#;
 ///
 /// Lists each tool's name and description so the planner knows what
 /// capabilities are available when decomposing tasks into steps.
+///
+/// Returns an empty string when the registry is empty; callers should
+/// skip injection in that case to avoid a blank block in the prompt.
 fn build_tool_summary(tools: &crate::tool::ToolRegistry) -> String {
     if tools.is_empty() {
         return String::new();
