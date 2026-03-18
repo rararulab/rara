@@ -88,7 +88,6 @@ pub(crate) async fn boot(
     pool: sqlx::SqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
-    browser_config: Option<rara_kernel::browser::BrowserConfig>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
 
@@ -203,19 +202,19 @@ pub(crate) async fn boot(
 
     // -- browser subsystem -------------------------------------------------
 
-    if let Some(browser_cfg) = browser_config {
-        match rara_kernel::browser::BrowserManager::start(browser_cfg).await {
-            Ok(manager) => {
-                let manager_ref: rara_kernel::browser::BrowserManagerRef =
-                    std::sync::Arc::new(manager);
-                for tool in rara_kernel::tool::browser::browser_tools(manager_ref) {
-                    tool_registry.register(tool);
-                }
-                info!("Browser subsystem initialized with Lightpanda");
+    match rara_kernel::browser::BrowserManager::start(rara_kernel::browser::BrowserConfig::default())
+        .await
+    {
+        Ok(manager) => {
+            let manager_ref: rara_kernel::browser::BrowserManagerRef =
+                std::sync::Arc::new(manager);
+            for tool in rara_kernel::tool::browser::browser_tools(manager_ref) {
+                tool_registry.register(tool);
             }
-            Err(e) => {
-                warn!("Browser subsystem disabled: {e}");
-            }
+            info!("Browser subsystem initialized with Lightpanda");
+        }
+        Err(e) => {
+            warn!("Browser subsystem disabled: {e}");
         }
     }
 
