@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "ayu";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-c76888db.js";
+            window.path_to_searchindex_js = "searchindex-524c37ba.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-102850bc.js"></script>
+        <script src="toc-04e93f4b.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -2916,6 +2916,168 @@ done — users can install via:
 <li>Formula pushed by cargo-dist during release</li>
 <li>Requires <code>HOMEBREW_TAP_TOKEN</code> secret with write access to the tap repo</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="harness-engineering"><a class="header" href="#harness-engineering">Harness Engineering</a></h1>
+<p>Rara is built by AI agents (Claude). This page documents how we keep the codebase healthy and agent-friendly through <strong>mechanical enforcement</strong> — automated checks that catch problems before they compound.</p>
+<blockquote>
+<p>A software engineering team’s primary job is no longer to write code, but to design environments, specify intent, and build feedback loops that allow agents to do reliable work.</p>
+<p>— <a href="https://openai.com/index/harness-engineering/">OpenAI, <em>Harness Engineering</em></a></p>
+</blockquote>
+<h2 id="philosophy"><a class="header" href="#philosophy">Philosophy</a></h2>
+<p>Three principles guide our approach:</p>
+<ol>
+<li><strong>If a rule exists only in documentation, it will drift.</strong> Every quality rule must have a corresponding automated check.</li>
+<li><strong>Waiting is expensive; corrections are cheap.</strong> We use minimal blocking gates at commit time and continuous quality tracking on <code>main</code>.</li>
+<li><strong>Build the missing capability into the repo.</strong> When an agent struggles, the fix is never “try harder” — it’s making the codebase more legible and enforceable.</li>
+</ol>
+<h2 id="devtool-commands"><a class="header" href="#devtool-commands">Devtool Commands</a></h2>
+<p>All enforcement tools live as subcommands of the Go-based <code>devtool</code> CLI under <code>scripts/</code>.</p>
+<h3 id="devtool-check-agent-md"><a class="header" href="#devtool-check-agent-md"><code>devtool check-agent-md</code></a></h3>
+<p>Verifies every crate under <code>crates/</code> has an <code>AGENT.md</code> file. AGENT.md files are the primary way agents understand a crate’s purpose, invariants, and anti-patterns without reading every source file.</p>
+<pre><code class="language-bash">just check-agent-md          # Run standalone
+scripts/bin/devtool check-agent-md
+</code></pre>
+<p><strong>Runs in:</strong> PR lint CI (blocking).</p>
+<h3 id="devtool-check-deps"><a class="header" href="#devtool-check-deps"><code>devtool check-deps</code></a></h3>
+<p>Validates crate dependency direction against a 7-layer architecture map. Lower-layer crates must not depend on higher-layer crates:</p>
+<pre><code>Layer 0 (foundation)  → common/*, paths, rara-model, domain/*, rara-api
+Layer 1 (domain)      → soul, symphony, skills, vault, composio, ...
+Layer 2 (core)        → kernel
+Layer 3 (subsystems)  → dock, sessions, agents, mcp, ...
+Layer 4 (integration) → channels, backend-admin
+Layer 5 (application) → app, server
+Layer 6 (entry)       → rara-cli
+</code></pre>
+<pre><code class="language-bash">just check-deps               # Run standalone
+scripts/bin/devtool check-deps
+</code></pre>
+<p><strong>Runs in:</strong> PR lint CI (blocking).</p>
+<h3 id="devtool-quality-matrix"><a class="header" href="#devtool-quality-matrix"><code>devtool quality-matrix</code></a></h3>
+<p>Scans all crates and generates a health dashboard covering:</p>
+<ul>
+<li><strong>AGENT.md</strong> — does the crate have agent guidelines?</li>
+<li><strong>Tests</strong> — does the crate have <code>#[cfg(test)]</code> or a <code>tests/</code> directory?</li>
+<li><strong>Doc coverage</strong> — what percentage of <code>pub</code> items have <code>///</code> doc comments?</li>
+<li><strong>Total lines</strong> — crate size as a proxy for risk</li>
+</ul>
+<pre><code class="language-bash">just quality-matrix           # Generate and write to docs/src/quality-matrix.md
+scripts/bin/devtool quality-matrix              # Print to stdout
+scripts/bin/devtool quality-matrix --output f   # Write to file
+</code></pre>
+<p><strong>Runs in:</strong> push to <code>main</code> (non-blocking, auto-commits updated report).</p>
+<h2 id="ci-integration"><a class="header" href="#ci-integration">CI Integration</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Check</th><th>Trigger</th><th>Blocking?</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>check-agent-md</code></td><td>PR lint</td><td>Yes</td><td>Prevent crates without agent guidelines</td></tr>
+<tr><td><code>check-deps</code></td><td>PR lint</td><td>Yes</td><td>Prevent architecture layer violations</td></tr>
+<tr><td><code>quality-matrix</code></td><td>Push to main</td><td>No</td><td>Track quality trends over time</td></tr>
+<tr><td><code>cargo clippy -D warnings</code></td><td>PR lint</td><td>Yes</td><td>Code quality</td></tr>
+<tr><td><code>cargo +nightly fmt --check</code></td><td>PR lint</td><td>Yes</td><td>Formatting consistency</td></tr>
+<tr><td><code>buf lint</code></td><td>PR lint</td><td>Yes</td><td>Protobuf schema quality</td></tr>
+<tr><td>Conventional commits</td><td>Pre-commit hook</td><td>Yes</td><td>Commit message discipline</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="adding-new-checks"><a class="header" href="#adding-new-checks">Adding New Checks</a></h2>
+<p>When you identify a rule that agents frequently violate:</p>
+<ol>
+<li>Create a <code>scripts/internal/&lt;name&gt;/commands.go</code> subcommand</li>
+<li>Register it in <code>scripts/cmd/devtool/main.go</code></li>
+<li>Add a <code>just</code> recipe in <code>justfile</code></li>
+<li>Add a CI job in <code>.github/workflows/lint.yml</code></li>
+<li>Decide: <strong>blocking</strong> (PR gate) or <strong>tracking</strong> (main-only report)?</li>
+</ol>
+<p>The bar for blocking checks is high — they must be deterministic, fast, and have zero false positives. Quality tracking checks can be softer.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="module-quality-matrix"><a class="header" href="#module-quality-matrix">Module Quality Matrix</a></h1>
+<p>A living dashboard that tracks the health of every crate in the Rara workspace. Inspired by engineering maturity models, this matrix helps identify gaps in documentation, testing, and maintainability across the codebase.</p>
+<p><strong>Legend:</strong> ✅ Present/Good | ⚠️ Partial | ❌ Missing/None</p>
+<blockquote>
+<p><strong>Last updated:</strong> 2026-03-18 (auto-generated by <code>devtool quality-matrix</code>)</p>
+</blockquote>
+<h2 id="quality-table"><a class="header" href="#quality-table">Quality Table</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Layer</th><th>AGENT.md</th><th>Tests</th><th>Docs</th><th style="text-align: right">LOC</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rara-kernel</code></td><td>kernel</td><td>✅</td><td>✅</td><td>✅ 477/571 (83%)</td><td style="text-align: right">30,182</td><td>—</td></tr>
+<tr><td><code>rara-app</code></td><td>app</td><td>✅</td><td>✅</td><td>⚠️ 55/134 (41%)</td><td style="text-align: right">11,315</td><td>—</td></tr>
+<tr><td><code>rara-channels</code></td><td>app</td><td>✅</td><td>✅</td><td>✅ 69/75 (92%)</td><td style="text-align: right">8,231</td><td>Excellent docs</td></tr>
+<tr><td><code>rara-skills</code></td><td>app</td><td>✅</td><td>✅</td><td>✅ 84/103 (81%)</td><td style="text-align: right">4,487</td><td>—</td></tr>
+<tr><td><code>rara-cli</code></td><td>cmd</td><td>✅</td><td>✅</td><td>⚠️ 3/48 (6%)</td><td style="text-align: right">3,918</td><td>—</td></tr>
+<tr><td><code>common-worker</code></td><td>common</td><td>✅</td><td>❌</td><td>✅ 70/80 (87%)</td><td style="text-align: right">3,867</td><td>No tests</td></tr>
+<tr><td><code>rara-mcp</code></td><td>integrations</td><td>✅</td><td>❌</td><td>✅ 18/24 (75%)</td><td style="text-align: right">3,519</td><td>No tests</td></tr>
+<tr><td><code>rara-backend-admin</code></td><td>extensions</td><td>✅</td><td>❌</td><td>✅ 24/41 (58%)</td><td style="text-align: right">3,284</td><td>No tests</td></tr>
+<tr><td><code>rara-symphony</code></td><td>app</td><td>✅</td><td>✅</td><td>⚠️ 12/33 (36%)</td><td style="text-align: right">2,951</td><td>—</td></tr>
+<tr><td><code>rara-dock</code></td><td>app</td><td>✅</td><td>✅</td><td>✅ 53/62 (85%)</td><td style="text-align: right">2,466</td><td>—</td></tr>
+<tr><td><code>rara-soul</code></td><td>app</td><td>✅</td><td>✅</td><td>✅ 34/34 (100%)</td><td style="text-align: right">1,223</td><td>Fully documented</td></tr>
+<tr><td><code>rara-vault</code></td><td>app</td><td>✅</td><td>✅</td><td>✅ 10/10 (100%)</td><td style="text-align: right">1,138</td><td>Fully documented</td></tr>
+<tr><td><code>rara-composio</code></td><td>integrations</td><td>✅</td><td>❌</td><td>✅ 11/17 (64%)</td><td style="text-align: right">1,138</td><td>—</td></tr>
+<tr><td><code>common-telemetry</code></td><td>common</td><td>✅</td><td>❌</td><td>✅ 22/23 (95%)</td><td style="text-align: right">1,073</td><td>Excellent docs</td></tr>
+<tr><td><code>rara-server</code></td><td>server</td><td>✅</td><td>❌</td><td>✅ 14/17 (82%)</td><td style="text-align: right">1,060</td><td>—</td></tr>
+<tr><td><code>base</code></td><td>common</td><td>✅</td><td>❌</td><td>✅ 16/19 (84%)</td><td style="text-align: right">906</td><td>—</td></tr>
+<tr><td><code>rara-agents</code></td><td>app</td><td>✅</td><td>✅</td><td>✅ 5/5 (100%)</td><td style="text-align: right">479</td><td>Fully documented</td></tr>
+<tr><td><code>yunara-store</code></td><td>common</td><td>✅</td><td>❌</td><td>✅ 7/11 (63%)</td><td style="text-align: right">460</td><td>—</td></tr>
+<tr><td><code>rara-git</code></td><td>extensions</td><td>✅</td><td>❌</td><td>✅ 9/10 (90%)</td><td style="text-align: right">460</td><td>Excellent docs</td></tr>
+<tr><td><code>rara-codex-oauth</code></td><td>integrations</td><td>✅</td><td>❌</td><td>✅ 14/14 (100%)</td><td style="text-align: right">426</td><td>Fully documented</td></tr>
+<tr><td><code>rara-paths</code></td><td>app</td><td>✅</td><td>❌</td><td>✅ 22/22 (100%)</td><td style="text-align: right">382</td><td>Fully documented</td></tr>
+<tr><td><code>common-runtime</code></td><td>common</td><td>✅</td><td>❌</td><td>⚠️ 3/18 (16%)</td><td style="text-align: right">348</td><td>—</td></tr>
+<tr><td><code>rara-sessions</code></td><td>app</td><td>✅</td><td>❌</td><td>✅ 1/1 (100%)</td><td style="text-align: right">312</td><td>Fully documented</td></tr>
+<tr><td><code>rara-error</code></td><td>common</td><td>✅</td><td>❌</td><td>❌ 0/7 (0%)</td><td style="text-align: right">187</td><td>—</td></tr>
+<tr><td><code>rara-domain-shared</code></td><td>domain</td><td>✅</td><td>❌</td><td>⚠️ 1/8 (12%)</td><td style="text-align: right">186</td><td>—</td></tr>
+<tr><td><code>rara-tool-macro</code></td><td>common</td><td>✅</td><td>❌</td><td>✅ 1/1 (100%)</td><td style="text-align: right">185</td><td>Fully documented</td></tr>
+<tr><td><code>crawl4ai</code></td><td>common</td><td>✅</td><td>❌</td><td>✅ 4/4 (100%)</td><td style="text-align: right">158</td><td>Fully documented</td></tr>
+<tr><td><code>rara-keyring-store</code></td><td>integrations</td><td>✅</td><td>❌</td><td>✅ 2/3 (66%)</td><td style="text-align: right">107</td><td>—</td></tr>
+<tr><td><code>rara-pg-credential-store</code></td><td>integrations</td><td>✅</td><td>❌</td><td>❌ 0/2 (0%)</td><td style="text-align: right">79</td><td>—</td></tr>
+<tr><td><code>rara-model</code></td><td>app</td><td>✅</td><td>❌</td><td>—</td><td style="text-align: right">20</td><td>Mostly migrations or minimal Rust code</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="aggregate-statistics"><a class="header" href="#aggregate-statistics">Aggregate Statistics</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Metric</th><th style="text-align: right">Count</th><th style="text-align: right">Percentage</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Total crates</strong></td><td style="text-align: right">30</td><td style="text-align: right">—</td></tr>
+<tr><td><strong>With AGENT.md</strong></td><td style="text-align: right">30</td><td style="text-align: right">100%</td></tr>
+<tr><td><strong>With tests</strong></td><td style="text-align: right">10</td><td style="text-align: right">33%</td></tr>
+<tr><td><strong>Doc coverage &gt; 50%</strong></td><td style="text-align: right">22</td><td style="text-align: right">73%</td></tr>
+<tr><td><strong>Total Rust LOC</strong></td><td style="text-align: right">84,547</td><td style="text-align: right">—</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="by-layer"><a class="header" href="#by-layer">By Layer</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layer</th><th style="text-align: right">Crates</th><th style="text-align: right">Avg Doc Coverage</th><th style="text-align: right">With AGENT.md</th><th style="text-align: right">With Tests</th></tr>
+</thead>
+<tbody>
+<tr><td>common</td><td style="text-align: right">8</td><td style="text-align: right">68%</td><td style="text-align: right">8</td><td style="text-align: right">0</td></tr>
+<tr><td>domain</td><td style="text-align: right">1</td><td style="text-align: right">12%</td><td style="text-align: right">1</td><td style="text-align: right">0</td></tr>
+<tr><td>kernel</td><td style="text-align: right">1</td><td style="text-align: right">83%</td><td style="text-align: right">1</td><td style="text-align: right">1</td></tr>
+<tr><td>app</td><td style="text-align: right">11</td><td style="text-align: right">75%</td><td style="text-align: right">11</td><td style="text-align: right">8</td></tr>
+<tr><td>server</td><td style="text-align: right">1</td><td style="text-align: right">82%</td><td style="text-align: right">1</td><td style="text-align: right">0</td></tr>
+<tr><td>cmd</td><td style="text-align: right">1</td><td style="text-align: right">6%</td><td style="text-align: right">1</td><td style="text-align: right">1</td></tr>
+<tr><td>extensions</td><td style="text-align: right">2</td><td style="text-align: right">74%</td><td style="text-align: right">2</td><td style="text-align: right">0</td></tr>
+<tr><td>integrations</td><td style="text-align: right">5</td><td style="text-align: right">61%</td><td style="text-align: right">5</td><td style="text-align: right">0</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="priority-actions"><a class="header" href="#priority-actions">Priority Actions</a></h2>
+<ol start="2">
+<li><strong>Test gap</strong>: 20 crates have zero tests. Critical gaps: <code>common-worker</code> (3,867 LOC), <code>rara-mcp</code> (3,519 LOC), <code>rara-backend-admin</code> (3,284 LOC), <code>rara-composio</code> (1,138 LOC).</li>
+<li><strong>Doc coverage</strong>: Only 23 crates exceed 50% doc coverage. The highest-impact target: <code>rara-app</code> (11,315 LOC, 41%).</li>
+<li><strong>Common layer</strong>: The foundational <code>common/</code> crates have gaps — 8 of 8 lack tests. Since every other layer depends on them, improving common/ has outsized impact.</li>
+</ol>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="raras-diary"><a class="header" href="#raras-diary">Rara’s Diary</a></h1>
 <p>Rara 的个人日记。每天记录工作进展、用户活动摘要和心得感悟。</p>
