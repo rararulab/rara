@@ -26,6 +26,7 @@ use axum::{
     routing::get,
 };
 use base::readable_size::ReadableSize;
+use opentelemetry::{KeyValue, global, metrics::Histogram};
 use rara_error::{ConnectionSnafu, ParseAddressSnafu, Result};
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
@@ -47,22 +48,14 @@ pub const DEFAULT_MAX_HTTP_BODY_SIZE: ReadableSize = ReadableSize::mb(100);
 /// Default request timeout in seconds.
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
-static HTTP_SERVER_REQUEST_DURATION_SECONDS: LazyLock<prometheus::HistogramVec> =
-    LazyLock::new(|| {
-        prometheus::register_histogram_vec!(
-            "http_server_request_duration_seconds",
-            "HTTP server request duration in seconds",
-            &[
-                "http_request_method",
-                "http_route",
-                "http_response_status_code",
-            ],
-            vec![
-                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
-            ]
-        )
-        .unwrap()
-    });
+/// HTTP server request duration histogram (OTel push-based).
+static HTTP_SERVER_REQUEST_DURATION_SECONDS: LazyLock<Histogram<f64>> = LazyLock::new(|| {
+    global::meter("rara-server")
+        .f64_histogram("http.server.request.duration")
+        .with_description("HTTP server request duration in seconds")
+        .with_unit("s")
+        .build()
+});
 
 async fn observe_http_metrics(request: Request, next: Next) -> Response {
     let method = request.method().clone();
@@ -76,9 +69,14 @@ async fn observe_http_metrics(request: Request, next: Next) -> Response {
     let response = next.run(request).await;
     let status = response.status();
 
-    HTTP_SERVER_REQUEST_DURATION_SECONDS
-        .with_label_values(&[method.as_str(), &route, status.as_str()])
-        .observe(started_at.elapsed().as_secs_f64());
+    HTTP_SERVER_REQUEST_DURATION_SECONDS.record(
+        started_at.elapsed().as_secs_f64(),
+        &[
+            KeyValue::new("http.request.method", method.as_str().to_string()),
+            KeyValue::new("http.route", route),
+            KeyValue::new("http.response.status_code", status.as_str().to_string()),
+        ],
+    );
 
     response
 }
@@ -304,23 +302,6 @@ async fn api_health_handler() -> axum::Json<serde_json::Value> {
     }))
 }
 
-/// Prometheus metrics endpoint — returns all registered metrics in text format.
-async fn metrics_handler() -> impl IntoResponse {
-    use prometheus::{Encoder, TextEncoder};
-    let encoder = TextEncoder::new();
-    let mut buffer = Vec::new();
-    let metric_families = prometheus::gather();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-    (
-        StatusCode::OK,
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain; version=0.0.4; charset=utf-8",
-        )],
-        buffer,
-    )
-}
-
 /// Add health routes to the router
 ///
 /// This function adds health check endpoints for API monitoring and readiness
@@ -330,5 +311,4 @@ pub fn health_routes(router: Router) -> Router {
     router
         .route("/api/v1/health", get(api_health_handler))
         .route("/api/health", get(api_health_handler))
-        .route("/metrics", get(metrics_handler))
 }

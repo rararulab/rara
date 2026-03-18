@@ -12,159 +12,139 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Prometheus metrics for the kernel.
+//! OpenTelemetry metrics for the kernel.
 //!
 //! Organized by domain: process lifecycle, LLM turns, event processing, I/O
-//! pipeline. All metrics use `LazyLock` for static registration with the
-//! global prometheus registry.
+//! pipeline. All metrics use `LazyLock` for static registration via the
+//! global OpenTelemetry meter.
 
 use std::sync::LazyLock;
 
-use prometheus::*;
+use opentelemetry::{
+    KeyValue, global,
+    metrics::{Counter, Histogram, UpDownCounter},
+};
 
-/// Agent name label.
-pub const AGENT_NAME_LABEL: &str = "agent_name";
-/// Model label.
-pub const MODEL_LABEL: &str = "model";
-/// Tool name label.
-pub const TOOL_NAME_LABEL: &str = "tool_name";
-/// Event type label.
-pub const EVENT_TYPE_LABEL: &str = "event_type";
-/// Syscall type label.
-pub const SYSCALL_TYPE_LABEL: &str = "syscall_type";
-/// Channel type label.
-pub const CHANNEL_TYPE_LABEL: &str = "channel_type";
-/// Exit state label.
-pub const EXIT_STATE_LABEL: &str = "exit_state";
+/// Return the shared meter scoped to the kernel crate.
+fn meter() -> opentelemetry::metrics::Meter { global::meter("rara-kernel") }
 
 // -- Session lifecycle -------------------------------------------------------
 
 /// Total agent sessions created.
-pub static SESSION_CREATED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_session_created_total",
-        "Total agent sessions created",
-        &[AGENT_NAME_LABEL]
-    )
-    .unwrap()
+static SESSION_CREATED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.session.created")
+        .with_description("Total agent sessions created")
+        .build()
 });
 
 /// Total agent sessions suspended (idle timeout / done).
-pub static SESSION_SUSPENDED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_session_suspended_total",
-        "Total agent sessions suspended",
-        &[AGENT_NAME_LABEL, EXIT_STATE_LABEL]
-    )
-    .unwrap()
+static SESSION_SUSPENDED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.session.suspended")
+        .with_description("Total agent sessions suspended")
+        .build()
 });
 
-/// Currently active agent sessions.
-pub static SESSION_ACTIVE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    register_int_gauge_vec!(
-        "kernel_session_active",
-        "Currently active agent sessions",
-        &[AGENT_NAME_LABEL]
-    )
-    .unwrap()
+/// Currently active agent sessions (gauge via up-down counter).
+static SESSION_ACTIVE: LazyLock<UpDownCounter<i64>> = LazyLock::new(|| {
+    meter()
+        .i64_up_down_counter("kernel.session.active")
+        .with_description("Currently active agent sessions")
+        .build()
 });
 
 // -- LLM turn metrics --------------------------------------------------------
 
 /// Total LLM turns executed.
-pub static TURN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_turn_total",
-        "Total LLM turns executed",
-        &[AGENT_NAME_LABEL, MODEL_LABEL]
-    )
-    .unwrap()
+static TURN_TOTAL: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.turn.total")
+        .with_description("Total LLM turns executed")
+        .build()
 });
 
 /// LLM turn execution duration in seconds.
-pub static TURN_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
-    register_histogram_vec!(
-        "kernel_turn_duration_seconds",
-        "LLM turn execution duration in seconds",
-        &[AGENT_NAME_LABEL, MODEL_LABEL],
-        vec![0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0]
-    )
-    .unwrap()
+static TURN_DURATION_SECONDS: LazyLock<Histogram<f64>> = LazyLock::new(|| {
+    meter()
+        .f64_histogram("kernel.turn.duration")
+        .with_description("LLM turn execution duration in seconds")
+        .with_unit("s")
+        .build()
 });
 
 /// Total tool calls made during turns.
-pub static TURN_TOOL_CALLS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_turn_tool_calls_total",
-        "Total tool calls made during turns",
-        &[AGENT_NAME_LABEL, TOOL_NAME_LABEL]
-    )
-    .unwrap()
+static TURN_TOOL_CALLS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.turn.tool_calls")
+        .with_description("Total tool calls made during turns")
+        .build()
 });
 
 /// Total input tokens consumed.
-pub static TURN_TOKENS_INPUT: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_turn_tokens_input_total",
-        "Total input tokens consumed",
-        &[MODEL_LABEL]
-    )
-    .unwrap()
+static TURN_TOKENS_INPUT: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.turn.tokens.input")
+        .with_description("Total input tokens consumed")
+        .build()
 });
 
 /// Total output tokens produced.
-pub static TURN_TOKENS_OUTPUT: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_turn_tokens_output_total",
-        "Total output tokens produced",
-        &[MODEL_LABEL]
-    )
-    .unwrap()
+static TURN_TOKENS_OUTPUT: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.turn.tokens.output")
+        .with_description("Total output tokens produced")
+        .build()
+});
+
+// -- Tool execution ----------------------------------------------------------
+
+/// Per-tool execution duration in seconds.
+static TOOL_DURATION: LazyLock<Histogram<f64>> = LazyLock::new(|| {
+    meter()
+        .f64_histogram("kernel.tool.duration")
+        .with_description("Per-tool execution duration in seconds")
+        .with_unit("s")
+        .build()
 });
 
 // -- Event processing --------------------------------------------------------
 
 /// Total events processed by the event loop.
-pub static EVENT_PROCESSED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_event_processed_total",
-        "Total events processed",
-        &[EVENT_TYPE_LABEL]
-    )
-    .unwrap()
+static EVENT_PROCESSED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.event.processed")
+        .with_description("Total events processed")
+        .build()
 });
 
 /// Total syscalls processed.
-pub static SYSCALL_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_syscall_total",
-        "Total syscalls processed",
-        &[SYSCALL_TYPE_LABEL]
-    )
-    .unwrap()
+static SYSCALL_TOTAL: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.syscall.total")
+        .with_description("Total syscalls processed")
+        .build()
 });
 
 // -- I/O pipeline ------------------------------------------------------------
 
 /// Total inbound messages received.
-pub static MESSAGE_INBOUND: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_message_inbound_total",
-        "Total inbound messages received",
-        &[CHANNEL_TYPE_LABEL]
-    )
-    .unwrap()
+static MESSAGE_INBOUND: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.message.inbound")
+        .with_description("Total inbound messages received")
+        .build()
 });
 
 /// Total outbound messages delivered.
-pub static MESSAGE_OUTBOUND: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "kernel_message_outbound_total",
-        "Total outbound messages delivered",
-        &[CHANNEL_TYPE_LABEL]
-    )
-    .unwrap()
+static MESSAGE_OUTBOUND: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("kernel.message.outbound")
+        .with_description("Total outbound messages delivered")
+        .build()
 });
+
+// -- Public helpers ----------------------------------------------------------
 
 /// Record aggregate metrics for a completed LLM turn.
 pub fn record_turn_metrics(
@@ -174,21 +154,91 @@ pub fn record_turn_metrics(
     input_tokens: u64,
     output_tokens: u64,
 ) {
-    TURN_TOTAL.with_label_values(&[agent_name, model]).inc();
-    TURN_DURATION_SECONDS
-        .with_label_values(&[agent_name, model])
-        .observe(duration_ms as f64 / 1_000.0);
-    TURN_TOKENS_INPUT
-        .with_label_values(&[model])
-        .inc_by(input_tokens);
-    TURN_TOKENS_OUTPUT
-        .with_label_values(&[model])
-        .inc_by(output_tokens);
+    let attrs = &[
+        KeyValue::new("agent_name", agent_name.to_string()),
+        KeyValue::new("model", model.to_string()),
+    ];
+    TURN_TOTAL.add(1, attrs);
+    TURN_DURATION_SECONDS.record(duration_ms as f64 / 1_000.0, attrs);
+
+    let model_attr = &[KeyValue::new("model", model.to_string())];
+    TURN_TOKENS_INPUT.add(input_tokens, model_attr);
+    TURN_TOKENS_OUTPUT.add(output_tokens, model_attr);
 }
 
 /// Record a tool call during an LLM turn.
 pub fn record_turn_tool_call(agent_name: &str, tool_name: &str) {
-    TURN_TOOL_CALLS
-        .with_label_values(&[agent_name, tool_name])
-        .inc();
+    TURN_TOOL_CALLS.add(
+        1,
+        &[
+            KeyValue::new("agent_name", agent_name.to_string()),
+            KeyValue::new("tool_name", tool_name.to_string()),
+        ],
+    );
+}
+
+/// Record tool execution duration.
+pub fn record_tool_duration(agent_name: &str, tool_name: &str, duration_ms: u64) {
+    TOOL_DURATION.record(
+        duration_ms as f64 / 1_000.0,
+        &[
+            KeyValue::new("agent_name", agent_name.to_string()),
+            KeyValue::new("tool_name", tool_name.to_string()),
+        ],
+    );
+}
+
+/// Record a session creation event.
+pub fn record_session_created(agent_name: &str) {
+    SESSION_CREATED.add(1, &[KeyValue::new("agent_name", agent_name.to_string())]);
+}
+
+/// Record a session suspension event.
+pub fn record_session_suspended(agent_name: &str, exit_state: &str) {
+    SESSION_SUSPENDED.add(
+        1,
+        &[
+            KeyValue::new("agent_name", agent_name.to_string()),
+            KeyValue::new("exit_state", exit_state.to_string()),
+        ],
+    );
+}
+
+/// Increment the active session gauge.
+pub fn inc_session_active(agent_name: &str) {
+    SESSION_ACTIVE.add(1, &[KeyValue::new("agent_name", agent_name.to_string())]);
+}
+
+/// Decrement the active session gauge.
+pub fn dec_session_active(agent_name: &str) {
+    SESSION_ACTIVE.add(-1, &[KeyValue::new("agent_name", agent_name.to_string())]);
+}
+
+/// Record an event processed by the event loop.
+pub fn record_event_processed(event_type: &str) {
+    EVENT_PROCESSED.add(1, &[KeyValue::new("event_type", event_type.to_string())]);
+}
+
+/// Record a syscall processed.
+pub fn record_syscall(syscall_type: &str) {
+    SYSCALL_TOTAL.add(
+        1,
+        &[KeyValue::new("syscall_type", syscall_type.to_string())],
+    );
+}
+
+/// Record an inbound message.
+pub fn record_message_inbound(channel_type: &str) {
+    MESSAGE_INBOUND.add(
+        1,
+        &[KeyValue::new("channel_type", channel_type.to_string())],
+    );
+}
+
+/// Record an outbound message.
+pub fn record_message_outbound(channel_type: &str) {
+    MESSAGE_OUTBOUND.add(
+        1,
+        &[KeyValue::new("channel_type", channel_type.to_string())],
+    );
 }

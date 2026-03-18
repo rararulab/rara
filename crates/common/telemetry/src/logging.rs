@@ -32,7 +32,9 @@ use bon::Builder;
 use once_cell::sync::{Lazy, OnceCell};
 use opentelemetry::{KeyValue, global, trace::TracerProvider};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::Sampler};
+use opentelemetry_sdk::{
+    metrics::SdkMeterProvider, propagation::TraceContextPropagator, trace::Sampler,
+};
 use opentelemetry_semantic_conventions::resource;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use smart_default::SmartDefault;
@@ -617,24 +619,28 @@ pub fn init_global_logging(
                     Sampler::ParentBased,
                 );
 
+            let otel_resource = opentelemetry_sdk::Resource::builder_empty()
+                .with_attributes([
+                    KeyValue::new(resource::SERVICE_NAME, app_name.to_string()),
+                    KeyValue::new(
+                        resource::SERVICE_INSTANCE_ID,
+                        node_id.unwrap_or("none".to_string()),
+                    ),
+                    KeyValue::new(resource::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+                    KeyValue::new(resource::PROCESS_PID, std::process::id().to_string()),
+                ])
+                .build();
+
             let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(build_otlp_exporter(opts))
                 .with_sampler(sampler)
-                .with_resource(
-                    opentelemetry_sdk::Resource::builder_empty()
-                        .with_attributes([
-                            KeyValue::new(resource::SERVICE_NAME, app_name.to_string()),
-                            KeyValue::new(
-                                resource::SERVICE_INSTANCE_ID,
-                                node_id.unwrap_or("none".to_string()),
-                            ),
-                            KeyValue::new(resource::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-                            KeyValue::new(resource::PROCESS_PID, std::process::id().to_string()),
-                        ])
-                        .build(),
-                )
+                .with_resource(otel_resource.clone())
                 .build();
             let tracer = provider.tracer("job");
+
+            // Initialize the OTel metrics pipeline alongside traces.
+            let meter_provider = init_meter_provider(opts, otel_resource);
+            global::set_meter_provider(meter_provider);
 
             tracing::subscriber::set_global_default(
                 subscriber.with(tracing_opentelemetry::layer().with_tracer(tracer)),
@@ -727,4 +733,62 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
             .build()
             .expect("Failed to create OTLP HTTP exporter "),
     }
+}
+
+/// Initialize an OpenTelemetry `MeterProvider` that periodically pushes
+/// metrics to an OTLP endpoint.
+///
+/// The exporter reuses the same endpoint / protocol configuration as the trace
+/// exporter so that a single collector receives both signals.
+fn init_meter_provider(
+    opts: &LoggingOptions,
+    resource: opentelemetry_sdk::Resource,
+) -> SdkMeterProvider {
+    let protocol = opts
+        .otlp_export_protocol
+        .clone()
+        .unwrap_or(OtlpExportProtocol::Http);
+
+    let endpoint = opts
+        .otlp_endpoint
+        .as_ref()
+        .map(|e| {
+            if e.starts_with("http") {
+                e.clone()
+            } else {
+                format!("http://{e}")
+            }
+        })
+        .unwrap_or_else(|| match protocol {
+            // Metrics share the same base endpoint; the SDK appends the
+            // correct path automatically for HTTP.
+            OtlpExportProtocol::Grpc => DEFAULT_OTLP_GRPC_ENDPOINT.to_string(),
+            OtlpExportProtocol::Http => {
+                // Use the base OTLP HTTP endpoint — the SDK appends /v1/metrics.
+                "http://localhost:4318".to_string()
+            }
+        });
+
+    let exporter = match protocol {
+        OtlpExportProtocol::Grpc => opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(&endpoint)
+            .build()
+            .expect("failed to build OTLP gRPC metric exporter"),
+        OtlpExportProtocol::Http => opentelemetry_otlp::MetricExporter::builder()
+            .with_http()
+            .with_endpoint(&endpoint)
+            .with_headers(opts.otlp_headers.clone())
+            .build()
+            .expect("failed to build OTLP HTTP metric exporter"),
+    };
+
+    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
+        .with_interval(std::time::Duration::from_secs(30))
+        .build();
+
+    SdkMeterProvider::builder()
+        .with_reader(reader)
+        .with_resource(resource)
+        .build()
 }

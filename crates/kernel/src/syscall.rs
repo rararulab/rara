@@ -143,9 +143,7 @@ impl SyscallDispatcher {
         let syscall_sender = syscall.session_key;
         let syscall = syscall.payload;
         let syscall_type: &'static str = (&syscall).into();
-        crate::metrics::SYSCALL_TOTAL
-            .with_label_values(&[syscall_type])
-            .inc();
+        crate::metrics::record_syscall(syscall_type);
         let span = debug_span!(
             "handle_syscall",
             syscall_type,

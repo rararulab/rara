@@ -1705,9 +1705,10 @@ impl IOSubsystem {
                     .await
                     {
                         Ok(Ok(())) => {
-                            crate::metrics::MESSAGE_OUTBOUND
-                                .with_label_values(&[&format!("{:?}", endpoint.channel_type)])
-                                .inc();
+                            crate::metrics::record_message_outbound(&format!(
+                                "{:?}",
+                                endpoint.channel_type
+                            ));
                         }
                         Ok(Err(e)) => {
                             tracing::warn!(?endpoint, %e, "delivery failed");

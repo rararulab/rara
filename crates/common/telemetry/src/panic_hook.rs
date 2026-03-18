@@ -19,11 +19,15 @@
 use std::{panic, sync::LazyLock};
 
 use backtrace::Backtrace;
-use prometheus::{IntCounter, register_int_counter};
+use opentelemetry::{global, metrics::Counter};
 
-/// Prometheus counter for tracking application panics.
-pub static PANIC_COUNTER: LazyLock<IntCounter> =
-    LazyLock::new(|| register_int_counter!("job_panic_counter", "panic_counter").unwrap());
+/// OpenTelemetry counter for tracking application panics.
+pub static PANIC_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    global::meter("rara-telemetry")
+        .u64_counter("rara.panic.total")
+        .with_description("Total application panics")
+        .build()
+});
 
 /// Set up enhanced panic handling with structured logging.
 ///
@@ -48,7 +52,7 @@ pub fn set_panic_hook() {
         } else {
             tracing::error!(message = %panic, backtrace = %backtrace);
         }
-        PANIC_COUNTER.inc();
+        PANIC_COUNTER.add(1, &[]);
         default_hook(panic);
     }));
 }
