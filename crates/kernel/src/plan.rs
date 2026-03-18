@@ -353,14 +353,18 @@ pub(crate) async fn run_plan_loop(
                     next_pause_at = total_tool_calls + pause_interval;
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
-                        continued: true,
+                        continued:   true,
                     });
                 }
                 _ => {
-                    warn!(total_tool_calls, step = step_idx, "plan loop stopped by user or timeout");
+                    warn!(
+                        total_tool_calls,
+                        step = step_idx,
+                        "plan loop stopped by user or timeout"
+                    );
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
-                        continued: false,
+                        continued:   false,
                     });
                     plan.status = PlanStatus::Failed;
                     break;

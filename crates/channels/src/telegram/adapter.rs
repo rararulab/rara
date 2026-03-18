@@ -1494,9 +1494,11 @@ async fn handle_turn_pause_callback(
     if let Some(msg) = &callback.message {
         let decided_by = callback.from.username.as_deref().unwrap_or("unknown");
         let (msg_id, chat_id, original_text) = match msg {
-            teloxide::types::MaybeInaccessibleMessage::Regular(m) => {
-                (m.id, m.chat.id, m.text().unwrap_or("Pause decision").to_owned())
-            }
+            teloxide::types::MaybeInaccessibleMessage::Regular(m) => (
+                m.id,
+                m.chat.id,
+                m.text().unwrap_or("Pause decision").to_owned(),
+            ),
             teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => {
                 (m.message_id, m.chat.id, "Pause decision".to_owned())
             }

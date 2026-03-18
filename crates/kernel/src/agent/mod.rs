@@ -1863,7 +1863,7 @@ pub(crate) async fn run_agent_loop(
                     next_pause_at = tool_calls_made + pause_interval;
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
-                        continued: true,
+                        continued:   true,
                     });
                 }
                 _ => {
@@ -1871,7 +1871,7 @@ pub(crate) async fn run_agent_loop(
                     warn!(tool_calls_made, "agent loop stopped by user or timeout");
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
-                        continued: false,
+                        continued:   false,
                     });
                     break;
                 }

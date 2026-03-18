@@ -294,8 +294,8 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
                 selected_anchor,
             })
         }
-        StreamEvent::PauseTurn { .. } => None,         // handled by dedicated channel listener
-        StreamEvent::PauseTurnResolved { .. } => None,  // informational only
+        StreamEvent::PauseTurn { .. } => None, // handled by dedicated channel listener
+        StreamEvent::PauseTurnResolved { .. } => None, // informational only
     }
 }
 

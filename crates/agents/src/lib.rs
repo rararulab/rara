@@ -180,7 +180,7 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
         metadata:               serde_json::Value::Null,
         sandbox:                None,
         default_execution_mode: None,
-    pause_turn_threshold:   None,
+        pause_turn_threshold:   None,
     }
 }
 
