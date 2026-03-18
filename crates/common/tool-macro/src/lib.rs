@@ -14,7 +14,7 @@
 
 //! Derive macro for type-safe agent tool definitions.
 //!
-//! Generates [`AgentTool`] implementations from a single annotated struct,
+//! Generates `AgentTool` implementations from a single annotated struct,
 //! using `schemars::JsonSchema` for schema generation and `serde::Deserialize`
 //! for parameter parsing.
 //!
