@@ -48,10 +48,14 @@ impl RaraDelegate {
     /// when emitting file-access events.
     pub fn new(event_tx: mpsc::Sender<AcpEvent>, cwd: PathBuf) -> Self { Self { event_tx, cwd } }
 
-    /// Send an event, logging a warning if the receiver has been dropped.
-    fn emit(&self, event: AcpEvent) {
-        if self.event_tx.try_send(event).is_err() {
-            warn!("ACP event channel full or closed — dropping event");
+    /// Send an event with backpressure.
+    ///
+    /// Uses `send().await` so that a slow consumer causes the delegate to
+    /// block rather than silently dropping events.  Falls back to a warning
+    /// only when the receiver has been dropped entirely.
+    async fn emit(&self, event: AcpEvent) {
+        if self.event_tx.send(event).await.is_err() {
+            warn!("ACP event channel closed — dropping event");
         }
     }
 
@@ -102,7 +106,8 @@ impl Client for RaraDelegate {
             "auto-approved tool call: {}",
             args.tool_call.fields.title.as_deref().unwrap_or("unknown")
         );
-        self.emit(AcpEvent::PermissionAutoApproved { description });
+        self.emit(AcpEvent::PermissionAutoApproved { description })
+            .await;
 
         debug!(option_id = %option_id, "auto-approved permission request");
 
@@ -116,20 +121,21 @@ impl Client for RaraDelegate {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 let text = Self::text_from_content(&chunk.content);
                 if !text.is_empty() {
-                    self.emit(AcpEvent::Text(text));
+                    self.emit(AcpEvent::Text(text)).await;
                 }
             }
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 let text = Self::text_from_content(&chunk.content);
                 if !text.is_empty() {
-                    self.emit(AcpEvent::Thinking(text));
+                    self.emit(AcpEvent::Thinking(text)).await;
                 }
             }
             SessionUpdate::ToolCall(tc) => {
                 self.emit(AcpEvent::ToolCallStarted {
                     id:    tc.tool_call_id.to_string(),
                     title: tc.title.clone(),
-                });
+                })
+                .await;
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 let status = match update.fields.status {
@@ -142,7 +148,8 @@ impl Client for RaraDelegate {
                     id: update.tool_call_id.to_string(),
                     status,
                     output: update.fields.title.clone(),
-                });
+                })
+                .await;
             }
             SessionUpdate::Plan(plan) => {
                 let steps: Vec<String> = plan
@@ -150,7 +157,7 @@ impl Client for RaraDelegate {
                     .iter()
                     .map(|entry| entry.content.clone())
                     .collect();
-                self.emit(AcpEvent::Plan { title: None, steps });
+                self.emit(AcpEvent::Plan { title: None, steps }).await;
             }
             // Ignore updates we don't translate yet (mode changes, commands, etc.)
             _ => {
@@ -166,7 +173,8 @@ impl Client for RaraDelegate {
         self.emit(AcpEvent::FileAccess {
             path:      path.clone(),
             operation: FileOperation::Read,
-        });
+        })
+        .await;
 
         let content = tokio::fs::read_to_string(path).await.map_err(|e| {
             agent_client_protocol::Error::internal_error()
@@ -199,7 +207,8 @@ impl Client for RaraDelegate {
         self.emit(AcpEvent::FileAccess {
             path:      path.clone(),
             operation: FileOperation::Write,
-        });
+        })
+        .await;
 
         // Ensure parent directory exists.
         if let Some(parent) = path.parent() {
