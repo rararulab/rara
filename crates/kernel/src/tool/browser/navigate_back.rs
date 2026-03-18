@@ -14,11 +14,13 @@
 
 //! Navigate back in the active browser tab.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use serde::Serialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{EmptyParams, ToolContext, ToolExecute},
 };
 
 /// Navigate back in the active tab's history.
@@ -26,9 +28,7 @@ use crate::{
 #[tool(
     name = "browser-navigate-back",
     description = "Navigate back in the active browser tab. Returns a fresh accessibility \
-                   snapshot.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   snapshot."
 )]
 pub struct BrowserNavigateBackTool {
     manager: BrowserManagerRef,
@@ -36,25 +36,31 @@ pub struct BrowserNavigateBackTool {
 
 impl BrowserNavigateBackTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
+/// Result of the browser-navigate-back tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserNavigateBackResult {
+    /// Accessibility tree snapshot after navigating back
+    snapshot: String,
+}
 
-    async fn exec(
+#[async_trait]
+impl ToolExecute for BrowserNavigateBackTool {
+    type Output = BrowserNavigateBackResult;
+    type Params = EmptyParams;
+
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _p: EmptyParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<BrowserNavigateBackResult> {
         let snapshot = self
             .manager
             .navigate_back()
             .await
             .map_err(|e| anyhow::anyhow!("navigate_back failed: {e}"))?;
 
-        Ok(serde_json::json!({ "snapshot": snapshot }).into())
+        Ok(BrowserNavigateBackResult { snapshot })
     }
 }

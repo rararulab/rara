@@ -14,12 +14,14 @@
 
 //! Type text into an element in the active browser page.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Type text into an input element identified by its ref ID.
@@ -27,9 +29,7 @@ use crate::{
 #[tool(
     name = "browser-type",
     description = "Type text into an input element on the page. Optionally submit the form by \
-                   pressing Enter after typing.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   pressing Enter after typing."
 )]
 pub struct BrowserTypeTool {
     manager: BrowserManagerRef,
@@ -37,56 +37,46 @@ pub struct BrowserTypeTool {
 
 impl BrowserTypeTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["ref", "text"],
-            "properties": {
-                "ref": {
-                    "type": "string",
-                    "description": "The ref ID of the input element (from the accessibility snapshot)"
-                },
-                "text": {
-                    "type": "string",
-                    "description": "The text to type into the element"
-                },
-                "submit": {
-                    "type": "boolean",
-                    "description": "Whether to press Enter after typing to submit the form (default: false)"
-                },
-                "element": {
-                    "type": "string",
-                    "description": "Human-readable description of the element (for logging)"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-type tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserTypeParams {
+    /// The ref ID of the input element (from the accessibility snapshot)
+    r#ref:   String,
+    /// The text to type into the element
+    text:    String,
+    /// Whether to press Enter after typing to submit the form (default: false)
+    #[serde(default)]
+    submit:  bool,
+    /// Human-readable description of the element (for logging)
+    #[serde(default)]
+    element: Option<String>,
+}
 
-    async fn exec(
+/// Result of the browser-type tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserTypeResult {
+    /// Accessibility tree snapshot after typing
+    snapshot: String,
+}
+
+#[async_trait]
+impl ToolExecute for BrowserTypeTool {
+    type Output = BrowserTypeResult;
+    type Params = BrowserTypeParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BrowserTypeParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let p: Params =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
+    ) -> anyhow::Result<BrowserTypeResult> {
         let snapshot = self
             .manager
             .type_text(&p.r#ref, &p.text, p.submit)
             .await
             .map_err(|e| anyhow::anyhow!("type_text failed: {e}"))?;
 
-        Ok(serde_json::json!({ "snapshot": snapshot }).into())
+        Ok(BrowserTypeResult { snapshot })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct Params {
-    r#ref:   String,
-    text:    String,
-    #[serde(default)]
-    submit:  bool,
-    #[serde(default)]
-    element: Option<String>,
 }
