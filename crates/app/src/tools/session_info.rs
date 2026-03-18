@@ -14,56 +14,61 @@
 
 //! Session info tool for querying current session metadata.
 
+use async_trait::async_trait;
 use rara_kernel::{
     session::SessionIndexRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SessionInfoParams {}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionInfoResult {
+    pub session_key: String,
+    pub title:       Option<String>,
+    pub metadata:    Option<Value>,
+}
 
 /// Agent tool that retrieves metadata for the current session.
 #[derive(ToolDef)]
 #[tool(
     name = "get-session-info",
     description = "Get metadata for the current session, including uploaded image paths and other \
-                   session-specific information.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   session-specific information."
 )]
 pub struct SessionInfoTool {
     session_index: SessionIndexRef,
 }
-
 impl SessionInfoTool {
     pub fn new(session_index: SessionIndexRef) -> Self { Self { session_index } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for SessionInfoTool {
+    type Output = SessionInfoResult;
+    type Params = SessionInfoParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _params: SessionInfoParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<SessionInfoResult> {
         let session_key = &context.session_key;
-
         let entry = self
             .session_index
             .get_session(session_key)
             .await
             .map_err(|e| anyhow::anyhow!("failed to get session: {e}"))?
             .ok_or_else(|| anyhow::anyhow!("session not found"))?;
-
-        Ok(json!({
-            "session_key": entry.key.to_string(),
-            "title": entry.title,
-            "metadata": entry.metadata,
+        Ok(SessionInfoResult {
+            session_key: entry.key.to_string(),
+            title:       entry.title,
+            metadata:    entry.metadata,
         })
-        .into())
     }
 }

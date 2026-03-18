@@ -16,14 +16,27 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use jiff::Timestamp;
 use rara_kernel::{
     handle::KernelHandle,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
+
+/// Input parameters for the list-sessions tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListSessionsParams {
+    /// Maximum number of sessions to return (default 50).
+    limit:         Option<u64>,
+    /// ISO 8601 timestamp -- only return sessions with activity after this
+    /// time.
+    updated_since: Option<String>,
+}
 
 /// Mita tool that lists all live sessions from the kernel's process table.
 ///
@@ -34,9 +47,7 @@ use tokio::sync::RwLock;
     name = "list-sessions",
     description = "List all live sessions currently running in the kernel process table. Returns \
                    session key, agent name, state, metrics, and timestamps. Use this to discover \
-                   sessions worth inspecting.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   sessions worth inspecting."
 )]
 pub struct ListSessionsTool {
     kernel_handle: Arc<RwLock<Option<KernelHandle>>>,
@@ -54,31 +65,17 @@ impl ListSessionsTool {
     pub fn handle_ref(&self) -> Arc<RwLock<Option<KernelHandle>>> {
         Arc::clone(&self.kernel_handle)
     }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of sessions to return (default 50)",
-                    "default": 50
-                },
-                "updated_since": {
-                    "type": "string",
-                    "description": "ISO 8601 timestamp \u{2014} only return sessions with activity after this time (e.g. '2025-01-01T00:00:00Z')"
-                }
-            },
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for ListSessionsTool {
+    type Output = Value;
+    type Params = ListSessionsParams;
 
-    async fn exec(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
-        let updated_since: Option<Timestamp> = params
-            .get("updated_since")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse().ok());
+    async fn run(&self, params: ListSessionsParams, _ctx: &ToolContext) -> anyhow::Result<Value> {
+        let limit = params.limit.unwrap_or(50) as usize;
+        let updated_since: Option<Timestamp> =
+            params.updated_since.as_deref().and_then(|s| s.parse().ok());
 
         let handle = self.kernel_handle.read().await;
         let handle = handle
@@ -119,7 +116,6 @@ impl ListSessionsTool {
         Ok(json!({
             "total": entries.len(),
             "sessions": entries,
-        })
-        .into())
+        }))
     }
 }

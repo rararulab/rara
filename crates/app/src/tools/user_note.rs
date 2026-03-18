@@ -14,22 +14,34 @@
 
 //! Tool for recording structured notes about a user into their persistent user
 //! tape.
-//!
-//! The LLM invokes this tool to persist facts, preferences, and TODOs that
-//! should be recalled across future sessions with the same user.
 
+use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
-/// Single source of truth for valid user-note categories.
-///
-/// Both the JSON schema (sent to the LLM) and the runtime validation match
-/// derive from this array, eliminating the risk of silent divergence.
 pub const NOTE_CATEGORIES: &[&str] = &["preference", "fact", "todo", "general"];
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UserNoteParams {
+    /// Category of the note.
+    category: String,
+    /// The note content to record.
+    content:  String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UserNoteResult {
+    pub status:   String,
+    pub note_id:  String,
+    pub user_id:  String,
+    pub category: String,
+    pub message:  String,
+}
 
 /// Layer 2 service tool: persist a structured note in the user's tape.
 #[derive(ToolDef)]
@@ -41,79 +53,47 @@ pub const NOTE_CATEGORIES: &[&str] = &["preference", "fact", "todo", "general"];
                    context for future conversations with this user.\n\nCategories:\n- preference: \
                    User preferences (language, style, tools they like)\n- fact: Important facts \
                    about the user (name, role, projects)\n- todo: Tasks or reminders for the \
-                   user\n- general: Anything else worth remembering",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   user\n- general: Anything else worth remembering"
 )]
 pub struct UserNoteTool {
     tape_service: TapeService,
 }
-
 impl UserNoteTool {
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
+}
 
-    fn schema() -> serde_json::Value {
-        let categories: Vec<serde_json::Value> = NOTE_CATEGORIES
-            .iter()
-            .map(|c| serde_json::Value::String((*c).to_owned()))
-            .collect();
-        json!({
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "enum": categories,
-                    "description": "Category of the note"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The note content to record"
-                }
-            },
-            "required": ["category", "content"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for UserNoteTool {
+    type Output = UserNoteResult;
+    type Params = UserNoteParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: UserNoteParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<UserNoteResult> {
         let user_id = context.user_id.as_str();
-        let category = params
-            .get("category")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: category"))?;
-        let content = params
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
-
-        // Validate category against the single source of truth.
-        if !NOTE_CATEGORIES.contains(&category) {
+        if !NOTE_CATEGORIES.contains(&params.category.as_str()) {
             anyhow::bail!(
-                "invalid category '{category}': must be one of {}",
+                "invalid category '{}': must be one of {}",
+                params.category,
                 NOTE_CATEGORIES.join(", ")
             );
         }
-
-        if content.trim().is_empty() {
+        if params.content.trim().is_empty() {
             anyhow::bail!("content must not be empty");
         }
-
         let entry = self
             .tape_service
-            .append_user_note(user_id, category, content)
+            .append_user_note(user_id, &params.category, &params.content)
             .await
             .map_err(|e| anyhow::anyhow!("failed to write user note: {e}"))?;
-
-        Ok(json!({
-            "status": "ok",
-            "note_id": entry.id,
-            "user_id": user_id,
-            "category": category,
-            "message": format!("Note recorded for user '{user_id}' under category '{category}'.")
+        Ok(UserNoteResult {
+            status:   "ok".to_owned(),
+            note_id:  entry.id.to_string(),
+            user_id:  user_id.to_owned(),
+            category: params.category,
+            message:  format!("Note recorded for user '{user_id}'."),
         })
-        .into())
     }
 }

@@ -16,86 +16,68 @@
 
 use std::path::PathBuf;
 
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 use uuid::Uuid;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenshotParams {
+    /// The URL to screenshot.
+    url:       String,
+    /// CSS selector to screenshot a specific element.
+    selector:  Option<String>,
+    /// Viewport width in pixels (default: 1280).
+    width:     Option<u64>,
+    /// Viewport height in pixels (default: 720).
+    height:    Option<u64>,
+    /// Capture full scrollable page (default: false).
+    full_page: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreenshotResult {
+    pub success: bool,
+    pub path:    String,
+}
 
 #[derive(ToolDef)]
 #[tool(
     name = "screenshot",
     description = "Take a screenshot of a web page using Playwright. Useful for previewing \
-                   frontend work, checking UI changes, or sharing visual results.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   frontend work, checking UI changes, or sharing visual results."
 )]
 pub struct ScreenshotTool {
     project_root: PathBuf,
 }
-
 impl ScreenshotTool {
     pub fn new(project_root: PathBuf) -> Self { Self { project_root } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL to screenshot (e.g. http://localhost:5173/dashboard)"
-                },
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector to screenshot a specific element (optional)"
-                },
-                "width": {
-                    "type": "number",
-                    "description": "Viewport width in pixels (default: 1280)"
-                },
-                "height": {
-                    "type": "number",
-                    "description": "Viewport height in pixels (default: 720)"
-                },
-                "full_page": {
-                    "type": "boolean",
-                    "description": "Capture full scrollable page (default: false)"
-                }
-            },
-            "required": ["url"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for ScreenshotTool {
+    type Output = ScreenshotResult;
+    type Params = ScreenshotParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: ScreenshotParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: url"))?;
-
-        let selector = params
-            .get("selector")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let width = params.get("width").and_then(|v| v.as_u64()).unwrap_or(1280);
-        let height = params.get("height").and_then(|v| v.as_u64()).unwrap_or(720);
-        let full_page = params
-            .get("full_page")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
+    ) -> anyhow::Result<ScreenshotResult> {
+        let selector = params.selector.as_deref().unwrap_or("");
+        let width = params.width.unwrap_or(1280);
+        let height = params.height.unwrap_or(720);
+        let full_page = params.full_page.unwrap_or(false);
         let output_path =
             std::env::temp_dir().join(format!("rara-screenshot-{}.png", Uuid::new_v4()));
         let output_str = output_path.to_string_lossy().to_string();
-
-        // Build and run the screenshot script.
         let script_path = self.project_root.join("scripts/screenshot.mjs");
         let mut cmd = tokio::process::Command::new("node");
         cmd.arg(&script_path)
-            .arg(url)
+            .arg(&params.url)
             .arg(&output_str)
             .arg(width.to_string())
             .arg(height.to_string())
@@ -104,28 +86,21 @@ impl ScreenshotTool {
             .current_dir(&self.project_root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-
-        info!(url, output = %output_str, "taking screenshot");
-
+        info!(url = %params.url, output = %output_str, "taking screenshot");
         let result = cmd
             .output()
             .await
             .map_err(|e| anyhow::anyhow!("failed to run screenshot script: {e}"))?;
-
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
             return Err(anyhow::anyhow!("screenshot script failed: {stderr}"));
         }
-
-        // Verify the file exists.
         if !output_path.exists() {
             return Err(anyhow::anyhow!("screenshot file was not created"));
         }
-
-        Ok(json!({
-            "success": true,
-            "path": output_str,
+        Ok(ScreenshotResult {
+            success: true,
+            path:    output_str,
         })
-        .into())
     }
 }

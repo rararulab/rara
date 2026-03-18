@@ -14,9 +14,12 @@
 
 //! Layer 2 service tools for managing agent skills.
 
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_skills::registry::InMemoryRegistry;
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// Format a SKILL.md file with YAML frontmatter (new format).
@@ -48,14 +51,16 @@ fn format_skill_md(
 // ListSkillsTool
 // ---------------------------------------------------------------------------
 
+/// Input parameters for the list-skills tool (no parameters required).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListSkillsParams {}
+
 /// Tool that lists all available skills with their metadata.
 #[derive(ToolDef)]
 #[tool(
     name = "list-skills",
     description = "List all available skills with their metadata (name, description, \
-                   allowed_tools, source, eligibility).",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   allowed_tools, source, eligibility)."
 )]
 pub struct ListSkillsTool {
     registry: InMemoryRegistry,
@@ -63,16 +68,18 @@ pub struct ListSkillsTool {
 
 impl ListSkillsTool {
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for ListSkillsTool {
+    type Output = Value;
+    type Params = ListSkillsParams;
 
-    async fn exec(&self, _params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn run(
+        &self,
+        _params: ListSkillsParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<Value> {
         let skills: Vec<Value> = self
             .registry
             .list_all()
@@ -91,7 +98,7 @@ impl ListSkillsTool {
             })
             .collect();
         let count = skills.len();
-        Ok(json!({ "skills": skills, "count": count }).into())
+        Ok(json!({ "skills": skills, "count": count }))
     }
 }
 
@@ -99,14 +106,25 @@ impl ListSkillsTool {
 // CreateSkillTool
 // ---------------------------------------------------------------------------
 
+/// Input parameters for the create-skill tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateSkillParams {
+    /// Unique skill name (lowercase, hyphens allowed).
+    name:          String,
+    /// Short description of what the skill does.
+    description:   String,
+    /// List of tools this skill is allowed to use.
+    allowed_tools: Option<Vec<String>>,
+    /// The prompt body (instructions for the agent).
+    prompt:        String,
+}
+
 /// Tool that creates a new skill by writing a `SKILL.md` file inside a skill
 /// directory and inserting the parsed metadata into the registry.
 #[derive(ToolDef)]
 #[tool(
     name = "create-skill",
-    description = "Create a new skill by writing a SKILL.md file with frontmatter and prompt body.",
-    params_schema = "Self::schema_create()",
-    execute_fn = "self.exec_create"
+    description = "Create a new skill by writing a SKILL.md file with frontmatter and prompt body."
 )]
 pub struct CreateSkillTool {
     registry: InMemoryRegistry,
@@ -114,69 +132,31 @@ pub struct CreateSkillTool {
 
 impl CreateSkillTool {
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
+}
 
-    fn schema_create() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Unique skill name (lowercase, hyphens allowed)"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Short description of what the skill does"
-                },
-                "allowed_tools": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "List of tools this skill is allowed to use"
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "The prompt body (instructions for the agent)"
-                }
-            },
-            "required": ["name", "description", "prompt"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for CreateSkillTool {
+    type Output = Value;
+    type Params = CreateSkillParams;
 
-    async fn exec_create(
+    async fn run(
         &self,
-        params: Value,
+        params: CreateSkillParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: name"))?;
-
-        let description = params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: description"))?;
-
-        let prompt = params
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: prompt"))?;
-
-        let allowed_tools: Vec<String> = params
-            .get("allowed_tools")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
+    ) -> anyhow::Result<Value> {
+        let allowed_tools = params.allowed_tools.unwrap_or_default();
 
         // Build the SKILL.md content.
-        let content = format_skill_md(name, description, &allowed_tools, prompt);
+        let content = format_skill_md(
+            &params.name,
+            &params.description,
+            &allowed_tools,
+            &params.prompt,
+        );
 
         // Write to skills_dir()/{name}/SKILL.md.
         let skills_dir = rara_paths::skills_dir();
-        let skill_dir = skills_dir.join(name);
+        let skill_dir = skills_dir.join(&params.name);
         std::fs::create_dir_all(&skill_dir)
             .map_err(|e| anyhow::anyhow!("failed to create skill directory: {e}"))?;
 
@@ -194,10 +174,9 @@ impl CreateSkillTool {
         self.registry.insert(meta);
 
         Ok(json!({
-            "created": name,
+            "created": params.name,
             "path": file_path.to_string_lossy(),
-        })
-        .into())
+        }))
     }
 }
 
@@ -205,13 +184,18 @@ impl CreateSkillTool {
 // DeleteSkillTool
 // ---------------------------------------------------------------------------
 
+/// Input parameters for the delete-skill tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteSkillParams {
+    /// Name of the skill to delete.
+    name: String,
+}
+
 /// Tool that deletes a skill by removing its directory and unregistering it.
 #[derive(ToolDef)]
 #[tool(
     name = "delete-skill",
-    description = "Delete a skill by removing its directory and unregistering it.",
-    params_schema = "Self::schema_delete()",
-    execute_fn = "self.exec_delete"
+    description = "Delete a skill by removing its directory and unregistering it."
 )]
 pub struct DeleteSkillTool {
     registry: InMemoryRegistry,
@@ -219,35 +203,23 @@ pub struct DeleteSkillTool {
 
 impl DeleteSkillTool {
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
+}
 
-    fn schema_delete() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Name of the skill to delete"
-                }
-            },
-            "required": ["name"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for DeleteSkillTool {
+    type Output = Value;
+    type Params = DeleteSkillParams;
 
-    async fn exec_delete(
+    async fn run(
         &self,
-        params: Value,
+        params: DeleteSkillParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: name"))?;
-
+    ) -> anyhow::Result<Value> {
         // Get the skill path before removing from registry.
         let meta = self
             .registry
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("skill not found: {name}"))?;
+            .get(&params.name)
+            .ok_or_else(|| anyhow::anyhow!("skill not found: {}", params.name))?;
         let skill_path = meta.path.clone();
 
         // Remove the directory (best-effort).
@@ -256,8 +228,8 @@ impl DeleteSkillTool {
         }
 
         // Remove from registry.
-        self.registry.remove(name);
+        self.registry.remove(&params.name);
 
-        Ok(json!({ "deleted": name }).into())
+        Ok(json!({ "deleted": params.name }))
     }
 }

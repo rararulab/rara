@@ -16,26 +16,44 @@
 
 use std::collections::HashMap;
 
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_mcp::manager::{
     mgr::McpManager,
     registry::{McpServerConfig, TransportType},
 };
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
 // InstallMcpServerTool
 // ---------------------------------------------------------------------------
 
+/// Input parameters for the install-mcp-server tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InstallMcpServerParams {
+    /// Unique name for the MCP server.
+    server_name: String,
+    /// Command to run the MCP server (e.g. 'npx', 'uvx', 'node').
+    command:     String,
+    /// Command-line arguments for the server.
+    args:        Option<Vec<String>>,
+    /// Environment variables to pass to the server process.
+    env:         Option<HashMap<String, String>>,
+    /// Transport type (default: stdio).
+    transport:   Option<String>,
+    /// URL for SSE transport (required when transport is 'sse').
+    url:         Option<String>,
+}
+
 /// Tool that installs (adds + starts) a new MCP server at runtime.
 #[derive(ToolDef)]
 #[tool(
     name = "install-mcp-server",
     description = "Install and start an MCP server. The server's tools become available \
-                   immediately for subsequent agent runs without restart.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   immediately for subsequent agent runs without restart."
 )]
 pub struct InstallMcpServerTool {
     manager: McpManager,
@@ -43,104 +61,45 @@ pub struct InstallMcpServerTool {
 
 impl InstallMcpServerTool {
     pub fn new(manager: McpManager) -> Self { Self { manager } }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "server_name": {
-                    "type": "string",
-                    "description": "Unique name for the MCP server"
-                },
-                "command": {
-                    "type": "string",
-                    "description": "Command to run the MCP server (e.g. 'npx', 'uvx', 'node')"
-                },
-                "args": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Command-line arguments for the server"
-                },
-                "env": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" },
-                    "description": "Environment variables to pass to the server process"
-                },
-                "transport": {
-                    "type": "string",
-                    "enum": ["stdio", "sse"],
-                    "description": "Transport type (default: stdio)"
-                },
-                "url": {
-                    "type": "string",
-                    "description": "URL for SSE transport (required when transport is 'sse')"
-                }
-            },
-            "required": ["server_name", "command"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for InstallMcpServerTool {
+    type Output = Value;
+    type Params = InstallMcpServerParams;
 
-    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let server_name = params
-            .get("server_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: server_name"))?;
-
-        let command = params
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: command"))?;
-
-        let args: Vec<String> = params
-            .get("args")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let env: HashMap<String, String> = params
-            .get("env")
-            .and_then(|v| v.as_object())
-            .map(|obj| {
-                obj.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let transport = match params.get("transport").and_then(|v| v.as_str()) {
+    async fn run(
+        &self,
+        params: InstallMcpServerParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<Value> {
+        let transport = match params.transport.as_deref() {
             Some("sse") => TransportType::Sse,
             _ => TransportType::Stdio,
         };
 
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-
         let config = McpServerConfig {
-            command: command.to_owned(),
-            args,
-            env,
+            command: params.command,
+            args: params.args.unwrap_or_default(),
+            env: params.env.unwrap_or_default(),
             enabled: true,
             transport,
-            url,
+            url: params.url,
             ..Default::default()
         };
 
         self.manager
-            .add_server(server_name.to_owned(), config, true)
+            .add_server(params.server_name.clone(), config, true)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to install MCP server '{server_name}': {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("failed to install MCP server '{}': {e}", params.server_name)
+            })?;
 
         Ok(json!({
             "status": "installed",
-            "server_name": server_name,
-            "message": format!("MCP server '{server_name}' installed and started. Its tools are now available."),
-        }).into())
+            "server_name": params.server_name,
+            "message": format!("MCP server '{}' installed and started. Its tools are now available.", params.server_name),
+        }))
     }
 }
 
@@ -148,14 +107,16 @@ impl InstallMcpServerTool {
 // ListMcpServersTool
 // ---------------------------------------------------------------------------
 
+/// Input parameters for the list-mcp-servers tool (no parameters required).
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListMcpServersParams {}
+
 /// Tool that lists all registered MCP servers and their tools.
 #[derive(ToolDef)]
 #[tool(
     name = "list-mcp-servers",
     description = "List all registered MCP servers with their status (enabled, connected) and \
-                   available tools.",
-    params_schema = "Self::schema_list()",
-    execute_fn = "self.exec_list"
+                   available tools."
 )]
 pub struct ListMcpServersTool {
     manager: McpManager,
@@ -163,20 +124,18 @@ pub struct ListMcpServersTool {
 
 impl ListMcpServersTool {
     pub fn new(manager: McpManager) -> Self { Self { manager } }
+}
 
-    fn schema_list() -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for ListMcpServersTool {
+    type Output = Value;
+    type Params = ListMcpServersParams;
 
-    async fn exec_list(
+    async fn run(
         &self,
-        _params: Value,
+        _params: ListMcpServersParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<Value> {
         let registry = self.manager.registry().await;
         let all_names = registry
             .list()
@@ -232,8 +191,7 @@ impl ListMcpServersTool {
             "servers": servers,
             "total": total,
             "connected": connected_count,
-        })
-        .into())
+        }))
     }
 }
 
@@ -241,14 +199,19 @@ impl ListMcpServersTool {
 // RemoveMcpServerTool
 // ---------------------------------------------------------------------------
 
+/// Input parameters for the remove-mcp-server tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RemoveMcpServerParams {
+    /// Name of the MCP server to remove.
+    server_name: String,
+}
+
 /// Tool that removes an MCP server from the registry and stops it.
 #[derive(ToolDef)]
 #[tool(
     name = "remove-mcp-server",
     description = "Remove an MCP server from the registry and stop it. Its tools will no longer \
-                   be available.",
-    params_schema = "Self::schema_remove()",
-    execute_fn = "self.exec_remove"
+                   be available."
 )]
 pub struct RemoveMcpServerTool {
     manager: McpManager,
@@ -256,50 +219,38 @@ pub struct RemoveMcpServerTool {
 
 impl RemoveMcpServerTool {
     pub fn new(manager: McpManager) -> Self { Self { manager } }
+}
 
-    fn schema_remove() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "server_name": {
-                    "type": "string",
-                    "description": "Name of the MCP server to remove"
-                }
-            },
-            "required": ["server_name"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for RemoveMcpServerTool {
+    type Output = Value;
+    type Params = RemoveMcpServerParams;
 
-    async fn exec_remove(
+    async fn run(
         &self,
-        params: Value,
+        params: RemoveMcpServerParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let server_name = params
-            .get("server_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: server_name"))?;
-
+    ) -> anyhow::Result<Value> {
         let removed = self
             .manager
-            .remove_server(server_name)
+            .remove_server(&params.server_name)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to remove MCP server '{server_name}': {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("failed to remove MCP server '{}': {e}", params.server_name)
+            })?;
 
         if removed {
             Ok(json!({
                 "status": "removed",
-                "server_name": server_name,
-                "message": format!("MCP server '{server_name}' removed and stopped."),
-            })
-            .into())
+                "server_name": params.server_name,
+                "message": format!("MCP server '{}' removed and stopped.", params.server_name),
+            }))
         } else {
             Ok(json!({
                 "status": "not_found",
-                "server_name": server_name,
-                "message": format!("MCP server '{server_name}' was not found in the registry."),
-            })
-            .into())
+                "server_name": params.server_name,
+                "message": format!("MCP server '{}' was not found in the registry.", params.server_name),
+            }))
         }
     }
 }

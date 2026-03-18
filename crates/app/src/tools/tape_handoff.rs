@@ -14,12 +14,29 @@
 
 //! Tool for agent-driven context truncation via tape handoff anchors.
 
+use async_trait::async_trait;
 use rara_kernel::{
     memory::{HandoffState, TapeService},
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TapeHandoffParams {
+    /// Anchor name (default: "handoff").
+    name:       Option<String>,
+    /// Summary of conversation so far.
+    summary:    String,
+    /// Actionable items for the next phase.
+    next_steps: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TapeHandoffResult {
+    pub output: String,
+}
 
 /// Creates a handoff anchor in the session tape, enabling context truncation.
 #[derive(ToolDef)]
@@ -28,74 +45,41 @@ use serde_json::json;
     description = "Create a handoff anchor to checkpoint progress and truncate context history. \
                    This is a core workflow tool \u{2014} use it proactively to manage context, \
                    not just when failures occur. You MUST provide a summary to preserve context \
-                   across the handoff boundary.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   across the handoff boundary."
 )]
 pub struct TapeHandoffTool {
     tape_service: TapeService,
 }
-
 impl TapeHandoffTool {
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Anchor name (default: \"handoff\")"
-                },
-                "summary": {
-                    "type": "string",
-                    "description": "Summary of conversation so far"
-                },
-                "next_steps": {
-                    "type": "string",
-                    "description": "Actionable items for the next phase"
-                }
-            },
-            "required": ["summary"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for TapeHandoffTool {
+    type Output = TapeHandoffResult;
+    type Params = TapeHandoffParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: TapeHandoffParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<TapeHandoffResult> {
         let tape_name = context.session_key.to_string();
-
-        let anchor_name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("handoff");
-
-        let summary = params
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-
-        let next_steps = params
-            .get("next_steps")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-
+        let anchor_name = params.name.as_deref().unwrap_or("handoff");
         let state = HandoffState {
-            phase: None,
-            summary,
-            next_steps,
+            phase:      None,
+            summary:    Some(params.summary),
+            next_steps: params.next_steps,
             source_ids: vec![],
-            owner: Some("agent".to_owned()),
-            extra: None,
+            owner:      Some("agent".to_owned()),
+            extra:      None,
         };
-
         self.tape_service
             .handoff(&tape_name, anchor_name, state)
             .await
             .map_err(|e| anyhow::anyhow!("failed to create handoff: {e}"))?;
-
-        Ok(json!({ "output": format!("handoff created: {anchor_name}") }).into())
+        Ok(TapeHandoffResult {
+            output: format!("handoff created: {anchor_name}"),
+        })
     }
 }

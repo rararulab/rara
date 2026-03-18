@@ -13,30 +13,45 @@
 // limitations under the License.
 
 //! HTTP fetch primitive.
-//!
-//! Issues an HTTP GET or POST request and returns the response status, content
-//! type, and body (truncated to 100 KB).
 
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
-/// Maximum response body size in bytes (100 KB).
 const MAX_BODY_BYTES: usize = 100 * 1024;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HttpFetchParams {
+    /// The URL to fetch.
+    url:    String,
+    /// HTTP method (default GET).
+    method: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpFetchResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status:       Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body:         Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error:        Option<String>,
+}
 
 /// Layer 1 primitive: issue an HTTP request.
 #[derive(ToolDef)]
 #[tool(
     name = "http-fetch",
     description = "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body \
-                   (truncated to 100KB). Useful for checking job posting pages or external APIs.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   (truncated to 100KB). Useful for checking job posting pages or external APIs."
 )]
 pub struct HttpFetchTool {
     client: reqwest::Client,
 }
-
 impl HttpFetchTool {
     pub fn new() -> Self {
         Self {
@@ -46,45 +61,23 @@ impl HttpFetchTool {
                 .unwrap_or_default(),
         }
     }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL to fetch"
-                },
-                "method": {
-                    "type": "string",
-                    "enum": ["GET", "POST"],
-                    "description": "HTTP method (default GET)"
-                }
-            },
-            "required": ["url"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for HttpFetchTool {
+    type Output = HttpFetchResult;
+    type Params = HttpFetchParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: HttpFetchParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: url"))?;
-
-        let method = params
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("GET");
-
+    ) -> anyhow::Result<HttpFetchResult> {
+        let method = params.method.as_deref().unwrap_or("GET");
         let request = match method {
-            "POST" => self.client.post(url),
-            _ => self.client.get(url),
+            "POST" => self.client.post(&params.url),
+            _ => self.client.get(&params.url),
         };
-
         match request.send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
@@ -94,7 +87,6 @@ impl HttpFetchTool {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("unknown")
                     .to_owned();
-
                 let body_bytes = resp.bytes().await.unwrap_or_default();
                 let body = if body_bytes.len() > MAX_BODY_BYTES {
                     let truncated = String::from_utf8_lossy(&body_bytes[..MAX_BODY_BYTES]);
@@ -102,18 +94,19 @@ impl HttpFetchTool {
                 } else {
                     String::from_utf8_lossy(&body_bytes).into_owned()
                 };
-
-                Ok(json!({
-                    "status": status,
-                    "content_type": content_type,
-                    "body": body,
+                Ok(HttpFetchResult {
+                    status:       Some(status),
+                    content_type: Some(content_type),
+                    body:         Some(body),
+                    error:        None,
                 })
-                .into())
             }
-            Err(e) => Ok(json!({
-                "error": format!("{e}"),
-            })
-            .into()),
+            Err(e) => Ok(HttpFetchResult {
+                status:       None,
+                content_type: None,
+                body:         None,
+                error:        Some(format!("{e}")),
+            }),
         }
     }
 }
