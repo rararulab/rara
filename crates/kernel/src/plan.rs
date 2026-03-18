@@ -160,6 +160,26 @@ Based on this context, create a REVISED plan using the `create-plan` tool. The n
 You MUST call the `create-plan` tool with the revised plan."#;
 
 // ---------------------------------------------------------------------------
+// Tool summary for planning context
+// ---------------------------------------------------------------------------
+
+/// Build a compact tool summary for the planning LLM.
+///
+/// Lists each tool's name and description so the planner knows what
+/// capabilities are available when decomposing tasks into steps.
+#[allow(dead_code)]
+fn build_tool_summary(tools: &crate::tool::ToolRegistry) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec!["Available tools:".to_string()];
+    for (name, tool) in tools.iter() {
+        lines.push(format!("- {}: {}", name, tool.description()));
+    }
+    lines.join("\n")
+}
+
+// ---------------------------------------------------------------------------
 // Plan executor
 // ---------------------------------------------------------------------------
 
