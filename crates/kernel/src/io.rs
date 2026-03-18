@@ -843,6 +843,20 @@ pub enum ToolCallLimitDecision {
     Stop,
 }
 
+/// Structured step status carried by [`StreamEvent::PlanProgress`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepStatus {
+    /// Step execution is starting.
+    Running,
+    /// Step completed successfully.
+    Done,
+    /// Step failed with a reason.
+    Failed { reason: String },
+    /// Step needs replanning.
+    NeedsReplan { reason: String },
+}
+
 /// Incremental events emitted during agent execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -919,6 +933,7 @@ pub enum StreamEvent {
     PlanProgress {
         current_step: usize,
         total_steps:  usize,
+        step_status:  PlanStepStatus,
         status_text:  String,
     },
     /// The plan has been revised.

@@ -34,7 +34,7 @@ use crate::{
     error::{KernelError, Result},
     guard::pipeline::GuardPipeline,
     handle::KernelHandle,
-    io::{StreamEvent, StreamHandle},
+    io::{PlanStepStatus, StreamEvent, StreamHandle},
     llm,
     memory::{TapEntryKind, TapeService},
     notification::NotificationBusRef,
@@ -313,6 +313,7 @@ pub(crate) async fn run_plan_loop(
         stream_handle.emit(StreamEvent::PlanProgress {
             current_step: step.index,
             total_steps:  plan.steps.len(),
+            step_status:  PlanStepStatus::Running,
             status_text:  format!("正在执行第{}步：{}…", step.index + 1, step.task),
         });
 
@@ -342,19 +343,26 @@ pub(crate) async fn run_plan_loop(
             ExecutionMode::Worker => execute_worker_step(handle, session_key, &step).await,
         };
 
-        let end_status = match &outcome {
-            StepOutcome::Success => format!("第{}步完成", step.index + 1),
-            StepOutcome::Failed { reason } => {
-                format!("第{}步失败：{}", step.index + 1, reason)
-            }
-            StepOutcome::NeedsReplan { reason } => {
-                format!("第{}步需要调整：{}", step.index + 1, reason)
-            }
+        let (step_status, end_status) = match &outcome {
+            StepOutcome::Success => (PlanStepStatus::Done, format!("第{}步完成", step.index + 1)),
+            StepOutcome::Failed { reason } => (
+                PlanStepStatus::Failed {
+                    reason: reason.clone(),
+                },
+                format!("第{}步失败：{}", step.index + 1, reason),
+            ),
+            StepOutcome::NeedsReplan { reason } => (
+                PlanStepStatus::NeedsReplan {
+                    reason: reason.clone(),
+                },
+                format!("第{}步需要调整：{}", step.index + 1, reason),
+            ),
         };
         stream_handle.emit(StreamEvent::PlanProgress {
             current_step: step.index,
-            total_steps:  plan.steps.len(),
-            status_text:  end_status,
+            total_steps: plan.steps.len(),
+            step_status,
+            status_text: end_status,
         });
 
         // If interrupted during step execution, exit immediately

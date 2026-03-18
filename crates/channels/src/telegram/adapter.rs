@@ -2490,7 +2490,7 @@ fn spawn_stream_forwarder(
     trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
 ) {
-    use rara_kernel::io::StreamEvent;
+    use rara_kernel::io::{PlanStepStatus, StreamEvent};
 
     tokio::spawn(async move {
         let hub = {
@@ -2712,7 +2712,7 @@ fn spawn_stream_forwarder(
                                 progress.last_edit = Instant::now();
                             }
                         }
-                        Ok(StreamEvent::PlanProgress { current_step, status_text, .. }) => {
+                        Ok(StreamEvent::PlanProgress { current_step, step_status, status_text, .. }) => {
                             if progress.plan_steps.is_some() {
                                 // Detect step transition: clear tools when step changes.
                                 if Some(current_step) != progress.plan_current_step {
@@ -2729,12 +2729,7 @@ fn spawn_stream_forwarder(
                                     progress.plan_current_step = Some(current_step);
                                 }
 
-                                // TODO(#590): status detection relies on Chinese string matching
-                                // ("完成"/"失败"/full-width colon). Ideally StreamEvent::PlanProgress
-                                // should carry a structured StepStatus enum instead of free-text.
-                                // See: https://github.com/rararulab/rara/issues/590
-
-                                // Update current step.
+                                // Update current step using structured status.
                                 if let Some(ref mut steps) = progress.plan_steps {
                                     // Dynamically extend steps if replan introduced new indices.
                                     while current_step >= steps.len() {
@@ -2744,14 +2739,13 @@ fn spawn_stream_forwarder(
                                         });
                                     }
                                     if let Some(step) = steps.get_mut(current_step) {
-                                        if status_text.contains("\u{5b8c}\u{6210}") {
-                                            step.status = StepStatus::Done;
-                                        } else if status_text.contains("\u{5931}\u{8d25}") {
-                                            step.status = StepStatus::Failed(status_text.clone());
-                                        } else {
-                                            step.status = StepStatus::Running;
-                                        }
-                                        // Extract task name from status on first Running.
+                                        step.status = match &step_status {
+                                            PlanStepStatus::Running => StepStatus::Running,
+                                            PlanStepStatus::Done => StepStatus::Done,
+                                            PlanStepStatus::Failed { reason } => StepStatus::Failed(reason.clone()),
+                                            PlanStepStatus::NeedsReplan { reason } => StepStatus::Failed(reason.clone()),
+                                        };
+                                        // Extract task name from status_text on first Running.
                                         if step.task.is_empty() {
                                             if let Some(colon_pos) = status_text.find('\u{ff1a}') {
                                                 let task: String = status_text[colon_pos + '\u{ff1a}'.len_utf8()..]
@@ -2785,12 +2779,18 @@ fn spawn_stream_forwarder(
                             // PlanCreated. Subsequent PlanProgress events carry the
                             // new (higher) step indices, handled by dynamic expansion
                             // in the PlanProgress handler above.
-                            if progress.plan_steps.is_some() {
-                                if let (Some(steps), Some(cur)) = (&mut progress.plan_steps, progress.plan_current_step) {
+                            if let Some(ref mut steps) = progress.plan_steps {
+                                // Mark the current step as failed.
+                                if let Some(cur) = progress.plan_current_step {
                                     if let Some(step) = steps.get_mut(cur) {
                                         step.status = StepStatus::Failed(reason.clone());
                                     }
                                 }
+                                // Remove remaining Pending steps — they won't execute
+                                // after replan; new steps arrive via PlanProgress with
+                                // higher indices and are dynamically expanded.
+                                steps.retain(|s| !matches!(s.status, StepStatus::Pending));
+
                                 let text = progress.render_text();
                                 if let Some(mid) = progress.message_id {
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
