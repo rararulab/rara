@@ -170,6 +170,22 @@ struct ToolProgress {
     error:      Option<String>,
 }
 
+/// Status of a single plan step.
+#[derive(Debug, Clone)]
+enum StepStatus {
+    Pending,
+    Running,
+    Done,
+    Failed(String),
+}
+
+/// State of a single plan step for display.
+#[derive(Debug, Clone)]
+struct PlanStepState {
+    task:   String,
+    status: StepStatus,
+}
+
 /// Progress message state for tool execution feedback.
 ///
 /// During streaming: renders live progress with tool activity + token footer.
@@ -200,13 +216,19 @@ struct ProgressMessage {
     /// Rara internal message ID — the `InboundMessage.id` that triggered this
     /// turn.
     rara_message_id:   String,
-    /// Plan steps must be saved here because `PlanCompleted` sets `plan =
-    /// None`. If we don't save them before that, the trace loses all plan
-    /// information.
+    /// Plan steps saved as display strings for the post-completion trace
+    /// detail view.
     saved_plan_steps:  Vec<String>,
     /// Cached loading hint, sampled once per turn to avoid flicker on
     /// re-render.
     loading_hint:      String,
+    /// Plan steps — `Some` when in plan mode, `None` for reactive.
+    plan_steps:        Option<Vec<PlanStepState>>,
+    /// Goal description for the plan header.
+    plan_goal:         Option<String>,
+    /// Index of the currently executing step (0-based), `None` before first
+    /// step starts.
+    plan_current_step: Option<usize>,
 }
 
 impl ProgressMessage {
@@ -227,85 +249,24 @@ impl ProgressMessage {
             rara_message_id,
             saved_plan_steps: Vec::new(),
             loading_hint: rara_kernel::io::loading_hints::random_hint().to_string(),
+            plan_steps: None,
+            plan_goal: None,
+            plan_current_step: None,
+        }
+    }
+
+    /// Render the current progress text, dispatching to plan or reactive
+    /// format.
+    fn render_text(&self) -> String {
+        if self.plan_steps.is_some() {
+            render_plan_progress(self)
+        } else {
+            render_progress(&self.tools, self.turn_started.elapsed(), self)
         }
     }
 }
 
 use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
-
-/// Display tier for plan messages in Telegram.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlanTier {
-    /// steps <= 2, est < 10s: no plan message, just let final answer through.
-    Micro,
-    /// est 10-30s: 1-line status, keep editing.
-    Medium,
-    /// est > 30s or steps > 4: compact summary + status, single message edit.
-    Heavy,
-}
-
-/// Plan display state for Telegram — three-tier strategy with single message
-/// edit.
-struct PlanDisplay {
-    message_id:              Option<MessageId>,
-    total_steps:             usize,
-    estimated_duration_secs: Option<u32>,
-    compact_summary:         Option<String>,
-    status_lines:            Vec<String>,
-    last_status:             String,
-    last_edit:               Instant,
-    tier:                    PlanTier,
-}
-
-impl PlanDisplay {
-    fn new(
-        total_steps: usize,
-        estimated_duration_secs: Option<u32>,
-        compact_summary: String,
-    ) -> Self {
-        let est = estimated_duration_secs.unwrap_or(0);
-        let tier = if total_steps <= 2 && est < 10 {
-            PlanTier::Micro
-        } else if est <= 30 && total_steps <= 4 {
-            PlanTier::Medium
-        } else {
-            PlanTier::Heavy
-        };
-
-        Self {
-            message_id: None,
-            total_steps,
-            estimated_duration_secs,
-            compact_summary: if tier == PlanTier::Heavy {
-                Some(compact_summary)
-            } else {
-                None
-            },
-            status_lines: Vec::new(),
-            last_status: String::new(),
-            last_edit: Instant::now()
-                .checked_sub(MIN_EDIT_INTERVAL)
-                .unwrap_or_else(Instant::now),
-            tier,
-        }
-    }
-
-    /// Build the current message text for editing.
-    fn render(&self) -> String {
-        let mut text = String::new();
-        if let Some(ref summary) = self.compact_summary {
-            text.push_str(summary);
-            text.push('\n');
-        }
-        if let Some(last) = self.status_lines.last() {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(last);
-        }
-        text
-    }
-}
 
 /// Format a single tool-progress line.
 /// Format a duration as a compact human-readable string.
@@ -494,6 +455,68 @@ fn render_progress(
 
         lines.push(format!("✳ {}", parts.join(" · ")));
     }
+
+    lines.join("\n")
+}
+
+/// Render plan-mode progress: steps as primary structure, tool calls
+/// nested under the current running step.
+///
+/// TODO: UI strings are hardcoded in Chinese (e.g. "第N步", "（N步）").
+/// Extract to a locale/template system when i18n is needed.
+fn render_plan_progress(progress: &ProgressMessage) -> String {
+    let plan_goal = progress.plan_goal.as_deref().unwrap_or("Plan");
+    let steps = progress.plan_steps.as_deref().unwrap_or_default();
+    let tools = &progress.tools;
+    let turn_elapsed = progress.turn_started.elapsed();
+
+    let total = steps.len();
+    let mut lines = vec![format!(
+        "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
+    )];
+    lines.push(String::new());
+
+    for (i, step) in steps.iter().enumerate() {
+        let (icon, suffix) = match &step.status {
+            StepStatus::Done => ("\u{2705}", String::new()),
+            StepStatus::Running => ("\u{25b6}\u{fe0f}", String::new()),
+            StepStatus::Failed(reason) => {
+                let short: String = reason.chars().take(40).collect();
+                ("\u{274c}", format!(": {short}"))
+            }
+            StepStatus::Pending => ("\u{2b1c}", String::new()),
+        };
+        lines.push(format!(
+            "{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}{suffix}",
+            i + 1,
+            step.task
+        ));
+
+        // Nest tool calls under the running step.
+        if matches!(step.status, StepStatus::Running) && !tools.is_empty() {
+            let phases = aggregate_phases(tools);
+            for phase in &phases {
+                let tool_line = format_phase_line(phase, &progress.loading_hint);
+                lines.push(format!("  {tool_line}"));
+            }
+        }
+    }
+
+    // Footer: elapsed + tokens
+    let mut parts = vec![format_duration_compact(turn_elapsed)];
+    if progress.input_tokens > 0 || progress.output_tokens > 0 {
+        let in_str = format_token_count(progress.input_tokens);
+        let out_str = format_token_count(progress.output_tokens);
+        parts.push(format!("\u{2191}{in_str} \u{2193}{out_str}"));
+    }
+    if progress.thinking_ms > 0 {
+        let secs = progress.thinking_ms / 1000;
+        if secs > 0 {
+            parts.push(format!("thought {secs}s"));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("\u{2733} {}", parts.join(" \u{00b7} ")));
 
     lines.join("\n")
 }
@@ -2479,7 +2502,7 @@ fn spawn_stream_forwarder(
     trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
 ) {
-    use rara_kernel::io::StreamEvent;
+    use rara_kernel::io::{PlanStepStatus, StreamEvent};
 
     tokio::spawn(async move {
         let hub = {
@@ -2523,7 +2546,6 @@ fn spawn_stream_forwarder(
 
         let mut progress = ProgressMessage::new(rara_message_id);
         let mut progress_dirty = false;
-        let mut plan: Option<PlanDisplay> = None;
 
         loop {
             tokio::select! {
@@ -2594,7 +2616,7 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
 
-                            let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
+                            let text = progress.render_text();
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -2625,7 +2647,7 @@ fn spawn_stream_forwarder(
                                 tp.error = error;
                             }
 
-                            let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
+                            let text = progress.render_text();
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                 match progress.message_id {
                                     Some(mid) => {
@@ -2678,72 +2700,152 @@ fn spawn_stream_forwarder(
                                 });
                             }
                         }
-                        Ok(StreamEvent::PlanCreated { total_steps, compact_summary, estimated_duration_secs, .. }) => {
-                            let mut p = PlanDisplay::new(total_steps, estimated_duration_secs, compact_summary);
-                            // Micro tier: don't send any plan message.
-                            if p.tier != PlanTier::Micro {
-                                let text = p.render();
-                                if !text.is_empty() {
-                                    match bot.send_message(ChatId(chat_id), &text).await {
-                                        Ok(msg) => { p.message_id = Some(msg.id); }
-                                        Err(e) => { warn!(chat_id, error = %e, "failed to send plan message"); }
+                        Ok(StreamEvent::PlanCreated { total_steps, goal, .. }) => {
+                            if total_steps <= 1 {
+                                // Micro: single-step plan, behave like reactive.
+                                continue;
+                            }
+                            let steps: Vec<PlanStepState> = (0..total_steps)
+                                .map(|_| PlanStepState {
+                                    task: String::new(),
+                                    status: StepStatus::Pending,
+                                })
+                                .collect();
+                            progress.plan_steps = Some(steps);
+                            progress.plan_goal = Some(goal.clone());
+
+                            // Send initial plan message immediately.
+                            let text = progress.render_text();
+                            if !text.is_empty() {
+                                match bot.send_message(ChatId(chat_id), &text).await {
+                                    Ok(msg) => { progress.message_id = Some(msg.id); }
+                                    Err(e) => { warn!(chat_id, error = %e, "failed to send plan progress message"); }
+                                }
+                                progress.last_edit = Instant::now();
+                            }
+                        }
+                        Ok(StreamEvent::PlanProgress { current_step, step_status, status_text, .. }) => {
+                            if progress.plan_steps.is_some() {
+                                // Detect step transition: clear tools when step changes.
+                                if Some(current_step) != progress.plan_current_step {
+                                    if let Some(ref mut steps) = progress.plan_steps {
+                                        if let Some(prev_idx) = progress.plan_current_step {
+                                            if let Some(prev) = steps.get_mut(prev_idx) {
+                                                if matches!(prev.status, StepStatus::Running) {
+                                                    prev.status = StepStatus::Done;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    progress.tools.clear();
+                                    progress.plan_current_step = Some(current_step);
+                                }
+
+                                // Update current step using structured status.
+                                if let Some(ref mut steps) = progress.plan_steps {
+                                    // Dynamically extend steps if replan introduced new indices.
+                                    while current_step >= steps.len() {
+                                        steps.push(PlanStepState {
+                                            task:   String::new(),
+                                            status: StepStatus::Pending,
+                                        });
+                                    }
+                                    if let Some(step) = steps.get_mut(current_step) {
+                                        step.status = match &step_status {
+                                            PlanStepStatus::Running => StepStatus::Running,
+                                            PlanStepStatus::Done => StepStatus::Done,
+                                            PlanStepStatus::Failed { reason } => StepStatus::Failed(reason.clone()),
+                                            PlanStepStatus::NeedsReplan { reason } => StepStatus::Failed(reason.clone()),
+                                        };
+                                        // Extract task name from status_text on first Running.
+                                        if step.task.is_empty() {
+                                            if let Some(colon_pos) = status_text.find('\u{ff1a}') {
+                                                let task: String = status_text[colon_pos + '\u{ff1a}'.len_utf8()..]
+                                                    .trim_end_matches('\u{2026}')
+                                                    .to_string();
+                                                step.task = task;
+                                            } else {
+                                                step.task = status_text.clone();
+                                            }
+                                        }
                                     }
                                 }
-                                p.last_edit = Instant::now();
-                            }
-                            plan = Some(p);
-                        }
-                        Ok(StreamEvent::PlanProgress { status_text, .. }) => {
-                            if let Some(ref mut p) = plan {
-                                if p.tier == PlanTier::Micro {
-                                    continue; // micro: suppress all plan updates
-                                }
-                                // Dedup: skip if identical to last status.
-                                if status_text == p.last_status {
-                                    continue;
-                                }
-                                p.last_status = status_text.clone();
-                                p.status_lines.push(status_text);
-                                let text = p.render();
-                                if p.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
-                                    if let Some(mid) = p.message_id {
+
+                                // Render and edit with throttle + dirty flag.
+                                let text = progress.render_text();
+                                if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                    if let Some(mid) = progress.message_id {
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                     }
-                                    p.last_edit = Instant::now();
+                                    progress.last_edit = Instant::now();
+                                    progress_dirty = false;
+                                } else {
+                                    progress_dirty = true;
                                 }
                             }
                         }
                         Ok(StreamEvent::PlanReplan { reason }) => {
-                            if let Some(ref mut p) = plan {
-                                if p.tier == PlanTier::Micro {
-                                    continue;
+                            // Kernel behavior: after PlanReplan, the kernel replaces
+                            // plan.steps with new steps re-indexed from
+                            // base_index = past_steps.len(). It does NOT re-send
+                            // PlanCreated. Subsequent PlanProgress events carry the
+                            // new (higher) step indices, handled by dynamic expansion
+                            // in the PlanProgress handler above.
+                            if let Some(ref mut steps) = progress.plan_steps {
+                                // Mark the current step as failed.
+                                if let Some(cur) = progress.plan_current_step {
+                                    if let Some(step) = steps.get_mut(cur) {
+                                        step.status = StepStatus::Failed(reason.clone());
+                                    }
                                 }
-                                let status = format!("方案调整中…{reason}");
-                                p.status_lines.push(status.clone());
-                                p.last_status = status;
-                                let text = p.render();
-                                if let Some(mid) = p.message_id {
+                                // Remove remaining Pending steps — they won't execute
+                                // after replan; new steps arrive via PlanProgress with
+                                // higher indices and are dynamically expanded.
+                                steps.retain(|s| !matches!(s.status, StepStatus::Pending));
+
+                                let text = progress.render_text();
+                                if let Some(mid) = progress.message_id {
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                 }
-                                p.last_edit = Instant::now();
+                                progress.last_edit = Instant::now();
                             }
                         }
                         Ok(StreamEvent::PlanCompleted { summary }) => {
-                            if let Some(ref mut p) = plan {
-                                if p.tier != PlanTier::Micro {
-                                    let done_text = format!("\u{2705} {summary}");
-                                    p.status_lines.push(done_text);
-                                    let text = p.render();
-                                    if let Some(mid) = p.message_id {
-                                        let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                            if progress.plan_steps.is_some() {
+                                // Mark running steps as done; leave pending steps as-is
+                                // (they were never started, so marking them "done" would
+                                // be misleading).
+                                if let Some(ref mut steps) = progress.plan_steps {
+                                    for step in steps.iter_mut() {
+                                        if matches!(step.status, StepStatus::Running) {
+                                            step.status = StepStatus::Done;
+                                        }
+                                    }
+                                    // Save plan steps for trace detail view.
+                                    progress.saved_plan_steps = steps
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, s)| {
+                                            let icon = match &s.status {
+                                                StepStatus::Done => "\u{2705}",
+                                                StepStatus::Failed(_) => "\u{274c}",
+                                                _ => "\u{2b1c}",
+                                            };
+                                            format!("{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}", i + 1, s.task)
+                                        })
+                                        .collect();
+                                    // Append completion summary.
+                                    if !summary.is_empty() {
+                                        progress.saved_plan_steps.push(format!("\u{2705} {summary}"));
                                     }
                                 }
-                                // IMPORTANT: save plan steps BEFORE `plan = None` below.
-                                // PlanCompleted clears the plan, but we need the steps
-                                // for the post-completion trace detail view.
-                                progress.saved_plan_steps = p.status_lines.clone();
+
+                                // Final render.
+                                let text = progress.render_text();
+                                if let Some(mid) = progress.message_id {
+                                    let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
+                                }
                             }
-                            plan = None;
                         }
                         Ok(StreamEvent::UsageUpdate { input_tokens, output_tokens, thinking_ms }) => {
                             progress.input_tokens = input_tokens;
@@ -2751,7 +2853,7 @@ fn spawn_stream_forwarder(
                             progress.thinking_ms = thinking_ms;
                             // Trigger a progress re-render if we have a message
                             if progress.message_id.is_some() || !progress.tools.is_empty() {
-                                let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
+                                let text = progress.render_text();
                                 if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
                                     if let Some(mid) = progress.message_id {
                                         let _ = bot
@@ -2857,14 +2959,7 @@ fn spawn_stream_forwarder(
                             // lets the user toggle the full execution trace on demand.
                             // The trace is stored in TraceStore with 1-hour TTL.
                             if let Some(mid) = progress.message_id {
-                                // Plan steps come from either:
-                                // 1. saved_plan_steps (if PlanCompleted fired), or
-                                // 2. the still-active plan (if stream closed mid-plan).
-                                let plan_steps = if progress.saved_plan_steps.is_empty() {
-                                    plan.as_ref().map(|p| p.status_lines.clone()).unwrap_or_default()
-                                } else {
-                                    std::mem::take(&mut progress.saved_plan_steps)
-                                };
+                                let plan_steps = std::mem::take(&mut progress.saved_plan_steps);
 
                                 let trace = ExecutionTrace {
                                     duration_secs:    progress.turn_started.elapsed().as_secs(),
@@ -2959,7 +3054,7 @@ fn spawn_stream_forwarder(
                     // timer keeps ticking even without new stream events.
                     let has_running = progress.tools.iter().any(|t| !t.finished);
                     if (progress_dirty || has_running) && !progress.tools.is_empty() {
-                        let text = render_progress(&progress.tools, progress.turn_started.elapsed(), &progress);
+                        let text = progress.render_text();
                         match progress.message_id {
                             Some(mid) => {
                                 let _ = bot

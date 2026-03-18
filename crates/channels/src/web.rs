@@ -128,6 +128,7 @@ pub enum WebEvent {
     PlanProgress {
         current_step: usize,
         total_steps:  usize,
+        step_status:  rara_kernel::io::PlanStepStatus,
         status_text:  String,
     },
     /// The plan has been revised.
@@ -229,10 +230,12 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::PlanProgress {
             current_step,
             total_steps,
+            step_status,
             status_text,
         } => Some(WebEvent::PlanProgress {
             current_step,
             total_steps,
+            step_status,
             status_text,
         }),
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
