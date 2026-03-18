@@ -890,11 +890,13 @@ async fn execute_worker_step(
         model:                  None, // inherit from parent via driver registry
         system_prompt:          format!(
             "You are a worker agent executing a specific task as part of a larger plan.\n\nYour \
-             task: {}\n\nAcceptance criteria: {}\n\nFocus exclusively on this task. Report your \
-             results clearly when done.\n\nIf a step requires interactive human action (e.g., \
-             browser login, manual approval) that you cannot perform, report what is needed and \
-             stop immediately instead of retrying.",
-            step.task, step.acceptance
+             task: {task}\n\nAcceptance criteria: {acceptance}\n\nFocus exclusively on this \
+             task.\n\nIf a step requires interactive human action (e.g., browser login, manual \
+             approval) that you cannot perform, report what is needed and stop immediately \
+             instead of retrying.{output_suffix}",
+            task = step.task,
+            acceptance = step.acceptance,
+            output_suffix = crate::agent::STRUCTURED_OUTPUT_SUFFIX,
         ),
         soul_prompt:            None,
         provider_hint:          None,
@@ -950,13 +952,10 @@ async fn execute_worker_step(
                         result.iterations, result.tool_calls
                     )
                 } else {
-                    // Truncate long worker outputs for the plan summary.
-                    let max_summary_len = 2000;
-                    if result.output.len() > max_summary_len {
-                        format!("{}...(truncated)", &result.output[..max_summary_len])
-                    } else {
-                        result.output.clone()
-                    }
+                    crate::agent::truncate_preview(
+                        &result.output,
+                        crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES,
+                    )
                 };
 
                 info!(

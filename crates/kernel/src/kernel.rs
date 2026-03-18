@@ -906,13 +906,13 @@ impl Kernel {
             "child result received"
         );
 
-        // Truncate for display / proactive turn directive.
-        const CHILD_RESULT_MAX_CHARS: usize = 2000;
+        use crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES;
         let output = &result.output;
-        let truncated_output = if output.len() > CHILD_RESULT_MAX_CHARS {
+        let truncated_output = if output.len() > CHILD_RESULT_SAFETY_LIMIT_BYTES {
+            let boundary = output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT_BYTES);
             format!(
                 "{}...(truncated, full result in child tape {child_id})",
-                &output[..CHILD_RESULT_MAX_CHARS],
+                &output[..boundary],
             )
         } else {
             output.clone()

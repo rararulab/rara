@@ -153,8 +153,10 @@ impl ToolExecute for FoldBranchTool {
             role: Default::default(),
             description: format!("Fold-branch child for: {}", p.task),
             model: None,
-            system_prompt: "You are a focused sub-agent. Complete the assigned task concisely."
-                .to_string(),
+            system_prompt: format!(
+                "You are a focused sub-agent. Complete the assigned task concisely.{suffix}",
+                suffix = crate::agent::STRUCTURED_OUTPUT_SUFFIX,
+            ),
             soul_prompt: None,
             provider_hint: None,
             max_iterations: p.max_iterations,
