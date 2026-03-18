@@ -1691,6 +1691,11 @@ pub(crate) async fn run_agent_loop(
                                     %reason,
                                     "guard block overridden by user approval"
                                 );
+                                // Remember approved path so the user is not
+                                // prompted again for the same directory tree.
+                                if layer == "path_scope" {
+                                    guard_pipeline.approve_path_scope(&name, &args);
+                                }
                                 // Fall through to normal tool execution.
                             }
                             _ => {

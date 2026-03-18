@@ -114,6 +114,12 @@ impl GuardPipeline {
         self.taint.record_tool_output(session, tool_name);
     }
 
+    /// Record a user-approved path so subsequent accesses under the same
+    /// directory tree bypass the path-scope check.
+    pub fn approve_path_scope(&self, tool_name: &str, args: &serde_json::Value) {
+        self.path_scope.approve_path(tool_name, args);
+    }
+
     /// Access the taint tracker directly (for fork, clear, manual label
     /// injection).
     pub fn taint_tracker(&self) -> &TaintTracker { &self.taint }
@@ -219,6 +225,28 @@ mod tests {
         let args = serde_json::json!({ "file_path": "src/main.rs" });
         let verdict = pipeline.pre_execute(&sk, "read-file", &args);
         assert!(matches!(verdict, GuardVerdict::Pass));
+    }
+
+    #[test]
+    fn approved_path_bypasses_scope_check() {
+        let pipeline = test_pipeline();
+        let sk = SessionKey::new();
+        let args = serde_json::json!({ "path": "/opt/external" });
+        // First check blocks.
+        assert!(matches!(
+            pipeline.pre_execute(&sk, "list-directory", &args),
+            GuardVerdict::Blocked {
+                layer: "path_scope",
+                ..
+            }
+        ));
+        // Approve the path.
+        pipeline.approve_path_scope("list-directory", &args);
+        // Now it passes.
+        assert!(matches!(
+            pipeline.pre_execute(&sk, "list-directory", &args),
+            GuardVerdict::Pass
+        ));
     }
 
     #[test]
