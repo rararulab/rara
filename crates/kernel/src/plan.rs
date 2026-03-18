@@ -171,8 +171,11 @@ fn build_tool_summary(tools: &crate::tool::ToolRegistry) -> String {
     if tools.is_empty() {
         return String::new();
     }
+    // Sort by name for deterministic output (stable prompt caching).
+    let mut entries: Vec<_> = tools.iter().collect();
+    entries.sort_by_key(|(name, _)| *name);
     let mut lines = vec!["Available tools:".to_string()];
-    for (name, tool) in tools.iter() {
+    for (name, tool) in entries {
         lines.push(format!("- {}: {}", name, tool.description()));
     }
     lines.join("\n")
@@ -225,7 +228,7 @@ pub(crate) async fn run_plan_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to get manifest for planning: {e}"),
             })?;
-    let agent_prompt = crate::agent::build_agent_system_prompt(handle, &manifest);
+    let (agent_prompt, _) = crate::agent::build_agent_system_prompt(handle, &manifest);
     let full_tools = handle
         .session_tool_registry(session_key)
         .await

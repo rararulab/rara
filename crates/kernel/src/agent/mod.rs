@@ -708,12 +708,18 @@ fn ensure_agent_md(path: &Path, agent_name: &str) {
 ///
 /// Used by both the reactive agent loop and the plan executor to ensure
 /// consistent agent identity across execution modes.
-pub(crate) fn build_agent_system_prompt(handle: &KernelHandle, manifest: &AgentManifest) -> String {
+///
+/// Returns `(prompt, has_soul)` so callers can avoid re-calling
+/// `resolve_soul_prompt`.
+pub(crate) fn build_agent_system_prompt(
+    handle: &KernelHandle,
+    manifest: &AgentManifest,
+) -> (String, bool) {
     // 1. Soul prompt: prepend soul text if available, otherwise use manifest prompt
     //    as-is.
-    let effective_prompt = match resolve_soul_prompt(&manifest.name) {
-        Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
-        None => manifest.system_prompt.clone(),
+    let (effective_prompt, has_soul) = match resolve_soul_prompt(&manifest.name) {
+        Some(soul) => (format!("{soul}\n\n---\n\n{}", manifest.system_prompt), true),
+        None => (manifest.system_prompt.clone(), false),
     };
     // 2. Append external agent.md (tool knowledge, CLI guides, operational notes).
     let effective_prompt = if let Some(agent_md) = load_agent_md(&manifest.name) {
@@ -729,11 +735,12 @@ pub(crate) fn build_agent_system_prompt(handle: &KernelHandle, manifest: &AgentM
     // the stable prefix (soul + system_prompt + agent.md + contract) stays
     // intact for provider-side prompt caching.
     let skills_block = handle.skills_prompt();
-    if skills_block.is_empty() {
+    let prompt = if skills_block.is_empty() {
         effective_prompt
     } else {
         format!("{effective_prompt}\n\n{skills_block}")
-    }
+    };
+    (prompt, has_soul)
 }
 
 fn build_runtime_contract_prompt(
@@ -868,8 +875,7 @@ pub(crate) async fn run_agent_loop(
     };
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
-    let effective_prompt = build_agent_system_prompt(handle, &manifest);
-    let has_soul = resolve_soul_prompt(&manifest.name).is_some();
+    let (effective_prompt, has_soul) = build_agent_system_prompt(handle, &manifest);
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
