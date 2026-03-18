@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
+mod acp_delegate;
 mod bash;
 mod composio;
 mod debug_trace;
@@ -50,6 +51,7 @@ mod tape_info;
 mod user_note;
 mod write_file;
 
+use acp_delegate::AcpDelegateTool;
 use bash::BashTool;
 use debug_trace::DebugTraceTool;
 use edit_file::EditFileTool;
@@ -136,6 +138,8 @@ pub fn rara_tool_names() -> Vec<String> {
         tool_names::BROWSER_HANDLE_DIALOG,
         tool_names::BROWSER_CONSOLE_MESSAGES,
         tool_names::BROWSER_NETWORK_REQUESTS,
+        // ACP delegation
+        AcpDelegateTool::NAME,
     ]
     .into_iter()
     .map(String::from)
@@ -229,6 +233,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // Mita soul evolution tools
         Arc::new(UpdateSoulStateTool::new()),
         Arc::new(EvolveSoulTool::new()),
+        // ACP delegation
+        Arc::new(AcpDelegateTool::new()),
     ];
 
     for tool in tools {
