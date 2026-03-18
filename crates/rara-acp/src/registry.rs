@@ -224,7 +224,7 @@ pub struct AcpAgentConfig {
 fn default_true() -> bool { true }
 
 impl AcpAgentConfig {
-    /// Convert to the [`AgentCommand`] format used by
+    /// Convert to the [`AgentCommand`](crate::AgentCommand) format used by
     /// [`AcpConnection`](crate::AcpConnection).
     pub fn to_agent_command(&self) -> crate::connection::AgentCommand {
         crate::connection::AgentCommand {
