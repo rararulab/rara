@@ -205,19 +205,23 @@ pub enum TapEntryKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmEntryMetadata {
     /// Internal message ID for end-to-end correlation.
-    pub rara_message_id: String,
+    pub rara_message_id:   String,
     /// Token consumption for this LLM iteration.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage:           Option<crate::llm::Usage>,
+    pub usage:             Option<crate::llm::Usage>,
     /// Model identifier used for this completion.
-    pub model:           String,
+    pub model:             String,
     /// Zero-based iteration index within the turn.
-    pub iteration:       usize,
+    pub iteration:         usize,
     /// Wall-clock duration of the streaming response in milliseconds.
-    pub stream_ms:       u64,
+    pub stream_ms:         u64,
     /// Time-to-first-token in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_token_ms:  Option<u64>,
+    pub first_token_ms:    Option<u64>,
+    /// Extended-thinking reasoning text, persisted so that `build_cascade`
+    /// can display reasoning in the cascade trace view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// Metadata attached to `ToolResult` tape entries.

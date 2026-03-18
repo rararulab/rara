@@ -1427,6 +1427,11 @@ pub(crate) async fn run_agent_loop(
                 iteration,
                 stream_ms,
                 first_token_ms,
+                reasoning_content: if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_reasoning.clone())
+                },
             })
             .ok();
             let _ = tape
@@ -1570,7 +1575,35 @@ pub(crate) async fn run_agent_loop(
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
         }
 
-        // Persist assistant message with tool calls to tape.
+        // Persist intermediate assistant message to tape so that
+        // `build_cascade` can detect tick boundaries between iterations.
+        // Without this, the cascade trace always shows a single tick.
+        {
+            let mut meta = crate::memory::LlmEntryMetadata {
+                rara_message_id: rara_message_id.to_string(),
+                usage: last_usage,
+                model: model.clone(),
+                iteration,
+                stream_ms,
+                first_token_ms,
+                reasoning_content: None,
+            };
+            if !accumulated_reasoning.is_empty() {
+                meta.reasoning_content = Some(accumulated_reasoning.clone());
+            }
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": &accumulated_text,
+                    }),
+                    serde_json::to_value(&meta).ok(),
+                )
+                .await;
+        }
+
+        // Persist tool calls to tape.
         if !assistant_tool_calls.is_empty() {
             let calls_json: Vec<serde_json::Value> = assistant_tool_calls
                 .iter()
@@ -1588,6 +1621,7 @@ pub(crate) async fn run_agent_loop(
                 iteration,
                 stream_ms,
                 first_token_ms,
+                reasoning_content: None,
             })
             .ok();
             let _ = tape
