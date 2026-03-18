@@ -17,11 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
 
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
-        with:
-          go-version-file: scripts/go.mod
-          cache-dependency-path: scripts/go.sum
-
       - name: Build devtool
         run: cd scripts && go build -o bin/devtool ./cmd/devtool/
 
