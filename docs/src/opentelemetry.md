@@ -1,108 +1,171 @@
-# OpenTelemetry Integration
+# Observability
 
-This document describes how to use the OpenTelemetry integration in `job` to monitor the performance of the HTTP and gRPC servers.
+Rara uses OpenTelemetry for all telemetry signals — **traces** and **metrics** are pushed via OTLP to a local collector. There is no pull-based `/metrics` endpoint; everything is push-based, suitable for local-first deployments without sidecars.
+
+## Architecture
+
+```
+┌─────────┐   OTLP (HTTP/gRPC)   ┌────────────────┐
+│  Rara   │ ───────────────────▶  │  OTel Collector │
+│         │   traces + metrics    │  (or Alloy)     │
+└─────────┘   every 30s (metrics) └────────┬───────┘
+                                           │
+                          ┌────────────────┼────────────────┐
+                          ▼                ▼                ▼
+                    ┌──────────┐   ┌────────────┐   ┌───────────┐
+                    │  Tempo   │   │   Mimir /   │   │  Grafana  │
+                    │ (traces) │   │ Prometheus  │   │           │
+                    └──────────┘   │ (metrics)   │   └───────────┘
+                                   └────────────┘
+```
 
 ## Configuration
 
-The OpenTelemetry integration is configured through environment variables. The following variables are available:
+All telemetry is configured in `config.yaml` under the `telemetry` section:
 
-* `OTEL_EXPORTER_OTLP_ENDPOINT`: The endpoint of the OpenTelemetry collector. Defaults to `http://localhost:4317`.
-* `OTEL_SERVICE_NAME`: The name of the service. Defaults to `job`.
+```yaml
+telemetry:
+  otlp_endpoint: "http://localhost:4318"   # OTLP collector endpoint
+  otlp_protocol: "http"                    # "http" or "grpc"
+```
 
-## Usage
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `otlp_endpoint` | `string` | `null` (disabled) | OTLP collector endpoint. Set this to enable telemetry. |
+| `otlp_protocol` | `string` | `"http"` | Transport protocol: `"http"` (port 4318) or `"grpc"` (port 4317). |
 
-To enable the OpenTelemetry integration, simply start the `job` server:
+When `otlp_endpoint` is set, Rara pushes both traces and metrics to the same endpoint:
+
+- **HTTP**: traces → `{endpoint}/v1/traces`, metrics → `{endpoint}/v1/metrics`
+- **gRPC**: both signals use the same gRPC endpoint
+
+When `otlp_endpoint` is `null`, telemetry is disabled (logs still go to local files).
+
+## Signals
+
+### Traces
+
+Distributed tracing with span context propagation (W3C Trace Context). Key instrumented operations:
+
+- `run_agent_loop` — full agent execution
+- `start_llm_turn` — individual LLM turn with iterations
+- Per-iteration spans with `first_token_ms`, `stream_ms`, model info
+- Tool execution spans with duration and success/failure
+
+### Metrics
+
+All metrics are pushed via OTLP periodic exporter (30-second flush interval). Metric names use dot notation per OTel convention.
+
+#### Kernel Metrics (meter: `rara-kernel`)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kernel.session.created` | Counter | `agent_name` | Sessions created |
+| `kernel.session.suspended` | Counter | `agent_name`, `exit_state` | Sessions suspended |
+| `kernel.session.active` | UpDownCounter | `agent_name` | Currently active sessions |
+| `kernel.turn.total` | Counter | `agent_name`, `model` | Total LLM turns |
+| `kernel.turn.duration` | Histogram (s) | `agent_name`, `model` | LLM turn duration |
+| `kernel.turn.tool_calls` | Counter | `agent_name`, `tool_name` | Tool calls per tool |
+| `kernel.turn.tokens.input` | Counter | `model` | Input tokens consumed |
+| `kernel.turn.tokens.output` | Counter | `model` | Output tokens consumed |
+| `kernel.tool.duration` | Histogram (s) | `agent_name`, `tool_name` | Per-tool execution duration |
+| `kernel.event.processed` | Counter | `event_type` | Events processed |
+| `kernel.syscall.total` | Counter | `syscall_type` | Syscalls executed |
+| `kernel.message.inbound` | Counter | `channel_type` | Inbound messages |
+| `kernel.message.outbound` | Counter | `channel_type` | Outbound messages |
+
+#### Worker Metrics (meter: `rara-worker`)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `worker.started` | Counter | `worker` | Worker starts |
+| `worker.stopped` | Counter | `worker` | Worker stops |
+| `worker.active` | UpDownCounter | `worker` | Currently active workers |
+| `worker.errors` | Counter | `worker` | Total worker errors |
+| `worker.start_errors` | Counter | `worker` | Start failures |
+| `worker.shutdown_errors` | Counter | `worker` | Shutdown failures |
+| `worker.executions` | Counter | `worker` | Execution cycles |
+| `worker.execution_errors` | Counter | `worker` | Execution failures |
+| `worker.execution.duration` | Histogram (s) | `worker` | Execution cycle duration |
+| `worker.paused` | Counter | `worker` | Pause events |
+| `worker.resumed` | Counter | `worker` | Resume events |
+
+#### HTTP Server Metrics (meter: `rara-server`)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `http.server.request.duration` | Histogram (s) | `method`, `route`, `status` | HTTP request duration |
+
+### Tape (Structured Event Log)
+
+In addition to OTel signals, Rara persists a complete event log to local JSONL files (the "tape"). Each tape entry includes typed metadata:
+
+- **LLM calls**: model, token usage, latency (`stream_ms`, `first_token_ms`), stop reason
+- **Tool calls**: per-tool `duration_ms`, success/failure, error messages
+- **Messages**: full request/response content
+
+Tape files are the single source of truth for conversation replay and post-hoc token analysis. See `crates/kernel/src/memory/` for details.
+
+## Quick Start: Local Setup with Grafana Alloy
+
+The simplest local setup uses [Grafana Alloy](https://grafana.com/docs/alloy/latest/) as the OTLP receiver:
+
+### 1. Install Alloy
 
 ```bash
-cargo run --bin job -- server
+brew install grafana/grafana/alloy    # macOS
 ```
 
-The server will automatically start exporting traces and metrics to the configured OpenTelemetry collector.
+### 2. Configure Alloy
 
-## Kubernetes Integration
+Create `alloy-config.alloy`:
 
-To integrate with the Kubernetes infrastructure described in the `k8s/` directory, you will need to deploy an OpenTelemetry collector to your cluster. The collector can be configured to export data to a variety of backends, such as Jaeger, Prometheus, or a cloud-based observability platform.
+```hcl
+otelcol.receiver.otlp "default" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
 
-Here is an example of a simple OpenTelemetry collector configuration that exports data to Jaeger:
+  output {
+    traces  = [otelcol.exporter.otlphttp.tempo.input]
+    metrics = [otelcol.exporter.prometheus.default.input]
+  }
+}
+
+otelcol.exporter.otlphttp "tempo" {
+  client {
+    endpoint = "http://localhost:3200"
+  }
+}
+
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = "http://localhost:9009/api/v1/push"
+  }
+}
+```
+
+### 3. Configure Rara
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: otel-collector-conf
-  labels:
-    app: opentelemetry
-    component: otel-collector-conf
-data:
-  otel-collector-config: |
-    receivers:
-      otlp:
-        protocols:
-          grpc:
-          http:
-
-    processors:
-      batch:
-
-    exporters:
-      jaeger:
-        endpoint: jaeger-all-in-one:14250
-        tls:
-          insecure: true
-
-    service:
-      pipelines:
-        traces:
-          receivers: [otlp]
-          processors: [batch]
-          exporters: [jaeger]
+# config.yaml
+telemetry:
+  otlp_endpoint: "http://localhost:4318"
+  otlp_protocol: "http"
 ```
 
-This configuration creates a ConfigMap that contains the OpenTelemetry collector configuration. The collector is configured to receive data over OTLP (gRPC and HTTP) and export it to a Jaeger instance running in the cluster.
+### 4. Start
 
-To deploy the collector, you can use the following Kubernetes manifest:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: otel-collector
-  labels:
-    app: opentelemetry
-    component: otel-collector
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: opentelemetry
-      component: otel-collector
-  template:
-    metadata:
-      labels:
-        app: opentelemetry
-        component: otel-collector
-    spec:
-      containers:
-      - name: otel-collector
-        image: otel/opentelemetry-collector:0.84.0
-        command:
-          - "--config=/conf/otel-collector-config.yaml"
-        volumeMounts:
-        - name: otel-collector-config-vol
-          mountPath: /conf
-        ports:
-        - name: otlp-grpc
-          containerPort: 4317
-        - name: otlp-http
-          containerPort: 4318
-      volumes:
-        - name: otel-collector-config-vol
-          configMap:
-            name: otel-collector-conf
+```bash
+alloy run alloy-config.alloy &
+rara server
 ```
 
-This manifest creates a Deployment that runs the OpenTelemetry collector. The collector is configured to use the ConfigMap created in the previous step.
-
-Once the collector is deployed, you will need to configure the `job` server to export data to the collector. You can do this by setting the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable to the address of the collector's OTLP gRPC endpoint.
-
-For example, if the collector is running in the `default` namespace, you can set the environment variable to `http://otel-collector.default:4317`.
+Traces and metrics will flow to your local Grafana stack. Import the dashboard from `deploy/grafana/rara-overview.json` for pre-built visualizations.
