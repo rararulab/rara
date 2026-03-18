@@ -1892,27 +1892,21 @@ async fn handle_update(
     //   other      → TODO: convert to RawPlatformMessage for kernel processing
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
+            // guard: callbacks do their own user-level auth internally,
+            // so they are routed before the chat-level check.
             if data.starts_with("guard:") {
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
+            // limit: callbacks do their own chat-level auth internally.
             if data.starts_with("limit:") {
                 handle_tool_call_limit_callback(handle, bot, callback, data, allowed_chat_ids)
                     .await;
                 return;
             }
-            if data.starts_with("trace:") {
-                handle_trace_callback(bot, callback, data, handle.trace_service()).await;
-                return;
-            }
-            if data.starts_with("cas:") {
-                handle_cascade_callback(bot, callback, data, handle).await;
-                return;
-            }
 
-            // Dispatch to registered callback handlers by prefix match.
-            // Enforce the same authorization as normal messages: both
-            // allowed_chat_ids and allowed_group_chat_id are checked.
+            // Chat-level authorization — applies to trace:, cas:, and all
+            // other callback prefixes uniformly.
             let cb_chat_id = callback
                 .message
                 .as_ref()
@@ -1944,6 +1938,16 @@ async fn handle_update(
                         return;
                     }
                 }
+            }
+
+            // Prefix-routed callbacks (now behind auth).
+            if data.starts_with("trace:") {
+                handle_trace_callback(bot, callback, data, handle.trace_service()).await;
+                return;
+            }
+            if data.starts_with("cas:") {
+                handle_cascade_callback(bot, callback, data, handle).await;
+                return;
             }
 
             for handler in callback_handlers {
