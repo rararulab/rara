@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod fold;
+pub(crate) mod repetition;
 
 /// Maximum **byte** length for child/worker agent results passed back to
 /// the parent context.  Child agents are instructed to self-summarize
