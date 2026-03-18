@@ -143,6 +143,16 @@ impl AcpConnection {
         });
 
         // -- 6. Initialize handshake -----------------------------------------
+        // Wrap `child` in an AcpConnection *before* the handshake so that
+        // if `initialize()` fails, Drop will kill and reap the subprocess
+        // instead of leaving it running in the background.
+        let conn_handle = Self {
+            conn: connection,
+            child,
+            session_id: None,
+            cwd: cwd.to_path_buf(),
+        };
+
         let init_request = InitializeRequest::new(ProtocolVersion::LATEST)
             .client_capabilities(
                 ClientCapabilities::new()
@@ -153,29 +163,25 @@ impl AcpConnection {
             )
             .client_info(Implementation::new("rara", env!("CARGO_PKG_VERSION")));
 
-        let init_response =
-            connection
-                .initialize(init_request)
-                .await
-                .map_err(|e| AcpError::Handshake {
+        let init_result = conn_handle.conn.initialize(init_request).await;
+
+        match init_result {
+            Ok(init_response) => {
+                debug!(
+                    agent_info = ?init_response.agent_info,
+                    protocol_version = %init_response.protocol_version,
+                    "ACP handshake completed"
+                );
+                Ok((conn_handle, event_rx))
+            }
+            Err(e) => {
+                // Drop conn_handle to kill and reap the child process.
+                drop(conn_handle);
+                Err(AcpError::Handshake {
                     message: format!("{e:?}"),
-                })?;
-
-        debug!(
-            agent_info = ?init_response.agent_info,
-            protocol_version = %init_response.protocol_version,
-            "ACP handshake completed"
-        );
-
-        Ok((
-            Self {
-                conn: connection,
-                child,
-                session_id: None,
-                cwd: cwd.to_path_buf(),
-            },
-            event_rx,
-        ))
+                })
+            }
+        }
     }
 
     /// Create a new session on the connected agent.
