@@ -37,6 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { CascadeViewer } from "@/components/CascadeViewer";
+import type { CascadeStreamState } from "@/hooks/use-cascade";
 import { api } from "@/api/client";
 import type {
   ChatMessageData,
@@ -1185,6 +1186,7 @@ function ChatThread({
   initialDraft,
   onInitialDraftConsumed,
   onMessageClick,
+  onStreamStateChange,
 }: {
   session: ChatSession;
   onClearMessages: () => void;
@@ -1193,6 +1195,7 @@ function ChatThread({
   initialDraft?: PendingDraft | null;
   onInitialDraftConsumed?: () => void;
   onMessageClick?: (seq: number) => void;
+  onStreamStateChange?: (isStreaming: boolean, state: CascadeStreamState) => void;
 }) {
   const sessionKey = session.key;
   const queryClient = useQueryClient();
@@ -1208,6 +1211,15 @@ function ChatThread({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Notify parent of stream state changes for cascade viewer
+  useEffect(() => {
+    onStreamStateChange?.(stream.isStreaming, {
+      reasoning: stream.reasoning,
+      activeTools: stream.activeTools,
+      completedTools: stream.completedTools,
+    });
+  }, [stream.isStreaming, stream.reasoning, stream.activeTools, stream.completedTools, onStreamStateChange]);
 
   const messagesQuery = useQuery({
     queryKey: ["chat-messages", sessionKey],
@@ -1845,6 +1857,20 @@ export default function Chat({
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const [cascadeSeq, setCascadeSeq] = useState<number | null>(null);
+  const [threadStreaming, setThreadStreaming] = useState(false);
+  const [threadStreamState, setThreadStreamState] = useState<CascadeStreamState>({
+    reasoning: "",
+    activeTools: [],
+    completedTools: [],
+  });
+
+  const handleStreamStateChange = useCallback(
+    (isStreaming: boolean, state: CascadeStreamState) => {
+      setThreadStreaming(isStreaming);
+      setThreadStreamState(state);
+    },
+    [],
+  );
 
   // Clear cascade panel when switching sessions
   const switchSession = useCallback((key: string | null) => {
@@ -1987,12 +2013,15 @@ export default function Chat({
                   initialDraft={pendingDraft}
                   onInitialDraftConsumed={() => setPendingDraft(null)}
                   onMessageClick={(seq) => setCascadeSeq(seq)}
+                  onStreamStateChange={handleStreamStateChange}
                 />
               </div>
               {cascadeSeq !== null && activeKey && (
                 <CascadeViewer
                   sessionKey={activeKey}
                   messageSeq={cascadeSeq}
+                  isStreaming={threadStreaming}
+                  streamState={threadStreamState}
                   onClose={() => setCascadeSeq(null)}
                 />
               )}
