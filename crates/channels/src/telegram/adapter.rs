@@ -461,6 +461,9 @@ fn render_progress(
 
 /// Render plan-mode progress: steps as primary structure, tool calls
 /// nested under the current running step.
+///
+/// TODO: UI strings are hardcoded in Chinese (e.g. "第N步", "（N步）").
+/// Extract to a locale/template system when i18n is needed.
 fn render_plan_progress(progress: &ProgressMessage) -> String {
     let plan_goal = progress.plan_goal.as_deref().unwrap_or("Plan");
     let steps = progress.plan_steps.as_deref().unwrap_or_default();
@@ -2726,9 +2729,10 @@ fn spawn_stream_forwarder(
                                     progress.plan_current_step = Some(current_step);
                                 }
 
-                                // TODO(#580): status detection relies on Chinese string matching
+                                // TODO(#590): status detection relies on Chinese string matching
                                 // ("完成"/"失败"/full-width colon). Ideally StreamEvent::PlanProgress
                                 // should carry a structured StepStatus enum instead of free-text.
+                                // See: https://github.com/rararulab/rara/issues/590
 
                                 // Update current step.
                                 if let Some(ref mut steps) = progress.plan_steps {
@@ -2775,6 +2779,12 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::PlanReplan { reason }) => {
+                            // Kernel behavior: after PlanReplan, the kernel replaces
+                            // plan.steps with new steps re-indexed from
+                            // base_index = past_steps.len(). It does NOT re-send
+                            // PlanCreated. Subsequent PlanProgress events carry the
+                            // new (higher) step indices, handled by dynamic expansion
+                            // in the PlanProgress handler above.
                             if progress.plan_steps.is_some() {
                                 if let (Some(steps), Some(cur)) = (&mut progress.plan_steps, progress.plan_current_step) {
                                     if let Some(step) = steps.get_mut(cur) {
