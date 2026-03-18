@@ -389,5 +389,619 @@ mod tests {
         let trace = build_cascade(&[], "empty");
         assert!(trace.ticks.is_empty());
         assert_eq!(trace.summary.total_entries, 0);
+        assert_eq!(trace.summary.tick_count, 0);
+        assert_eq!(trace.summary.tool_call_count, 0);
+    }
+
+    #[test]
+    fn multi_iteration_creates_multiple_ticks() {
+        // user -> assistant -> tool_call -> tool_result -> assistant -> tool_call ->
+        // tool_result -> assistant
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "do two things"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "first I'll search"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "search", "arguments": "{}"}}]}),
+            ),
+            make_entry(4, TapEntryKind::ToolResult, json!({"results": ["result1"]})),
+            make_entry(
+                5,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "now I'll read"}),
+            ),
+            make_entry(
+                6,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c2", "function": {"name": "read", "arguments": "{}"}}]}),
+            ),
+            make_entry(7, TapEntryKind::ToolResult, json!({"results": ["result2"]})),
+            make_entry(
+                8,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "done"}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "multi");
+        assert_eq!(trace.ticks.len(), 3);
+        assert_eq!(trace.summary.tick_count, 3);
+        assert_eq!(trace.summary.tool_call_count, 2);
+
+        // Tick 0: user_input + thought + action + observation
+        assert_eq!(trace.ticks[0].index, 0);
+        assert_eq!(trace.ticks[0].entries.len(), 4);
+        assert_eq!(trace.ticks[0].entries[0].kind, CascadeEntryKind::UserInput);
+        assert_eq!(trace.ticks[0].entries[1].kind, CascadeEntryKind::Thought);
+        assert_eq!(trace.ticks[0].entries[2].kind, CascadeEntryKind::Action);
+        assert_eq!(
+            trace.ticks[0].entries[3].kind,
+            CascadeEntryKind::Observation
+        );
+
+        // Tick 1: thought + action + observation
+        assert_eq!(trace.ticks[1].index, 1);
+        assert_eq!(trace.ticks[1].entries[0].kind, CascadeEntryKind::Thought);
+        assert_eq!(trace.ticks[1].entries[0].content, "now I'll read");
+
+        // Tick 2: final thought
+        assert_eq!(trace.ticks[2].index, 2);
+        assert_eq!(trace.ticks[2].entries[0].kind, CascadeEntryKind::Thought);
+        assert_eq!(trace.ticks[2].entries[0].content, "done");
+    }
+
+    #[test]
+    fn multiple_tool_calls_in_single_entry() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "let me do both"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({
+                    "calls": [
+                        {"id": "c1", "function": {"name": "search", "arguments": "{\"q\":\"a\"}"}},
+                        {"id": "c2", "function": {"name": "read", "arguments": "{\"path\":\"b\"}"}}
+                    ]
+                }),
+            ),
+            make_entry(
+                4,
+                TapEntryKind::ToolResult,
+                json!({"results": ["r1", "r2"]}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "multi-call");
+        assert_eq!(trace.summary.tool_call_count, 2);
+        // 2 action entries from the single ToolCall tape entry
+        let actions: Vec<_> = trace.ticks[0]
+            .entries
+            .iter()
+            .filter(|e| e.kind == CascadeEntryKind::Action)
+            .collect();
+        assert_eq!(actions.len(), 2);
+        assert!(actions[0].content.starts_with("search("));
+        assert!(actions[1].content.starts_with("read("));
+
+        // 2 observation entries
+        let obs: Vec<_> = trace.ticks[0]
+            .entries
+            .iter()
+            .filter(|e| e.kind == CascadeEntryKind::Observation)
+            .collect();
+        assert_eq!(obs.len(), 2);
+    }
+
+    #[test]
+    fn reasoning_content_from_metadata() {
+        let mut entry = make_entry(
+            2,
+            TapEntryKind::Message,
+            json!({"role": "assistant", "content": "visible response"}),
+        );
+        entry.metadata = Some(json!({"reasoning_content": "internal reasoning here"}));
+
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "think"}),
+            ),
+            entry,
+        ];
+        let trace = build_cascade(&entries, "reasoning");
+        let thought = &trace.ticks[0].entries[1];
+        assert_eq!(thought.kind, CascadeEntryKind::Thought);
+        assert!(thought.content.contains("[reasoning]"));
+        assert!(thought.content.contains("internal reasoning here"));
+        assert!(thought.content.contains("[response]"));
+        assert!(thought.content.contains("visible response"));
+    }
+
+    #[test]
+    fn reasoning_only_no_visible_content() {
+        let mut entry = make_entry(
+            2,
+            TapEntryKind::Message,
+            json!({"role": "assistant", "content": ""}),
+        );
+        entry.metadata = Some(json!({"reasoning_content": "just thinking"}));
+
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "q"}),
+            ),
+            entry,
+        ];
+        let trace = build_cascade(&entries, "reasoning-only");
+        let thought = &trace.ticks[0].entries[1];
+        assert_eq!(thought.content, "just thinking");
+        // Should NOT contain [reasoning] / [response] wrappers when only reasoning is
+        // present
+        assert!(!thought.content.contains("[reasoning]"));
+    }
+
+    #[test]
+    fn empty_assistant_content_skipped() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": ""}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "search", "arguments": "{}"}}]}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "skip-empty");
+        // Empty assistant content should not produce a Thought entry
+        let thoughts: Vec<_> = trace.ticks[0]
+            .entries
+            .iter()
+            .filter(|e| e.kind == CascadeEntryKind::Thought)
+            .collect();
+        assert!(thoughts.is_empty());
+    }
+
+    #[test]
+    fn multimodal_content_extraction() {
+        let entries = vec![make_entry(
+            1,
+            TapEntryKind::Message,
+            json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look at this"},
+                    {"type": "image", "source": {"data": "base64..."}},
+                    {"type": "text", "text": "what is it?"}
+                ]
+            }),
+        )];
+        let trace = build_cascade(&entries, "multimodal");
+        let user_entry = &trace.ticks[0].entries[0];
+        assert_eq!(user_entry.kind, CascadeEntryKind::UserInput);
+        // Text blocks joined with newline, image blocks ignored
+        assert_eq!(user_entry.content, "look at this\nwhat is it?");
+    }
+
+    #[test]
+    fn tool_result_json_value_serialized() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "checking"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "get_data", "arguments": "{}"}}]}),
+            ),
+            make_entry(
+                4,
+                TapEntryKind::ToolResult,
+                json!({
+                    "results": [{"key": "value", "count": 42}]
+                }),
+            ),
+        ];
+        let trace = build_cascade(&entries, "json-result");
+        let obs = trace.ticks[0]
+            .entries
+            .iter()
+            .find(|e| e.kind == CascadeEntryKind::Observation)
+            .unwrap();
+        // Non-string result should be JSON-serialized
+        assert!(obs.content.contains("key"));
+        assert!(obs.content.contains("value"));
+        assert!(obs.content.contains("42"));
+    }
+
+    #[test]
+    fn tool_result_string_value_preserved() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "ok"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "echo", "arguments": "{}"}}]}),
+            ),
+            make_entry(
+                4,
+                TapEntryKind::ToolResult,
+                json!({"results": ["plain text output"]}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "string-result");
+        let obs = trace.ticks[0]
+            .entries
+            .iter()
+            .find(|e| e.kind == CascadeEntryKind::Observation)
+            .unwrap();
+        assert_eq!(obs.content, "plain text output");
+    }
+
+    #[test]
+    fn entry_id_format() {
+        let entries = vec![make_entry(
+            0xABCD,
+            TapEntryKind::Message,
+            json!({"role": "user", "content": "hi"}),
+        )];
+        let trace = build_cascade(&entries, "id-fmt");
+        let id = &trace.ticks[0].entries[0].id;
+        // Format: "{prefix} • {tick}-{hex4}-{seq}"
+        assert!(id.starts_with("usr \u{2022} 0-abcd-1"), "got: {id}");
+    }
+
+    #[test]
+    fn entry_id_truncates_to_last_4_hex() {
+        let entries = vec![make_entry(
+            0x12345678,
+            TapEntryKind::Message,
+            json!({"role": "user", "content": "hi"}),
+        )];
+        let trace = build_cascade(&entries, "id-trunc");
+        let id = &trace.ticks[0].entries[0].id;
+        // Only last 16 bits (0x5678) should appear
+        assert!(id.contains("5678"), "got: {id}");
+        assert!(
+            !id.contains("1234"),
+            "should not contain upper bits, got: {id}"
+        );
+    }
+
+    #[test]
+    fn summary_statistics_accurate() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "go"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "step1"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [
+                    {"id": "c1", "function": {"name": "a", "arguments": "{}"}},
+                    {"id": "c2", "function": {"name": "b", "arguments": "{}"}}
+                ]}),
+            ),
+            make_entry(
+                4,
+                TapEntryKind::ToolResult,
+                json!({"results": ["r1", "r2"]}),
+            ),
+            make_entry(
+                5,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "step2"}),
+            ),
+            make_entry(
+                6,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c3", "function": {"name": "c", "arguments": "{}"}}]}),
+            ),
+            make_entry(7, TapEntryKind::ToolResult, json!({"results": ["r3"]})),
+            make_entry(
+                8,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "final"}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "stats");
+        assert_eq!(trace.summary.tick_count, 3);
+        assert_eq!(trace.summary.tool_call_count, 3);
+        // user(1) + thought(1) + action(2) + obs(2) + thought(1) + action(1) + obs(1) +
+        // thought(1) = 10
+        assert_eq!(trace.summary.total_entries, 10);
+    }
+
+    #[test]
+    fn system_messages_ignored() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "system", "content": "you are a bot"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "hello"}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "sys-ignore");
+        assert_eq!(trace.ticks.len(), 1);
+        // Only user_input and thought — system message is skipped
+        assert_eq!(trace.ticks[0].entries.len(), 2);
+        assert_eq!(trace.ticks[0].entries[0].kind, CascadeEntryKind::UserInput);
+        assert_eq!(trace.ticks[0].entries[1].kind, CascadeEntryKind::Thought);
+    }
+
+    #[test]
+    fn non_message_kinds_ignored() {
+        // Event, System, Anchor, Note etc. should be silently skipped
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(2, TapEntryKind::Event, json!({"event": "heartbeat"})),
+            make_entry(3, TapEntryKind::System, json!({"info": "started"})),
+            make_entry(4, TapEntryKind::Anchor, json!({"anchor": "a1"})),
+            make_entry(5, TapEntryKind::Note, json!({"note": "internal"})),
+            make_entry(
+                6,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "hello"}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "skip-kinds");
+        assert_eq!(trace.ticks.len(), 1);
+        assert_eq!(trace.ticks[0].entries.len(), 2);
+        assert_eq!(trace.summary.total_entries, 2);
+    }
+
+    #[test]
+    fn only_user_message_produces_single_tick() {
+        let entries = vec![make_entry(
+            1,
+            TapEntryKind::Message,
+            json!({"role": "user", "content": "pending"}),
+        )];
+        let trace = build_cascade(&entries, "user-only");
+        assert_eq!(trace.ticks.len(), 1);
+        assert_eq!(trace.ticks[0].entries.len(), 1);
+        assert_eq!(trace.ticks[0].entries[0].kind, CascadeEntryKind::UserInput);
+        assert_eq!(trace.summary.tick_count, 1);
+    }
+
+    #[test]
+    fn tool_call_missing_function_field() {
+        // Malformed tool call payload — missing "function" key
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "ok"}),
+            ),
+            make_entry(3, TapEntryKind::ToolCall, json!({"calls": [{"id": "c1"}]})),
+        ];
+        let trace = build_cascade(&entries, "bad-call");
+        let action = trace.ticks[0]
+            .entries
+            .iter()
+            .find(|e| e.kind == CascadeEntryKind::Action)
+            .unwrap();
+        // Should fallback to "unknown" name and "{}" args
+        assert_eq!(action.content, "unknown({})");
+    }
+
+    #[test]
+    fn tool_call_no_calls_array() {
+        // ToolCall entry with no "calls" key — should produce no action entries
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "ok"}),
+            ),
+            make_entry(3, TapEntryKind::ToolCall, json!({"something_else": true})),
+        ];
+        let trace = build_cascade(&entries, "no-calls");
+        let actions: Vec<_> = trace.ticks[0]
+            .entries
+            .iter()
+            .filter(|e| e.kind == CascadeEntryKind::Action)
+            .collect();
+        assert!(actions.is_empty());
+        assert_eq!(trace.summary.tool_call_count, 0);
+    }
+
+    #[test]
+    fn tool_result_no_results_array() {
+        // ToolResult entry with no "results" key — should produce no observation
+        // entries
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "hi"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "ok"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "f", "arguments": "{}"}}]}),
+            ),
+            make_entry(4, TapEntryKind::ToolResult, json!({"error": "timeout"})),
+        ];
+        let trace = build_cascade(&entries, "no-results");
+        let obs: Vec<_> = trace.ticks[0]
+            .entries
+            .iter()
+            .filter(|e| e.kind == CascadeEntryKind::Observation)
+            .collect();
+        assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn message_id_propagated() {
+        let trace = build_cascade(&[], "my-custom-id-123");
+        assert_eq!(trace.message_id, "my-custom-id-123");
+    }
+
+    #[test]
+    fn tick_indices_sequential() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "go"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "a"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "t", "arguments": "{}"}}]}),
+            ),
+            make_entry(4, TapEntryKind::ToolResult, json!({"results": ["r"]})),
+            make_entry(
+                5,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "b"}),
+            ),
+            make_entry(
+                6,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c2", "function": {"name": "t", "arguments": "{}"}}]}),
+            ),
+            make_entry(7, TapEntryKind::ToolResult, json!({"results": ["r"]})),
+            make_entry(
+                8,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "c"}),
+            ),
+        ];
+        let trace = build_cascade(&entries, "idx");
+        for (i, tick) in trace.ticks.iter().enumerate() {
+            assert_eq!(tick.index, i, "tick {} has wrong index {}", i, tick.index);
+        }
+    }
+
+    #[test]
+    fn content_null_handled_gracefully() {
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": null}),
+            ),
+            make_entry(2, TapEntryKind::Message, json!({"role": "assistant"})),
+        ];
+        let trace = build_cascade(&entries, "null-content");
+        // user with null content => empty string => still creates entry
+        assert_eq!(trace.ticks[0].entries[0].kind, CascadeEntryKind::UserInput);
+        assert_eq!(trace.ticks[0].entries[0].content, "");
+        // assistant with no content key and no reasoning => empty, should be skipped
+        let thoughts: Vec<_> = trace.ticks[0]
+            .entries
+            .iter()
+            .filter(|e| e.kind == CascadeEntryKind::Thought)
+            .collect();
+        assert!(thoughts.is_empty());
+    }
+
+    #[test]
+    fn metadata_preserved_on_entries() {
+        let mut user_entry = make_entry(
+            1,
+            TapEntryKind::Message,
+            json!({"role": "user", "content": "hi"}),
+        );
+        user_entry.metadata = Some(json!({"source": "telegram", "chat_id": 123}));
+
+        let entries = vec![user_entry];
+        let trace = build_cascade(&entries, "meta");
+        let meta = trace.ticks[0].entries[0].metadata.as_ref().unwrap();
+        assert_eq!(meta["source"], "telegram");
+        assert_eq!(meta["chat_id"], 123);
+    }
+
+    #[test]
+    fn cascade_entry_kind_prefix() {
+        assert_eq!(CascadeEntryKind::UserInput.prefix(), "usr");
+        assert_eq!(CascadeEntryKind::Thought.prefix(), "thk");
+        assert_eq!(CascadeEntryKind::Action.prefix(), "act");
+        assert_eq!(CascadeEntryKind::Observation.prefix(), "obs");
     }
 }
