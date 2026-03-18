@@ -16,49 +16,34 @@
 
 use std::path::Path;
 
-use async_trait::async_trait;
 use rara_kernel::{
     channel::types::MessageContent,
     event::KernelEventEnvelope,
     identity::UserId,
     io::{Attachment, OutboundEnvelope},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Maximum file size: 10 MB (Telegram limit).
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Send an image file to the user in the current conversation.
+#[derive(ToolDef)]
+#[tool(
+    name = "send-image",
+    description = "Send an image file to the user in the current conversation. Supports PNG, \
+                   JPEG, WebP, and GIF formats. Maximum file size is 10 MB.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct SendImageTool;
 
 impl SendImageTool {
-    pub const NAME: &str = "send-image";
-
     pub fn new() -> Self { Self }
-}
 
-/// Map file extension to MIME type. Returns `None` for unsupported types.
-fn mime_from_extension(ext: &str) -> Option<&'static str> {
-    match ext.to_ascii_lowercase().as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "webp" => Some("image/webp"),
-        "gif" => Some("image/gif"),
-        _ => None,
-    }
-}
-
-#[async_trait]
-impl AgentTool for SendImageTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Send an image file to the user in the current conversation. Supports PNG, JPEG, WebP, and \
-         GIF formats. Maximum file size is 10 MB."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -75,7 +60,7 @@ impl AgentTool for SendImageTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -169,5 +154,16 @@ impl AgentTool for SendImageTool {
             "filename": filename,
         })
         .into())
+    }
+}
+
+/// Map file extension to MIME type. Returns `None` for unsupported types.
+fn mime_from_extension(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        _ => None,
     }
 }

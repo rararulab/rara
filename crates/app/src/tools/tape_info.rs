@@ -14,34 +14,30 @@
 
 //! Tool for querying tape metadata (entry count, anchors, token usage).
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{AgentTool, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Returns summary information about the current session tape.
+#[derive(ToolDef)]
+#[tool(
+    name = "tape-info",
+    description = "Return metadata about the current session tape: entry count, anchors, entries \
+                   since last anchor, and last known token usage.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct TapeInfoTool {
     tape_service: TapeService,
 }
 
 impl TapeInfoTool {
-    pub const NAME: &str = "tape-info";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for TapeInfoTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Return metadata about the current session tape: entry count, anchors, entries since last \
-         anchor, and last known token usage."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {},
@@ -49,10 +45,10 @@ impl AgentTool for TapeInfoTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
-        context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let tape_name = context.session_key.to_string();
 

@@ -16,32 +16,28 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Change the Telegram bot's profile photo from the images directory.
+#[derive(ToolDef)]
+#[tool(
+    name = "set-avatar",
+    description = "Change the Telegram bot's profile photo. The image file must be placed in the \
+                   images directory beforehand. Use a filename relative to the images directory.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct SetAvatarTool {
     settings: Arc<dyn SettingsProvider>,
 }
 
 impl SetAvatarTool {
-    pub const NAME: &str = "set-avatar";
-
     pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
-}
 
-#[async_trait]
-impl AgentTool for SetAvatarTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Change the Telegram bot's profile photo. The image file must be placed in the images \
-         directory beforehand. Use a filename relative to the images directory."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -54,10 +50,10 @@ impl AgentTool for SetAvatarTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let filename = params
             .get("filename")

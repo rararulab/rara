@@ -22,6 +22,9 @@ pub mod models;
 pub mod routes;
 pub mod state;
 pub mod store;
+// Re-export `rara_kernel::tool` so the `ToolDef` proc macro can resolve
+// `crate::tool::AgentTool` in derived impls.
+pub use rara_kernel::tool;
 pub mod tools;
 
 pub use error::DockError;

@@ -17,8 +17,8 @@
 //! Runs a command via `/bin/bash -c` with configurable timeout and working
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Maximum output size in bytes (50 KB).
@@ -31,24 +31,21 @@ const MAX_OUTPUT_LINES: usize = 2000;
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Layer 1 primitive: execute a shell command.
+#[derive(ToolDef)]
+#[tool(
+    name = "bash",
+    description = "Execute a shell command via /bin/bash -c. Returns exit code, combined \
+                   stdout/stderr, and whether the command timed out. Output is truncated to 50KB \
+                   / 2000 lines.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BashTool;
 
 impl BashTool {
-    pub const NAME: &str = "bash";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for BashTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Execute a shell command via /bin/bash -c. Returns exit code, combined stdout/stderr, and \
-         whether the command timed out. Output is truncated to 50KB / 2000 lines."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -69,10 +66,10 @@ impl AgentTool for BashTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let command = params
             .get("command")

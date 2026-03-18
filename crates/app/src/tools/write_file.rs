@@ -18,29 +18,25 @@
 //! do not exist.
 
 use anyhow::Context;
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Layer 1 primitive: write content to a file.
+#[derive(ToolDef)]
+#[tool(
+    name = "write-file",
+    description = "Write content to a file on the filesystem. Automatically creates parent \
+                   directories if they do not exist. Overwrites the file if it already exists.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct WriteFileTool;
 
 impl WriteFileTool {
-    pub const NAME: &str = "write-file";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for WriteFileTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Write content to a file on the filesystem. Automatically creates parent directories if \
-         they do not exist. Overwrites the file if it already exists."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -57,10 +53,10 @@ impl AgentTool for WriteFileTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("file_path")

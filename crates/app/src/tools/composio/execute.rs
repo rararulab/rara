@@ -1,31 +1,27 @@
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use super::shared::ComposioShared;
 
 /// Execute a Composio action on a connected app.
+#[derive(ToolDef)]
+#[tool(
+    name = "composio_execute",
+    description = "Execute an action on a connected app via Composio. Requires the tool_slug \
+                   (from composio_list) and action parameters. The connected_account_id is \
+                   auto-resolved when omitted.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub(super) struct ComposioExecuteTool {
     shared: ComposioShared,
 }
 
 impl ComposioExecuteTool {
-    pub const NAME: &str = "composio_execute";
-
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
-}
 
-#[async_trait]
-impl AgentTool for ComposioExecuteTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Execute an action on a connected app via Composio. Requires the tool_slug (from \
-         composio_list) and action parameters. The connected_account_id is auto-resolved when \
-         omitted."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -54,7 +50,7 @@ impl AgentTool for ComposioExecuteTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,

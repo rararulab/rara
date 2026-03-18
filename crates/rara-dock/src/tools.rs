@@ -24,11 +24,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
 use rara_kernel::{
     session::SessionKey,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use crate::{
@@ -121,26 +121,22 @@ fn optional_f64(params: &serde_json::Value, key: &str) -> Option<f64> {
 // ===========================================================================
 
 /// Add a single canvas block.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.block.add",
+    description = "Add a new content block to the dock canvas. Returns the mutation to apply.",
+    params_schema = "Self::schema_block_add()",
+    execute_fn = "self.exec_block_add"
+)]
 pub struct DockBlockAddTool {
     sink: DockMutationSink,
 }
 
 impl DockBlockAddTool {
-    pub const NAME: &str = "dock.block.add";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockBlockAddTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Add a new content block to the dock canvas. Returns the mutation to apply."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_block_add() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -161,7 +157,7 @@ impl AgentTool for DockBlockAddTool {
         })
     }
 
-    async fn execute(
+    async fn exec_block_add(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -189,24 +185,22 @@ impl AgentTool for DockBlockAddTool {
 }
 
 /// Update an existing canvas block.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.block.update",
+    description = "Update the HTML content of an existing canvas block.",
+    params_schema = "Self::schema_block_update()",
+    execute_fn = "self.exec_block_update"
+)]
 pub struct DockBlockUpdateTool {
     sink: DockMutationSink,
 }
 
 impl DockBlockUpdateTool {
-    pub const NAME: &str = "dock.block.update";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockBlockUpdateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Update the HTML content of an existing canvas block." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_block_update() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -223,7 +217,7 @@ impl AgentTool for DockBlockUpdateTool {
         })
     }
 
-    async fn execute(
+    async fn exec_block_update(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -250,24 +244,22 @@ impl AgentTool for DockBlockUpdateTool {
 }
 
 /// Remove a canvas block.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.block.remove",
+    description = "Remove a canvas block by ID.",
+    params_schema = "Self::schema_block_remove()",
+    execute_fn = "self.exec_block_remove"
+)]
 pub struct DockBlockRemoveTool {
     sink: DockMutationSink,
 }
 
 impl DockBlockRemoveTool {
-    pub const NAME: &str = "dock.block.remove";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockBlockRemoveTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Remove a canvas block by ID." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_block_remove() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -280,7 +272,7 @@ impl AgentTool for DockBlockRemoveTool {
         })
     }
 
-    async fn execute(
+    async fn exec_block_remove(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -305,26 +297,22 @@ impl AgentTool for DockBlockRemoveTool {
 // ===========================================================================
 
 /// Add a shared fact to the dock session.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.fact.add",
+    description = "Add a shared fact to the dock session. Facts persist across turns.",
+    params_schema = "Self::schema_fact_add()",
+    execute_fn = "self.exec_fact_add"
+)]
 pub struct DockFactAddTool {
     sink: DockMutationSink,
 }
 
 impl DockFactAddTool {
-    pub const NAME: &str = "dock.fact.add";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockFactAddTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Add a shared fact to the dock session. Facts persist across turns."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_fact_add() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -341,7 +329,7 @@ impl AgentTool for DockFactAddTool {
         })
     }
 
-    async fn execute(
+    async fn exec_fact_add(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -367,24 +355,22 @@ impl AgentTool for DockFactAddTool {
 }
 
 /// Update an existing shared fact.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.fact.update",
+    description = "Update the content of an existing shared fact.",
+    params_schema = "Self::schema_fact_update()",
+    execute_fn = "self.exec_fact_update"
+)]
 pub struct DockFactUpdateTool {
     sink: DockMutationSink,
 }
 
 impl DockFactUpdateTool {
-    pub const NAME: &str = "dock.fact.update";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockFactUpdateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Update the content of an existing shared fact." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_fact_update() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -401,7 +387,7 @@ impl AgentTool for DockFactUpdateTool {
         })
     }
 
-    async fn execute(
+    async fn exec_fact_update(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -427,24 +413,22 @@ impl AgentTool for DockFactUpdateTool {
 }
 
 /// Remove a shared fact.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.fact.remove",
+    description = "Remove a shared fact by ID.",
+    params_schema = "Self::schema_fact_remove()",
+    execute_fn = "self.exec_fact_remove"
+)]
 pub struct DockFactRemoveTool {
     sink: DockMutationSink,
 }
 
 impl DockFactRemoveTool {
-    pub const NAME: &str = "dock.fact.remove";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockFactRemoveTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Remove a shared fact by ID." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_fact_remove() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -457,7 +441,7 @@ impl AgentTool for DockFactRemoveTool {
         })
     }
 
-    async fn execute(
+    async fn exec_fact_remove(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -482,26 +466,22 @@ impl AgentTool for DockFactRemoveTool {
 // ===========================================================================
 
 /// Add an annotation to the dock session.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.annotation.add",
+    description = "Add an annotation to the dock canvas, optionally attached to a block.",
+    params_schema = "Self::schema_ann_add()",
+    execute_fn = "self.exec_ann_add"
+)]
 pub struct DockAnnotationAddTool {
     sink: DockMutationSink,
 }
 
 impl DockAnnotationAddTool {
-    pub const NAME: &str = "dock.annotation.add";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockAnnotationAddTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Add an annotation to the dock canvas, optionally attached to a block."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_ann_add() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -530,7 +510,7 @@ impl AgentTool for DockAnnotationAddTool {
         })
     }
 
-    async fn execute(
+    async fn exec_ann_add(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -574,24 +554,22 @@ impl AgentTool for DockAnnotationAddTool {
 }
 
 /// Update an existing annotation.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.annotation.update",
+    description = "Update an existing annotation.",
+    params_schema = "Self::schema_ann_update()",
+    execute_fn = "self.exec_ann_update"
+)]
 pub struct DockAnnotationUpdateTool {
     sink: DockMutationSink,
 }
 
 impl DockAnnotationUpdateTool {
-    pub const NAME: &str = "dock.annotation.update";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockAnnotationUpdateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Update an existing annotation." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_ann_update() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -620,7 +598,7 @@ impl AgentTool for DockAnnotationUpdateTool {
         })
     }
 
-    async fn execute(
+    async fn exec_ann_update(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -664,24 +642,22 @@ impl AgentTool for DockAnnotationUpdateTool {
 }
 
 /// Remove an annotation.
+#[derive(ToolDef)]
+#[tool(
+    name = "dock.annotation.remove",
+    description = "Remove an annotation by ID.",
+    params_schema = "Self::schema_ann_remove()",
+    execute_fn = "self.exec_ann_remove"
+)]
 pub struct DockAnnotationRemoveTool {
     sink: DockMutationSink,
 }
 
 impl DockAnnotationRemoveTool {
-    pub const NAME: &str = "dock.annotation.remove";
-
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
-}
 
-#[async_trait]
-impl AgentTool for DockAnnotationRemoveTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str { "Remove an annotation by ID." }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema_ann_remove() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -694,7 +670,7 @@ impl AgentTool for DockAnnotationRemoveTool {
         })
     }
 
-    async fn execute(
+    async fn exec_ann_remove(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -739,14 +715,14 @@ pub fn dock_tools(sink: DockMutationSink) -> Vec<rara_kernel::tool::AgentToolRef
 /// All dock tool names for manifest registration.
 pub fn dock_tool_names() -> Vec<&'static str> {
     vec![
-        DockBlockAddTool::NAME,
-        DockBlockUpdateTool::NAME,
-        DockBlockRemoveTool::NAME,
-        DockFactAddTool::NAME,
-        DockFactUpdateTool::NAME,
-        DockFactRemoveTool::NAME,
-        DockAnnotationAddTool::NAME,
-        DockAnnotationUpdateTool::NAME,
-        DockAnnotationRemoveTool::NAME,
+        DockBlockAddTool::TOOL_NAME,
+        DockBlockUpdateTool::TOOL_NAME,
+        DockBlockRemoveTool::TOOL_NAME,
+        DockFactAddTool::TOOL_NAME,
+        DockFactUpdateTool::TOOL_NAME,
+        DockFactRemoveTool::TOOL_NAME,
+        DockAnnotationAddTool::TOOL_NAME,
+        DockAnnotationUpdateTool::TOOL_NAME,
+        DockAnnotationRemoveTool::TOOL_NAME,
     ]
 }

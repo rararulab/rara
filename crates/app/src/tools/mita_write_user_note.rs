@@ -20,11 +20,11 @@
 //! system-level background agent — which needs to write cross-session
 //! observations into arbitrary user tapes during heartbeat analysis.
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use super::{notify::push_notification, user_note::NOTE_CATEGORIES};
@@ -34,29 +34,26 @@ use super::{notify::push_notification, user_note::NOTE_CATEGORIES};
 /// Mita is a system-level agent that observes all sessions.  During heartbeat
 /// cycles it may discover cross-session patterns or insights that should be
 /// persisted in a specific user's tape for future context injection.
+#[derive(ToolDef)]
+#[tool(
+    name = "write-user-note",
+    description = "Write a structured note into a specific user's tape. This is a system-level \
+                   tool for recording cross-session observations about a user. Requires explicit \
+                   user_id.\n\nCategories:\n- preference: User preferences (language, style, \
+                   tools they like)\n- fact: Important facts about the user (name, role, \
+                   projects)\n- todo: Tasks or reminders for the user\n- general: Anything else \
+                   worth remembering",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct MitaWriteUserNoteTool {
     tape_service: TapeService,
 }
 
 impl MitaWriteUserNoteTool {
-    pub const NAME: &str = "write-user-note";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for MitaWriteUserNoteTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Write a structured note into a specific user's tape. This is a system-level tool for \
-         recording cross-session observations about a user. Requires explicit \
-         user_id.\n\nCategories:\n- preference: User preferences (language, style, tools they \
-         like)\n- fact: Important facts about the user (name, role, projects)\n- todo: Tasks or \
-         reminders for the user\n- general: Anything else worth remembering"
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         let categories: Vec<serde_json::Value> = NOTE_CATEGORIES
             .iter()
             .map(|c| serde_json::Value::String((*c).to_owned()))
@@ -82,7 +79,7 @@ impl AgentTool for MitaWriteUserNoteTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -123,7 +120,7 @@ impl AgentTool for MitaWriteUserNoteTool {
 
         push_notification(
             context,
-            format!("📝 User note [{category}] for {user_id}: {content}"),
+            format!("\u{1f4dd} User note [{category}] for {user_id}: {content}"),
         );
 
         Ok(json!({

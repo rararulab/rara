@@ -18,11 +18,11 @@
 //! The LLM invokes this tool to persist facts, preferences, and TODOs that
 //! should be recalled across future sessions with the same user.
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{AgentTool, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Single source of truth for valid user-note categories.
@@ -32,30 +32,27 @@ use serde_json::json;
 pub const NOTE_CATEGORIES: &[&str] = &["preference", "fact", "todo", "general"];
 
 /// Layer 2 service tool: persist a structured note in the user's tape.
+#[derive(ToolDef)]
+#[tool(
+    name = "user-note",
+    description = "Record a note about the current user for future reference. The user is \
+                   automatically identified from the session context \u{2014} do NOT pass a \
+                   user_id. Notes persist across sessions and are automatically loaded into \
+                   context for future conversations with this user.\n\nCategories:\n- preference: \
+                   User preferences (language, style, tools they like)\n- fact: Important facts \
+                   about the user (name, role, projects)\n- todo: Tasks or reminders for the \
+                   user\n- general: Anything else worth remembering",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct UserNoteTool {
     tape_service: TapeService,
 }
 
 impl UserNoteTool {
-    pub const NAME: &str = "user-note";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for UserNoteTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Record a note about the current user for future reference. The user is automatically \
-         identified from the session context — do NOT pass a user_id. Notes persist across \
-         sessions and are automatically loaded into context for future conversations with this \
-         user.\n\nCategories:\n- preference: User preferences (language, style, tools they \
-         like)\n- fact: Important facts about the user (name, role, projects)\n- todo: Tasks or \
-         reminders for the user\n- general: Anything else worth remembering"
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         let categories: Vec<serde_json::Value> = NOTE_CATEGORIES
             .iter()
             .map(|c| serde_json::Value::String((*c).to_owned()))
@@ -77,10 +74,10 @@ impl AgentTool for UserNoteTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let user_id = context.user_id.as_str();
         let category = params

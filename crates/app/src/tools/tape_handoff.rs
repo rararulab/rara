@@ -14,35 +14,32 @@
 
 //! Tool for agent-driven context truncation via tape handoff anchors.
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::{HandoffState, TapeService},
-    tool::{AgentTool, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Creates a handoff anchor in the session tape, enabling context truncation.
+#[derive(ToolDef)]
+#[tool(
+    name = "tape-handoff",
+    description = "Create a handoff anchor to checkpoint progress and truncate context history. \
+                   This is a core workflow tool \u{2014} use it proactively to manage context, \
+                   not just when failures occur. You MUST provide a summary to preserve context \
+                   across the handoff boundary.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct TapeHandoffTool {
     tape_service: TapeService,
 }
 
 impl TapeHandoffTool {
-    pub const NAME: &str = "tape-handoff";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for TapeHandoffTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Create a handoff anchor to checkpoint progress and truncate context history. This is a \
-         core workflow tool — use it proactively to manage context, not just when failures occur. \
-         You MUST provide a summary to preserve context across the handoff boundary."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -63,10 +60,10 @@ impl AgentTool for TapeHandoffTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let tape_name = context.session_key.to_string();
 

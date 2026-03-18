@@ -1,30 +1,26 @@
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use super::shared::ComposioShared;
 
 /// List OAuth-connected accounts on Composio.
+#[derive(ToolDef)]
+#[tool(
+    name = "composio_accounts",
+    description = "List connected OAuth accounts on Composio. Shows which third-party apps \
+                   (Gmail, Notion, GitHub, etc.) have been authorized and their connection status.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub(super) struct ComposioAccountsTool {
     shared: ComposioShared,
 }
 
 impl ComposioAccountsTool {
-    pub const NAME: &str = "composio_accounts";
-
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
-}
 
-#[async_trait]
-impl AgentTool for ComposioAccountsTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List connected OAuth accounts on Composio. Shows which third-party apps (Gmail, Notion, \
-         GitHub, etc.) have been authorized and their connection status."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -40,7 +36,7 @@ impl AgentTool for ComposioAccountsTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,

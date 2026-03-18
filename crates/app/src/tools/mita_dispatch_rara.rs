@@ -16,13 +16,13 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rara_kernel::{
     handle::KernelHandle,
     memory::TapeService,
     session::SessionKey,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
@@ -35,14 +35,22 @@ use super::notify::push_notification;
 /// from Mita's proactive analysis (not the user).
 ///
 /// The `KernelHandle` is set after kernel startup via the `handle_ref` hook.
+#[derive(ToolDef)]
+#[tool(
+    name = "dispatch-rara",
+    description = "Dispatch a proactive instruction to Rara for a specific session. Rara will \
+                   receive the instruction as a system-level directive and generate an \
+                   appropriate response to the user. Use this when you determine a user needs \
+                   proactive attention.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct DispatchRaraTool {
     kernel_handle: Arc<RwLock<Option<KernelHandle>>>,
     tape_service:  TapeService,
 }
 
 impl DispatchRaraTool {
-    pub const NAME: &str = "dispatch-rara";
-
     pub fn new(tape_service: TapeService) -> Self {
         Self {
             kernel_handle: Arc::new(RwLock::new(None)),
@@ -57,19 +65,8 @@ impl DispatchRaraTool {
     pub fn handle_ref(&self) -> Arc<RwLock<Option<KernelHandle>>> {
         Arc::clone(&self.kernel_handle)
     }
-}
 
-#[async_trait]
-impl AgentTool for DispatchRaraTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Dispatch a proactive instruction to Rara for a specific session. Rara will receive the \
-         instruction as a system-level directive and generate an appropriate response to the user. \
-         Use this when you determine a user needs proactive attention."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -86,7 +83,7 @@ impl AgentTool for DispatchRaraTool {
         })
     }
 
-    async fn execute(&self, params: Value, ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let session_id_str = params
             .get("session_id")
             .and_then(|v| v.as_str())
@@ -137,7 +134,7 @@ impl AgentTool for DispatchRaraTool {
 
         push_notification(
             ctx,
-            format!("📨 Mita → Rara [{session_id_str}]: {instruction}"),
+            format!("\u{1f4e8} Mita \u{2192} Rara [{session_id_str}]: {instruction}"),
         );
 
         Ok(json!({

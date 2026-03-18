@@ -16,12 +16,12 @@
 
 use std::collections::HashMap;
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
 use rara_mcp::manager::{
     mgr::McpManager,
     registry::{McpServerConfig, TransportType},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -29,26 +29,22 @@ use serde_json::{Value, json};
 // ---------------------------------------------------------------------------
 
 /// Tool that installs (adds + starts) a new MCP server at runtime.
+#[derive(ToolDef)]
+#[tool(
+    name = "install-mcp-server",
+    description = "Install and start an MCP server. The server's tools become available \
+                   immediately for subsequent agent runs without restart.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct InstallMcpServerTool {
     manager: McpManager,
 }
 
 impl InstallMcpServerTool {
-    pub const NAME: &str = "install-mcp-server";
-
     pub fn new(manager: McpManager) -> Self { Self { manager } }
-}
 
-#[async_trait]
-impl AgentTool for InstallMcpServerTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Install and start an MCP server. The server's tools become available immediately for \
-         subsequent agent runs without restart."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -84,11 +80,7 @@ impl AgentTool for InstallMcpServerTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: Value,
-        _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let server_name = params
             .get("server_name")
             .and_then(|v| v.as_str())
@@ -157,26 +149,22 @@ impl AgentTool for InstallMcpServerTool {
 // ---------------------------------------------------------------------------
 
 /// Tool that lists all registered MCP servers and their tools.
+#[derive(ToolDef)]
+#[tool(
+    name = "list-mcp-servers",
+    description = "List all registered MCP servers with their status (enabled, connected) and \
+                   available tools.",
+    params_schema = "Self::schema_list()",
+    execute_fn = "self.exec_list"
+)]
 pub struct ListMcpServersTool {
     manager: McpManager,
 }
 
 impl ListMcpServersTool {
-    pub const NAME: &str = "list-mcp-servers";
-
     pub fn new(manager: McpManager) -> Self { Self { manager } }
-}
 
-#[async_trait]
-impl AgentTool for ListMcpServersTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List all registered MCP servers with their status (enabled, connected) and available \
-         tools."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema_list() -> Value {
         json!({
             "type": "object",
             "properties": {},
@@ -184,10 +172,10 @@ impl AgentTool for ListMcpServersTool {
         })
     }
 
-    async fn execute(
+    async fn exec_list(
         &self,
         _params: Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let registry = self.manager.registry().await;
         let all_names = registry
@@ -254,25 +242,22 @@ impl AgentTool for ListMcpServersTool {
 // ---------------------------------------------------------------------------
 
 /// Tool that removes an MCP server from the registry and stops it.
+#[derive(ToolDef)]
+#[tool(
+    name = "remove-mcp-server",
+    description = "Remove an MCP server from the registry and stop it. Its tools will no longer \
+                   be available.",
+    params_schema = "Self::schema_remove()",
+    execute_fn = "self.exec_remove"
+)]
 pub struct RemoveMcpServerTool {
     manager: McpManager,
 }
 
 impl RemoveMcpServerTool {
-    pub const NAME: &str = "remove-mcp-server";
-
     pub fn new(manager: McpManager) -> Self { Self { manager } }
-}
 
-#[async_trait]
-impl AgentTool for RemoveMcpServerTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Remove an MCP server from the registry and stop it. Its tools will no longer be available."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema_remove() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -285,10 +270,10 @@ impl AgentTool for RemoveMcpServerTool {
         })
     }
 
-    async fn execute(
+    async fn exec_remove(
         &self,
         params: Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let server_name = params
             .get("server_name")

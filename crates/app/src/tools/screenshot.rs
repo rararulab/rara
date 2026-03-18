@@ -16,32 +16,28 @@
 
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 use tracing::info;
 use uuid::Uuid;
 
+#[derive(ToolDef)]
+#[tool(
+    name = "screenshot",
+    description = "Take a screenshot of a web page using Playwright. Useful for previewing \
+                   frontend work, checking UI changes, or sharing visual results.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct ScreenshotTool {
     project_root: PathBuf,
 }
 
 impl ScreenshotTool {
-    pub const NAME: &str = "screenshot";
-
     pub fn new(project_root: PathBuf) -> Self { Self { project_root } }
-}
 
-#[async_trait]
-impl AgentTool for ScreenshotTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Take a screenshot of a web page using Playwright. Useful for previewing frontend work, \
-         checking UI changes, or sharing visual results."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -70,10 +66,10 @@ impl AgentTool for ScreenshotTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let url = params
             .get("url")

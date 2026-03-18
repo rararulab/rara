@@ -18,38 +18,34 @@
 //! checks `auto_send_enabled`, and sends via `smtp.gmail.com:587` with
 //! STARTTLS + App Password authentication.
 
-use async_trait::async_trait;
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
     message::{Attachment, MultiPart, SinglePart, header::ContentType},
     transport::smtp::authentication::Credentials,
 };
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
+#[derive(ToolDef)]
+#[tool(
+    name = "send-email",
+    description = "Send an email via Gmail SMTP. Requires Gmail address and App Password to be \
+                   configured in settings, and auto_send_enabled must be true. Supports optional \
+                   PDF file attachment by providing the absolute path to the file on disk.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct SendEmailTool {
     settings: std::sync::Arc<dyn SettingsProvider>,
 }
 
 impl SendEmailTool {
-    pub const NAME: &str = "send-email";
-
     pub fn new(settings: std::sync::Arc<dyn SettingsProvider>) -> Self { Self { settings } }
-}
 
-#[async_trait]
-impl AgentTool for SendEmailTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Send an email via Gmail SMTP. Requires Gmail address and App Password to be configured in \
-         settings, and auto_send_enabled must be true. Supports optional PDF file attachment by \
-         providing the absolute path to the file on disk."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -74,10 +70,10 @@ impl AgentTool for SendEmailTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let to = params
             .get("to")

@@ -18,32 +18,29 @@
 //! sorted by modification time (newest first).
 
 use anyhow::Context;
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Default maximum number of file entries to return.
 const DEFAULT_LIMIT: usize = 500;
 
 /// Layer 1 primitive: find files matching a glob pattern.
+#[derive(ToolDef)]
+#[tool(
+    name = "find-files",
+    description = "Find files matching a glob pattern (e.g. '*.rs', '**/*.toml'). Results are \
+                   sorted by modification time (newest first). Respects .gitignore when inside a \
+                   git repository.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct FindFilesTool;
 
 impl FindFilesTool {
-    pub const NAME: &str = "find-files";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for FindFilesTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Find files matching a glob pattern (e.g. '*.rs', '**/*.toml'). Results are sorted by \
-         modification time (newest first). Respects .gitignore when inside a git repository."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -64,10 +61,10 @@ impl AgentTool for FindFilesTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let pattern = params
             .get("pattern")

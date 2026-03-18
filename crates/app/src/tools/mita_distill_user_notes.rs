@@ -20,44 +20,42 @@
 //! the summary and notes written after the anchor will appear in the user's
 //! LLM context window.
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::{HandoffState, TapeService},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use super::notify::push_notification;
 
 /// Mita-exclusive tool: distill accumulated user notes into a compact anchor.
+#[derive(ToolDef)]
+#[tool(
+    name = "distill-user-notes",
+    description = "Distill accumulated user notes into a compact summary anchor using the \
+                   structured profile template below. Use this when a user's tape has accumulated \
+                   many notes that should be condensed.\n\nThe summary MUST follow this template \
+                   (omit empty sections):\n\n## Identity\nName, role, background, timezone\n\n## \
+                   Communication Style\nLanguage preference, verbosity, tone, interaction \
+                   patterns\n\n## Expertise & Interests\nTechnical domains, skill levels, current \
+                   learning areas\n\n## Key Facts\nProjects, relationships, important \
+                   context\n\n## Active Context\nCurrent goals, pending tasks, recent focus \
+                   areas\n\nRules:\n- Preserve all valid information from the previous anchor \
+                   summary\n- When information conflicts, prefer the most recent note and note \
+                   the change\n- Remove completed TODOs and outdated information\n- Omit sections \
+                   with no information",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct DistillUserNotesTool {
     tape_service: TapeService,
 }
 
 impl DistillUserNotesTool {
-    pub const NAME: &str = "distill-user-notes";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for DistillUserNotesTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Distill accumulated user notes into a compact summary anchor using the structured profile \
-         template below. Use this when a user's tape has accumulated many notes that should be \
-         condensed.\n\nThe summary MUST follow this template (omit empty sections):\n\n## \
-         Identity\nName, role, background, timezone\n\n## Communication Style\nLanguage \
-         preference, verbosity, tone, interaction patterns\n\n## Expertise & Interests\nTechnical \
-         domains, skill levels, current learning areas\n\n## Key Facts\nProjects, relationships, \
-         important context\n\n## Active Context\nCurrent goals, pending tasks, recent focus \
-         areas\n\nRules:\n- Preserve all valid information from the previous anchor summary\n- \
-         When information conflicts, prefer the most recent note and note the change\n- Remove \
-         completed TODOs and outdated information\n- Omit sections with no information"
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -74,7 +72,7 @@ impl AgentTool for DistillUserNotesTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -108,7 +106,10 @@ impl AgentTool for DistillUserNotesTool {
             .await
             .map_err(|e| anyhow::anyhow!("failed to write distillation anchor: {e}"))?;
 
-        push_notification(context, format!("🗜️ User notes distilled for {user_id}"));
+        push_notification(
+            context,
+            format!("\u{1f5dc}\u{fe0f} User notes distilled for {user_id}"),
+        );
 
         Ok(json!({
             "status": "ok",

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use rara_composio::ComposioAuthProvider;
 use rara_kernel::tool::AgentToolRef;
 
+// ToolDef derive is used in submodules.
 use self::{
     accounts::ComposioAccountsTool, connect::ComposioConnectTool, execute::ComposioExecuteTool,
     list::ComposioListTool,
