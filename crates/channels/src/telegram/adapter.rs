@@ -313,6 +313,8 @@ struct Phase {
     all_success:    bool,
     total_duration: Option<std::time::Duration>,
     first_error:    Option<String>,
+    /// Summary of the first tool in this phase (e.g. file path, command).
+    first_summary:  String,
 }
 
 /// Group consecutive tools by activity label into phases.
@@ -345,6 +347,7 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
                 all_success:    tool.success,
                 total_duration: tool.duration,
                 first_error:    tool.error.clone(),
+                first_summary:  tool.summary.clone(),
             });
         }
     }
@@ -353,27 +356,37 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
 }
 
 /// Format a single phase line.
+///
+/// When the phase contains a single tool (`count == 1`) and has a non-empty
+/// summary, the summary is appended so the user can see *what* was called
+/// (e.g. file path, shell command, search query).
 fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
+    let suffix = if phase.count == 1 && !phase.first_summary.is_empty() {
+        format!(" — {}", phase.first_summary)
+    } else {
+        String::new()
+    };
+
     if phase.all_finished {
         let time = phase
             .total_duration
             .map(|d| format!(" ({})", format_duration_compact(d)))
             .unwrap_or_default();
         if phase.all_success {
-            format!("\u{2705} {}{time}", phase.activity)
+            format!("\u{2705} {}{time}{suffix}", phase.activity)
         } else {
             match &phase.first_error {
                 Some(err) => {
                     let short_err: String = err.chars().take(60).collect();
                     format!("\u{274c} {}{time}: {short_err}", phase.activity)
                 }
-                None => format!("\u{274c} {}{time}", phase.activity),
+                None => format!("\u{274c} {}{time}{suffix}", phase.activity),
             }
         }
     } else if phase.activity == rara_kernel::io::stages::THINKING {
         loading_hint.to_string()
     } else {
-        format!("正在{}…", phase.activity)
+        format!("正在{}… {}", phase.activity, phase.first_summary)
     }
 }
 
