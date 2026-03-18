@@ -9,7 +9,7 @@ use rara_kernel::{
 /// bash).
 #[test]
 fn web_fetch_taint_blocks_all_sink_tools() {
-    let pipeline = GuardPipeline::new();
+    let pipeline = GuardPipeline::new(std::env::temp_dir().join("rara-test-workspace"), vec![]);
     let session = SessionKey::new();
     pipeline.post_execute(&session, "web_fetch");
 
@@ -38,7 +38,7 @@ fn web_fetch_taint_blocks_all_sink_tools() {
 /// parent.
 #[test]
 fn fork_isolation() {
-    let pipeline = GuardPipeline::new();
+    let pipeline = GuardPipeline::new(std::env::temp_dir().join("rara-test-workspace"), vec![]);
     let parent = SessionKey::new();
     let child = SessionKey::new();
 
@@ -70,7 +70,7 @@ fn fork_isolation() {
 /// Secret taint blocks outbound network but allows local file writes.
 #[test]
 fn secret_taint_directional() {
-    let pipeline = GuardPipeline::new();
+    let pipeline = GuardPipeline::new(std::env::temp_dir().join("rara-test-workspace"), vec![]);
     let session = SessionKey::new();
     pipeline.taint_tracker().record_secret(&session);
 
@@ -94,7 +94,7 @@ fn secret_taint_directional() {
 /// Taint layer runs before pattern layer — taint verdict takes priority.
 #[test]
 fn taint_takes_priority_over_pattern() {
-    let pipeline = GuardPipeline::new();
+    let pipeline = GuardPipeline::new(std::env::temp_dir().join("rara-test-workspace"), vec![]);
     let session = SessionKey::new();
     pipeline.post_execute(&session, "web_fetch");
 
@@ -111,7 +111,7 @@ fn taint_takes_priority_over_pattern() {
 /// Pattern scan exfiltration rule applies to non-shell tools too.
 #[test]
 fn exfiltration_pattern_on_non_shell() {
-    let pipeline = GuardPipeline::new();
+    let pipeline = GuardPipeline::new(std::env::temp_dir().join("rara-test-workspace"), vec![]);
     let session = SessionKey::new();
 
     // "curl -d" in exfiltration rule is shell_only: false — blocks on any tool
