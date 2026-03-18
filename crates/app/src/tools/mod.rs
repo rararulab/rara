@@ -139,7 +139,7 @@ pub fn rara_tool_names() -> Vec<String> {
         tool_names::BROWSER_CONSOLE_MESSAGES,
         tool_names::BROWSER_NETWORK_REQUESTS,
         // ACP delegation
-        AcpDelegateTool::NAME,
+        AcpDelegateTool::TOOL_NAME,
     ]
     .into_iter()
     .map(String::from)
