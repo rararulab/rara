@@ -25,6 +25,14 @@ use std::path::{Component, Path, PathBuf};
 ///
 /// Returns `None` (pass) when the resolved path is within scope, or
 /// `Some(reason)` when the path escapes the allowed boundaries.
+///
+/// # Security Limitations
+///
+/// This guard uses **lexical** path normalization (no filesystem access).
+/// Symlinks inside the workspace pointing to external paths will not be
+/// detected. If the threat model includes symlink-based escapes, consider
+/// adding an optional `std::fs::canonicalize` pass for paths that exist on
+/// disk (tracked as a follow-up).
 pub struct PathScopeGuard {
     workspace: PathBuf,
     whitelist: Vec<PathBuf>,
@@ -49,6 +57,7 @@ impl PathScopeGuard {
     /// within scope. Returns `Some(reason)` if the path escapes the workspace
     /// and all whitelist entries.
     pub fn check(&self, tool_name: &str, args: &serde_json::Value) -> Option<String> {
+        // SYNC: keep in sync with tool registry (crates/app/src/tools/mod.rs)
         let param_name = match tool_name {
             "read-file" | "write-file" | "edit-file" => "file_path",
             "grep" | "list-directory" | "find-files" => "path",
@@ -71,6 +80,7 @@ impl PathScopeGuard {
 
         tracing::debug!(
             tool = tool_name,
+            raw_path = raw_path,
             path = %resolved.display(),
             workspace = %self.workspace.display(),
             "path-scope guard checking file access"
@@ -97,7 +107,7 @@ impl PathScopeGuard {
 /// Normalize a path lexically by resolving `.` and `..` components without
 /// touching the filesystem. This is intentional — the guard must work on paths
 /// that may not yet exist.
-pub fn normalize_path(path: &Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {

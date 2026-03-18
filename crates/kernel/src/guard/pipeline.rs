@@ -20,7 +20,7 @@
 
 use tracing::instrument;
 
-use super::{pattern::PatternGuard, taint::TaintTracker};
+use super::{path_scope::PathScopeGuard, pattern::PatternGuard, taint::TaintTracker};
 use crate::session::SessionKey;
 
 /// Verdict from the guard pipeline.
@@ -30,7 +30,7 @@ pub enum GuardVerdict {
     Pass,
     /// Tool call is blocked.
     Blocked {
-        /// Which layer blocked it: "taint" or "pattern".
+        /// Which layer blocked it: "taint", "pattern", or "path_scope".
         layer:     &'static str,
         /// Human-readable reason.
         reason:    String,
@@ -39,17 +39,22 @@ pub enum GuardVerdict {
     },
 }
 
-/// Combines taint tracking + pattern scanning into a single guard.
+/// Combines taint tracking, pattern scanning, and path-scope enforcement into a
+/// single guard.
 pub struct GuardPipeline {
-    taint:   TaintTracker,
-    pattern: PatternGuard,
+    taint:      TaintTracker,
+    pattern:    PatternGuard,
+    path_scope: PathScopeGuard,
 }
 
 impl GuardPipeline {
     pub fn new() -> Self {
+        let workspace = rara_paths::workspace_dir().clone();
+        let config = rara_paths::config_dir().clone();
         Self {
-            taint:   TaintTracker::new(),
-            pattern: PatternGuard,
+            taint:      TaintTracker::new(),
+            pattern:    PatternGuard,
+            path_scope: PathScopeGuard::new(workspace, vec![config]),
         }
     }
 
@@ -87,6 +92,15 @@ impl GuardPipeline {
                     "{}: matched '{}'",
                     critical.rule_name, critical.matched_pattern
                 ),
+                tool_name: tool_name.to_string(),
+            };
+        }
+
+        // Layer 3: path scope check (argument-level, file tools only).
+        if let Some(reason) = self.path_scope.check(tool_name, args) {
+            return GuardVerdict::Blocked {
+                layer: "path_scope",
+                reason,
                 tool_name: tool_name.to_string(),
             };
         }
@@ -174,6 +188,30 @@ mod tests {
             verdict,
             GuardVerdict::Blocked { layer: "taint", .. }
         ));
+    }
+
+    #[test]
+    fn path_scope_blocks_outside_workspace() {
+        let pipeline = GuardPipeline::new();
+        let sk = SessionKey::new();
+        let args = serde_json::json!({ "file_path": "/etc/passwd" });
+        let verdict = pipeline.pre_execute(&sk, "read-file", &args);
+        assert!(matches!(
+            verdict,
+            GuardVerdict::Blocked {
+                layer: "path_scope",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn path_scope_passes_relative_path() {
+        let pipeline = GuardPipeline::new();
+        let sk = SessionKey::new();
+        let args = serde_json::json!({ "file_path": "src/main.rs" });
+        let verdict = pipeline.pre_execute(&sk, "read-file", &args);
+        assert!(matches!(verdict, GuardVerdict::Pass));
     }
 
     #[test]
