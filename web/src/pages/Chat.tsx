@@ -36,6 +36,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { CascadeViewer } from "@/components/CascadeViewer";
 import { api } from "@/api/client";
 import type {
   ChatMessageData,
@@ -563,7 +564,7 @@ function ImageBlock({ src }: { src: string }) {
   );
 }
 
-function MessageBubble({ msg, metrics }: { msg: ChatMessageData; metrics?: TurnMetrics | null }) {
+function MessageBubble({ msg, metrics, onClick }: { msg: ChatMessageData; metrics?: TurnMetrics | null; onClick?: () => void }) {
   const isUser = msg.role === "user";
   const isSystem = msg.role === "system";
   const isMultimodal = Array.isArray(msg.content);
@@ -579,7 +580,8 @@ function MessageBubble({ msg, metrics }: { msg: ChatMessageData; metrics?: TurnM
 
   return (
     <div
-      className={cn("group flex gap-3", isUser ? "flex-row-reverse" : "flex-row")}
+      className={cn("group flex gap-3 cursor-pointer", isUser ? "flex-row-reverse" : "flex-row")}
+      onClick={() => onClick?.()}
     >
       {/* Avatar */}
       <div
@@ -1182,6 +1184,7 @@ function ChatThread({
   onTogglePanel,
   initialDraft,
   onInitialDraftConsumed,
+  onMessageClick,
 }: {
   session: ChatSession;
   onClearMessages: () => void;
@@ -1189,6 +1192,7 @@ function ChatThread({
   onTogglePanel: () => void;
   initialDraft?: PendingDraft | null;
   onInitialDraftConsumed?: () => void;
+  onMessageClick?: (seq: number) => void;
 }) {
   const sessionKey = session.key;
   const queryClient = useQueryClient();
@@ -1591,6 +1595,7 @@ function ChatThread({
                   key={msg.seq}
                   msg={msg}
                   metrics={isLastAssistant ? latestMetrics : undefined}
+                  onClick={() => onMessageClick?.(msg.seq)}
                 />
               );
             })}
@@ -1839,6 +1844,13 @@ export default function Chat({
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
+  const [cascadeSeq, setCascadeSeq] = useState<number | null>(null);
+
+  // Clear cascade panel when switching sessions
+  const switchSession = useCallback((key: string | null) => {
+    setActiveKey(key);
+    setCascadeSeq(null);
+  }, []);
 
   const sessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
@@ -1863,7 +1875,7 @@ export default function Chat({
         return [session, ...next];
       });
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-      setActiveKey(session.key);
+      switchSession(session.key);
     },
   });
 
@@ -1875,7 +1887,7 @@ export default function Chat({
         queryKey: ["chat-messages", deletedKey],
       });
       if (activeKey === deletedKey) {
-        setActiveKey(null);
+        switchSession(null);
       }
     },
   });
@@ -1947,7 +1959,7 @@ export default function Chat({
       <SessionList
         sessions={sessions}
         activeKey={activeKey}
-        onSelect={setActiveKey}
+        onSelect={switchSession}
         onDelete={handleDelete}
         isLoading={sessionsQuery.isLoading}
         collapsed={panelCollapsed}
@@ -1964,15 +1976,27 @@ export default function Chat({
         <div className="flex min-w-0 flex-1 overflow-hidden rounded-2xl bg-transparent">
           {/* Right panel: chat thread or empty state */}
           {activeSession ? (
-            <ChatThread
-              key={activeKey}
-              session={activeSession}
-              onClearMessages={handleClearMessages}
-              panelCollapsed={panelCollapsed}
-              onTogglePanel={() => setPanelCollapsed((p) => !p)}
-              initialDraft={pendingDraft}
-              onInitialDraftConsumed={() => setPendingDraft(null)}
-            />
+            <div className="flex min-w-0 flex-1 overflow-hidden">
+              <div className="min-w-0 flex-1">
+                <ChatThread
+                  key={activeKey}
+                  session={activeSession}
+                  onClearMessages={handleClearMessages}
+                  panelCollapsed={panelCollapsed}
+                  onTogglePanel={() => setPanelCollapsed((p) => !p)}
+                  initialDraft={pendingDraft}
+                  onInitialDraftConsumed={() => setPendingDraft(null)}
+                  onMessageClick={(seq) => setCascadeSeq(seq)}
+                />
+              </div>
+              {cascadeSeq !== null && activeKey && (
+                <CascadeViewer
+                  sessionKey={activeKey}
+                  messageSeq={cascadeSeq}
+                  onClose={() => setCascadeSeq(null)}
+                />
+              )}
+            </div>
           ) : (
             <EmptyState
               onSendFirstMessage={handleStartFromEmpty}
