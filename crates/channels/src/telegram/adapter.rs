@@ -1431,30 +1431,31 @@ async fn handle_guard_callback(
     }
 }
 
-/// Handle a pause-turn callback query (continue/stop) from a Telegram
+/// Handle a tool-call-limit callback query (continue/stop) from a Telegram
 /// inline keyboard button.
 ///
 /// ## Callback data protocol
 ///
-/// Format: `"turn:{action}:{session_key}:{pause_id}"`
+/// Format: `"limit:{action}:{session_key}:{limit_id}"`
 ///
 /// - `action`      — `"continue"` (resume loop) or `"stop"` (graceful stop)
 /// - `session_key`  — identifies the session whose agent loop is paused
-/// - `pause_id` — monotonic counter binding this button to a specific pause
-///   instance. Stale IDs are rejected by `KernelHandle::resolve_pause_turn`.
+/// - `limit_id` — monotonic counter binding this button to a specific limit
+///   instance. Stale IDs are rejected by
+///   `KernelHandle::resolve_tool_call_limit`.
 ///
 /// ## Authorization
 ///
 /// Uses **chat-based auth** (`callback.message.chat().id`) checked against
 /// `allowed_chat_ids`, matching the same authorization used for inbound
 /// messages. This is intentional: in group chats any member of the allowed
-/// chat can resolve the pause, not just the user who triggered it.
+/// chat can resolve the limit, not just the user who triggered it.
 ///
 /// ## UI feedback
 ///
 /// After resolving, the original inline keyboard message is edited to show
 /// who made the decision and what action was taken.
-async fn handle_turn_pause_callback(
+async fn handle_tool_call_limit_callback(
     handle: &KernelHandle,
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
@@ -1471,7 +1472,7 @@ async fn handle_turn_pause_callback(
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&cb_chat_id) {
         warn!(
             chat_id = cb_chat_id,
-            "turn pause callback: unauthorized chat"
+            "tool call limit callback: unauthorized chat"
         );
         let _ = bot
             .answer_callback_query(callback.id.clone())
@@ -1480,44 +1481,44 @@ async fn handle_turn_pause_callback(
         return;
     }
 
-    // Parse "turn:continue:{session_key}:{pause_id}" or
-    // "turn:stop:{session_key}:{pause_id}"
+    // Parse "limit:continue:{session_key}:{limit_id}" or
+    // "limit:stop:{session_key}:{limit_id}"
     let parts: Vec<&str> = data.splitn(4, ':').collect();
     if parts.len() != 4 {
-        warn!(data, "turn pause callback: malformed data");
+        warn!(data, "tool call limit callback: malformed data");
         return;
     }
 
-    let (action, session_key_str, pause_id_str) = (parts[1], parts[2], parts[3]);
+    let (action, session_key_str, limit_id_str) = (parts[1], parts[2], parts[3]);
     let session_key = match rara_kernel::session::SessionKey::try_from_raw(session_key_str) {
         Ok(k) => k,
         Err(e) => {
-            warn!(error = %e, "turn pause callback: invalid session key");
+            warn!(error = %e, "tool call limit callback: invalid session key");
             return;
         }
     };
-    let pause_id: u64 = match pause_id_str.parse() {
+    let limit_id: u64 = match limit_id_str.parse() {
         Ok(id) => id,
         Err(_) => {
-            warn!(pause_id_str, "turn pause callback: invalid pause_id");
+            warn!(limit_id_str, "tool call limit callback: invalid limit_id");
             return;
         }
     };
 
     let decision = match action {
-        "continue" => rara_kernel::io::PauseTurnDecision::Continue,
-        "stop" => rara_kernel::io::PauseTurnDecision::Stop,
+        "continue" => rara_kernel::io::ToolCallLimitDecision::Continue,
+        "stop" => rara_kernel::io::ToolCallLimitDecision::Stop,
         _ => {
-            warn!(action, "turn pause callback: unknown action");
+            warn!(action, "tool call limit callback: unknown action");
             return;
         }
     };
 
-    let resolved = handle.resolve_pause_turn(&session_key, pause_id, decision);
+    let resolved = handle.resolve_tool_call_limit(&session_key, limit_id, decision);
 
     let answer_text = match decision {
-        rara_kernel::io::PauseTurnDecision::Continue => "▶️ Continuing",
-        rara_kernel::io::PauseTurnDecision::Stop => "⏹ Stopped",
+        rara_kernel::io::ToolCallLimitDecision::Continue => "▶️ Continuing",
+        rara_kernel::io::ToolCallLimitDecision::Stop => "⏹ Stopped",
     };
     let _ = bot
         .answer_callback_query(callback.id.clone())
@@ -1540,10 +1541,10 @@ async fn handle_turn_pause_callback(
 
         let status = if resolved {
             match decision {
-                rara_kernel::io::PauseTurnDecision::Continue => {
+                rara_kernel::io::ToolCallLimitDecision::Continue => {
                     format!("▶️ <b>Continued</b> by @{decided_by}")
                 }
-                rara_kernel::io::PauseTurnDecision::Stop => {
+                rara_kernel::io::ToolCallLimitDecision::Stop => {
                     format!("⏹ <b>Stopped</b> by @{decided_by}")
                 }
             }
@@ -1732,8 +1733,9 @@ async fn handle_update(
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
-            if data.starts_with("turn:") {
-                handle_turn_pause_callback(handle, bot, callback, data, allowed_chat_ids).await;
+            if data.starts_with("limit:") {
+                handle_tool_call_limit_callback(handle, bot, callback, data, allowed_chat_ids)
+                    .await;
                 return;
             }
             if data.starts_with("trace:") {
@@ -2537,11 +2539,11 @@ fn spawn_stream_forwarder(
                             progress.model = model;
                             progress.iterations = iterations;
                         }
-                        // Pause turn: send inline keyboard with continue/stop
+                        // Tool call limit: send inline keyboard with continue/stop
                         // buttons. The callback data encodes session_key and
-                        // pause_id so handle_turn_pause_callback can route the
+                        // limit_id so handle_tool_call_limit_callback can route the
                         // decision back to the correct oneshot channel.
-                        Ok(StreamEvent::PauseTurn { session_key, pause_id, tool_calls_made, elapsed_secs }) => {
+                        Ok(StreamEvent::ToolCallLimit { session_key, limit_id, tool_calls_made, elapsed_secs }) => {
                             let text = format!(
                                 "⚠️ <b>Agent Paused</b>\n\n\
                                  已执行 <b>{tool_calls_made}</b> 次工具调用（耗时 {elapsed_secs}s）。\n\
@@ -2550,11 +2552,11 @@ fn spawn_stream_forwarder(
                             let keyboard = InlineKeyboardMarkup::new(vec![vec![
                                 InlineKeyboardButton::callback(
                                     "▶️ 继续",
-                                    format!("turn:continue:{session_key}:{pause_id}"),
+                                    format!("limit:continue:{session_key}:{limit_id}"),
                                 ),
                                 InlineKeyboardButton::callback(
                                     "⏹ 停止",
-                                    format!("turn:stop:{session_key}:{pause_id}"),
+                                    format!("limit:stop:{session_key}:{limit_id}"),
                                 ),
                             ]]);
                             let result = bot
@@ -2563,10 +2565,10 @@ fn spawn_stream_forwarder(
                                 .reply_markup(keyboard)
                                 .await;
                             if let Err(e) = result {
-                                warn!(error = %e, "forward_stream: failed to send pause prompt");
+                                warn!(error = %e, "forward_stream: failed to send tool call limit prompt");
                             }
                         }
-                        Ok(StreamEvent::PauseTurnResolved { .. }) => {
+                        Ok(StreamEvent::ToolCallLimitResolved { .. }) => {
                             // Informational only — already handled by callback.
                         }
                         Ok(_) => {} // Ignore: Progress (stage changes have no TG UX)

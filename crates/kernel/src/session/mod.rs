@@ -309,13 +309,13 @@ pub struct Session {
     pub pause_buffer: Vec<KernelEventEnvelope>,
     /// Active background tasks spawned by this session.
     pub background_tasks: Vec<BackgroundTaskEntry>,
-    /// Pending pause-turn oneshot sender keyed by pause_id. When the agent
-    /// loop pauses at the tool call threshold, it registers a `(pause_id,
-    /// sender)` here. Only a callback carrying the matching `pause_id` can
-    /// resolve it, preventing stale buttons from resolving a newer pause.
-    pub pending_pause_turn: Option<(
+    /// Pending tool call limit oneshot sender keyed by limit_id. When the
+    /// agent loop pauses at the tool call limit, it registers a `(limit_id,
+    /// sender)` here. Only a callback carrying the matching `limit_id` can
+    /// resolve it, preventing stale buttons from resolving a newer limit.
+    pub pending_tool_call_limit: Option<(
         u64,
-        tokio::sync::oneshot::Sender<crate::io::PauseTurnDecision>,
+        tokio::sync::oneshot::Sender<crate::io::ToolCallLimitDecision>,
     )>,
     /// The channel endpoint that originated this session (e.g. a specific
     /// Telegram chat). Used as a fallback for reply routing when the

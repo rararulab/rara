@@ -525,53 +525,54 @@ impl KernelHandle {
             .unwrap_or_default()
     }
 
-    /// Register a pause-turn oneshot sender on the session.
+    /// Register a tool call limit oneshot sender on the session.
     ///
     /// Called by the agent loop (inline or plan) when cumulative tool calls
-    /// reach the `pause_turn_threshold`. The `tx` end is stored alongside
-    /// `pause_id` so that [`resolve_pause_turn`](Self::resolve_pause_turn)
+    /// reach the `tool_call_limit`. The `tx` end is stored alongside
+    /// `limit_id` so that
+    /// [`resolve_tool_call_limit`](Self::resolve_tool_call_limit)
     /// can validate the ID before delivering the decision.
     ///
-    /// Only one pause can be pending per session at a time — registering a
+    /// Only one limit can be pending per session at a time — registering a
     /// new one implicitly drops the previous sender (if any), which causes
     /// the old `rx` to receive a channel-closed error (treated as Stop).
-    pub fn register_pause_turn(
+    pub fn register_tool_call_limit(
         &self,
         session_key: &SessionKey,
-        pause_id: u64,
-        tx: tokio::sync::oneshot::Sender<crate::io::PauseTurnDecision>,
+        limit_id: u64,
+        tx: tokio::sync::oneshot::Sender<crate::io::ToolCallLimitDecision>,
     ) {
         self.process_table.with_mut(session_key, |session| {
-            session.pending_pause_turn = Some((pause_id, tx));
+            session.pending_tool_call_limit = Some((limit_id, tx));
         });
     }
 
-    /// Resolve a pending pause-turn decision.
+    /// Resolve a pending tool call limit decision.
     ///
     /// Called by channel adapters (e.g. Telegram callback handler) when the
     /// user clicks continue/stop on the inline keyboard.
     ///
-    /// **Stale button protection:** only resolves if `pause_id` matches the
-    /// currently pending one. This prevents a button from an earlier pause
+    /// **Stale button protection:** only resolves if `limit_id` matches the
+    /// currently pending one. This prevents a button from an earlier limit
     /// (which the user didn't click in time) from accidentally resolving a
-    /// newer pause instance. Mismatched IDs are silently ignored.
+    /// newer limit instance. Mismatched IDs are silently ignored.
     ///
     /// Returns `true` if the decision was successfully delivered to the
     /// waiting agent loop.
-    pub fn resolve_pause_turn(
+    pub fn resolve_tool_call_limit(
         &self,
         session_key: &SessionKey,
-        pause_id: u64,
-        decision: crate::io::PauseTurnDecision,
+        limit_id: u64,
+        decision: crate::io::ToolCallLimitDecision,
     ) -> bool {
         self.process_table
             .with_mut(session_key, |session| {
-                if let Some((pending_id, _)) = &session.pending_pause_turn {
-                    if *pending_id != pause_id {
+                if let Some((pending_id, _)) = &session.pending_tool_call_limit {
+                    if *pending_id != limit_id {
                         return false; // stale callback — ignore
                     }
                 }
-                if let Some((_, tx)) = session.pending_pause_turn.take() {
+                if let Some((_, tx)) = session.pending_tool_call_limit.take() {
                     tx.send(decision).is_ok()
                 } else {
                     false

@@ -535,12 +535,12 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::DockTurnComplete { session_id, .. } => CliEvent::Progress {
             text: format!("Dock turn complete: {session_id}"),
         },
-        StreamEvent::PauseTurn {
+        StreamEvent::ToolCallLimit {
             tool_calls_made, ..
         } => CliEvent::Progress {
-            text: format!("Agent paused after {tool_calls_made} tool calls"),
+            text: format!("Agent paused after {tool_calls_made} tool calls (tool call limit)"),
         },
-        StreamEvent::PauseTurnResolved { continued, .. } => CliEvent::Progress {
+        StreamEvent::ToolCallLimitResolved { continued, .. } => CliEvent::Progress {
             text: if continued {
                 "Agent resumed".to_string()
             } else {

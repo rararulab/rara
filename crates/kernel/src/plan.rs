@@ -237,18 +237,18 @@ pub(crate) async fn run_plan_loop(
     let mut last_model = String::new();
     let mut final_texts: Vec<String> = Vec::new();
     let mut replan_count = 0usize;
-    // ── Pause turn circuit breaker (plan mode) ────────────────────────
+    // ── Tool call limit circuit breaker (plan mode) ────────────────────
     // Same mechanism as the inline agent loop, but tracks cumulative tool
     // calls across *all* plan steps (total_tool_calls). 0 = disabled.
     // Note: each plan step's inner agent loop has its own independent
-    // pause check — this outer layer provides cross-step protection.
-    let pause_interval = handle
+    // limit check — this outer layer provides cross-step protection.
+    let limit_interval = handle
         .session_manifest(&session_key)
         .await
-        .map(|m| m.pause_turn_threshold.unwrap_or(0))
+        .map(|m| m.tool_call_limit.unwrap_or(0))
         .unwrap_or(0);
-    let mut next_pause_at: usize = pause_interval;
-    let mut pause_id_counter: u64 = 0;
+    let mut next_limit_at: usize = limit_interval;
+    let mut limit_id_counter: u64 = 0;
 
     // Use an index-based loop so we can replace plan.steps on replan.
     let mut step_idx = 0;
@@ -325,29 +325,29 @@ pub(crate) async fn run_plan_loop(
             outcome: outcome.clone(),
         });
 
-        // ── Pause turn check (cumulative across all plan steps) ────────
+        // ── Tool call limit check (cumulative across all plan steps) ────
         // Uses total_tool_calls (sum across steps) rather than per-step
         // counts. Same oneshot + 120s timeout pattern as inline agent loop.
-        if pause_interval > 0 && total_tool_calls >= next_pause_at {
-            pause_id_counter += 1;
-            let current_pause_id = pause_id_counter;
+        if limit_interval > 0 && total_tool_calls >= next_limit_at {
+            limit_id_counter += 1;
+            let current_limit_id = limit_id_counter;
             let elapsed_secs = start.elapsed().as_secs();
-            stream_handle.emit(StreamEvent::PauseTurn {
+            stream_handle.emit(StreamEvent::ToolCallLimit {
                 session_key: session_key.to_string(),
-                pause_id: current_pause_id,
+                limit_id: current_limit_id,
                 tool_calls_made: total_tool_calls,
                 elapsed_secs,
             });
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            handle.register_pause_turn(&session_key, current_pause_id, tx);
+            handle.register_tool_call_limit(&session_key, current_limit_id, tx);
 
             info!(
                 total_tool_calls,
-                next_pause_at,
-                pause_id = current_pause_id,
+                next_limit_at,
+                limit_id = current_limit_id,
                 step = step_idx,
-                "plan loop paused at tool call threshold"
+                "plan loop paused at tool call limit"
             );
 
             let decision = tokio::select! {
@@ -361,11 +361,11 @@ pub(crate) async fn run_plan_loop(
             };
 
             match decision {
-                Ok(Ok(crate::io::PauseTurnDecision::Continue)) => {
-                    next_pause_at = total_tool_calls + pause_interval;
-                    stream_handle.emit(StreamEvent::PauseTurnResolved {
+                Ok(Ok(crate::io::ToolCallLimitDecision::Continue)) => {
+                    next_limit_at = total_tool_calls + limit_interval;
+                    stream_handle.emit(StreamEvent::ToolCallLimitResolved {
                         session_key: session_key.to_string(),
-                        pause_id:    current_pause_id,
+                        limit_id:    current_limit_id,
                         continued:   true,
                     });
                 }
@@ -375,9 +375,9 @@ pub(crate) async fn run_plan_loop(
                         step = step_idx,
                         "plan loop stopped by user or timeout"
                     );
-                    stream_handle.emit(StreamEvent::PauseTurnResolved {
+                    stream_handle.emit(StreamEvent::ToolCallLimitResolved {
                         session_key: session_key.to_string(),
-                        pause_id:    current_pause_id,
+                        limit_id:    current_limit_id,
                         continued:   false,
                     });
                     plan.status = PlanStatus::Failed;
@@ -815,7 +815,7 @@ async fn execute_worker_step(
         metadata:               serde_json::Value::Null,
         sandbox:                None,
         default_execution_mode: None,
-        pause_turn_threshold:   None,
+        tool_call_limit:        None,
     };
 
     info!(

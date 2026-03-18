@@ -824,19 +824,19 @@ pub enum BackgroundTaskStatus {
     Cancelled,
 }
 
-/// User's decision when the agent loop is paused at the tool call threshold.
+/// User's decision when the agent loop is paused at the tool call limit.
 ///
 /// The agent loop (both inline and plan modes) tracks cumulative tool calls
-/// per turn. When the count reaches `pause_turn_threshold`, execution suspends
+/// per turn. When the count reaches `tool_call_limit`, execution suspends
 /// and the adapter presents the user with continue/stop options (e.g. Telegram
 /// inline keyboard). The decision is delivered back through a
 /// `tokio::sync::oneshot` channel registered on the session.
 ///
 /// If no decision arrives within **120 seconds**, the loop treats it as `Stop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PauseTurnDecision {
-    /// Resume agent loop execution. The next pause fires after another
-    /// `pause_turn_threshold` tool calls from the current count.
+pub enum ToolCallLimitDecision {
+    /// Resume agent loop execution. The next limit fires after another
+    /// `tool_call_limit` tool calls from the current count.
     Continue,
     /// Stop the agent loop gracefully, returning partial results accumulated
     /// so far. This is distinct from max-iteration exhaustion.
@@ -937,34 +937,34 @@ pub enum StreamEvent {
         selected_anchor: Option<String>,
     },
     /// Agent loop paused because cumulative tool calls reached the
-    /// `pause_turn_threshold` ceiling.
+    /// `tool_call_limit` ceiling.
     ///
     /// Channel adapters should present the user with continue/stop controls
     /// (e.g. Telegram inline keyboard). The agent loop blocks on a oneshot
     /// channel for up to **120 seconds**; if no decision arrives the loop
     /// stops automatically.
     ///
-    /// `pause_id` is a monotonically increasing counter (per turn) that binds
-    /// this event to a specific pause instance. Adapters must include it in
-    /// callback data so that stale buttons from an earlier pause cannot
+    /// `limit_id` is a monotonically increasing counter (per turn) that binds
+    /// this event to a specific limit instance. Adapters must include it in
+    /// callback data so that stale buttons from an earlier limit cannot
     /// accidentally resolve a newer one.
-    PauseTurn {
+    ToolCallLimit {
         session_key:     String,
-        /// Monotonic pause instance ID — prevents stale callback resolution.
-        pause_id:        u64,
+        /// Monotonic limit instance ID — prevents stale callback resolution.
+        limit_id:        u64,
         /// Cumulative tool calls executed so far in this turn.
         tool_calls_made: usize,
         /// Wall-clock seconds since turn start.
         elapsed_secs:    u64,
     },
-    /// A pending pause-turn has been resolved by the user (or by timeout).
+    /// A pending tool call limit has been resolved by the user (or by timeout).
     ///
     /// Informational only — adapters may use this to update UI (e.g. edit
     /// the Telegram inline keyboard message to show the decision).
-    PauseTurnResolved {
+    ToolCallLimitResolved {
         session_key: String,
-        /// Must match the `pause_id` from the corresponding `PauseTurn`.
-        pause_id:    u64,
+        /// Must match the `limit_id` from the corresponding `ToolCallLimit`.
+        limit_id:    u64,
         /// `true` if the user chose to continue; `false` on stop or timeout.
         continued:   bool,
     },
