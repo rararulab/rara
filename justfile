@@ -80,9 +80,15 @@ test:
 
 alias t := test
 
-[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny)")]
+[doc("check that every crate has an AGENT.md")]
 [group("👆 Code Quality")]
-lint:
+check-agent-md:
+    @cd scripts && go build -o bin/devtool ./cmd/devtool/
+    @scripts/bin/devtool check-agent-md
+
+[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md)")]
+[group("👆 Code Quality")]
+lint: check-agent-md
     @echo "🔍 Running clippy..."
     cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
     @echo "📚 Building documentation..."

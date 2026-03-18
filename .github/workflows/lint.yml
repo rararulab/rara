@@ -45,19 +45,36 @@ jobs:
       - name: Buf format check
         run: cd api && buf format --diff --exit-code
 
+  agent-md:
+    name: AGENT.md Check
+    runs-on: arc-runner-set
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Build devtool
+        run: cd scripts && go build -o bin/devtool ./cmd/devtool/
+
+      - name: Check AGENT.md existence
+        run: scripts/bin/devtool check-agent-md
+
   lint-success:
     name: Lint Success
     runs-on: arc-runner-set
-    needs: [rust-format, proto-lint]
+    needs: [rust-format, proto-lint, agent-md]
     if: always()
     steps:
       - name: Check all lint jobs status
         env:
           RUST_FORMAT_RESULT: ${{ needs.rust-format.result }}
           PROTO_LINT_RESULT: ${{ needs.proto-lint.result }}
+          AGENT_MD_RESULT: ${{ needs.agent-md.result }}
         run: |
           if [[ "$RUST_FORMAT_RESULT" != "success" || \
-                "$PROTO_LINT_RESULT" != "success" ]]; then
+                "$PROTO_LINT_RESULT" != "success" || \
+                "$AGENT_MD_RESULT" != "success" ]]; then
             echo "One or more lint jobs failed"
             exit 1
           fi
