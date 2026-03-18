@@ -18,6 +18,7 @@
 //! 1. Tracking data provenance labels (taint) through the LLM context
 //! 2. Scanning tool arguments for known dangerous patterns
 
+pub mod path_scope;
 pub mod pattern;
 pub mod pipeline;
 pub mod taint;
