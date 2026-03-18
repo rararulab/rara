@@ -1971,6 +1971,7 @@ pub(crate) async fn run_agent_loop(
         }
         msg
     };
+    let actual_iterations = iteration_traces.len();
     let trace = TurnTrace {
         duration_ms: turn_start.elapsed().as_millis() as u64,
         model: model.clone(),
@@ -1997,7 +1998,7 @@ pub(crate) async fn run_agent_loop(
 
     Ok(AgentTurnResult {
         text: last_accumulated_text,
-        iterations: max_iterations,
+        iterations: actual_iterations,
         tool_calls: tool_calls_made,
         model: model.clone(),
         trace,
