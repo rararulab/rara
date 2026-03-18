@@ -192,3 +192,23 @@ pub fn record_turn_tool_call(agent_name: &str, tool_name: &str) {
         .with_label_values(&[agent_name, tool_name])
         .inc();
 }
+
+// -- Tool execution ----------------------------------------------------------
+
+/// Per-tool execution duration histogram.
+pub static TOOL_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "kernel_tool_duration_seconds",
+        "Tool execution duration in seconds",
+        &[AGENT_NAME_LABEL, TOOL_NAME_LABEL],
+        vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
+    )
+    .unwrap()
+});
+
+/// Record tool execution duration for Prometheus.
+pub fn record_tool_duration(agent_name: &str, tool_name: &str, duration_ms: u64) {
+    TOOL_DURATION_SECONDS
+        .with_label_values(&[agent_name, tool_name])
+        .observe(duration_ms as f64 / 1000.0);
+}
