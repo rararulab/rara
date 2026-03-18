@@ -216,9 +216,7 @@ impl KernelHandle {
 
         self.submit_message(msg).map_err(|_| IOError::SystemBusy)?;
 
-        crate::metrics::MESSAGE_INBOUND
-            .with_label_values(&[&channel_label])
-            .inc();
+        crate::metrics::record_message_inbound(&channel_label);
 
         Ok(())
     }

@@ -12,127 +12,111 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! OpenTelemetry metrics for the worker subsystem.
+
 use std::sync::LazyLock;
 
-use prometheus::*;
+use opentelemetry::{
+    global,
+    metrics::{Counter, Histogram, UpDownCounter},
+};
 
-/// Worker name label.
-pub const WORKER_LABEL: &str = "worker";
+/// Return the shared meter scoped to the worker crate.
+fn meter() -> opentelemetry::metrics::Meter { global::meter("rara-worker") }
 
 // -- Worker lifecycle --------------------------------------------------------
 
 /// Total number of workers started.
-pub static WORKER_STARTED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_started_total",
-        "Total number of workers started",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_STARTED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.started")
+        .with_description("Total number of workers started")
+        .build()
 });
 
 /// Total number of workers stopped gracefully.
-pub static WORKER_STOPPED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_stopped_total",
-        "Total number of workers stopped gracefully",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_STOPPED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.stopped")
+        .with_description("Total number of workers stopped gracefully")
+        .build()
 });
 
-/// Whether the worker is currently active (1) or not (0).
-pub static WORKER_ACTIVE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    register_int_gauge_vec!(
-        "worker_active",
-        "Whether the worker is currently active (1) or not (0)",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+/// Whether the worker is currently active (gauge via up-down counter).
+pub static WORKER_ACTIVE: LazyLock<UpDownCounter<i64>> = LazyLock::new(|| {
+    meter()
+        .i64_up_down_counter("worker.active")
+        .with_description("Whether the worker is currently active")
+        .build()
 });
 
 // -- Worker errors -----------------------------------------------------------
 
 /// Total number of worker errors.
-pub static WORKER_ERRORS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_errors_total",
-        "Total number of worker errors",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.errors")
+        .with_description("Total number of worker errors")
+        .build()
 });
 
 /// Total number of worker start errors.
-pub static WORKER_START_ERRORS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_start_errors_total",
-        "Total number of worker start errors",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_START_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.start_errors")
+        .with_description("Total number of worker start errors")
+        .build()
 });
 
 /// Total number of worker shutdown errors.
-pub static WORKER_SHUTDOWN_ERRORS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_shutdown_errors_total",
-        "Total number of worker shutdown errors",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_SHUTDOWN_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.shutdown_errors")
+        .with_description("Total number of worker shutdown errors")
+        .build()
 });
 
 // -- Worker execution --------------------------------------------------------
 
 /// Total number of worker executions.
-pub static WORKER_EXECUTIONS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_executions_total",
-        "Total number of worker executions",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_EXECUTIONS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.executions")
+        .with_description("Total number of worker executions")
+        .build()
 });
 
 /// Total number of worker execution errors.
-pub static WORKER_EXECUTION_ERRORS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_execution_errors_total",
-        "Total number of worker execution errors",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_EXECUTION_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.execution_errors")
+        .with_description("Total number of worker execution errors")
+        .build()
 });
 
 /// Worker execution duration in seconds.
-pub static WORKER_EXECUTION_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
-    register_histogram_vec!(
-        "worker_execution_duration_seconds",
-        "Worker execution duration in seconds",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_EXECUTION_DURATION_SECONDS: LazyLock<Histogram<f64>> = LazyLock::new(|| {
+    meter()
+        .f64_histogram("worker.execution.duration")
+        .with_description("Worker execution duration in seconds")
+        .with_unit("s")
+        .build()
 });
 
 // -- Worker state transitions ------------------------------------------------
 
 /// Total number of times workers were paused.
-pub static WORKER_PAUSED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_paused_total",
-        "Total number of times workers were paused",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_PAUSED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.paused")
+        .with_description("Total number of times workers were paused")
+        .build()
 });
 
 /// Total number of times workers were resumed.
-pub static WORKER_RESUMED: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "worker_resumed_total",
-        "Total number of times workers were resumed",
-        &[WORKER_LABEL]
-    )
-    .unwrap()
+pub static WORKER_RESUMED: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    meter()
+        .u64_counter("worker.resumed")
+        .with_description("Total number of times workers were resumed")
+        .build()
 });

@@ -22,6 +22,7 @@ use std::{
 };
 
 use common_runtime::Runtime;
+use opentelemetry::KeyValue;
 use smart_default::SmartDefault;
 use tokio::{sync::Notify, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -631,8 +632,8 @@ async fn run_worker<S: Clone + Send + Sync, W: Worker>(
     let _guard = span.enter();
 
     info!("Worker starting");
-    WORKER_STARTED.with_label_values(&[name]).inc();
-    WORKER_ACTIVE.with_label_values(&[name]).set(1);
+    WORKER_STARTED.add(1, &[KeyValue::new("worker", name.to_string())]);
+    WORKER_ACTIVE.add(1, &[KeyValue::new("worker", name.to_string())]);
 
     // Call on_start hook
     worker.on_start(ctx.clone()).await;
@@ -641,10 +642,11 @@ async fn run_worker<S: Clone + Send + Sync, W: Worker>(
     if eager && !ctx.is_cancelled() {
         let start = Instant::now();
         worker.work(ctx.clone()).await;
-        WORKER_EXECUTIONS.with_label_values(&[name]).inc();
-        WORKER_EXECUTION_DURATION_SECONDS
-            .with_label_values(&[name])
-            .observe(start.elapsed().as_secs_f64());
+        WORKER_EXECUTIONS.add(1, &[KeyValue::new("worker", name.to_string())]);
+        WORKER_EXECUTION_DURATION_SECONDS.record(
+            start.elapsed().as_secs_f64(),
+            &[KeyValue::new("worker", name.to_string())],
+        );
     }
 
     // Main execution loop
@@ -669,8 +671,8 @@ async fn run_worker<S: Clone + Send + Sync, W: Worker>(
                                 // Shutdown requested while paused
                                 worker.on_shutdown(ctx.clone()).await;
                                 info!("Worker stopped (cancelled while paused)");
-                                WORKER_STOPPED.with_label_values(&[name]).inc();
-                                WORKER_ACTIVE.with_label_values(&[name]).set(0);
+                                WORKER_STOPPED.add(1, &[KeyValue::new("worker", name.to_string())]);
+                                WORKER_ACTIVE.add(-1, &[KeyValue::new("worker", name.to_string())]);
                                 return;
                             }
                         }
@@ -682,18 +684,19 @@ async fn run_worker<S: Clone + Send + Sync, W: Worker>(
         let start = Instant::now();
         worker.work(ctx.clone()).await;
 
-        WORKER_EXECUTIONS.with_label_values(&[name]).inc();
-        WORKER_EXECUTION_DURATION_SECONDS
-            .with_label_values(&[name])
-            .observe(start.elapsed().as_secs_f64());
+        WORKER_EXECUTIONS.add(1, &[KeyValue::new("worker", name.to_string())]);
+        WORKER_EXECUTION_DURATION_SECONDS.record(
+            start.elapsed().as_secs_f64(),
+            &[KeyValue::new("worker", name.to_string())],
+        );
     }
 
     // Call on_shutdown hook
     worker.on_shutdown(ctx.clone()).await;
 
     info!("Worker stopped");
-    WORKER_STOPPED.with_label_values(&[name]).inc();
-    WORKER_ACTIVE.with_label_values(&[name]).set(0);
+    WORKER_STOPPED.add(1, &[KeyValue::new("worker", name.to_string())]);
+    WORKER_ACTIVE.add(-1, &[KeyValue::new("worker", name.to_string())]);
 }
 
 /// Execution loop for fallible workers with error handling.
@@ -715,19 +718,19 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
     let _guard = span.enter();
 
     info!("Worker starting");
-    WORKER_STARTED.with_label_values(&[name]).inc();
-    WORKER_ACTIVE.with_label_values(&[name]).set(1);
+    WORKER_STARTED.add(1, &[KeyValue::new("worker", name.to_string())]);
+    WORKER_ACTIVE.add(1, &[KeyValue::new("worker", name.to_string())]);
 
     // Call on_start hook with error handling
     if let Err(e) = worker.on_start(ctx.clone()).await {
         error!(error = %e, "Worker on_start failed");
-        WORKER_START_ERRORS.with_label_values(&[name]).inc();
-        WORKER_ERRORS.with_label_values(&[name]).inc();
+        WORKER_START_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
+        WORKER_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
 
         if e.is_fatal() {
             error!("Fatal error in on_start, worker will not run");
-            WORKER_STOPPED.with_label_values(&[name]).inc();
-            WORKER_ACTIVE.with_label_values(&[name]).set(0);
+            WORKER_STOPPED.add(1, &[KeyValue::new("worker", name.to_string())]);
+            WORKER_ACTIVE.add(-1, &[KeyValue::new("worker", name.to_string())]);
             return;
         }
     }
@@ -737,25 +740,26 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
         let start = Instant::now();
         let result = worker.work(ctx.clone()).await;
 
-        WORKER_EXECUTIONS.with_label_values(&[name]).inc();
-        WORKER_EXECUTION_DURATION_SECONDS
-            .with_label_values(&[name])
-            .observe(start.elapsed().as_secs_f64());
+        WORKER_EXECUTIONS.add(1, &[KeyValue::new("worker", name.to_string())]);
+        WORKER_EXECUTION_DURATION_SECONDS.record(
+            start.elapsed().as_secs_f64(),
+            &[KeyValue::new("worker", name.to_string())],
+        );
 
         if let Err(e) = result {
             error!(error = %e, "Eager execution failed");
-            WORKER_EXECUTION_ERRORS.with_label_values(&[name]).inc();
-            WORKER_ERRORS.with_label_values(&[name]).inc();
+            WORKER_EXECUTION_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
+            WORKER_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
 
             if e.is_fatal() {
                 error!("Fatal error in eager execution, stopping worker");
                 if let Err(e) = worker.on_shutdown(ctx.clone()).await {
                     error!(error = %e, "Worker on_shutdown failed");
-                    WORKER_SHUTDOWN_ERRORS.with_label_values(&[name]).inc();
-                    WORKER_ERRORS.with_label_values(&[name]).inc();
+                    WORKER_SHUTDOWN_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
+                    WORKER_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
                 }
-                WORKER_STOPPED.with_label_values(&[name]).inc();
-                WORKER_ACTIVE.with_label_values(&[name]).set(0);
+                WORKER_STOPPED.add(1, &[KeyValue::new("worker", name.to_string())]);
+                WORKER_ACTIVE.add(-1, &[KeyValue::new("worker", name.to_string())]);
                 return;
             }
         }
@@ -783,12 +787,12 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
                                 // Shutdown requested while paused
                                 if let Err(e) = worker.on_shutdown(ctx.clone()).await {
                                     error!(error = %e, "Worker on_shutdown failed");
-                                    WORKER_SHUTDOWN_ERRORS.with_label_values(&[name]).inc();
-                                    WORKER_ERRORS.with_label_values(&[name]).inc();
+                                    WORKER_SHUTDOWN_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
+                                    WORKER_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
                                 }
                                 info!("Worker stopped (cancelled while paused)");
-                                WORKER_STOPPED.with_label_values(&[name]).inc();
-                                WORKER_ACTIVE.with_label_values(&[name]).set(0);
+                                WORKER_STOPPED.add(1, &[KeyValue::new("worker", name.to_string())]);
+                                WORKER_ACTIVE.add(-1, &[KeyValue::new("worker", name.to_string())]);
                                 return;
                             }
                         }
@@ -800,16 +804,17 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
         let start = Instant::now();
         let result = worker.work(ctx.clone()).await;
 
-        WORKER_EXECUTIONS.with_label_values(&[name]).inc();
-        WORKER_EXECUTION_DURATION_SECONDS
-            .with_label_values(&[name])
-            .observe(start.elapsed().as_secs_f64());
+        WORKER_EXECUTIONS.add(1, &[KeyValue::new("worker", name.to_string())]);
+        WORKER_EXECUTION_DURATION_SECONDS.record(
+            start.elapsed().as_secs_f64(),
+            &[KeyValue::new("worker", name.to_string())],
+        );
 
         // Handle work errors
         if let Err(e) = result {
             error!(error = %e, "Worker execution failed");
-            WORKER_EXECUTION_ERRORS.with_label_values(&[name]).inc();
-            WORKER_ERRORS.with_label_values(&[name]).inc();
+            WORKER_EXECUTION_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
+            WORKER_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
 
             if e.is_fatal() {
                 error!("Fatal error, stopping worker");
@@ -822,11 +827,11 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
     // Call on_shutdown hook with error handling
     if let Err(e) = worker.on_shutdown(ctx.clone()).await {
         error!(error = %e, "Worker on_shutdown failed");
-        WORKER_SHUTDOWN_ERRORS.with_label_values(&[name]).inc();
-        WORKER_ERRORS.with_label_values(&[name]).inc();
+        WORKER_SHUTDOWN_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
+        WORKER_ERRORS.add(1, &[KeyValue::new("worker", name.to_string())]);
     }
 
     info!("Worker stopped");
-    WORKER_STOPPED.with_label_values(&[name]).inc();
-    WORKER_ACTIVE.with_label_values(&[name]).set(0);
+    WORKER_STOPPED.add(1, &[KeyValue::new("worker", name.to_string())]);
+    WORKER_ACTIVE.add(-1, &[KeyValue::new("worker", name.to_string())]);
 }

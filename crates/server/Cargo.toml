@@ -26,7 +26,7 @@ axum-tracing-opentelemetry = { workspace = true }
 base = { workspace = true }
 common-runtime = { workspace = true }
 futures = { workspace = true }
-prometheus = { workspace = true }
+opentelemetry = { version = "0.31.0", default-features = false, features = ["metrics"] }
 rara-api = { workspace = true }
 rara-error = { workspace = true }
 serde = { workspace = true }

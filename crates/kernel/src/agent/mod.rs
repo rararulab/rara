@@ -1838,6 +1838,8 @@ pub(crate) async fn run_agent_loop(
                     .await;
             }
 
+            crate::metrics::record_tool_duration(&manifest.name, name, *duration_ms);
+
             tool_call_traces.push(ToolCallTrace {
                 name: name.clone(),
                 id: id.clone(),

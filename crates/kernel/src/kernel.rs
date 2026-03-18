@@ -576,9 +576,7 @@ impl Kernel {
     /// Dispatch a single event to its handler.
     async fn handle_event(&self, event: KernelEventEnvelope) {
         let event_type: &'static str = (&event.kind).into();
-        crate::metrics::EVENT_PROCESSED
-            .with_label_values(&[event_type])
-            .inc();
+        crate::metrics::record_event_processed(event_type);
 
         let KernelEventEnvelope { base, kind } = event;
 
@@ -779,12 +777,8 @@ impl Kernel {
                 .fork_session(&parent_key, &session_key);
         }
 
-        crate::metrics::SESSION_CREATED
-            .with_label_values(&[&manifest.name])
-            .inc();
-        crate::metrics::SESSION_ACTIVE
-            .with_label_values(&[&manifest.name])
-            .inc();
+        crate::metrics::record_session_created(&manifest.name);
+        crate::metrics::inc_session_active(&manifest.name);
 
         info!(
             session_key = %session_key,
@@ -1092,12 +1086,8 @@ impl Kernel {
                 }
             }
 
-            crate::metrics::SESSION_ACTIVE
-                .with_label_values(&[&manifest_name])
-                .dec();
-            crate::metrics::SESSION_SUSPENDED
-                .with_label_values(&[&manifest_name, &state.to_string()])
-                .inc();
+            crate::metrics::dec_session_active(&manifest_name);
+            crate::metrics::record_session_suspended(&manifest_name, &state.to_string());
 
             // Notify parent if this is a child process.
             if let Some(parent_id) = parent_id {

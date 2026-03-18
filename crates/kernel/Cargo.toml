@@ -35,8 +35,7 @@ indexmap.workspace = true
 jiff.workspace = true
 md5.workspace = true
 opendal = { workspace = true }
-opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
-prometheus.workspace = true
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace", "metrics"] }
 rand.workspace = true
 rapidfuzz.workspace = true
 rara-domain-shared.workspace = true

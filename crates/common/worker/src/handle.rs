@@ -17,6 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use opentelemetry::KeyValue;
 use tokio::sync::Notify;
 
 use crate::{
@@ -199,13 +200,13 @@ impl Handle for IntervalHandle {
 impl Pausable for IntervalHandle {
     fn pause(&self) {
         self.paused.store(true, Ordering::Release);
-        WORKER_PAUSED.with_label_values(&[self.name]).inc();
+        WORKER_PAUSED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.notify.notify_one();
-        WORKER_RESUMED.with_label_values(&[self.name]).inc();
+        WORKER_RESUMED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn is_paused(&self) -> bool { self.paused.load(Ordering::Acquire) }
@@ -248,13 +249,13 @@ impl Handle for CronHandle {
 impl Pausable for CronHandle {
     fn pause(&self) {
         self.paused.store(true, Ordering::Release);
-        WORKER_PAUSED.with_label_values(&[self.name]).inc();
+        WORKER_PAUSED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.notify.notify_one();
-        WORKER_RESUMED.with_label_values(&[self.name]).inc();
+        WORKER_RESUMED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn is_paused(&self) -> bool { self.paused.load(Ordering::Acquire) }
@@ -299,13 +300,13 @@ impl Handle for IntervalOrNotifyHandle {
 impl Pausable for IntervalOrNotifyHandle {
     fn pause(&self) {
         self.paused.store(true, Ordering::Release);
-        WORKER_PAUSED.with_label_values(&[self.name]).inc();
+        WORKER_PAUSED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.notify.notify_one();
-        WORKER_RESUMED.with_label_values(&[self.name]).inc();
+        WORKER_RESUMED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn is_paused(&self) -> bool { self.paused.load(Ordering::Acquire) }
@@ -354,13 +355,13 @@ impl Handle for CronOrNotifyHandle {
 impl Pausable for CronOrNotifyHandle {
     fn pause(&self) {
         self.paused.store(true, Ordering::Release);
-        WORKER_PAUSED.with_label_values(&[self.name]).inc();
+        WORKER_PAUSED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.notify.notify_one();
-        WORKER_RESUMED.with_label_values(&[self.name]).inc();
+        WORKER_RESUMED.add(1, &[KeyValue::new("worker", self.name.to_string())]);
     }
 
     fn is_paused(&self) -> bool { self.paused.load(Ordering::Acquire) }
