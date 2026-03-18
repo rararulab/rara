@@ -36,6 +36,7 @@ rara-dock = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-kernel = { workspace = true }
 rara-tool-macro.workspace = true
+schemars.workspace = true
 rara-keyring-store.workspace = true
 rara-mcp.workspace = true
 rara-paths = { workspace = true }
