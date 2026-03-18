@@ -222,10 +222,11 @@ async fn run_acp_session(
                     AcpEvent::PermissionAutoApproved { description } => {
                         debug!(description, "permission auto-approved");
                     }
-                    // Stop collecting once the process exits or the turn ends
-                    // with no more events to follow.
-                    AcpEvent::ProcessExited { .. } => break,
-                    AcpEvent::TurnComplete { .. } => {}
+                    // Don't break on ProcessExited or TurnComplete — there
+                    // may still be events queued behind them from the delegate.
+                    // The collector exits when the channel closes (all senders
+                    // dropped after shutdown).
+                    AcpEvent::ProcessExited { .. } | AcpEvent::TurnComplete { .. } => {}
                 }
             }
             (texts, tools, files)

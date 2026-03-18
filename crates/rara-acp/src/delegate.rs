@@ -144,10 +144,18 @@ impl Client for RaraDelegate {
                     Some(AcpToolCallStatus::InProgress) => ToolCallStatus::Running,
                     _ => ToolCallStatus::Running,
                 };
+                // Prefer raw_output (the actual tool result) over title
+                // (which is just a human-readable label).
+                let output = update
+                    .fields
+                    .raw_output
+                    .as_ref()
+                    .map(|v| v.to_string())
+                    .or_else(|| update.fields.title.clone());
                 self.emit(AcpEvent::ToolCallUpdate {
                     id: update.tool_call_id.to_string(),
                     status,
-                    output: update.fields.title.clone(),
+                    output,
                 })
                 .await;
             }
