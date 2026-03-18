@@ -16,4 +16,4 @@ pub use events::{
     AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus,
 };
 pub use registry::{AgentCommand, AgentKind, AgentRegistry};
-pub use thread::{AcpThread, AcpThreadEntry, AcpThreadStatus, AcpToolCall};
+pub use thread::{AcpThread, AcpThreadEntry, AcpThreadStatus, AcpToolCall, PermissionRequestInfo};
