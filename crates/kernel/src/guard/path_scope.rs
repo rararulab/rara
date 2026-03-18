@@ -26,7 +26,10 @@
 //! are gated by Layers 1–2 (taint + pattern) and the approval policy instead.
 //! Defense-in-depth means no single layer is expected to catch everything.
 
-use std::path::{Component, Path, PathBuf};
+use std::{
+    path::{Component, Path, PathBuf},
+    sync::RwLock,
+};
 
 /// Tools that use a `file_path` parameter.
 ///
@@ -54,8 +57,11 @@ pub const PATH_TOOLS: &[&str] = &["grep", "list-directory", "find-files"];
 /// - **Case sensitivity**: On macOS/Windows (case-insensitive filesystems),
 ///   path comparison is lowercased to prevent case-variant bypasses.
 pub struct PathScopeGuard {
-    workspace: PathBuf,
-    whitelist: Vec<PathBuf>,
+    workspace:         PathBuf,
+    whitelist:         Vec<PathBuf>,
+    /// Paths approved by the user at runtime. Persists for the lifetime of the
+    /// guard (i.e. the process) and is cleared on restart.
+    approved_prefixes: RwLock<Vec<PathBuf>>,
 }
 
 impl PathScopeGuard {
@@ -65,8 +71,9 @@ impl PathScopeGuard {
     /// `whitelist` contains additional allowed path prefixes.
     pub fn new(workspace: PathBuf, whitelist: Vec<PathBuf>) -> Self {
         Self {
-            workspace: normalize_path(&workspace),
-            whitelist: whitelist.iter().map(|p| normalize_path(p)).collect(),
+            workspace:         normalize_path(&workspace),
+            whitelist:         whitelist.iter().map(|p| normalize_path(p)).collect(),
+            approved_prefixes: RwLock::new(Vec::new()),
         }
     }
 
@@ -125,11 +132,95 @@ impl PathScopeGuard {
             }
         }
 
+        // Check user-approved paths from earlier approvals in this session.
+        // Fail-closed: if the lock is poisoned we skip dynamic approvals and
+        // fall through to the "blocked" path, which is the safe default.
+        match self.approved_prefixes.read() {
+            Ok(approved) => {
+                for prefix in approved.iter() {
+                    if path_starts_with(&resolved, prefix) {
+                        tracing::debug!(
+                            path = %resolved.display(),
+                            approved_prefix = %prefix.display(),
+                            "path allowed by dynamic approval"
+                        );
+                        return None;
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "approved_prefixes lock poisoned, skipping dynamic approvals (fail-closed)"
+                );
+            }
+        }
+
         Some(format!(
             "path '{}' is outside workspace '{}' and not in whitelist",
             resolved.display(),
             self.workspace.display(),
         ))
+    }
+
+    /// Record a user-approved path so that subsequent accesses to the same
+    /// directory tree pass without re-prompting.
+    ///
+    /// Extracts the directory prefix from the tool's path argument and adds it
+    /// to the dynamic whitelist. For file tools (`read-file`, etc.) the parent
+    /// directory is whitelisted; for directory tools (`list-directory`, etc.)
+    /// the path itself is whitelisted.
+    pub fn approve_path(&self, tool_name: &str, args: &serde_json::Value) {
+        let param_name = if FILE_PATH_TOOLS.contains(&tool_name) {
+            "file_path"
+        } else if PATH_TOOLS.contains(&tool_name) {
+            "path"
+        } else {
+            return;
+        };
+
+        let raw_path = match args.get(param_name).and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return,
+        };
+
+        let resolved = if Path::new(raw_path).is_absolute() {
+            normalize_path(Path::new(raw_path))
+        } else {
+            normalize_path(&self.workspace.join(raw_path))
+        };
+
+        // For file tools, whitelist the parent directory so sibling files are
+        // also covered. For directory tools, whitelist the path itself.
+        let prefix = if FILE_PATH_TOOLS.contains(&tool_name) {
+            resolved
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(resolved)
+        } else {
+            resolved
+        };
+
+        let mut approved = match self.approved_prefixes.write() {
+            Ok(guard) => guard,
+            Err(e) => e.into_inner(),
+        };
+
+        // Skip if already covered by an existing approved prefix.
+        if approved
+            .iter()
+            .any(|existing| path_starts_with(&prefix, existing))
+        {
+            return;
+        }
+
+        // Prune narrower entries that are now covered by the new broader prefix.
+        approved.retain(|existing| !path_starts_with(existing, &prefix));
+
+        tracing::info!(
+            prefix = %prefix.display(),
+            "adding user-approved path prefix to dynamic whitelist"
+        );
+        approved.push(prefix);
     }
 }
 
@@ -366,6 +457,84 @@ mod tests {
         let g = guard_with_whitelist();
         let args = json!({"file_path": "/var/secret"});
         assert!(g.check("read-file", &args).is_some());
+    }
+
+    // ── dynamic approval ────────────────────────────────────────────
+
+    #[test]
+    fn approved_directory_passes_subsequent_checks() {
+        let g = guard();
+        let dir_args = json!({"path": "/tmp/sanyuan-skills"});
+        // First check blocks.
+        assert!(g.check("list-directory", &dir_args).is_some());
+        // Simulate user approval.
+        g.approve_path("list-directory", &dir_args);
+        // Same path now passes.
+        assert_eq!(g.check("list-directory", &dir_args), None);
+        // Sub-path also passes.
+        let sub_args = json!({"path": "/tmp/sanyuan-skills/skills"});
+        assert_eq!(g.check("list-directory", &sub_args), None);
+        // File under the tree also passes.
+        let file_args = json!({"file_path": "/tmp/sanyuan-skills/skills/sigma/SKILL.md"});
+        assert_eq!(g.check("read-file", &file_args), None);
+    }
+
+    #[test]
+    fn approved_file_whitelists_parent_directory() {
+        let g = guard();
+        let file_args = json!({"file_path": "/tmp/data/report.txt"});
+        assert!(g.check("read-file", &file_args).is_some());
+        g.approve_path("read-file", &file_args);
+        // Sibling file in same directory passes.
+        let sibling = json!({"file_path": "/tmp/data/other.txt"});
+        assert_eq!(g.check("read-file", &sibling), None);
+    }
+
+    #[test]
+    fn approval_does_not_overshoot() {
+        let g = guard();
+        let dir_args = json!({"path": "/tmp/sanyuan-skills"});
+        g.approve_path("list-directory", &dir_args);
+        // Unrelated path still blocked.
+        let other = json!({"file_path": "/var/secret"});
+        assert!(g.check("read-file", &other).is_some());
+    }
+
+    #[test]
+    fn duplicate_approval_is_deduplicated() {
+        let g = guard();
+        let args = json!({"path": "/tmp/test"});
+        g.approve_path("list-directory", &args);
+        g.approve_path("list-directory", &args);
+        let approved = g.approved_prefixes.read().unwrap();
+        assert_eq!(approved.len(), 1);
+    }
+
+    #[test]
+    fn sub_path_approval_deduped_by_parent() {
+        let g = guard();
+        // Approve a parent first.
+        g.approve_path("list-directory", &json!({"path": "/tmp/root"}));
+        // Approving a sub-path should be a no-op (already covered).
+        g.approve_path("list-directory", &json!({"path": "/tmp/root/sub"}));
+        let approved = g.approved_prefixes.read().unwrap();
+        assert_eq!(approved.len(), 1);
+    }
+
+    #[test]
+    fn broader_prefix_prunes_narrower_entries() {
+        let g = guard();
+        // Approve a narrow path first.
+        g.approve_path("list-directory", &json!({"path": "/tmp/root/sub"}));
+        assert_eq!(g.approved_prefixes.read().unwrap().len(), 1);
+        // Approve a broader parent — should replace the narrow entry.
+        g.approve_path("list-directory", &json!({"path": "/tmp/root"}));
+        let approved = g.approved_prefixes.read().unwrap();
+        assert_eq!(approved.len(), 1);
+        assert_eq!(approved[0], PathBuf::from("/tmp/root"));
+        // Sub-path still works.
+        let sub_args = json!({"path": "/tmp/root/sub/deep"});
+        assert_eq!(g.check("list-directory", &sub_args), None);
     }
 
     // ── edge cases ──────────────────────────────────────────────────
