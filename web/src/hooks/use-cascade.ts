@@ -54,14 +54,16 @@ interface UseCascadeOptions {
 
 /** Build a live CascadeTrace from the current stream state props. */
 function buildLiveTrace(streamState: CascadeStreamState): CascadeTrace {
+  const now = new Date().toISOString();
   const entries: CascadeEntry[] = [];
 
   // Reasoning becomes a thought entry
   if (streamState.reasoning) {
     entries.push({
       kind: "thought",
-      id: "agent.thought • LIVE-reasoning",
-      data: { content: streamState.reasoning },
+      id: "thk • LIVE-reasoning",
+      content: streamState.reasoning,
+      timestamp: now,
     });
   }
 
@@ -69,17 +71,16 @@ function buildLiveTrace(streamState: CascadeStreamState): CascadeTrace {
   for (const tool of streamState.completedTools) {
     entries.push({
       kind: "action",
-      id: `tool.call • ${tool.id}`,
-      data: { tool: tool.name },
+      id: `act • ${tool.id}`,
+      content: `${tool.name}()`,
+      timestamp: now,
     });
     entries.push({
       kind: "observation",
-      id: `tool.result • ${tool.id}`,
-      data: {
-        success: tool.success,
-        preview: tool.result_preview,
-        ...(tool.error ? { error: tool.error } : {}),
-      },
+      id: `obs • ${tool.id}`,
+      content: tool.error ?? tool.result_preview,
+      timestamp: now,
+      metadata: { success: tool.success },
     });
   }
 
@@ -87,20 +88,20 @@ function buildLiveTrace(streamState: CascadeStreamState): CascadeTrace {
   for (const tool of streamState.activeTools) {
     entries.push({
       kind: "action",
-      id: `tool.call • ${tool.id}`,
-      data: { tool: tool.name, arguments: tool.arguments, status: "running" },
+      id: `act • ${tool.id}`,
+      content: `${tool.name}(…) [running]`,
+      timestamp: now,
+      metadata: { arguments: tool.arguments, status: "running" },
     });
   }
 
   return {
     message_id: "streaming",
-    ticks: [{ tick: 1, entries }],
+    ticks: [{ index: 0, entries }],
     summary: {
-      duration_secs: 0,
-      iterations: 1,
-      model: "",
-      input_tokens: 0,
-      output_tokens: 0,
+      tick_count: 1,
+      tool_call_count: streamState.completedTools.length + streamState.activeTools.length,
+      total_entries: entries.length,
     },
   };
 }

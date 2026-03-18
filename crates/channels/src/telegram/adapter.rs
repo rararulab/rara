@@ -1759,13 +1759,28 @@ async fn handle_cascade_callback(
         }
     };
 
-    // Look up the rara_message_id from the execution trace to filter entries.
+    // Look up the rara_message_id from the execution trace for labelling.
     let rara_message_id = match handle.trace_service().get(trace_id).await {
         Ok(Some(t)) => t.rara_message_id,
         _ => String::new(),
     };
 
-    let cascade = rara_kernel::cascade::build_cascade(&entries, &rara_message_id);
+    // Extract only the turn that corresponds to this trace.  The ULID
+    // trace_id encodes a creation timestamp; we use it to find the user
+    // message that started the turn.
+    let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
+    let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
+        let ts_ms = ulid.timestamp_ms() as i64;
+        let target =
+            jiff::Timestamp::from_millisecond(ts_ms).unwrap_or_else(|_| jiff::Timestamp::now());
+        let turn = rara_kernel::cascade::find_turn_by_timestamp(&entries, &boundaries, target);
+        rara_kernel::cascade::turn_slice(&entries, &boundaries, turn)
+    } else {
+        // Fallback: use all entries if ULID parsing fails.
+        &entries
+    };
+
+    let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
 
     if cascade.ticks.is_empty() {
         let _ = bot

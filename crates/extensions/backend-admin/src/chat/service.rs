@@ -27,7 +27,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
 use rara_kernel::{
-    cascade::{CascadeTrace, build_cascade},
+    cascade::{CascadeTrace, build_cascade, find_turn_boundaries, turn_slice},
     channel::types::{ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall},
     llm::{Message, Role},
     memory::{TapEntry, TapEntryKind, TapeService},
@@ -302,52 +302,36 @@ impl SessionService {
                     message: format!("failed to read tape: {e}"),
                 })?;
 
-        // Find the turn boundaries by locating user messages.
-        let conversational: Vec<(usize, &TapEntry)> = entries
+        // Convert tape → chat messages so we can map the 1-based message_seq
+        // back to the owning user-message turn.  The seq values in ChatMessage
+        // can skip numbers (e.g. a ToolResult with N results increments seq
+        // by N), so a direct index into tape entries is unreliable.
+        let chat_msgs = tap_entries_to_chat_messages(&entries);
+
+        let i_seq = message_seq as i64;
+        // Find the last user message whose seq <= the clicked message_seq.
+        let owning_user = chat_msgs
             .iter()
-            .enumerate()
-            .filter(|(_, e)| {
-                matches!(
-                    e.kind,
-                    TapEntryKind::Message | TapEntryKind::ToolCall | TapEntryKind::ToolResult
-                )
-            })
-            .collect();
+            .rfind(|m| m.role == MessageRole::User && m.seq <= i_seq);
 
-        // message_seq is 1-based seq of the chat message the user clicked.
-        // Map it to the original entry index range.
-        // First, find which user message this seq corresponds to.
-        // seq is 1-based index in the full chat message list.
-        let seq_idx = message_seq.saturating_sub(1);
-
-        // Find the original entry indices for this turn.
-        // We need to find the entry range: from the entry at seq_idx in the
-        // conversational list until the next user message entry.
-        if seq_idx >= conversational.len() {
+        let Some(owner) = owning_user else {
             return Err(ChatError::InvalidRequest {
-                message: format!("message seq {message_seq} out of range"),
+                message: format!("no user message found for seq {message_seq}"),
             });
-        }
+        };
 
-        let start_entry_idx = conversational[seq_idx].0;
-
-        // Find the next user message after this seq position.
-        let end_entry_idx = conversational
+        // Determine the 0-based ordinal of this user message.
+        let user_ordinal = chat_msgs
             .iter()
-            .skip(seq_idx + 1)
-            .find(|(_, e)| {
-                e.kind == TapEntryKind::Message
-                    && e.payload
-                        .get("role")
-                        .and_then(Value::as_str)
-                        .is_some_and(|r| r == "user")
-            })
-            .map(|(orig_idx, _)| *orig_idx)
-            .unwrap_or(entries.len());
+            .filter(|m| m.role == MessageRole::User)
+            .position(|m| m.seq == owner.seq)
+            .unwrap_or(0);
 
-        let turn_entries: Vec<TapEntry> = entries[start_entry_idx..end_entry_idx].to_vec();
+        // Use turn boundary helpers to extract the right slice of tape entries.
+        let boundaries = find_turn_boundaries(&entries);
+        let turn_entries = turn_slice(&entries, &boundaries, user_ordinal);
         let message_id = format!("{}-{}", key, message_seq);
-        let trace = build_cascade(&turn_entries, &message_id);
+        let trace = build_cascade(turn_entries, &message_id);
         Ok(trace)
     }
 

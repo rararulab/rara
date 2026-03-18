@@ -285,6 +285,54 @@ fn format_entry_id(kind: CascadeEntryKind, tick: usize, entry_id: u64, seq: usiz
     format!("{} \u{2022} {}-{}-{}", kind.prefix(), tick, short_id, seq)
 }
 
+/// Find indices of user-message entries in a tape, defining turn boundaries.
+///
+/// Each returned index marks the start of a new "turn" (user → assistant
+/// round).  The slice for turn *N* spans `boundaries[N] .. boundaries[N+1]`
+/// (or end-of-tape for the last turn).
+pub fn find_turn_boundaries(entries: &[TapEntry]) -> Vec<usize> {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            e.kind == TapEntryKind::Message
+                && e.payload
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .is_some_and(|r| r == "user")
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Extract the sub-slice of `entries` that belongs to turn number `turn`
+/// (0-based), given pre-computed `boundaries` from [`find_turn_boundaries`].
+pub fn turn_slice<'a>(
+    entries: &'a [TapEntry],
+    boundaries: &[usize],
+    turn: usize,
+) -> &'a [TapEntry] {
+    let start = boundaries.get(turn).copied().unwrap_or(0);
+    let end = boundaries.get(turn + 1).copied().unwrap_or(entries.len());
+    &entries[start..end]
+}
+
+/// Find the turn whose user-message timestamp is closest to (but not after)
+/// `target`.  Returns a 0-based turn index suitable for [`turn_slice`].
+pub fn find_turn_by_timestamp(
+    entries: &[TapEntry],
+    boundaries: &[usize],
+    target: Timestamp,
+) -> usize {
+    if boundaries.is_empty() {
+        return 0;
+    }
+    boundaries
+        .iter()
+        .rposition(|&i| entries[i].timestamp <= target)
+        .unwrap_or(0)
+}
+
 /// Extract plain text content from a message payload.
 fn extract_text_content(payload: &Value) -> String {
     match payload.get("content") {

@@ -63,7 +63,12 @@ function EntryRow({ entry }: { entry: CascadeEntry }) {
       </button>
       {expanded && (
         <div className="mx-3 mb-2 rounded bg-zinc-950 p-2 overflow-x-auto">
-          <JsonTree data={entry.data} />
+          <pre className="whitespace-pre-wrap break-words text-zinc-300">{entry.content}</pre>
+          {entry.metadata && (
+            <div className="mt-1 border-t border-zinc-800 pt-1">
+              <JsonTree data={entry.metadata} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -83,7 +88,7 @@ function TickSection({ tick }: { tick: CascadeTick }) {
         {expanded
           ? <ChevronDown className="h-3 w-3 shrink-0 text-zinc-400" />
           : <ChevronRight className="h-3 w-3 shrink-0 text-zinc-400" />}
-        <span className="font-bold text-zinc-200">TICK {tick.tick}</span>
+        <span className="font-bold text-zinc-200">TICK {tick.index}</span>
         <span className="text-zinc-600 text-[10px]">({tick.entries.length})</span>
       </button>
       {expanded && (
@@ -126,14 +131,9 @@ export function MessageTracePanel({ sessionKey, messageSeq, isStreaming, streamS
             msg: <span className="text-zinc-300">{trace.message_id}</span>
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-zinc-500">
-            <span>model: <span className="text-zinc-300">{trace.summary.model}</span></span>
-            <span>duration: <span className="text-zinc-300">{trace.summary.duration_secs.toFixed(1)}s</span></span>
-            <span>iters: <span className="text-zinc-300">{trace.summary.iterations}</span></span>
-            <span>
-              tokens: <span className="text-zinc-300">
-                {trace.summary.input_tokens.toLocaleString()}in / {trace.summary.output_tokens.toLocaleString()}out
-              </span>
-            </span>
+            <span>ticks: <span className="text-zinc-300">{trace.summary.tick_count}</span></span>
+            <span>tools: <span className="text-zinc-300">{trace.summary.tool_call_count}</span></span>
+            <span>entries: <span className="text-zinc-300">{trace.summary.total_entries}</span></span>
           </div>
         </div>
       )}
@@ -151,7 +151,7 @@ export function MessageTracePanel({ sessionKey, messageSeq, isStreaming, streamS
           </div>
         )}
         {trace && trace.ticks.map((tick) => (
-          <TickSection key={tick.tick} tick={tick} />
+          <TickSection key={tick.index} tick={tick} />
         ))}
         {trace && trace.ticks.length === 0 && (
           <div className="flex items-center justify-center py-8 text-zinc-500">
