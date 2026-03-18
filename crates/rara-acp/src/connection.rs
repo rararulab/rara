@@ -226,15 +226,27 @@ impl AcpConnection {
         Ok(response)
     }
 
-    /// Close the current session if the agent supports it, then kill the
-    /// child process.
+    /// Close the current session, kill the child process, and reap it.
     ///
-    /// This is also called automatically on drop, but calling it explicitly
-    /// allows inspecting errors.
+    /// Unlike `Drop` (which only does a best-effort sync reap), this method
+    /// awaits the child's exit status to guarantee no zombie is left behind.
+    /// Prefer calling this explicitly over relying on drop.
     pub async fn shutdown(&mut self) -> Result<(), AcpError> {
-        // Clear session state and kill the child process.
         self.session_id.take();
         self.kill_child();
+        // Await the child so the OS reaps the process table entry.  After
+        // start_kill() the child should exit quickly; we still await to be
+        // certain no zombie is left.
+        match self.child.wait().await {
+            Ok(status) => {
+                debug!(exit_status = ?status, "ACP child process reaped");
+            }
+            Err(e) => {
+                // The child may already have been reaped by the stderr
+                // watcher or a previous shutdown call — not an error.
+                debug!(error = %e, "child wait failed (likely already reaped)");
+            }
+        }
         Ok(())
     }
 
@@ -244,12 +256,32 @@ impl AcpConnection {
     /// Return a reference to the underlying ACP connection for advanced usage.
     pub fn inner(&self) -> &ClientSideConnection { &self.conn }
 
-    /// Forcibly kill the child process.
+    /// Forcibly kill the child process and attempt synchronous reap.
+    ///
+    /// Called from both `shutdown()` and `Drop`.  `start_kill()` sends
+    /// SIGKILL; `try_wait()` reaps the process if it has already exited.
+    /// In `Drop` we cannot `.await`, so `try_wait()` is the best we can
+    /// do — `shutdown().await` is the preferred path for reliable reaping.
     fn kill_child(&mut self) {
         if let Err(e) = self.child.start_kill() {
             // `InvalidInput` means the child already exited — not an error.
             if e.kind() != std::io::ErrorKind::InvalidInput {
                 warn!(error = %e, "failed to kill ACP agent child process");
+            }
+        }
+        // Best-effort synchronous reap to avoid leaving a zombie when
+        // the caller forgets to call shutdown().await.
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                debug!(exit_status = ?status, "ACP child reaped in kill_child");
+            }
+            Ok(None) => {
+                // Process not yet exited after SIGKILL — rare but possible.
+                // The async shutdown path or the OS will reap it eventually.
+                debug!("ACP child not yet exited after SIGKILL, will be reaped later");
+            }
+            Err(e) => {
+                debug!(error = %e, "try_wait failed (likely already reaped)");
             }
         }
     }
