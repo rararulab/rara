@@ -170,6 +170,23 @@ struct ToolProgress {
     error:      Option<String>,
 }
 
+/// Status of a single plan step.
+#[derive(Debug, Clone)]
+enum StepStatus {
+    Pending,
+    Running,
+    Done,
+    Failed(String),
+}
+
+/// State of a single plan step for display.
+#[derive(Debug, Clone)]
+struct PlanStepState {
+    index:  usize,
+    task:   String,
+    status: StepStatus,
+}
+
 /// Progress message state for tool execution feedback.
 ///
 /// During streaming: renders live progress with tool activity + token footer.
@@ -207,6 +224,12 @@ struct ProgressMessage {
     /// Cached loading hint, sampled once per turn to avoid flicker on
     /// re-render.
     loading_hint:      String,
+    /// Plan steps — `Some` when in plan mode, `None` for reactive.
+    plan_steps:        Option<Vec<PlanStepState>>,
+    /// Goal description for the plan header.
+    plan_goal:         Option<String>,
+    /// Index of the currently executing step (0-based).
+    plan_current_step: usize,
 }
 
 impl ProgressMessage {
@@ -227,6 +250,9 @@ impl ProgressMessage {
             rara_message_id,
             saved_plan_steps: Vec::new(),
             loading_hint: rara_kernel::io::loading_hints::random_hint().to_string(),
+            plan_steps: None,
+            plan_goal: None,
+            plan_current_step: 0,
         }
     }
 }
@@ -494,6 +520,66 @@ fn render_progress(
 
         lines.push(format!("✳ {}", parts.join(" · ")));
     }
+
+    lines.join("\n")
+}
+
+/// Render plan-mode progress: steps as primary structure, tool calls
+/// nested under the current running step.
+fn render_plan_progress(
+    plan_goal: &str,
+    steps: &[PlanStepState],
+    tools: &[ToolProgress],
+    turn_elapsed: std::time::Duration,
+    progress: &ProgressMessage,
+) -> String {
+    let total = steps.len();
+    let mut lines = vec![format!(
+        "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
+    )];
+    lines.push(String::new());
+
+    for step in steps {
+        let (icon, suffix) = match &step.status {
+            StepStatus::Done => ("\u{2705}", String::new()),
+            StepStatus::Running => ("\u{25b6}\u{fe0f}", String::new()),
+            StepStatus::Failed(reason) => {
+                let short: String = reason.chars().take(40).collect();
+                ("\u{274c}", format!(": {short}"))
+            }
+            StepStatus::Pending => ("\u{2b1c}", String::new()),
+        };
+        lines.push(format!(
+            "{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}{suffix}",
+            step.index + 1,
+            step.task
+        ));
+
+        // Nest tool calls under the running step.
+        if matches!(step.status, StepStatus::Running) && !tools.is_empty() {
+            let phases = aggregate_phases(tools);
+            for phase in &phases {
+                let tool_line = format_phase_line(phase, &progress.loading_hint);
+                lines.push(format!("  {tool_line}"));
+            }
+        }
+    }
+
+    // Footer: elapsed + tokens
+    let mut parts = vec![format_duration_compact(turn_elapsed)];
+    if progress.input_tokens > 0 || progress.output_tokens > 0 {
+        let in_str = format_token_count(progress.input_tokens);
+        let out_str = format_token_count(progress.output_tokens);
+        parts.push(format!("\u{2191}{in_str} \u{2193}{out_str}"));
+    }
+    if progress.thinking_ms > 0 {
+        let secs = progress.thinking_ms / 1000;
+        if secs > 0 {
+            parts.push(format!("thought {secs}s"));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("\u{2733} {}", parts.join(" \u{00b7} ")));
 
     lines.join("\n")
 }
