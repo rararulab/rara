@@ -5,7 +5,10 @@
 //! stdin/stdout.  The connection is `!Send` because the upstream ACP crate
 //! uses `async_trait(?Send)` and `LocalBoxFuture`.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use agent_client_protocol::{
     Agent, ClientCapabilities, ClientSideConnection, ContentBlock, FileSystemCapabilities,
@@ -16,7 +19,7 @@ use snafu::ResultExt as _;
 use tokio::{
     io::AsyncReadExt as _,
     process::{Child, Command},
-    sync::mpsc,
+    sync::{Mutex, mpsc},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, info, warn};
@@ -92,9 +95,13 @@ impl AcpConnection {
             cmd.spawn().context(error::SpawnProcessSnafu)?
         };
 
+        let full_cmd = std::iter::once(command.program.as_str())
+            .chain(command.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
         info!(
-            program = %command.program,
-            args = ?command.args,
+            cmd = %full_cmd,
+            cwd = %cwd.display(),
             "spawned ACP agent subprocess"
         );
 
@@ -139,18 +146,25 @@ impl AcpConnection {
         });
 
         // -- 5. Watch for child process exit via stderr EOF -------------------
-        // When the child process exits, its stderr pipe closes.  We read
-        // stderr to EOF (discarding output) and then emit `ProcessExited`.
+        // Capture stderr into a shared buffer so handshake errors can include
+        // the actual child output (e.g. "npm 404 Not Found").
+        let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let stderr_buf_writer = Arc::clone(&stderr_buf);
         let mut child_stderr = child.stderr.take();
         tokio::task::spawn_local(async move {
             if let Some(ref mut stderr) = child_stderr {
-                let mut buf = [0u8; 1024];
-                // Read until EOF — we discard stderr content; it's only used
-                // as a signal that the process has exited.
+                let mut buf = [0u8; 4096];
                 loop {
                     match stderr.read(&mut buf).await {
                         Ok(0) | Err(_) => break,
-                        Ok(_) => continue,
+                        Ok(n) => {
+                            let chunk = String::from_utf8_lossy(&buf[..n]);
+                            let mut locked = stderr_buf_writer.lock().await;
+                            // Cap at 8 KiB to avoid unbounded growth.
+                            if locked.len() < 8192 {
+                                locked.push_str(&chunk);
+                            }
+                        }
                     }
                 }
             }
@@ -181,18 +195,33 @@ impl AcpConnection {
             )
             .client_info(Implementation::new("rara", env!("CARGO_PKG_VERSION")));
 
-        let init_response = conn_handle
-            .conn
-            .initialize(init_request)
-            .await
-            .context(error::InitializeSnafu)?;
+        let init_result = conn_handle.conn.initialize(init_request).await;
 
-        debug!(
-            agent_info = ?init_response.agent_info,
-            protocol_version = %init_response.protocol_version,
-            "ACP handshake completed"
-        );
-        Ok((conn_handle, event_rx))
+        match init_result {
+            Ok(init_response) => {
+                debug!(
+                    agent_info = ?init_response.agent_info,
+                    protocol_version = %init_response.protocol_version,
+                    "ACP handshake completed"
+                );
+                Ok((conn_handle, event_rx))
+            }
+            Err(init_err) => {
+                // Give the child a moment to flush stderr before we read it.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let captured = stderr_buf.lock().await;
+                let stderr_snippet = captured.trim();
+                if stderr_snippet.is_empty() {
+                    Err(init_err).context(error::InitializeSnafu)
+                } else {
+                    Err(AcpError::Handshake {
+                        message: format!(
+                            "initialize failed: {init_err}\n--- agent stderr ---\n{stderr_snippet}"
+                        ),
+                    })
+                }
+            }
+        }
     }
 
     /// Create a new session on the connected agent.
