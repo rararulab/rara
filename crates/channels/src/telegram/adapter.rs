@@ -1694,7 +1694,7 @@ async fn handle_trace_callback(
     };
 
     if let (Ok(cid), Ok(mid)) = (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>()) {
-        let cascade_callback = format!("cas:{chat_id_str}:{msg_id_str}:{trace_id}");
+        let cascade_callback = format!("cas:show:{chat_id_str}:{msg_id_str}:{trace_id}");
         let keyboard = InlineKeyboardMarkup::new(vec![vec![
             InlineKeyboardButton::callback(button_text, next_action),
             InlineKeyboardButton::callback("\u{1f50d} Cascade", cascade_callback),
@@ -1707,18 +1707,18 @@ async fn handle_trace_callback(
     }
 }
 
-/// Handle a cascade callback: fetch tape entries, build cascade trace, and
-/// send as a new message.
+/// Handle a cascade callback: toggle cascade trace view in-place on the
+/// existing message (edit instead of sending a new message).
 ///
-/// Callback data format: `"cas:{chat_id}:{msg_id}:{trace_id}"`
+/// Callback data format: `"cas:{show|hide}:{chat_id}:{msg_id}:{trace_id}"`
 async fn handle_cascade_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
     handle: &KernelHandle,
 ) {
-    let parts: Vec<&str> = data.splitn(4, ':').collect();
-    if parts.len() != 4 {
+    let parts: Vec<&str> = data.splitn(5, ':').collect();
+    if parts.len() != 5 {
         let _ = bot
             .answer_callback_query(callback.id.clone())
             .text("Invalid cascade callback")
@@ -1726,48 +1726,59 @@ async fn handle_cascade_callback(
         return;
     }
 
-    let chat_id_str = parts[1];
-    let trace_id = parts[3];
+    let action = parts[1];
+    let chat_id_str = parts[2];
+    let msg_id_str = parts[3];
+    let trace_id = parts[4];
 
     // Answer callback immediately to dismiss the Telegram spinner.
     let _ = bot.answer_callback_query(callback.id.clone()).await;
 
-    let Ok(cid) = chat_id_str.parse::<i64>() else {
+    let (Ok(cid), Ok(mid)) = (chat_id_str.parse::<i64>(), msg_id_str.parse::<i32>()) else {
         return;
     };
 
-    // Look up the session_id from the trace record.
+    // "hide" → restore compact summary with the original buttons.
+    if action != "show" {
+        let trace = match handle.trace_service().get(trace_id).await {
+            Ok(Some(t)) => t,
+            _ => return,
+        };
+        let compact = render_compact_summary(&trace);
+        let trace_cb = format!("trace:show:{chat_id_str}:{msg_id_str}:{trace_id}");
+        let cascade_cb = format!("cas:show:{chat_id_str}:{msg_id_str}:{trace_id}");
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("\u{1f4ca} \u{8be6}\u{60c5}", trace_cb),
+            InlineKeyboardButton::callback("\u{1f50d} Cascade", cascade_cb),
+        ]]);
+        let _ = bot
+            .edit_message_text(ChatId(cid), MessageId(mid), &compact)
+            .parse_mode(ParseMode::Html)
+            .reply_markup(keyboard)
+            .await;
+        return;
+    }
+
+    // "show" → build cascade trace and display in-place.
     let session_id = match handle.trace_service().get_session_id(trace_id).await {
         Ok(Some(s)) => s,
-        _ => {
-            let _ = bot
-                .send_message(ChatId(cid), "Cascade trace not available: trace not found.")
-                .await;
-            return;
-        }
+        _ => return,
     };
 
-    // Read tape entries for the session.
     let entries = match handle.tape().entries(&session_id).await {
         Ok(e) => e,
         Err(e) => {
             warn!(error = %e, "cascade: failed to read tape entries");
-            let _ = bot
-                .send_message(ChatId(cid), "Cascade trace not available: tape read error.")
-                .await;
             return;
         }
     };
 
-    // Look up the rara_message_id from the execution trace for labelling.
     let rara_message_id = match handle.trace_service().get(trace_id).await {
         Ok(Some(t)) => t.rara_message_id,
         _ => String::new(),
     };
 
-    // Extract only the turn that corresponds to this trace.  The ULID
-    // trace_id encodes a creation timestamp; we use it to find the user
-    // message that started the turn.
+    // Extract only the turn that corresponds to this trace.
     let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
     let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
         let ts_ms = ulid.timestamp_ms() as i64;
@@ -1776,23 +1787,25 @@ async fn handle_cascade_callback(
         let turn = rara_kernel::cascade::find_turn_by_timestamp(&entries, &boundaries, target);
         rara_kernel::cascade::turn_slice(&entries, &boundaries, turn)
     } else {
-        // Fallback: use all entries if ULID parsing fails.
         &entries
     };
 
     let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
 
     if cascade.ticks.is_empty() {
-        let _ = bot
-            .send_message(ChatId(cid), "Cascade trace is empty — no ticks recorded.")
-            .await;
         return;
     }
 
     let html = render_cascade_html(&cascade);
+    let hide_cb = format!("cas:hide:{chat_id_str}:{msg_id_str}:{trace_id}");
+    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "\u{1f50d} \u{6536}\u{8d77}",
+        hide_cb,
+    )]]);
     let _ = bot
-        .send_message(ChatId(cid), &html)
+        .edit_message_text(ChatId(cid), MessageId(mid), &html)
         .parse_mode(ParseMode::Html)
+        .reply_markup(keyboard)
         .await;
 }
 
@@ -2817,7 +2830,7 @@ fn spawn_stream_forwarder(
                                             chat_id, mid.0,
                                         );
                                         let cascade_cb = format!(
-                                            "cas:{}:{}:{trace_id}",
+                                            "cas:show:{}:{}:{trace_id}",
                                             chat_id, mid.0,
                                         );
                                         let keyboard = InlineKeyboardMarkup::new(vec![vec![
