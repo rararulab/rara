@@ -11,6 +11,7 @@ publish = false
 agent-client-protocol = { version = "0.10.2", features = ["unstable"] }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+bon = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

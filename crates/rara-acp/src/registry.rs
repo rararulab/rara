@@ -105,6 +105,12 @@ impl FSAcpRegistry {
 impl AcpRegistry for FSAcpRegistry {
     async fn add(&self, name: String, config: AcpAgentConfig) -> Result<()> {
         let mut inner = self.inner.write().await;
+        // Prevent non-builtin configs from overwriting builtin agents.
+        if let Some(existing) = inner.agents.get(&name) {
+            if existing.builtin && !config.builtin {
+                anyhow::bail!("cannot overwrite builtin ACP agent '{name}'");
+            }
+        }
         info!(agent = %name, command = %config.command, "adding ACP agent");
         inner.agents.insert(name, config);
         inner.save().await
@@ -138,12 +144,10 @@ impl AcpRegistry for FSAcpRegistry {
 
     async fn disable(&self, name: &str) -> Result<bool> {
         let mut inner = self.inner.write().await;
-        if let Some(cfg) = inner.agents.get(name) {
+        if let Some(cfg) = inner.agents.get_mut(name) {
             if cfg.builtin {
                 anyhow::bail!("cannot disable builtin ACP agent '{name}'");
             }
-        }
-        if let Some(cfg) = inner.agents.get_mut(name) {
             cfg.enabled = false;
             inner.save().await?;
             Ok(true)
@@ -174,8 +178,9 @@ impl AcpRegistry for FSAcpRegistry {
 }
 
 /// Configuration for a single ACP agent.
-#[derive(Debug, Clone, Serialize, Deserialize, SmartDefault)]
+#[derive(Debug, Clone, Serialize, Deserialize, SmartDefault, bon::Builder)]
 #[serde(default)]
+#[builder(on(String, into))]
 pub struct AcpAgentConfig {
     /// Command to spawn the agent (e.g. "npx", "gemini").
     pub command: String,
@@ -185,9 +190,11 @@ pub struct AcpAgentConfig {
     pub env:     HashMap<String, String>,
     /// Whether this agent is available for use.
     #[default = true]
+    #[builder(default = true)]
     pub enabled: bool,
     /// Built-in agents cannot be removed or disabled by users.
     #[serde(default)]
+    #[builder(default)]
     pub builtin: bool,
 }
 

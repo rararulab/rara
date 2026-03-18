@@ -143,9 +143,9 @@ pub fn rara_tool_names() -> Vec<String> {
         // ACP delegation
         AcpDelegateTool::TOOL_NAME,
         // ACP management
-        InstallAcpAgentTool::NAME,
-        ListAcpAgentsTool::NAME,
-        RemoveAcpAgentTool::NAME,
+        InstallAcpAgentTool::TOOL_NAME,
+        ListAcpAgentsTool::TOOL_NAME,
+        RemoveAcpAgentTool::TOOL_NAME,
     ]
     .into_iter()
     .map(String::from)

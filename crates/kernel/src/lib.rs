@@ -95,11 +95,6 @@ pub mod tool_names {
 
     // ACP delegation
     pub const ACP_DELEGATE: &str = "acp-delegate";
-
-    // ACP management
-    pub const INSTALL_ACP_AGENT: &str = "install-acp-agent";
-    pub const LIST_ACP_AGENTS: &str = "list-acp-agents";
-    pub const REMOVE_ACP_AGENT: &str = "remove-acp-agent";
 }
 
 pub use error::{KernelError, Result};

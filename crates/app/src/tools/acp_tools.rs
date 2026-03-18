@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use rara_acp::registry::{AcpAgentConfig, AcpRegistryRef};
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -12,26 +12,23 @@ use serde_json::{Value, json};
 // ---------------------------------------------------------------------------
 
 /// Tool that registers a new ACP agent in the registry.
+#[derive(ToolDef)]
+#[tool(
+    name = "install-acp-agent",
+    description = "Register a new ACP agent so it becomes available for delegation via \
+                   acp-delegate. The agent is not started immediately — ACP agents are spawned on \
+                   demand.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct InstallAcpAgentTool {
     registry: AcpRegistryRef,
 }
 
 impl InstallAcpAgentTool {
-    pub const NAME: &str = "install-acp-agent";
-
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
-}
 
-#[async_trait]
-impl AgentTool for InstallAcpAgentTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Register a new ACP agent so it becomes available for delegation via acp-delegate. The \
-         agent is not started immediately — ACP agents are spawned on demand."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -58,11 +55,7 @@ impl AgentTool for InstallAcpAgentTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: Value,
-        _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let agent_name = params
             .get("agent_name")
             .and_then(|v| v.as_str())
@@ -110,7 +103,7 @@ impl AgentTool for InstallAcpAgentTool {
             "status": "installed",
             "agent_name": agent_name,
             "message": format!(
-                "ACP agent '{agent_name}' registered. It can now be used with the acp-delegate tool."
+                "ACP agent '{agent_name}' registered. Use acp-delegate to run it."
             ),
         })
         .into())
@@ -122,25 +115,22 @@ impl AgentTool for InstallAcpAgentTool {
 // ---------------------------------------------------------------------------
 
 /// Tool that lists all registered ACP agents.
+#[derive(ToolDef)]
+#[tool(
+    name = "list-acp-agents",
+    description = "List all registered ACP agents with their status (enabled, builtin) and spawn \
+                   command.",
+    params_schema = "Self::schema_list()",
+    execute_fn = "self.exec_list"
+)]
 pub struct ListAcpAgentsTool {
     registry: AcpRegistryRef,
 }
 
 impl ListAcpAgentsTool {
-    pub const NAME: &str = "list-acp-agents";
-
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
-}
 
-#[async_trait]
-impl AgentTool for ListAcpAgentsTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List all registered ACP agents with their status (enabled, builtin) and spawn command."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema_list() -> Value {
         json!({
             "type": "object",
             "properties": {},
@@ -148,10 +138,10 @@ impl AgentTool for ListAcpAgentsTool {
         })
     }
 
-    async fn execute(
+    async fn exec_list(
         &self,
         _params: Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let all_names = self
             .registry
@@ -160,8 +150,12 @@ impl AgentTool for ListAcpAgentsTool {
             .map_err(|e| anyhow::anyhow!("failed to list ACP agents: {e}"))?;
 
         let mut agents = Vec::new();
+        let mut enabled_count = 0usize;
         for name in &all_names {
             if let Ok(Some(config)) = self.registry.get(name).await {
+                if config.enabled {
+                    enabled_count += 1;
+                }
                 agents.push(json!({
                     "name": name,
                     "command": config.command,
@@ -172,15 +166,9 @@ impl AgentTool for ListAcpAgentsTool {
             }
         }
 
-        let total = agents.len();
-        let enabled_count = agents
-            .iter()
-            .filter(|a| a.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false))
-            .count();
-
         Ok(json!({
             "agents": agents,
-            "total": total,
+            "total": agents.len(),
             "enabled": enabled_count,
         })
         .into())
@@ -192,25 +180,21 @@ impl AgentTool for ListAcpAgentsTool {
 // ---------------------------------------------------------------------------
 
 /// Tool that removes an ACP agent from the registry.
+#[derive(ToolDef)]
+#[tool(
+    name = "remove-acp-agent",
+    description = "Remove an ACP agent from the registry. Built-in agents cannot be removed.",
+    params_schema = "Self::schema_remove()",
+    execute_fn = "self.exec_remove"
+)]
 pub struct RemoveAcpAgentTool {
     registry: AcpRegistryRef,
 }
 
 impl RemoveAcpAgentTool {
-    pub const NAME: &str = "remove-acp-agent";
-
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
-}
 
-#[async_trait]
-impl AgentTool for RemoveAcpAgentTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Remove an ACP agent from the registry. Built-in agents cannot be removed."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema_remove() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -223,10 +207,10 @@ impl AgentTool for RemoveAcpAgentTool {
         })
     }
 
-    async fn execute(
+    async fn exec_remove(
         &self,
         params: Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let agent_name = params
             .get("agent_name")
