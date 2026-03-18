@@ -65,6 +65,7 @@ Hooks configured in `.pre-commit-config.yaml`:
 - `cargo check --all --all-targets`
 - `cargo +nightly fmt --all -- --check`
 - `cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings`
+- `RUSTDOCFLAGS="-D warnings" cargo +nightly doc --workspace --no-deps --document-private-items`
 
 Triggers on: `.rs`, `.toml`, `Cargo.lock`, `rust-toolchain.toml` changes.
 
