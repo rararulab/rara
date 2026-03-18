@@ -376,6 +376,7 @@ fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
             format!("\u{2705} {}{time}{suffix}", phase.activity)
         } else {
             match &phase.first_error {
+                // Error message takes priority over summary.
                 Some(err) => {
                     let short_err: String = err.chars().take(60).collect();
                     format!("\u{274c} {}{time}: {short_err}", phase.activity)
@@ -386,7 +387,7 @@ fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
     } else if phase.activity == rara_kernel::io::stages::THINKING {
         loading_hint.to_string()
     } else {
-        format!("正在{}… {}", phase.activity, phase.first_summary)
+        format!("正在{}…{suffix}", phase.activity)
     }
 }
 
