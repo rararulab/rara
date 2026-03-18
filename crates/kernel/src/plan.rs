@@ -124,6 +124,9 @@ pub struct Plan {
 
 /// Maximum replan attempts before giving up.
 const MAX_REPLAN_ATTEMPTS: usize = 3;
+/// Max LLM iterations per worker step — keeps impossible tasks from burning
+/// time.
+const WORKER_MAX_ITERATIONS: usize = 12;
 
 /// System prompt for the planning LLM call.
 const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner. Analyze the user's request and decompose it into a structured execution plan.
@@ -880,12 +883,14 @@ async fn execute_worker_step(
         system_prompt:          format!(
             "You are a worker agent executing a specific task as part of a larger plan.\n\nYour \
              task: {}\n\nAcceptance criteria: {}\n\nFocus exclusively on this task. Report your \
-             results clearly when done.",
+             results clearly when done.\n\nIf a step requires interactive human action (e.g., \
+             browser login, manual approval) that you cannot perform, report what is needed and \
+             stop immediately instead of retrying.",
             step.task, step.acceptance
         ),
         soul_prompt:            None,
         provider_hint:          None,
-        max_iterations:         Some(20),
+        max_iterations:         Some(WORKER_MAX_ITERATIONS),
         tools:                  vec!["*".to_string()], // inherit all tools
         max_children:           None,
         max_context_tokens:     None,
