@@ -36,7 +36,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { CascadeViewer } from "@/components/CascadeViewer";
+import { MessageTracePanel } from "@/components/MessageTracePanel";
 import type { CascadeStreamState } from "@/hooks/use-cascade";
 import { api } from "@/api/client";
 import type {
@@ -2017,7 +2017,7 @@ export default function Chat({
                 />
               </div>
               {cascadeSeq !== null && activeKey && (
-                <CascadeViewer
+                <MessageTracePanel
                   sessionKey={activeKey}
                   messageSeq={cascadeSeq}
                   isStreaming={threadStreaming}
