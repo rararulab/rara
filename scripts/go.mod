@@ -1,6 +1,6 @@
 module github.com/rararulab/rara/scripts
 
-go 1.26.1
+go 1.26.0
 
 require (
 	charm.land/bubbles/v2 v2.0.0
