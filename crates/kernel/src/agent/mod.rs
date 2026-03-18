@@ -1186,6 +1186,7 @@ pub(crate) async fn run_agent_loop(
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
         let mut last_usage: Option<llm::Usage> = None;
+        let mut last_stop_reason: Option<llm::StopReason> = None;
         // Per-iteration reasoning timer — set on the first ReasoningDelta,
         // settled (added to cumulative_thinking_ms) on either:
         //   a) the first TextDelta (reasoning → content transition), or
@@ -1262,24 +1263,7 @@ pub(crate) async fn run_agent_loop(
                 }
                 llm::StreamDelta::Done { stop_reason, usage } => {
                     has_tool_calls = stop_reason == llm::StopReason::ToolCalls;
-                    if let Some(u) = usage {
-                        if let Err(e) = tape
-                            .append_event(
-                                tape_name,
-                                "llm.run",
-                                serde_json::json!({
-                                    "usage": {
-                                        "prompt_tokens": u.prompt_tokens,
-                                        "completion_tokens": u.completion_tokens,
-                                        "total_tokens": u.total_tokens
-                                    }
-                                }),
-                            )
-                            .await
-                        {
-                            warn!(error = %e, "failed to persist llm usage event");
-                        }
-                    }
+                    last_stop_reason = Some(stop_reason);
                     last_usage = usage;
                     // Fallback: settle reasoning if no TextDelta arrived
                     // (e.g. tool-only iteration with extended thinking).
@@ -1375,22 +1359,45 @@ pub(crate) async fn run_agent_loop(
             );
         }
 
+        // Compute timing metrics once, used by both tape entries and traces.
+        let stream_ms = stream_start.elapsed().as_millis() as u64;
+        let first_token_ms =
+            first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
+
+        // Persist LLM usage event to tape with performance metrics.
+        if let Some(u) = last_usage {
+            let event = crate::memory::LlmRunEvent {
+                usage: u,
+                model: model.clone(),
+                stop_reason: last_stop_reason.unwrap_or(llm::StopReason::Stop),
+                iteration,
+                stream_ms,
+                first_token_ms,
+            };
+            if let Err(e) = tape
+                .append_event(
+                    tape_name,
+                    "llm.run",
+                    serde_json::to_value(&event).unwrap_or_default(),
+                )
+                .await
+            {
+                warn!(error = %e, "failed to persist llm usage event");
+            }
+        }
+
         // Terminal response (no tool calls, or recovery iteration must exit)
         if !has_tool_calls || llm_error_recovery_used {
             // Persist final assistant message to tape.
-            let meta = {
-                let mut m = serde_json::json!({
-                    "rara_message_id": rara_message_id.to_string(),
-                });
-                if let Some(u) = last_usage.as_ref() {
-                    m["usage"] = serde_json::json!({
-                        "prompt_tokens": u.prompt_tokens,
-                        "completion_tokens": u.completion_tokens,
-                        "total_tokens": u.total_tokens,
-                    });
-                }
-                Some(m)
-            };
+            let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
+                rara_message_id: rara_message_id.to_string(),
+                usage: last_usage,
+                model: model.clone(),
+                iteration,
+                stream_ms,
+                first_token_ms,
+            })
+            .ok();
             let _ = tape
                 .append_message(
                     tape_name,
@@ -1402,9 +1409,6 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await;
 
-            let first_token_ms =
-                first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
-            let stream_ms = stream_start.elapsed().as_millis() as u64;
             let text_preview: String = accumulated_text.chars().take(200).collect();
             iteration_traces.push(IterationTrace {
                 index: iteration,
@@ -1496,9 +1500,16 @@ pub(crate) async fn run_agent_loop(
                                     "error": &error_message,
                                 }]
                             }),
-                            Some(
-                                serde_json::json!({"rara_message_id": rara_message_id.to_string()}),
-                            ),
+                            serde_json::to_value(crate::memory::ToolResultMetadata {
+                                rara_message_id: rara_message_id.to_string(),
+                                tool_metrics:    vec![crate::memory::ToolMetric {
+                                    name:        tool_call.name.clone(),
+                                    duration_ms: 0,
+                                    success:     false,
+                                    error:       Some(error_message.clone()),
+                                }],
+                            })
+                            .ok(),
                         )
                         .await;
                     let raw_args: String = tool_call.arguments_buf.chars().take(100).collect();
@@ -1539,19 +1550,15 @@ pub(crate) async fn run_agent_loop(
                     })
                 })
                 .collect();
-            let tool_call_meta = {
-                let mut m = serde_json::json!({
-                    "rara_message_id": rara_message_id.to_string(),
-                });
-                if let Some(u) = last_usage.as_ref() {
-                    m["usage"] = serde_json::json!({
-                        "prompt_tokens": u.prompt_tokens,
-                        "completion_tokens": u.completion_tokens,
-                        "total_tokens": u.total_tokens,
-                    });
-                }
-                Some(m)
-            };
+            let tool_call_meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
+                rara_message_id: rara_message_id.to_string(),
+                usage: last_usage,
+                model: model.clone(),
+                iteration,
+                stream_ms,
+                first_token_ms,
+            })
+            .ok();
             let _ = tape
                 .append_tool_call(
                     tape_name,
@@ -1774,11 +1781,27 @@ pub(crate) async fn run_agent_loop(
                 .iter()
                 .map(|(_id, name, _args)| name.clone())
                 .collect();
+            let tool_metrics: Vec<crate::memory::ToolMetric> = results
+                .iter()
+                .zip(valid_tool_calls.iter())
+                .map(|((success, _, err, duration_ms), (_id, name, _args))| {
+                    crate::memory::ToolMetric {
+                        name:        name.clone(),
+                        duration_ms: *duration_ms,
+                        success:     *success,
+                        error:       err.clone(),
+                    }
+                })
+                .collect();
             let _ = tape
                 .append_tool_result(
                     tape_name,
                     serde_json::json!({ "results": results_json.clone() }),
-                    Some(serde_json::json!({"rara_message_id": rara_message_id.to_string()})),
+                    serde_json::to_value(crate::memory::ToolResultMetadata {
+                        rara_message_id: rara_message_id.to_string(),
+                        tool_metrics,
+                    })
+                    .ok(),
                 )
                 .await;
             if should_remind_tape_anchor(&tool_names, &results_json) {
@@ -1828,9 +1851,6 @@ pub(crate) async fn run_agent_loop(
 
         // Collect iteration trace (with tool calls)
         {
-            let first_token_ms =
-                first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
-            let stream_ms = stream_start.elapsed().as_millis() as u64;
             let text_preview: String = accumulated_text.chars().take(200).collect();
             iteration_traces.push(IterationTrace {
                 index: iteration,
