@@ -14,34 +14,27 @@
 
 //! Retrieve browser console messages (stub — not yet implemented).
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use serde_json::Value;
 
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{EmptyParams, ToolContext, ToolExecute};
 
 /// Retrieve console.log/warn/error messages from the browser. Stub — pending
 /// Lightpanda support.
 #[derive(ToolDef)]
 #[tool(
     name = "browser-console-messages",
-    description = "Retrieve console messages (log, warn, error) from the browser page.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+    description = "Retrieve console messages (log, warn, error) from the browser page."
 )]
 pub struct BrowserConsoleMessagesTool;
 
-impl BrowserConsoleMessagesTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
+#[async_trait]
+impl ToolExecute for BrowserConsoleMessagesTool {
+    type Output = Value;
+    type Params = EmptyParams;
 
-    async fn exec(
-        &self,
-        _params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, _p: EmptyParams, _context: &ToolContext) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-console-messages is not yet implemented — will be added when Lightpanda \
              supports this feature"

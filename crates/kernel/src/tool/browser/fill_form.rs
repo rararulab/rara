@@ -14,43 +14,44 @@
 
 //! Fill a form with multiple values (stub — not yet implemented).
 
-use rara_tool_macro::ToolDef;
+use std::collections::HashMap;
 
-use crate::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Fill multiple form fields at once. Stub — pending Lightpanda support.
 #[derive(ToolDef)]
 #[tool(
     name = "browser-fill-form",
-    description = "Fill multiple form fields at once by providing a mapping of ref IDs to values.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+    description = "Fill multiple form fields at once by providing a mapping of ref IDs to values."
 )]
 pub struct BrowserFillFormTool;
 
-impl BrowserFillFormTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["fields"],
-            "properties": {
-                "fields": {
-                    "type": "object",
-                    "description": "A mapping of ref IDs to values to fill in"
-                },
-                "submit": {
-                    "type": "boolean",
-                    "description": "Whether to submit the form after filling (default: false)"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-fill-form tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserFillFormParams {
+    /// A mapping of ref IDs to values to fill in
+    fields: HashMap<String, String>,
+    /// Whether to submit the form after filling (default: false)
+    #[serde(default)]
+    submit: bool,
+}
 
-    async fn exec(
+#[async_trait]
+impl ToolExecute for BrowserFillFormTool {
+    type Output = Value;
+    type Params = BrowserFillFormParams;
+
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _p: BrowserFillFormParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-fill-form is not yet implemented — will be added when Lightpanda supports \
              this feature"

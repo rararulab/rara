@@ -14,20 +14,20 @@
 
 //! Close all browser tabs.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use serde::Serialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{EmptyParams, ToolContext, ToolExecute},
 };
 
 /// Close all browser tabs and reset the browser state.
 #[derive(ToolDef)]
 #[tool(
     name = "browser-close",
-    description = "Close all browser tabs and reset the browser state.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+    description = "Close all browser tabs and reset the browser state."
 )]
 pub struct BrowserCloseTool {
     manager: BrowserManagerRef,
@@ -35,24 +35,30 @@ pub struct BrowserCloseTool {
 
 impl BrowserCloseTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
+/// Result of the browser-close tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserCloseResult {
+    /// Remaining tabs (always empty after close-all)
+    tabs: Vec<()>,
+}
 
-    async fn exec(
+#[async_trait]
+impl ToolExecute for BrowserCloseTool {
+    type Output = BrowserCloseResult;
+    type Params = EmptyParams;
+
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _p: EmptyParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<BrowserCloseResult> {
         self.manager
             .close_all()
             .await
             .map_err(|e| anyhow::anyhow!("close_all failed: {e}"))?;
 
-        Ok(serde_json::json!({ "tabs": [] }).into())
+        Ok(BrowserCloseResult { tabs: vec![] })
     }
 }

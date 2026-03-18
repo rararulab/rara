@@ -37,8 +37,15 @@ pub trait ToolExecute: Send + Sync {
     /// Must derive both `serde::Deserialize` and `schemars::JsonSchema`.
     type Params: DeserializeOwned + schemars::JsonSchema;
 
+    /// The result struct for this tool. Must derive `serde::Serialize`.
+    type Output: serde::Serialize;
+
     /// Execute the tool with typed parameters.
-    async fn run(&self, params: Self::Params, context: &ToolContext) -> anyhow::Result<ToolOutput>;
+    async fn run(
+        &self,
+        params: Self::Params,
+        context: &ToolContext,
+    ) -> anyhow::Result<Self::Output>;
 }
 
 /// Empty parameter struct for tools that accept no parameters.
@@ -63,6 +70,20 @@ pub struct ToolOutput {
     pub json:      serde_json::Value,
     /// Binary resources to persist and inject as multimodal content.
     pub resources: Vec<ResourceAttachment>,
+}
+
+impl ToolOutput {
+    /// Create a `ToolOutput` by serializing a typed result struct.
+    ///
+    /// The resulting `ToolOutput` has an empty `resources` list. Tools that
+    /// need to attach binary resources (e.g. screenshots) should use
+    /// `execute_fn` and construct `ToolOutput` directly instead.
+    pub fn from_serialize<T: serde::Serialize>(val: &T) -> anyhow::Result<Self> {
+        Ok(Self {
+            json:      serde_json::to_value(val)?,
+            resources: vec![],
+        })
+    }
 }
 
 impl From<serde_json::Value> for ToolOutput {

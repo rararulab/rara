@@ -21,23 +21,24 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use super::{categories, embedding::EmbeddingService, items};
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// LLM-callable tool for querying the Knowledge Layer.
 #[derive(ToolDef)]
 #[tool(
     name = "memory",
-    description = "Search and read the user's long-term memory. Supports three actions:\n- \
+    description = "Search and read the user\'s long-term memory. Supports three actions:\n- \
                    search: semantic search across memory items\n- categories: list all memory \
                    categories for the user\n- read_category: read the full content of a specific \
-                   category file",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   category file"
 )]
 pub struct MemoryTool {
     pool:          SqlitePool,
@@ -53,58 +54,50 @@ impl MemoryTool {
             embedding_svc,
         }
     }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["search", "categories", "read_category"],
-                    "description": "The memory operation to perform"
-                },
-                "query": {
-                    "type": "string",
-                    "description": "Search query (required for 'search' action)"
-                },
-                "category": {
-                    "type": "string",
-                    "description": "Category name (required for 'read_category' action)"
-                }
-            },
-            "required": ["action"]
-        })
-    }
+/// Parameters for the `memory` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryParams {
+    /// The memory operation to perform: "search", "categories", or
+    /// "read_category".
+    action:   String,
+    /// Search query (required for "search" action).
+    query:    Option<String>,
+    /// Category name (required for "read_category" action).
+    category: Option<String>,
+}
 
-    async fn exec(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let action = params.get("action").and_then(Value::as_str).unwrap_or("");
+#[async_trait]
+impl ToolExecute for MemoryTool {
+    type Output = Value;
+    type Params = MemoryParams;
 
+    async fn run(&self, p: MemoryParams, context: &ToolContext) -> anyhow::Result<Value> {
         let username = context.user_id.as_str();
 
-        match action {
+        match p.action.as_str() {
             "search" => {
-                let query = params.get("query").and_then(Value::as_str).unwrap_or("");
+                let query = p.query.as_deref().unwrap_or("");
                 if query.is_empty() {
-                    return Ok(json!({"error": "query is required for search action"}).into());
+                    return Ok(json!({"error": "query is required for search action"}));
                 }
-                self.exec_search(username, query).await.map(Into::into)
+                self.exec_search(username, query).await
             }
-            "categories" => self.exec_categories(username).await.map(Into::into),
+            "categories" => self.exec_categories(username).await,
             "read_category" => {
-                let category = params.get("category").and_then(Value::as_str).unwrap_or("");
+                let category = p.category.as_deref().unwrap_or("");
                 if category.is_empty() {
-                    return Ok(
-                        json!({"error": "category is required for read_category action"}).into(),
-                    );
+                    return Ok(json!({"error": "category is required for read_category action"}));
                 }
-                self.exec_read_category(username, category)
-                    .await
-                    .map(Into::into)
+                self.exec_read_category(username, category).await
             }
-            _ => Ok(json!({"error": format!("unknown action: {action}")}).into()),
+            _ => Ok(json!({"error": format!("unknown action: {}", p.action)})),
         }
     }
+}
 
+impl MemoryTool {
     async fn exec_search(&self, username: &str, query: &str) -> anyhow::Result<Value> {
         // Embed the query.
         let embeddings = self.embedding_svc.embed(&[query.to_string()]).await?;
@@ -147,7 +140,7 @@ impl MemoryTool {
     async fn exec_read_category(&self, username: &str, category: &str) -> anyhow::Result<Value> {
         match categories::read_category(username, category).await? {
             Some(content) => Ok(json!({"category": category, "content": content})),
-            None => Ok(json!({"error": format!("category '{category}' not found")})),
+            None => Ok(json!({"error": format!("category \'{category}\' not found")})),
         }
     }
 }

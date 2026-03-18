@@ -17,9 +17,11 @@
 //! Runs a command via `/bin/bash -c` with configurable timeout and working
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -30,68 +32,59 @@ const MAX_OUTPUT_LINES: usize = 2000;
 /// Default command timeout in seconds.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
+/// Input parameters for the bash tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BashParams {
+    /// The shell command to execute.
+    command: String,
+    /// Timeout in seconds (default 120).
+    timeout: Option<u64>,
+    /// Working directory for the command.
+    cwd:     Option<String>,
+}
+
+/// Typed result returned by the bash tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BashResult {
+    /// Process exit code (-1 if failed to execute or timed out).
+    pub exit_code: i32,
+    /// Combined stdout and stderr output.
+    pub stdout:    String,
+    /// Whether the command was killed due to timeout.
+    pub timed_out: bool,
+    /// Whether the output was truncated.
+    pub truncated: bool,
+}
+
 /// Layer 1 primitive: execute a shell command.
 #[derive(ToolDef)]
 #[tool(
     name = "bash",
     description = "Execute a shell command via /bin/bash -c. Returns exit code, combined \
                    stdout/stderr, and whether the command timed out. Output is truncated to 50KB \
-                   / 2000 lines.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   / 2000 lines."
 )]
 pub struct BashTool;
 
 impl BashTool {
     pub fn new() -> Self { Self }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute"
-                },
-                "timeout": {
-                    "type": "number",
-                    "description": "Timeout in seconds (default 120)"
-                },
-                "cwd": {
-                    "type": "string",
-                    "description": "Working directory for the command"
-                }
-            },
-            "required": ["command"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for BashTool {
+    type Output = BashResult;
+    type Params = BashParams;
 
-    async fn exec(
-        &self,
-        params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let command = params
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: command"))?;
-
-        let timeout_secs = params
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
-
-        let cwd = params.get("cwd").and_then(|v| v.as_str());
-
-        // Attempt rtk rewrite for token-optimized output.
-        let effective_command = rtk_rewrite(command).await;
+    async fn run(&self, params: BashParams, _context: &ToolContext) -> anyhow::Result<BashResult> {
+        let timeout_secs = params.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let effective_command = rtk_rewrite(&params.command).await;
 
         let mut cmd = tokio::process::Command::new("/bin/bash");
         cmd.arg("-c").arg(&effective_command);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        if let Some(dir) = cwd {
+        if let Some(ref dir) = params.cwd {
             cmd.current_dir(dir);
         } else {
             cmd.current_dir(rara_paths::workspace_dir());
@@ -106,31 +99,25 @@ impl BashTool {
                 let combined = format!("{stdout}{stderr}");
                 let (truncated_output, was_truncated) = truncate_output(&combined);
 
-                Ok(json!({
-                    "exit_code": output.status.code().unwrap_or(-1),
-                    "stdout": truncated_output,
-                    "timed_out": false,
-                    "truncated": was_truncated,
+                Ok(BashResult {
+                    exit_code: output.status.code().unwrap_or(-1),
+                    stdout:    truncated_output,
+                    timed_out: false,
+                    truncated: was_truncated,
                 })
-                .into())
             }
-            Ok(Err(e)) => Ok(json!({
-                "exit_code": -1,
-                "stdout": format!("failed to execute command: {e}"),
-                "timed_out": false,
-                "truncated": false,
-            })
-            .into()),
-            Err(_) => {
-                // Timeout — the child process was dropped which should kill it.
-                Ok(json!({
-                    "exit_code": -1,
-                    "stdout": format!("command timed out after {timeout_secs}s"),
-                    "timed_out": true,
-                    "truncated": false,
-                })
-                .into())
-            }
+            Ok(Err(e)) => Ok(BashResult {
+                exit_code: -1,
+                stdout:    format!("failed to execute command: {e}"),
+                timed_out: false,
+                truncated: false,
+            }),
+            Err(_) => Ok(BashResult {
+                exit_code: -1,
+                stdout:    format!("command timed out after {timeout_secs}s"),
+                timed_out: true,
+                truncated: false,
+            }),
         }
     }
 }

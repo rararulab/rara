@@ -14,56 +14,58 @@
 
 //! Tool for querying tape metadata (entry count, anchors, token usage).
 
+use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TapeInfoParams {}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TapeInfoResult {
+    pub output: String,
+}
 
 /// Returns summary information about the current session tape.
 #[derive(ToolDef)]
 #[tool(
     name = "tape-info",
     description = "Return metadata about the current session tape: entry count, anchors, entries \
-                   since last anchor, and last known token usage.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   since last anchor, and last known token usage."
 )]
 pub struct TapeInfoTool {
     tape_service: TapeService,
 }
-
 impl TapeInfoTool {
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for TapeInfoTool {
+    type Output = TapeInfoResult;
+    type Params = TapeInfoParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _params: TapeInfoParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<TapeInfoResult> {
         let tape_name = context.session_key.to_string();
-
         let info = self
             .tape_service
             .info(&tape_name)
             .await
             .map_err(|e| anyhow::anyhow!("failed to read tape info: {e}"))?;
-
         let last_anchor_display = info.last_anchor.as_deref().unwrap_or("-");
         let usage_display = info
             .last_token_usage
             .map(|n| n.to_string())
             .unwrap_or_else(|| "unknown".to_owned());
-
         let output = format!(
             "tape={}\nentries={}\nanchors={}\nlast_anchor={}\nentries_since_last_anchor={}\\
              nlast_token_usage={}",
@@ -74,7 +76,6 @@ impl TapeInfoTool {
             info.entries_since_last_anchor,
             usage_display,
         );
-
-        Ok(json!({ "output": output }).into())
+        Ok(TapeInfoResult { output })
     }
 }

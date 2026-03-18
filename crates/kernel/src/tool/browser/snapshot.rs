@@ -14,11 +14,13 @@
 
 //! Take an accessibility tree snapshot of the active page.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use serde::Serialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{EmptyParams, ToolContext, ToolExecute},
 };
 
 /// Capture a fresh accessibility tree snapshot of the active browser page.
@@ -27,9 +29,7 @@ use crate::{
     name = "browser-snapshot",
     description = "Take an accessibility snapshot of the current page without performing any \
                    action. Use this to inspect the page content after waiting or to refresh your \
-                   view.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   view."
 )]
 pub struct BrowserSnapshotTool {
     manager: BrowserManagerRef,
@@ -37,25 +37,31 @@ pub struct BrowserSnapshotTool {
 
 impl BrowserSnapshotTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
+/// Result of the browser-snapshot tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserSnapshotResult {
+    /// Accessibility tree snapshot text
+    snapshot: String,
+}
 
-    async fn exec(
+#[async_trait]
+impl ToolExecute for BrowserSnapshotTool {
+    type Output = BrowserSnapshotResult;
+    type Params = EmptyParams;
+
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _p: EmptyParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<BrowserSnapshotResult> {
         let snapshot = self
             .manager
             .take_snapshot_active()
             .await
             .map_err(|e| anyhow::anyhow!("snapshot failed: {e}"))?;
 
-        Ok(serde_json::json!({ "snapshot": snapshot }).into())
+        Ok(BrowserSnapshotResult { snapshot })
     }
 }

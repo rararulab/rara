@@ -14,44 +14,39 @@
 
 //! Drag an element (stub — not yet implemented).
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
 
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Drag an element from one position to another. Stub — pending Lightpanda
 /// support.
 #[derive(ToolDef)]
 #[tool(
     name = "browser-drag",
-    description = "Drag an element from one position to another on the page.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+    description = "Drag an element from one position to another on the page."
 )]
 pub struct BrowserDragTool;
 
-impl BrowserDragTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["startRef", "endRef"],
-            "properties": {
-                "startRef": {
-                    "type": "string",
-                    "description": "The ref ID of the element to drag from"
-                },
-                "endRef": {
-                    "type": "string",
-                    "description": "The ref ID of the element to drag to"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-drag tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserDragParams {
+    /// The ref ID of the element to drag from
+    start_ref: String,
+    /// The ref ID of the element to drag to
+    end_ref:   String,
+}
 
-    async fn exec(
-        &self,
-        _params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+#[async_trait]
+impl ToolExecute for BrowserDragTool {
+    type Output = Value;
+    type Params = BrowserDragParams;
+
+    async fn run(&self, _p: BrowserDragParams, _context: &ToolContext) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-drag is not yet implemented — will be added when Lightpanda supports this \
              feature"

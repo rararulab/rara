@@ -14,9 +14,11 @@
 
 //! Retrieve browser network requests (stub — not yet implemented).
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use serde_json::Value;
 
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{EmptyParams, ToolContext, ToolExecute};
 
 /// Retrieve network requests made by the browser page. Stub — pending
 /// Lightpanda support.
@@ -24,25 +26,16 @@ use crate::tool::{ToolContext, ToolOutput};
 #[tool(
     name = "browser-network-requests",
     description = "Retrieve network requests made by the browser page, including URLs, methods, \
-                   and status codes.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   and status codes."
 )]
 pub struct BrowserNetworkRequestsTool;
 
-impl BrowserNetworkRequestsTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
+#[async_trait]
+impl ToolExecute for BrowserNetworkRequestsTool {
+    type Output = Value;
+    type Params = EmptyParams;
 
-    async fn exec(
-        &self,
-        _params: serde_json::Value,
-        _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, _p: EmptyParams, _context: &ToolContext) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-network-requests is not yet implemented — will be added when Lightpanda \
              supports this feature"

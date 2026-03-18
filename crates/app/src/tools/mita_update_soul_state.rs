@@ -20,10 +20,13 @@
 //! - `style_drift`
 //! - `discovered_interests`
 
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_soul::state::{EmergedTrait, HistoryEntry, RelationshipStage, StyleDrift};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use tracing::info;
 
 use super::notify::push_notification;
@@ -36,6 +39,20 @@ const UPDATABLE_FIELDS: &[&str] = &[
     "discovered_interests",
 ];
 
+/// Input parameters for the update-soul-state tool.
+///
+/// The `value` field is untyped (JSON value) because its schema depends on
+/// which `field` is being updated.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateSoulStateParams {
+    /// Target agent name (e.g. "rara").
+    agent: String,
+    /// The soul state field to update.
+    field: String,
+    /// The new value for the field (schema depends on field).
+    value: Value,
+}
+
 /// Mita-exclusive tool: update a specific field in an agent's soul state.
 #[derive(ToolDef)]
 #[tool(
@@ -45,70 +62,41 @@ const UPDATABLE_FIELDS: &[&str] = &[
                    \"close_friend\"\n- emerged_traits: array of {\"trait\": \"...\", \
                    \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}\n- style_drift: \
                    {\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}\n- \
-                   discovered_interests: array of strings",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   discovered_interests: array of strings"
 )]
 pub struct UpdateSoulStateTool;
 
 impl UpdateSoulStateTool {
     pub fn new() -> Self { Self }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "agent": {
-                    "type": "string",
-                    "description": "Target agent name (e.g. \"rara\")"
-                },
-                "field": {
-                    "type": "string",
-                    "enum": UPDATABLE_FIELDS,
-                    "description": "The soul state field to update"
-                },
-                "value": {
-                    "description": "The new value for the field (schema depends on field)"
-                }
-            },
-            "required": ["agent", "field", "value"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for UpdateSoulStateTool {
+    type Output = Value;
+    type Params = UpdateSoulStateParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: UpdateSoulStateParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let agent = params
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: agent"))?;
-        let field = params
-            .get("field")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: field"))?;
-        let value = params
-            .get("value")
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: value"))?;
-
-        if !UPDATABLE_FIELDS.contains(&field) {
+    ) -> anyhow::Result<Value> {
+        if !UPDATABLE_FIELDS.contains(&params.field.as_str()) {
             anyhow::bail!(
                 "invalid field '{}': must be one of {}",
-                field,
+                params.field,
                 UPDATABLE_FIELDS.join(", ")
             );
         }
 
         // Load existing state or create default.
-        let mut state = rara_soul::loader::load_state(agent)
+        let mut state = rara_soul::loader::load_state(&params.agent)
             .map_err(|e| anyhow::anyhow!("failed to load soul state: {e}"))?
             .unwrap_or_default();
 
-        match field {
+        match params.field.as_str() {
             "relationship_stage" => {
-                let stage: RelationshipStage =
-                    serde_json::from_value(value.clone()).map_err(|e| {
+                let stage: RelationshipStage = serde_json::from_value(params.value.clone())
+                    .map_err(|e| {
                         anyhow::anyhow!(
                             "invalid relationship_stage value: {e}. Expected one of: stranger, \
                              acquaintance, friend, close_friend"
@@ -122,15 +110,15 @@ impl UpdateSoulStateTool {
                     description: format!("{old:?} -> {stage:?}"),
                 });
                 info!(
-                    agent,
+                    agent = %params.agent,
                     ?old,
                     ?stage,
                     "soul state: relationship stage updated"
                 );
             }
             "emerged_traits" => {
-                let traits: Vec<EmergedTrait> =
-                    serde_json::from_value(value.clone()).map_err(|e| {
+                let traits: Vec<EmergedTrait> = serde_json::from_value(params.value.clone())
+                    .map_err(|e| {
                         anyhow::anyhow!(
                             "invalid emerged_traits value: {e}. Expected array of {{\"trait\": \
                              \"...\", \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}}"
@@ -158,19 +146,20 @@ impl UpdateSoulStateTool {
                     ),
                 });
                 info!(
-                    agent,
+                    agent = %params.agent,
                     count,
                     total = state.emerged_traits.len(),
                     "soul state: emerged traits updated"
                 );
             }
             "style_drift" => {
-                let drift: StyleDrift = serde_json::from_value(value.clone()).map_err(|e| {
-                    anyhow::anyhow!(
-                        "invalid style_drift value: {e}. Expected {{\"formality\": 1-10, \
-                         \"verbosity\": 1-10, \"humor_frequency\": 1-10}}"
-                    )
-                })?;
+                let drift: StyleDrift =
+                    serde_json::from_value(params.value.clone()).map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid style_drift value: {e}. Expected {{\"formality\": 1-10, \
+                             \"verbosity\": 1-10, \"humor_frequency\": 1-10}}"
+                        )
+                    })?;
                 state.style_drift = drift;
                 state.append_history(HistoryEntry {
                     timestamp:   jiff::Timestamp::now(),
@@ -182,11 +171,11 @@ impl UpdateSoulStateTool {
                         state.style_drift.humor_frequency
                     ),
                 });
-                info!(agent, ?state.style_drift, "soul state: style drift updated");
+                info!(agent = %params.agent, ?state.style_drift, "soul state: style drift updated");
             }
             "discovered_interests" => {
                 let interests: Vec<String> =
-                    serde_json::from_value(value.clone()).map_err(|e| {
+                    serde_json::from_value(params.value.clone()).map_err(|e| {
                         anyhow::anyhow!(
                             "invalid discovered_interests value: {e}. Expected array of strings"
                         )
@@ -207,7 +196,7 @@ impl UpdateSoulStateTool {
                     ),
                 });
                 info!(
-                    agent,
+                    agent = %params.agent,
                     count,
                     total = state.discovered_interests.len(),
                     "soul state: discovered interests updated"
@@ -217,20 +206,22 @@ impl UpdateSoulStateTool {
         }
 
         // Persist the updated state.
-        rara_soul::loader::save_state(agent, &state)
+        rara_soul::loader::save_state(&params.agent, &state)
             .map_err(|e| anyhow::anyhow!("failed to save soul state: {e}"))?;
 
         push_notification(
             context,
-            format!("\u{2699}\u{fe0f} Soul state updated: {agent}.{field}"),
+            format!(
+                "\u{2699}\u{fe0f} Soul state updated: {}.{}",
+                params.agent, params.field
+            ),
         );
 
         Ok(json!({
             "status": "ok",
-            "agent": agent,
-            "field": field,
-            "message": format!("Soul state field '{field}' updated for agent '{agent}'.")
-        })
-        .into())
+            "agent": params.agent,
+            "field": params.field,
+            "message": format!("Soul state field '{}' updated for agent '{}'.", params.field, params.agent)
+        }))
     }
 }

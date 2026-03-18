@@ -25,13 +25,14 @@ use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::{
     event::{KernelEventEnvelope, Syscall},
     schedule::{JobId, Trigger},
-    tool::{EmptyParams, ToolContext, ToolExecute, ToolOutput},
+    tool::{EmptyParams, ToolContext, ToolExecute},
 };
 
 // -- shared helper ------------------------------------------------------------
@@ -41,7 +42,7 @@ async fn register_job(
     message: String,
     tags: Vec<String>,
     context: &ToolContext,
-) -> anyhow::Result<ToolOutput> {
+) -> anyhow::Result<Value> {
     let next_at = trigger.next_at();
 
     let event_queue = &context.event_queue;
@@ -68,8 +69,7 @@ async fn register_job(
     Ok(serde_json::json!({
         "job_id": job_id.to_string(),
         "next_run": next_at.to_string(),
-    })
-    .into())
+    }))
 }
 
 // ============================================================================
@@ -102,13 +102,10 @@ pub struct ScheduleOnceParams {
 
 #[async_trait]
 impl ToolExecute for ScheduleOnceTool {
+    type Output = Value;
     type Params = ScheduleOnceParams;
 
-    async fn run(
-        &self,
-        p: ScheduleOnceParams,
-        context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, p: ScheduleOnceParams, context: &ToolContext) -> anyhow::Result<Value> {
         if p.after_seconds == 0 {
             return Err(anyhow::anyhow!("after_seconds must be > 0"));
         }
@@ -152,13 +149,10 @@ pub struct ScheduleIntervalParams {
 
 #[async_trait]
 impl ToolExecute for ScheduleIntervalTool {
+    type Output = Value;
     type Params = ScheduleIntervalParams;
 
-    async fn run(
-        &self,
-        p: ScheduleIntervalParams,
-        context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, p: ScheduleIntervalParams, context: &ToolContext) -> anyhow::Result<Value> {
         if p.interval_seconds == 0 {
             return Err(anyhow::anyhow!("interval_seconds must be > 0"));
         }
@@ -213,13 +207,10 @@ pub struct ScheduleCronParams {
 
 #[async_trait]
 impl ToolExecute for ScheduleCronTool {
+    type Output = Value;
     type Params = ScheduleCronParams;
 
-    async fn run(
-        &self,
-        p: ScheduleCronParams,
-        context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, p: ScheduleCronParams, context: &ToolContext) -> anyhow::Result<Value> {
         if p.cron.is_empty() {
             return Err(anyhow::anyhow!("cron expression must not be empty"));
         }
@@ -276,13 +267,10 @@ pub struct ScheduleRemoveParams {
 
 #[async_trait]
 impl ToolExecute for ScheduleRemoveTool {
+    type Output = Value;
     type Params = ScheduleRemoveParams;
 
-    async fn run(
-        &self,
-        p: ScheduleRemoveParams,
-        context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, p: ScheduleRemoveParams, context: &ToolContext) -> anyhow::Result<Value> {
         let event_queue = &context.event_queue;
         let session_key = context.session_key;
 
@@ -302,7 +290,7 @@ impl ToolExecute for ScheduleRemoveTool {
             .map_err(|_| anyhow::anyhow!("kernel dropped reply channel"))?
             .map_err(|e| anyhow::anyhow!("remove job failed: {e}"))?;
 
-        Ok(serde_json::json!({ "ok": true }).into())
+        Ok(serde_json::json!({ "ok": true }))
     }
 }
 
@@ -320,9 +308,10 @@ pub struct ScheduleListTool;
 
 #[async_trait]
 impl ToolExecute for ScheduleListTool {
+    type Output = Value;
     type Params = EmptyParams;
 
-    async fn run(&self, _p: EmptyParams, context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn run(&self, _p: EmptyParams, context: &ToolContext) -> anyhow::Result<Value> {
         let event_queue = &context.event_queue;
         let session_key = context.session_key;
 
@@ -352,7 +341,6 @@ impl ToolExecute for ScheduleListTool {
         Ok(serde_json::json!({
             "jobs": list,
             "count": list.len(),
-        })
-        .into())
+        }))
     }
 }

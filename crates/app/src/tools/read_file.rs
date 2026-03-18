@@ -21,9 +21,11 @@
 //! file up to a budget derived from the model's context window size.
 
 use anyhow::Context;
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use async_trait::async_trait;
+use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Maximum total output size in bytes per page (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -118,6 +120,28 @@ fn read_page(all_lines: &[&str], offset: usize, limit: usize) -> PageResult {
     }
 }
 
+/// Input parameters for the read-file tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadFileParams {
+    /// Absolute path to the file to read.
+    file_path: String,
+    /// 1-based line number to start reading from (default 1).
+    offset:    Option<u64>,
+    /// Maximum number of lines to return (default 2000).
+    limit:     Option<u64>,
+}
+
+/// Typed result returned by the read-file tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadFileResult {
+    /// File content with line number prefixes.
+    pub content:     String,
+    /// Total number of lines in the file.
+    pub total_lines: usize,
+    /// Whether the output was truncated.
+    pub truncated:   bool,
+}
+
 /// Layer 1 primitive: read a file with line numbers.
 #[derive(ToolDef)]
 #[tool(
@@ -125,53 +149,29 @@ fn read_page(all_lines: &[&str], offset: usize, limit: usize) -> PageResult {
     description = "Read a file from the filesystem. Returns content with line number prefixes \
                    (like cat -n). Without offset/limit, adaptively reads up to the context-window \
                    budget (multiple pages auto-stitched). Use offset and limit to read a specific \
-                   range. Detects binary files. Long lines are truncated at 2000 characters.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   range. Detects binary files. Long lines are truncated at 2000 characters."
 )]
 pub struct ReadFileTool;
 
 impl ReadFileTool {
     pub fn new() -> Self { Self }
+}
 
-    fn schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Absolute path to the file to read"
-                },
-                "offset": {
-                    "type": "number",
-                    "description": "1-based line number to start reading from (default 1)"
-                },
-                "limit": {
-                    "type": "number",
-                    "description": "Maximum number of lines to return (default 2000)"
-                }
-            },
-            "required": ["file_path"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for ReadFileTool {
+    type Output = ReadFileResult;
+    type Params = ReadFileParams;
 
-    async fn exec(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        params: ReadFileParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let raw_path = params
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
-        let file_path = if std::path::Path::new(raw_path).is_absolute() {
-            std::path::PathBuf::from(raw_path)
+    ) -> anyhow::Result<ReadFileResult> {
+        let file_path = if std::path::Path::new(&params.file_path).is_absolute() {
+            std::path::PathBuf::from(&params.file_path)
         } else {
-            rara_paths::workspace_dir().join(raw_path)
+            rara_paths::workspace_dir().join(&params.file_path)
         };
-
-        let explicit_offset = params.get("offset").and_then(|v| v.as_u64());
-        let explicit_limit = params.get("limit").and_then(|v| v.as_u64());
 
         let raw_bytes = tokio::fs::read(&file_path)
             .await
@@ -180,28 +180,26 @@ impl ReadFileTool {
         // Binary detection: check for null bytes in the first BINARY_CHECK_BYTES.
         let check_len = raw_bytes.len().min(BINARY_CHECK_BYTES);
         if raw_bytes[..check_len].contains(&0) {
-            return Ok(json!({
-                "content": "[binary file detected]",
-                "total_lines": 0,
-                "truncated": false,
-            })
-            .into());
+            return Ok(ReadFileResult {
+                content:     "[binary file detected]".to_owned(),
+                total_lines: 0,
+                truncated:   false,
+            });
         }
 
         let content = String::from_utf8_lossy(&raw_bytes);
         let all_lines: Vec<&str> = content.lines().collect();
 
         // Single-page mode: agent explicitly specified offset or limit.
-        if explicit_offset.is_some() || explicit_limit.is_some() {
-            let offset = explicit_offset.map(|v| v.max(1) as usize).unwrap_or(1);
-            let limit = explicit_limit.map(|v| v as usize).unwrap_or(DEFAULT_LIMIT);
+        if params.offset.is_some() || params.limit.is_some() {
+            let offset = params.offset.map(|v| v.max(1) as usize).unwrap_or(1);
+            let limit = params.limit.map(|v| v as usize).unwrap_or(DEFAULT_LIMIT);
             let page = read_page(&all_lines, offset, limit);
-            return Ok(json!({
-                "content": page.output,
-                "total_lines": page.total_lines,
-                "truncated": page.has_more_lines || page.content_truncated,
-            })
-            .into());
+            return Ok(ReadFileResult {
+                content:     page.output,
+                total_lines: page.total_lines,
+                truncated:   page.has_more_lines || page.content_truncated,
+            });
         }
 
         // Adaptive paging mode: read multiple pages up to budget.
@@ -219,7 +217,6 @@ impl ReadFileTool {
             accumulated.push_str(&page.output);
 
             if !page.has_more_lines {
-                // All lines in the file have been read.
                 file_fully_read = true;
                 break;
             }
@@ -232,7 +229,6 @@ impl ReadFileTool {
         }
 
         if !file_fully_read {
-            // Extract the last line number from accumulated output for the hint.
             let last_line_no = accumulated
                 .lines()
                 .last()
@@ -246,12 +242,11 @@ impl ReadFileTool {
             ));
         }
 
-        Ok(json!({
-            "content": accumulated,
-            "total_lines": total_lines,
-            "truncated": !file_fully_read || any_content_truncated,
+        Ok(ReadFileResult {
+            content: accumulated,
+            total_lines,
+            truncated: !file_fully_read || any_content_truncated,
         })
-        .into())
     }
 }
 

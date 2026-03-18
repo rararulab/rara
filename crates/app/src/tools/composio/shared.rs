@@ -25,4 +25,15 @@ impl ComposioShared {
             .await
             .unwrap_or_else(|_| "default".to_owned())
     }
+
+    /// Resolve entity_id from an explicit value or fall back to config default.
+    pub async fn resolve_entity_id(&self, explicit: Option<&str>) -> String {
+        if let Some(id) = explicit {
+            return id.to_owned();
+        }
+        self.client
+            .default_entity_id()
+            .await
+            .unwrap_or_else(|_| "default".to_owned())
+    }
 }

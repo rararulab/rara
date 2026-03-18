@@ -14,12 +14,14 @@
 
 //! Wait for a condition in the active browser page.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Wait for text to appear, disappear, or for a time delay, then snapshot.
@@ -27,9 +29,7 @@ use crate::{
 #[tool(
     name = "browser-wait-for",
     description = "Wait for a condition before taking a snapshot. You can wait for text to \
-                   appear, text to disappear, or a fixed number of seconds.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   appear, text to disappear, or a fixed number of seconds."
 )]
 pub struct BrowserWaitForTool {
     manager: BrowserManagerRef,
@@ -37,52 +37,46 @@ pub struct BrowserWaitForTool {
 
 impl BrowserWaitForTool {
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
+}
 
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "time": {
-                    "type": "number",
-                    "description": "Number of seconds to wait before taking the snapshot"
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Wait until this text appears on the page"
-                },
-                "textGone": {
-                    "type": "string",
-                    "description": "Wait until this text disappears from the page"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-wait-for tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserWaitForParams {
+    /// Number of seconds to wait before taking the snapshot
+    #[serde(default)]
+    time:      Option<f64>,
+    /// Wait until this text appears on the page
+    #[serde(default)]
+    text:      Option<String>,
+    /// Wait until this text disappears from the page
+    #[serde(default)]
+    text_gone: Option<String>,
+}
 
-    async fn exec(
+/// Result of the browser-wait-for tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserWaitForResult {
+    /// Accessibility tree snapshot after waiting
+    snapshot: String,
+}
+
+#[async_trait]
+impl ToolExecute for BrowserWaitForTool {
+    type Output = BrowserWaitForResult;
+    type Params = BrowserWaitForParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BrowserWaitForParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let p: Params =
-            serde_json::from_value(params).map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
-
+    ) -> anyhow::Result<BrowserWaitForResult> {
         let snapshot = self
             .manager
             .wait_for(p.text.as_deref(), p.text_gone.as_deref(), p.time)
             .await
             .map_err(|e| anyhow::anyhow!("wait_for failed: {e}"))?;
 
-        Ok(serde_json::json!({ "snapshot": snapshot }).into())
+        Ok(BrowserWaitForResult { snapshot })
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Params {
-    #[serde(default)]
-    time:      Option<f64>,
-    #[serde(default)]
-    text:      Option<String>,
-    #[serde(default)]
-    text_gone: Option<String>,
 }

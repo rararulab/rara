@@ -14,9 +14,13 @@
 
 //! Handle a browser dialog (stub — not yet implemented).
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
 
-use crate::tool::{ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Handle a browser dialog (alert, confirm, prompt). Stub — pending Lightpanda
 /// support.
@@ -24,36 +28,31 @@ use crate::tool::{ToolContext, ToolOutput};
 #[tool(
     name = "browser-handle-dialog",
     description = "Handle a JavaScript dialog (alert, confirm, prompt) by accepting or dismissing \
-                   it.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   it."
 )]
 pub struct BrowserHandleDialogTool;
 
-impl BrowserHandleDialogTool {
-    fn schema() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["action"],
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["accept", "dismiss"],
-                    "description": "Whether to accept or dismiss the dialog"
-                },
-                "promptText": {
-                    "type": "string",
-                    "description": "Text to enter in a prompt dialog before accepting"
-                }
-            }
-        })
-    }
+/// Parameters for the browser-handle-dialog tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserHandleDialogParams {
+    /// Whether to accept or dismiss the dialog
+    action:      String,
+    /// Text to enter in a prompt dialog before accepting
+    #[serde(default)]
+    prompt_text: Option<String>,
+}
 
-    async fn exec(
+#[async_trait]
+impl ToolExecute for BrowserHandleDialogTool {
+    type Output = Value;
+    type Params = BrowserHandleDialogParams;
+
+    async fn run(
         &self,
-        _params: serde_json::Value,
+        _p: BrowserHandleDialogParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<Value> {
         anyhow::bail!(
             "browser-handle-dialog is not yet implemented — will be added when Lightpanda \
              supports this feature"
