@@ -2,14 +2,39 @@
 
 use std::collections::HashMap;
 
+use async_trait::async_trait;
 use rara_acp::registry::{AcpAgentConfig, AcpRegistryRef};
-use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_kernel::tool::{EmptyParams, ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
-use serde_json::{Value, json};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // InstallAcpAgentTool
 // ---------------------------------------------------------------------------
+
+/// Parameters for installing a new ACP agent.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InstallAcpAgentParams {
+    /// Unique name for the ACP agent.
+    agent_name: String,
+    /// Command to run the ACP agent (e.g. 'npx', 'node', 'gemini').
+    command:    String,
+    /// Command-line arguments for the agent.
+    #[serde(default)]
+    args:       Vec<String>,
+    /// Environment variables to pass to the agent process.
+    #[serde(default)]
+    env:        HashMap<String, String>,
+}
+
+/// Result of installing an ACP agent.
+#[derive(Debug, Serialize)]
+pub struct InstallAcpAgentResult {
+    status:     String,
+    agent_name: String,
+    message:    String,
+}
 
 /// Tool that registers a new ACP agent in the registry.
 #[derive(ToolDef)]
@@ -17,96 +42,50 @@ use serde_json::{Value, json};
     name = "install-acp-agent",
     description = "Register a new ACP agent so it becomes available for delegation via \
                    acp-delegate. The agent is not started immediately — ACP agents are spawned on \
-                   demand.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   demand."
 )]
 pub struct InstallAcpAgentTool {
     registry: AcpRegistryRef,
 }
 
 impl InstallAcpAgentTool {
+    /// Create a new instance backed by the given agent registry.
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
+}
 
-    fn schema() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Unique name for the ACP agent"
-                },
-                "command": {
-                    "type": "string",
-                    "description": "Command to run the ACP agent (e.g. 'npx', 'node', 'gemini')"
-                },
-                "args": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Command-line arguments for the agent"
-                },
-                "env": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" },
-                    "description": "Environment variables to pass to the agent process"
-                }
-            },
-            "required": ["agent_name", "command"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for InstallAcpAgentTool {
+    type Output = InstallAcpAgentResult;
+    type Params = InstallAcpAgentParams;
 
-    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let agent_name = params
-            .get("agent_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: agent_name"))?;
-
-        let command = params
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: command"))?;
-
-        let args: Vec<String> = params
-            .get("args")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let env: HashMap<String, String> = params
-            .get("env")
-            .and_then(|v| v.as_object())
-            .map(|obj| {
-                obj.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
-                    .collect()
-            })
-            .unwrap_or_default();
-
+    async fn run(
+        &self,
+        params: InstallAcpAgentParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<InstallAcpAgentResult> {
         let config = AcpAgentConfig {
-            command: command.to_owned(),
-            args,
-            env,
+            command: params.command,
+            args: params.args,
+            env: params.env,
             enabled: true,
             ..Default::default()
         };
 
         self.registry
-            .add(agent_name.to_owned(), config)
+            .add(params.agent_name.clone(), config)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to install ACP agent '{agent_name}': {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("failed to install ACP agent '{}': {e}", params.agent_name)
+            })?;
 
-        Ok(json!({
-            "status": "installed",
-            "agent_name": agent_name,
-            "message": format!(
-                "ACP agent '{agent_name}' registered. Use acp-delegate to run it."
+        Ok(InstallAcpAgentResult {
+            status:     "installed".to_owned(),
+            message:    format!(
+                "ACP agent '{}' registered. Use acp-delegate to run it.",
+                params.agent_name
             ),
+            agent_name: params.agent_name,
         })
-        .into())
     }
 }
 
@@ -114,35 +93,50 @@ impl InstallAcpAgentTool {
 // ListAcpAgentsTool
 // ---------------------------------------------------------------------------
 
+/// Summary of a single registered ACP agent.
+#[derive(Debug, Serialize)]
+pub struct AcpAgentInfo {
+    name:    String,
+    command: String,
+    args:    Vec<String>,
+    enabled: bool,
+    builtin: bool,
+}
+
+/// Result of listing ACP agents.
+#[derive(Debug, Serialize)]
+pub struct ListAcpAgentsResult {
+    agents:  Vec<AcpAgentInfo>,
+    total:   usize,
+    enabled: usize,
+}
+
 /// Tool that lists all registered ACP agents.
 #[derive(ToolDef)]
 #[tool(
     name = "list-acp-agents",
     description = "List all registered ACP agents with their status (enabled, builtin) and spawn \
-                   command.",
-    params_schema = "Self::schema_list()",
-    execute_fn = "self.exec_list"
+                   command."
 )]
 pub struct ListAcpAgentsTool {
     registry: AcpRegistryRef,
 }
 
 impl ListAcpAgentsTool {
+    /// Create a new instance backed by the given agent registry.
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
+}
 
-    fn schema_list() -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
+#[async_trait]
+impl ToolExecute for ListAcpAgentsTool {
+    type Output = ListAcpAgentsResult;
+    type Params = EmptyParams;
 
-    async fn exec_list(
+    async fn run(
         &self,
-        _params: Value,
+        _params: EmptyParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<ListAcpAgentsResult> {
         let all = self
             .registry
             .all_agents()
@@ -155,21 +149,20 @@ impl ListAcpAgentsTool {
             if config.enabled {
                 enabled_count += 1;
             }
-            agents.push(json!({
-                "name": name,
-                "command": config.command,
-                "args": config.args,
-                "enabled": config.enabled,
-                "builtin": config.builtin,
-            }));
+            agents.push(AcpAgentInfo {
+                name:    name.clone(),
+                command: config.command.clone(),
+                args:    config.args.clone(),
+                enabled: config.enabled,
+                builtin: config.builtin,
+            });
         }
 
-        Ok(json!({
-            "agents": agents,
-            "total": agents.len(),
-            "enabled": enabled_count,
+        Ok(ListAcpAgentsResult {
+            total: agents.len(),
+            enabled: enabled_count,
+            agents,
         })
-        .into())
     }
 }
 
@@ -177,64 +170,69 @@ impl ListAcpAgentsTool {
 // RemoveAcpAgentTool
 // ---------------------------------------------------------------------------
 
+/// Parameters for removing an ACP agent.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RemoveAcpAgentParams {
+    /// Name of the ACP agent to remove.
+    agent_name: String,
+}
+
+/// Result of removing an ACP agent.
+#[derive(Debug, Serialize)]
+pub struct RemoveAcpAgentResult {
+    status:     String,
+    agent_name: String,
+    message:    String,
+}
+
 /// Tool that removes an ACP agent from the registry.
 #[derive(ToolDef)]
 #[tool(
     name = "remove-acp-agent",
-    description = "Remove an ACP agent from the registry. Built-in agents cannot be removed.",
-    params_schema = "Self::schema_remove()",
-    execute_fn = "self.exec_remove"
+    description = "Remove an ACP agent from the registry. Built-in agents cannot be removed."
 )]
 pub struct RemoveAcpAgentTool {
     registry: AcpRegistryRef,
 }
 
 impl RemoveAcpAgentTool {
+    /// Create a new instance backed by the given agent registry.
     pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
+}
 
-    fn schema_remove() -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Name of the ACP agent to remove"
-                }
-            },
-            "required": ["agent_name"]
-        })
-    }
+#[async_trait]
+impl ToolExecute for RemoveAcpAgentTool {
+    type Output = RemoveAcpAgentResult;
+    type Params = RemoveAcpAgentParams;
 
-    async fn exec_remove(
+    async fn run(
         &self,
-        params: Value,
+        params: RemoveAcpAgentParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let agent_name = params
-            .get("agent_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: agent_name"))?;
-
+    ) -> anyhow::Result<RemoveAcpAgentResult> {
         let removed = self
             .registry
-            .remove(agent_name)
+            .remove(&params.agent_name)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to remove ACP agent '{agent_name}': {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("failed to remove ACP agent '{}': {e}", params.agent_name)
+            })?;
 
         if removed {
-            Ok(json!({
-                "status": "removed",
-                "agent_name": agent_name,
-                "message": format!("ACP agent '{agent_name}' removed."),
+            Ok(RemoveAcpAgentResult {
+                status:     "removed".to_owned(),
+                message:    format!("ACP agent '{}' removed.", params.agent_name),
+                agent_name: params.agent_name,
             })
-            .into())
         } else {
-            Ok(json!({
-                "status": "not_found",
-                "agent_name": agent_name,
-                "message": format!("ACP agent '{agent_name}' was not found in the registry."),
+            Ok(RemoveAcpAgentResult {
+                status:     "not_found".to_owned(),
+                message:    format!(
+                    "ACP agent '{}' was not found in the registry.",
+                    params.agent_name
+                ),
+                agent_name: params.agent_name,
             })
-            .into())
         }
     }
 }
