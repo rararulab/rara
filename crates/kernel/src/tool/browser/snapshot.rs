@@ -14,41 +14,38 @@
 
 //! Take an accessibility tree snapshot of the active page.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Capture a fresh accessibility tree snapshot of the active browser page.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-snapshot",
+    description = "Take an accessibility snapshot of the current page without performing any \
+                   action. Use this to inspect the page content after waiting or to refresh your \
+                   view.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserSnapshotTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserSnapshotTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_SNAPSHOT;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[async_trait]
-impl AgentTool for BrowserSnapshotTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Take an accessibility snapshot of the current page without performing any action. Use \
-         this to inspect the page content after waiting or to refresh your view."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {}
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

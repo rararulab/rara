@@ -14,27 +14,24 @@
 
 //! Handle a browser dialog (stub — not yet implemented).
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
-use crate::tool::{AgentTool, ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolOutput};
 
 /// Handle a browser dialog (alert, confirm, prompt). Stub — pending Lightpanda
 /// support.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-handle-dialog",
+    description = "Handle a JavaScript dialog (alert, confirm, prompt) by accepting or dismissing \
+                   it.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserHandleDialogTool;
 
 impl BrowserHandleDialogTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_HANDLE_DIALOG;
-}
-
-#[async_trait]
-impl AgentTool for BrowserHandleDialogTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Handle a JavaScript dialog (alert, confirm, prompt) by accepting or dismissing it."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["action"],
@@ -52,7 +49,7 @@ impl AgentTool for BrowserHandleDialogTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

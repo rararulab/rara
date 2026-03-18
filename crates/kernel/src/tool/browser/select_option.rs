@@ -14,26 +14,22 @@
 
 //! Select an option from a dropdown (stub — not yet implemented).
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 
-use crate::tool::{AgentTool, ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolOutput};
 
 /// Select an option from a dropdown element. Stub — pending Lightpanda support.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-select-option",
+    description = "Select an option from a dropdown (select) element on the page.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserSelectOptionTool;
 
 impl BrowserSelectOptionTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_SELECT_OPTION;
-}
-
-#[async_trait]
-impl AgentTool for BrowserSelectOptionTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Select an option from a dropdown (select) element on the page."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["ref", "values"],
@@ -51,7 +47,7 @@ impl AgentTool for BrowserSelectOptionTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
         _context: &ToolContext,

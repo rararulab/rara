@@ -14,46 +14,31 @@
 
 //! Wait for a condition in the active browser page.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Wait for text to appear, disappear, or for a time delay, then snapshot.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-wait-for",
+    description = "Wait for a condition before taking a snapshot. You can wait for text to \
+                   appear, text to disappear, or a fixed number of seconds.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserWaitForTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserWaitForTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_WAIT_FOR;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Params {
-    #[serde(default)]
-    time:      Option<f64>,
-    #[serde(default)]
-    text:      Option<String>,
-    #[serde(default)]
-    text_gone: Option<String>,
-}
-
-#[async_trait]
-impl AgentTool for BrowserWaitForTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Wait for a condition before taking a snapshot. You can wait for text to appear, text to \
-         disappear, or a fixed number of seconds."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -73,7 +58,7 @@ impl AgentTool for BrowserWaitForTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -89,4 +74,15 @@ impl AgentTool for BrowserWaitForTool {
 
         Ok(serde_json::json!({ "snapshot": snapshot }).into())
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Params {
+    #[serde(default)]
+    time:      Option<f64>,
+    #[serde(default)]
+    text:      Option<String>,
+    #[serde(default)]
+    text_gone: Option<String>,
 }

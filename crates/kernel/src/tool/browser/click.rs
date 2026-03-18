@@ -14,42 +14,31 @@
 
 //! Click an element in the active browser page.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Click an element identified by its ref ID from the accessibility snapshot.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-click",
+    description = "Click an element on the page using its ref ID from the accessibility snapshot. \
+                   Returns a fresh snapshot after clicking.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserClickTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserClickTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_CLICK;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    r#ref:   String,
-    #[serde(default)]
-    element: Option<String>,
-}
-
-#[async_trait]
-impl AgentTool for BrowserClickTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Click an element on the page using its ref ID from the accessibility snapshot. Returns a \
-         fresh snapshot after clicking."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["ref"],
@@ -66,7 +55,7 @@ impl AgentTool for BrowserClickTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -82,4 +71,11 @@ impl AgentTool for BrowserClickTool {
 
         Ok(serde_json::json!({ "snapshot": snapshot }).into())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    r#ref:   String,
+    #[serde(default)]
+    element: Option<String>,
 }

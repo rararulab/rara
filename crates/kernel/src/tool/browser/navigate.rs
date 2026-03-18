@@ -14,40 +14,31 @@
 
 //! Navigate to a URL in the browser.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Navigate to a URL, returning the page title and accessibility snapshot.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-navigate",
+    description = "Navigate to a URL in the browser. Returns the page title and an accessibility \
+                   snapshot of the page content.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserNavigateTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserNavigateTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_NAVIGATE;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    url: String,
-}
-
-#[async_trait]
-impl AgentTool for BrowserNavigateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Navigate to a URL in the browser. Returns the page title and an accessibility snapshot of \
-         the page content."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["url"],
@@ -60,7 +51,7 @@ impl AgentTool for BrowserNavigateTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -82,4 +73,9 @@ impl AgentTool for BrowserNavigateTool {
         })
         .into())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    url: String,
 }

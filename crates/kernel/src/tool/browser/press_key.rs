@@ -14,40 +14,31 @@
 
 //! Press a keyboard key in the active browser page.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde::Deserialize;
 
 use crate::{
     browser::BrowserManagerRef,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Press a keyboard key (e.g. Enter, Escape, ArrowDown) in the active page.
+#[derive(ToolDef)]
+#[tool(
+    name = "browser-press-key",
+    description = "Press a keyboard key in the active browser page. Use key names like 'Enter', \
+                   'Escape', 'Tab', 'ArrowDown', etc.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct BrowserPressKeyTool {
     manager: BrowserManagerRef,
 }
 
 impl BrowserPressKeyTool {
-    pub const NAME: &str = crate::tool_names::BROWSER_PRESS_KEY;
-
     pub fn new(manager: BrowserManagerRef) -> Self { Self { manager } }
-}
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    key: String,
-}
-
-#[async_trait]
-impl AgentTool for BrowserPressKeyTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Press a keyboard key in the active browser page. Use key names like 'Enter', 'Escape', \
-         'Tab', 'ArrowDown', etc."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "required": ["key"],
@@ -60,7 +51,7 @@ impl AgentTool for BrowserPressKeyTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -75,4 +66,9 @@ impl AgentTool for BrowserPressKeyTool {
 
         Ok(serde_json::json!({ "status": "ok" }).into())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    key: String,
 }
