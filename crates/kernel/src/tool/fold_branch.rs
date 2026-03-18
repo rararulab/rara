@@ -189,6 +189,7 @@ impl AgentTool for FoldBranchTool {
             metadata: Default::default(),
             sandbox: None,
             default_execution_mode: None,
+            pause_turn_threshold: None,
         };
 
         // Resolve principal from parent session.

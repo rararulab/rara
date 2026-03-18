@@ -221,6 +221,12 @@ pub struct AgentManifest {
     /// unless overridden by session-level `/msg_version`.
     #[serde(default)]
     pub default_execution_mode: Option<ExecutionMode>,
+    /// Per-turn tool call threshold that triggers a pause requiring user
+    /// confirmation. When `tool_calls_made >= pause_turn_threshold`, the
+    /// agent loop pauses and waits for user input (continue/stop).
+    /// Default: 15.
+    #[serde(default)]
+    pub pause_turn_threshold:   Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.

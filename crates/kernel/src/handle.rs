@@ -525,6 +525,37 @@ impl KernelHandle {
             .unwrap_or_default()
     }
 
+    /// Register a pause-turn oneshot sender on the session.
+    /// Called by the agent loop when tool call threshold is reached.
+    pub fn register_pause_turn(
+        &self,
+        session_key: &SessionKey,
+        tx: tokio::sync::oneshot::Sender<crate::io::PauseTurnDecision>,
+    ) {
+        self.process_table.with_mut(session_key, |session| {
+            session.pending_pause_turn = Some(tx);
+        });
+    }
+
+    /// Resolve a pending pause-turn decision.
+    /// Called by channel adapters when user clicks continue/stop.
+    /// Returns `true` if the decision was delivered.
+    pub fn resolve_pause_turn(
+        &self,
+        session_key: &SessionKey,
+        decision: crate::io::PauseTurnDecision,
+    ) -> bool {
+        self.process_table
+            .with_mut(session_key, |session| {
+                if let Some(tx) = session.pending_pause_turn.take() {
+                    tx.send(decision).is_ok()
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+    }
+
     // -- Memory operations --
 
     /// Store a value in a session's private namespace.

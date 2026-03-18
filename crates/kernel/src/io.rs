@@ -824,6 +824,15 @@ pub enum BackgroundTaskStatus {
     Cancelled,
 }
 
+/// Decision from user when agent loop is paused at tool call threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseTurnDecision {
+    /// Resume agent loop execution.
+    Continue,
+    /// Stop the agent loop, return partial results.
+    Stop,
+}
+
 /// Incremental events emitted during agent execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -916,6 +925,18 @@ pub enum StreamEvent {
         annotations:     Vec<serde_json::Value>,
         history:         Vec<serde_json::Value>,
         selected_anchor: Option<String>,
+    },
+    /// Agent loop paused because tool call count reached threshold.
+    /// Client should display inline buttons for continue/stop.
+    PauseTurn {
+        session_key:     String,
+        tool_calls_made: usize,
+        elapsed_secs:    u64,
+    },
+    /// User resolved a pause-turn decision.
+    PauseTurnResolved {
+        session_key: String,
+        continued:   bool,
     },
 }
 

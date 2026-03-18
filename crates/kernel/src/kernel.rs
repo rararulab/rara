@@ -765,6 +765,7 @@ impl Kernel {
             origin_endpoint,
             pause_buffer: Vec::new(),
             background_tasks: Vec::new(),
+            pending_pause_turn: None,
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _parent_child_permit: None,
             _global_permit: global_permit,
@@ -1400,6 +1401,7 @@ impl Kernel {
             }),
             sandbox:                None,
             default_execution_mode: None,
+            pause_turn_threshold:   None,
         };
 
         // 3. Spawn the agent.

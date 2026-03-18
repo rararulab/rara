@@ -309,6 +309,10 @@ pub struct Session {
     pub pause_buffer: Vec<KernelEventEnvelope>,
     /// Active background tasks spawned by this session.
     pub background_tasks: Vec<BackgroundTaskEntry>,
+    /// Pending pause-turn oneshot sender. When the agent loop pauses at
+    /// the tool call threshold, it registers a sender here and awaits
+    /// the receiver. Telegram adapter (or other channel) resolves it.
+    pub pending_pause_turn: Option<tokio::sync::oneshot::Sender<crate::io::PauseTurnDecision>>,
     /// The channel endpoint that originated this session (e.g. a specific
     /// Telegram chat). Used as a fallback for reply routing when the
     /// triggering message is synthetic (no platform origin).

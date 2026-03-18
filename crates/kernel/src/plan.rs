@@ -742,6 +742,7 @@ async fn execute_worker_step(
         metadata:               serde_json::Value::Null,
         sandbox:                None,
         default_execution_mode: None,
+        pause_turn_threshold:   None,
     };
 
     info!(

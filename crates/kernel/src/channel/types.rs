@@ -433,6 +433,17 @@ pub enum StreamEvent {
     Done { text: String },
     /// Streaming terminated with an error.
     Error { message: String },
+    /// Agent loop paused at tool call threshold — adapter should prompt user.
+    PauseTurn {
+        session_key:     String,
+        tool_calls_made: usize,
+        elapsed_secs:    u64,
+    },
+    /// Pause resolved by user.
+    PauseTurnResolved {
+        session_key: String,
+        continued:   bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
