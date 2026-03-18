@@ -25,8 +25,9 @@ pub(crate) const CHILD_RESULT_SAFETY_LIMIT_BYTES: usize = 8000;
 /// Structured-output instructions appended to child agent system prompts
 /// so they self-summarize before returning results to the parent.
 pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
-    "\n\nWhen done, provide a structured result:\n1. Summary (2-3 sentences)\n2. Key findings or \
-     outputs (bullet points)\nKeep your final response under 1500 characters.";
+    "\n\nWhen done, provide a structured result:\n1. Summary (2-3 sentences of what you did and \
+     the outcome)\n2. Key changes or findings (bullet points)\n3. Issues encountered (if \
+     any)\nKeep your final response concise — under 1500 characters.";
 
 use std::{
     collections::HashMap,
