@@ -703,6 +703,39 @@ fn ensure_agent_md(path: &Path, agent_name: &str) {
     }
 }
 
+/// Build the full agent system prompt (soul + manifest + agent.md + runtime
+/// contract + skills).
+///
+/// Used by both the reactive agent loop and the plan executor to ensure
+/// consistent agent identity across execution modes.
+pub(crate) fn build_agent_system_prompt(handle: &KernelHandle, manifest: &AgentManifest) -> String {
+    // 1. Soul prompt: prepend soul text if available, otherwise use manifest prompt
+    //    as-is.
+    let effective_prompt = match resolve_soul_prompt(&manifest.name) {
+        Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
+        None => manifest.system_prompt.clone(),
+    };
+    // 2. Append external agent.md (tool knowledge, CLI guides, operational notes).
+    let effective_prompt = if let Some(agent_md) = load_agent_md(&manifest.name) {
+        format!("{effective_prompt}\n\n<agent_knowledge>\n{agent_md}\n</agent_knowledge>")
+    } else {
+        effective_prompt
+    };
+    // 3. Append runtime contract (tape actions, delegation rules, etc.).
+    let has_kernel_tool = handle.tool_registry().get("kernel").is_some();
+    let effective_prompt =
+        build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
+    // 4. Append available skills after the static runtime contract so that
+    // the stable prefix (soul + system_prompt + agent.md + contract) stays
+    // intact for provider-side prompt caching.
+    let skills_block = handle.skills_prompt();
+    if skills_block.is_empty() {
+        effective_prompt
+    } else {
+        format!("{effective_prompt}\n\n{skills_block}")
+    }
+}
+
 fn build_runtime_contract_prompt(
     base_prompt: &str,
     has_kernel_tool: bool,
@@ -835,31 +868,8 @@ pub(crate) async fn run_agent_loop(
     };
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
-    let has_kernel_tool = tools.get("kernel").is_some();
-    let (effective_prompt, has_soul) = {
-        let soul_text = resolve_soul_prompt(&manifest.name);
-        match soul_text {
-            Some(soul) => (format!("{soul}\n\n---\n\n{}", manifest.system_prompt), true),
-            None => (manifest.system_prompt.clone(), false),
-        }
-    };
-    // Append external agent.md (tool knowledge, CLI guides, operational notes)
-    let effective_prompt = if let Some(agent_md) = load_agent_md(&manifest.name) {
-        format!("{effective_prompt}\n\n<agent_knowledge>\n{agent_md}\n</agent_knowledge>")
-    } else {
-        effective_prompt
-    };
-    let effective_prompt =
-        build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
-    // Append available skills *after* the static runtime contract so that
-    // the stable prefix (soul + system_prompt + agent.md + contract) stays
-    // intact for provider-side prompt caching.
-    let skills_block = handle.skills_prompt();
-    let effective_prompt = if skills_block.is_empty() {
-        effective_prompt
-    } else {
-        format!("{effective_prompt}\n\n{skills_block}")
-    };
+    let effective_prompt = build_agent_system_prompt(handle, &manifest);
+    let has_soul = resolve_soul_prompt(&manifest.name).is_some();
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
