@@ -75,13 +75,14 @@ pub struct CreatePlanParams {
 
 #[async_trait]
 impl super::ToolExecute for CreatePlanTool {
+    type Output = serde_json::Value;
     type Params = CreatePlanParams;
 
     async fn run(
         &self,
         input: CreatePlanParams,
         _context: &super::ToolContext,
-    ) -> anyhow::Result<super::ToolOutput> {
+    ) -> anyhow::Result<serde_json::Value> {
         if input.steps.is_empty() {
             return Err(anyhow::anyhow!("plan must have at least one step"));
         }
@@ -114,6 +115,6 @@ impl super::ToolExecute for CreatePlanTool {
         let json = serde_json::to_value(&plan)
             .map_err(|e| anyhow::anyhow!("failed to serialize plan: {e}"))?;
 
-        Ok(json.into())
+        Ok(json)
     }
 }

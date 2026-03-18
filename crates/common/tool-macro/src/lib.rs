@@ -154,7 +154,8 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             let typed: <Self as crate::tool::ToolExecute>::Params =
                 serde_json::from_value(params)
                     .map_err(|e| anyhow::anyhow!("invalid params for '{}': {e}", self.name()))?;
-            crate::tool::ToolExecute::run(self, typed, context).await
+            let output = crate::tool::ToolExecute::run(self, typed, context).await?;
+            crate::tool::ToolOutput::from_serialize(&output)
         }
     };
 

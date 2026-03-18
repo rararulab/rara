@@ -22,7 +22,7 @@ use crate::{
     handle::KernelHandle,
     io::{BackgroundTaskStatus, StreamEvent},
     session::{SessionKey, Signal},
-    tool::{ToolContext, ToolExecute, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Builtin tool that cancels a running background agent.
@@ -55,13 +55,14 @@ pub struct CancelBackgroundParams {
 
 #[async_trait]
 impl ToolExecute for CancelBackgroundTool {
+    type Output = serde_json::Value;
     type Params = CancelBackgroundParams;
 
     async fn run(
         &self,
         p: CancelBackgroundParams,
         _context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    ) -> anyhow::Result<serde_json::Value> {
         let task_id = SessionKey::try_from_raw(&p.task_id)
             .map_err(|_| anyhow::anyhow!("invalid task_id: {}", p.task_id))?;
         let reason = p.reason.as_deref().unwrap_or("cancelled by parent");
@@ -70,8 +71,7 @@ impl ToolExecute for CancelBackgroundTool {
             return Ok(serde_json::json!({
                 "error": "task not found or not a background task of this session",
                 "task_id": p.task_id,
-            })
-            .into());
+            }));
         }
 
         info!(
@@ -87,8 +87,7 @@ impl ToolExecute for CancelBackgroundTool {
             return Ok(serde_json::json!({
                 "error": format!("failed to send terminate signal: {e}"),
                 "task_id": p.task_id,
-            })
-            .into());
+            }));
         }
 
         // Signal succeeded — now safe to remove from active list so
@@ -109,7 +108,6 @@ impl ToolExecute for CancelBackgroundTool {
             "task_id": p.task_id,
             "status": "cancelled",
             "reason": reason,
-        })
-        .into())
+        }))
     }
 }
