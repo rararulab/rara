@@ -160,6 +160,31 @@ Based on this context, create a REVISED plan using the `create-plan` tool. The n
 You MUST call the `create-plan` tool with the revised plan."#;
 
 // ---------------------------------------------------------------------------
+// Tool summary for planning context
+// ---------------------------------------------------------------------------
+
+/// Build a compact tool summary for the planning LLM.
+///
+/// Lists each tool's name and description so the planner knows what
+/// capabilities are available when decomposing tasks into steps.
+///
+/// Returns an empty string when the registry is empty; callers should
+/// skip injection in that case to avoid a blank block in the prompt.
+fn build_tool_summary(tools: &crate::tool::ToolRegistry) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
+    // Sort by name for deterministic output (stable prompt caching).
+    let mut entries: Vec<_> = tools.iter().collect();
+    entries.sort_by_key(|(name, _)| *name);
+    let mut lines = vec!["Available tools:".to_string()];
+    for (name, tool) in entries {
+        lines.push(format!("- {}: {}", name, tool.description()));
+    }
+    lines.join("\n")
+}
+
+// ---------------------------------------------------------------------------
 // Plan executor
 // ---------------------------------------------------------------------------
 
@@ -198,7 +223,32 @@ pub(crate) async fn run_plan_loop(
 
     // -- Phase 1: Plan creation -----------------------------------------------
 
-    let plan = create_plan_via_llm(handle, session_key, &user_text, &tool_context).await?;
+    // Build agent context for the planner (same identity as reactive loop).
+    let manifest =
+        handle
+            .session_manifest(&session_key)
+            .await
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to get manifest for planning: {e}"),
+            })?;
+    let (agent_prompt, _) = crate::agent::build_agent_system_prompt(handle, &manifest);
+    let full_tools = handle
+        .session_tool_registry(session_key)
+        .await
+        .map_err(|e| KernelError::AgentExecution {
+            message: format!("failed to get tool registry for planning: {e}"),
+        })?;
+    let tools_for_plan = full_tools.filtered(&manifest.tools);
+
+    let plan = create_plan_via_llm(
+        handle,
+        session_key,
+        &user_text,
+        &tool_context,
+        &agent_prompt,
+        &tools_for_plan,
+    )
+    .await?;
 
     // Persist plan to tape as a Plan entry.
     let plan_json = serde_json::to_value(&plan).map_err(|e| KernelError::AgentExecution {
@@ -424,6 +474,8 @@ pub(crate) async fn run_plan_loop(
                 &remaining_steps,
                 &reason,
                 &tool_context,
+                &agent_prompt,
+                &tools_for_plan,
             )
             .await
             {
@@ -552,6 +604,8 @@ async fn create_plan_via_llm(
     session_key: SessionKey,
     user_text: &str,
     tool_context: &crate::tool::ToolContext,
+    agent_system_prompt: &str,
+    tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
     let (driver, model) = handle
         .session_resolve_driver(session_key)
@@ -567,8 +621,19 @@ async fn create_plan_via_llm(
         parameters:  create_plan_tool.parameters_schema(),
     };
 
+    // Compose planning prompt with agent identity and available tools so
+    // the planner understands the agent's capabilities.
+    let tool_summary = build_tool_summary(tools);
+    let mut planning_prompt = format!(
+        "{PLANNING_SYSTEM_PROMPT}\n\n<agent_context>\n{agent_system_prompt}\n</agent_context>"
+    );
+    if !tool_summary.is_empty() {
+        planning_prompt.push_str("\n\n");
+        planning_prompt.push_str(&tool_summary);
+    }
+
     let messages = vec![
-        llm::Message::system(PLANNING_SYSTEM_PROMPT),
+        llm::Message::system(&planning_prompt),
         llm::Message::user(user_text),
     ];
 
@@ -646,6 +711,8 @@ async fn replan_via_llm(
     remaining_steps: &[&PlanStep],
     failure_reason: &str,
     tool_context: &crate::tool::ToolContext,
+    agent_system_prompt: &str,
+    tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
     let (driver, model) = handle
         .session_resolve_driver(session_key)
@@ -696,8 +763,19 @@ async fn replan_via_llm(
         },
     );
 
+    // Compose replan prompt with agent identity and available tools so
+    // the replanner understands the agent's capabilities.
+    let tool_summary = build_tool_summary(tools);
+    let mut replan_prompt = format!(
+        "{REPLAN_SYSTEM_PROMPT}\n\n<agent_context>\n{agent_system_prompt}\n</agent_context>"
+    );
+    if !tool_summary.is_empty() {
+        replan_prompt.push_str("\n\n");
+        replan_prompt.push_str(&tool_summary);
+    }
+
     let messages = vec![
-        llm::Message::system(REPLAN_SYSTEM_PROMPT),
+        llm::Message::system(&replan_prompt),
         llm::Message::user(replan_context),
     ];
 

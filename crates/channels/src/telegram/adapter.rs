@@ -1755,11 +1755,19 @@ async fn handle_cascade_callback(
                 InlineKeyboardButton::callback("\u{1f4ca} \u{8be6}\u{60c5}", trace_cb),
                 InlineKeyboardButton::callback("\u{1f50d} Cascade", cascade_cb),
             ]]);
-            let _ = bot
+            if let Err(e) = bot
                 .edit_message_text(ChatId(cid), MessageId(mid), &compact)
                 .parse_mode(ParseMode::Html)
                 .reply_markup(keyboard)
-                .await;
+                .await
+            {
+                warn!(
+                    error = %e,
+                    chat_id = cid,
+                    msg_id = mid,
+                    "cascade: failed to restore compact summary"
+                );
+            }
         }
 
         // "show" → build cascade trace and display in-place.
@@ -1787,6 +1795,12 @@ async fn handle_cascade_callback(
                 }
             };
 
+            tracing::debug!(
+                session_id = %session_id,
+                entry_count = entries.len(),
+                "cascade: loaded tape entries"
+            );
+
             let rara_message_id = match handle.trace_service().get(trace_id).await {
                 Ok(Some(t)) => t.rara_message_id,
                 _ => String::new(),
@@ -1807,6 +1821,12 @@ async fn handle_cascade_callback(
 
             let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
 
+            tracing::debug!(
+                ticks = cascade.ticks.len(),
+                total_entries = cascade.summary.total_entries,
+                "cascade: built trace"
+            );
+
             if cascade.ticks.is_empty() {
                 let _ = bot
                     .answer_callback_query(callback.id.clone())
@@ -1825,11 +1845,20 @@ async fn handle_cascade_callback(
                 "\u{1f50d} \u{6536}\u{8d77}",
                 hide_cb,
             )]]);
-            let _ = bot
+            if let Err(e) = bot
                 .edit_message_text(ChatId(cid), MessageId(mid), &html)
                 .parse_mode(ParseMode::Html)
                 .reply_markup(keyboard)
-                .await;
+                .await
+            {
+                warn!(
+                    error = %e,
+                    chat_id = cid,
+                    msg_id = mid,
+                    html_len = html.len(),
+                    "cascade: failed to edit message with cascade view"
+                );
+            }
         }
     }
 }
