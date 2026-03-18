@@ -24,7 +24,7 @@ use tracing::{debug, info, warn};
 use crate::{
     delegate::RaraDelegate,
     error::{self, AcpError},
-    events::AcpEvent,
+    events::{AcpEvent, PermissionBridge},
     registry::AgentCommand,
 };
 
@@ -55,11 +55,16 @@ impl AcpConnection {
     /// Returns the connection handle and an mpsc receiver for [`AcpEvent`]s
     /// emitted by the delegate (session notifications, file I/O, permissions).
     ///
+    /// When `permission_tx` is `Some`, permission requests are forwarded via
+    /// [`PermissionBridge`] for interactive resolution. When `None`, the
+    /// delegate auto-approves all requests.
+    ///
     /// The caller **must** drive the returned connection on a `LocalSet`
     /// because the underlying ACP protocol is `!Send`.
     pub async fn connect(
         command: &AgentCommand,
         cwd: &Path,
+        permission_tx: Option<mpsc::Sender<PermissionBridge>>,
     ) -> Result<(Self, mpsc::Receiver<AcpEvent>), AcpError> {
         // -- 1. Spawn child process ------------------------------------------
         let mut child = {
@@ -103,7 +108,10 @@ impl AcpConnection {
         // -- 3. Create delegate + event channel ------------------------------
         let (event_tx, event_rx) = mpsc::channel::<AcpEvent>(256);
         let exit_event_tx = event_tx.clone();
-        let delegate = RaraDelegate::new(event_tx, cwd.to_path_buf());
+        let delegate = match permission_tx {
+            Some(perm_tx) => RaraDelegate::new(event_tx, perm_tx, cwd.to_path_buf()),
+            None => RaraDelegate::new_auto_approve(event_tx, cwd.to_path_buf()),
+        };
 
         // -- 4. Build ClientSideConnection -----------------------------------
         // The spawn closure runs futures on the current LocalSet via
