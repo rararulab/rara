@@ -27,6 +27,7 @@ jiff.workspace = true
 lettre.workspace = true
 notify = { workspace = true }
 rand.workspace = true
+rara-acp.workspace = true
 rara-agents.workspace = true
 rara-backend-admin = { workspace = true }
 rara-channels = { workspace = true }

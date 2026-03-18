@@ -92,6 +92,9 @@ pub mod tool_names {
     pub const BROWSER_HANDLE_DIALOG: &str = "browser-handle-dialog";
     pub const BROWSER_CONSOLE_MESSAGES: &str = "browser-console-messages";
     pub const BROWSER_NETWORK_REQUESTS: &str = "browser-network-requests";
+
+    // ACP delegation
+    pub const ACP_DELEGATE: &str = "acp-delegate";
 }
 
 pub use error::{KernelError, Result};
