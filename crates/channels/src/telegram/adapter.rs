@@ -182,7 +182,6 @@ enum StepStatus {
 /// State of a single plan step for display.
 #[derive(Debug, Clone)]
 struct PlanStepState {
-    index:  usize,
     task:   String,
     status: StepStatus,
 }
@@ -474,7 +473,7 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
     )];
     lines.push(String::new());
 
-    for step in steps {
+    for (i, step) in steps.iter().enumerate() {
         let (icon, suffix) = match &step.status {
             StepStatus::Done => ("\u{2705}", String::new()),
             StepStatus::Running => ("\u{25b6}\u{fe0f}", String::new()),
@@ -486,7 +485,7 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         };
         lines.push(format!(
             "{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}{suffix}",
-            step.index + 1,
+            i + 1,
             step.task
         ));
 
@@ -2692,8 +2691,7 @@ fn spawn_stream_forwarder(
                                 continue;
                             }
                             let steps: Vec<PlanStepState> = (0..total_steps)
-                                .map(|i| PlanStepState {
-                                    index: i,
+                                .map(|_| PlanStepState {
                                     task: String::new(),
                                     status: StepStatus::Pending,
                                 })
@@ -2734,6 +2732,13 @@ fn spawn_stream_forwarder(
 
                                 // Update current step.
                                 if let Some(ref mut steps) = progress.plan_steps {
+                                    // Dynamically extend steps if replan introduced new indices.
+                                    while current_step >= steps.len() {
+                                        steps.push(PlanStepState {
+                                            task:   String::new(),
+                                            status: StepStatus::Pending,
+                                        });
+                                    }
                                     if let Some(step) = steps.get_mut(current_step) {
                                         if status_text.contains("\u{5b8c}\u{6210}") {
                                             step.status = StepStatus::Done;
@@ -2753,7 +2758,6 @@ fn spawn_stream_forwarder(
                                                 step.task = status_text.clone();
                                             }
                                         }
-                                        step.index = current_step;
                                     }
                                 }
 
@@ -2784,7 +2788,7 @@ fn spawn_stream_forwarder(
                                 progress.last_edit = Instant::now();
                             }
                         }
-                        Ok(StreamEvent::PlanCompleted { summary: _ }) => {
+                        Ok(StreamEvent::PlanCompleted { summary }) => {
                             if progress.plan_steps.is_some() {
                                 // Mark running steps as done; leave pending steps as-is
                                 // (they were never started, so marking them "done" would
@@ -2798,15 +2802,20 @@ fn spawn_stream_forwarder(
                                     // Save plan steps for trace detail view.
                                     progress.saved_plan_steps = steps
                                         .iter()
-                                        .map(|s| {
+                                        .enumerate()
+                                        .map(|(i, s)| {
                                             let icon = match &s.status {
                                                 StepStatus::Done => "\u{2705}",
                                                 StepStatus::Failed(_) => "\u{274c}",
                                                 _ => "\u{2b1c}",
                                             };
-                                            format!("{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}", s.index + 1, s.task)
+                                            format!("{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}", i + 1, s.task)
                                         })
                                         .collect();
+                                    // Append completion summary.
+                                    if !summary.is_empty() {
+                                        progress.saved_plan_steps.push(format!("\u{2705} {summary}"));
+                                    }
                                 }
 
                                 // Final render.
