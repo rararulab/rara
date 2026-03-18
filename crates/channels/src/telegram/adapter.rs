@@ -1795,6 +1795,12 @@ async fn handle_cascade_callback(
                 }
             };
 
+            tracing::debug!(
+                session_id = %session_id,
+                entry_count = entries.len(),
+                "cascade: loaded tape entries"
+            );
+
             let rara_message_id = match handle.trace_service().get(trace_id).await {
                 Ok(Some(t)) => t.rara_message_id,
                 _ => String::new(),
@@ -1814,6 +1820,12 @@ async fn handle_cascade_callback(
             };
 
             let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
+
+            tracing::debug!(
+                ticks = cascade.ticks.len(),
+                total_entries = cascade.summary.total_entries,
+                "cascade: built trace"
+            );
 
             if cascade.ticks.is_empty() {
                 let _ = bot
