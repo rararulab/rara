@@ -13,6 +13,8 @@
 // limitations under the License.
 
 //! Directory listing primitive.
+//!
+//! Lists entries in a directory with name, type, and size metadata.
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -29,19 +31,21 @@ pub struct ListDirectoryParams {
     path: String,
 }
 
+/// Single entry in a directory listing.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
-    pub name:       String,
+    name:       String,
     #[serde(rename = "type")]
-    pub entry_type: String,
-    pub size:       u64,
+    entry_type: String,
+    size:       u64,
 }
 
+/// Typed result returned by the list-directory tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct ListDirectoryResult {
-    pub entries:   Vec<DirEntry>,
-    pub total:     usize,
-    pub truncated: bool,
+    entries:   Vec<DirEntry>,
+    total:     usize,
+    truncated: bool,
 }
 
 /// Layer 1 primitive: list directory contents.
@@ -66,10 +70,13 @@ impl ToolExecute for ListDirectoryTool {
         params: ListDirectoryParams,
         _context: &ToolContext,
     ) -> anyhow::Result<ListDirectoryResult> {
-        let path = if std::path::Path::new(&params.path).is_absolute() {
-            std::path::PathBuf::from(&params.path)
-        } else {
-            rara_paths::workspace_dir().join(&params.path)
+        let path = {
+            let p = std::path::PathBuf::from(params.path);
+            if p.is_absolute() {
+                p
+            } else {
+                rara_paths::workspace_dir().join(p)
+            }
         };
         let mut read_dir = tokio::fs::read_dir(&path)
             .await
@@ -85,6 +92,7 @@ impl ToolExecute for ListDirectoryTool {
             if entries.len() >= MAX_ENTRIES {
                 continue;
             }
+
             let name = entry.file_name().to_string_lossy().into_owned();
             let file_type = entry
                 .file_type()
@@ -97,11 +105,13 @@ impl ToolExecute for ListDirectoryTool {
             } else {
                 "file"
             };
+
             let size = if file_type.is_file() {
                 entry.metadata().await.map(|m| m.len()).unwrap_or(0)
             } else {
                 0
             };
+
             entries.push(DirEntry {
                 name,
                 entry_type: type_str.to_owned(),
