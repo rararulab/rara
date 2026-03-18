@@ -880,12 +880,14 @@ async fn execute_worker_step(
         system_prompt:          format!(
             "You are a worker agent executing a specific task as part of a larger plan.\n\nYour \
              task: {}\n\nAcceptance criteria: {}\n\nFocus exclusively on this task. Report your \
-             results clearly when done.",
+             results clearly when done.\n\nIf a step requires interactive human action (e.g., \
+             browser login, manual approval) that you cannot perform, report what is needed and \
+             stop immediately instead of retrying.",
             step.task, step.acceptance
         ),
         soul_prompt:            None,
         provider_hint:          None,
-        max_iterations:         Some(20),
+        max_iterations:         Some(12),
         tools:                  vec!["*".to_string()], // inherit all tools
         max_children:           None,
         max_context_tokens:     None,
