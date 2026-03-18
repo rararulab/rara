@@ -25,8 +25,18 @@ use crate::{
     delegate::RaraDelegate,
     error::{self, AcpError},
     events::{AcpEvent, PermissionBridge},
-    registry::AgentCommand,
 };
+
+/// Resolved command to spawn an agent subprocess.
+#[derive(Debug, Clone)]
+pub struct AgentCommand {
+    /// Executable path or command name.
+    pub program: String,
+    /// Command-line arguments.
+    pub args:    Vec<String>,
+    /// Optional environment variables to set for the subprocess.
+    pub env:     Vec<(String, String)>,
+}
 
 /// Handle to a running ACP agent subprocess.
 ///

@@ -13,10 +13,10 @@ pub mod thread;
 // Re-export commonly used types from agent_client_protocol so downstream
 // crates don't need a direct dependency on the protocol crate.
 pub use agent_client_protocol::{RequestPermissionOutcome, SelectedPermissionOutcome};
-pub use connection::AcpConnection;
+pub use connection::{AcpConnection, AgentCommand};
 pub use error::AcpError;
 pub use events::{
     AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus,
 };
-pub use registry::{AgentCommand, AgentKind, AgentRegistry};
+pub use registry::{AcpAgentConfig, AcpRegistry, AcpRegistryRef, FSAcpRegistry};
 pub use thread::{AcpThread, AcpThreadEntry, AcpThreadStatus, AcpToolCall, PermissionRequestInfo};

@@ -14,16 +14,16 @@
 
 //! ACP delegate tool — dispatches a task to an external coding agent via ACP.
 //!
-//! Spawns a child agent process (Claude, Codex, Gemini, or custom), sends a
-//! prompt over the Agent Communication Protocol, collects streaming events,
-//! and returns a structured JSON summary.
+//! Spawns a child agent process, sends a prompt over the Agent Communication
+//! Protocol, collects streaming events, and returns a structured JSON summary.
+//! Agents are resolved dynamically from the [`AcpRegistry`].
 
 use std::{future::Future, path::PathBuf, pin::Pin};
 
 use rara_acp::{
     AcpThread, PermissionRequestInfo, RequestPermissionOutcome, SelectedPermissionOutcome,
     events::{AcpEvent, StopReason, ToolCallStatus},
-    registry::AgentKind,
+    registry::AcpRegistryRef,
 };
 use rara_kernel::tool::{ToolContext, ToolOutput};
 use rara_tool_macro::ToolDef;
@@ -35,21 +35,23 @@ use tracing::{debug, warn};
 /// The tool spawns the requested agent as a subprocess, communicates using
 /// the Agent Communication Protocol (stdin/stdout JSON-RPC), and collects
 /// the agent's text output and tool call summaries into a single JSON
-/// response.
+/// response.  Agents are resolved from the [`AcpRegistry`] at runtime.
 #[derive(ToolDef)]
 #[tool(
     name = "acp-delegate",
-    description = "Delegate a task to an external coding agent (Claude, Codex, or Gemini) via the \
-                   Agent Communication Protocol. The agent runs as a subprocess, executes the \
-                   prompt, and returns its text output and tool call summary.",
+    description = "Delegate a task to an external coding agent via the Agent Communication \
+                   Protocol. The agent runs as a subprocess, executes the prompt, and returns its \
+                   text output and tool call summary. Use list-acp-agents to see available agents.",
     params_schema = "Self::schema()",
     execute_fn = "self.exec"
 )]
-pub struct AcpDelegateTool;
+pub struct AcpDelegateTool {
+    registry: AcpRegistryRef,
+}
 
 impl AcpDelegateTool {
-    /// Create a new instance.
-    pub fn new() -> Self { Self }
+    /// Create a new instance backed by the given agent registry.
+    pub fn new(registry: AcpRegistryRef) -> Self { Self { registry } }
 
     fn schema() -> serde_json::Value {
         json!({
@@ -57,8 +59,7 @@ impl AcpDelegateTool {
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "Agent to delegate to: 'claude', 'codex', or 'gemini'",
-                    "enum": ["claude", "codex", "gemini"]
+                    "description": "Name of the ACP agent to delegate to (e.g. 'claude', 'codex', 'gemini', or any custom agent)"
                 },
                 "prompt": {
                     "type": "string",
@@ -94,21 +95,28 @@ impl AcpDelegateTool {
             .map(PathBuf::from)
             .unwrap_or_else(|| rara_paths::workspace_dir().clone());
 
-        let agent_kind = match agent_name {
-            "claude" => AgentKind::Claude,
-            "codex" => AgentKind::Codex,
-            "gemini" => AgentKind::Gemini,
-            other => {
-                return Err(anyhow::anyhow!(
-                    "unsupported agent '{other}': only 'claude', 'codex', and 'gemini' are \
-                     supported"
-                ));
-            }
-        };
+        // Resolve agent from registry.
+        let config = self
+            .registry
+            .get(agent_name)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to look up agent '{agent_name}': {e}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown ACP agent '{agent_name}'. Use list-acp-agents to see available \
+                     agents."
+                )
+            })?;
+
+        if !config.enabled {
+            return Err(anyhow::anyhow!("ACP agent '{agent_name}' is disabled"));
+        }
+
+        let command = config.to_agent_command();
 
         // Spawn the AcpThread — handles subprocess, handshake, and session
         // creation internally.
-        let mut thread = AcpThread::spawn(agent_kind, cwd)
+        let mut thread = AcpThread::spawn(agent_name, command, cwd)
             .await
             .map_err(|e| anyhow::anyhow!("ACP spawn failed: {e}"))?;
 

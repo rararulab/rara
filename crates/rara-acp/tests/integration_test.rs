@@ -1,60 +1,199 @@
-//! Basic integration tests for rara-acp types and registry.
+//! Integration tests for rara-acp types and FSAcpRegistry.
 //!
 //! These tests verify the registry, event types, and error types without
 //! spawning a real ACP agent process.
 
 use agent_client_protocol::{RequestPermissionOutcome, SelectedPermissionOutcome};
 use rara_acp::{
-    AcpEvent, AcpThreadStatus, AgentCommand, AgentKind, AgentRegistry, FileOperation,
+    AcpAgentConfig, AcpEvent, AcpRegistry, AcpThreadStatus, FSAcpRegistry, FileOperation,
     PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus,
 };
 use tokio::sync::{mpsc, oneshot};
 
-#[test]
-fn registry_resolves_builtin_agents() {
-    let registry = AgentRegistry::with_defaults();
+// -- FSAcpRegistry tests --
 
-    let claude = registry
-        .resolve(&AgentKind::Claude)
-        .expect("claude registered");
-    assert_eq!(claude.program, "npx");
-    assert!(claude.args.iter().any(|a| a.contains("claude")));
-
-    let codex = registry
-        .resolve(&AgentKind::Codex)
-        .expect("codex registered");
-    assert_eq!(codex.program, "npx");
-    assert!(codex.args.iter().any(|a| a.contains("codex")));
-
-    let gemini = registry
-        .resolve(&AgentKind::Gemini)
-        .expect("gemini registered");
-    assert_eq!(gemini.program, "gemini");
+#[tokio::test]
+async fn fs_registry_load_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+    let agents = registry.list().await.unwrap();
+    assert!(agents.is_empty());
 }
 
-#[test]
-fn registry_custom_agent() {
-    let mut registry = AgentRegistry::with_defaults();
+#[tokio::test]
+async fn fs_registry_add_and_get() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
 
-    let kind = AgentKind::Custom("my-agent".into());
-    let cmd = AgentCommand {
-        program: "my-agent".into(),
-        args:    vec!["--acp".into()],
-        env:     vec![],
+    let config = AcpAgentConfig {
+        command: "my-agent".into(),
+        args: vec!["--acp".into()],
+        enabled: true,
+        ..Default::default()
     };
-    registry.register(kind.clone(), cmd);
+    registry
+        .add("test-agent".into(), config.clone())
+        .await
+        .unwrap();
 
-    let resolved = registry.resolve(&kind).expect("custom agent registered");
-    assert_eq!(resolved.program, "my-agent");
-    assert_eq!(resolved.args, vec!["--acp"]);
+    let retrieved = registry.get("test-agent").await.unwrap().unwrap();
+    assert_eq!(retrieved.command, "my-agent");
+    assert_eq!(retrieved.args, vec!["--acp"]);
+    assert!(retrieved.enabled);
+    assert!(!retrieved.builtin);
 }
 
-#[test]
-fn registry_unknown_custom_returns_none() {
-    let registry = AgentRegistry::with_defaults();
-    let result = registry.resolve(&AgentKind::Custom("nonexistent".into()));
-    assert!(result.is_none());
+#[tokio::test]
+async fn fs_registry_remove_custom() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+
+    let config = AcpAgentConfig {
+        command: "test".into(),
+        enabled: true,
+        ..Default::default()
+    };
+    registry.add("removable".into(), config).await.unwrap();
+    assert!(registry.remove("removable").await.unwrap());
+    assert!(registry.get("removable").await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn fs_registry_cannot_remove_builtin() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+
+    let config = AcpAgentConfig {
+        command: "npx".into(),
+        enabled: true,
+        builtin: true,
+        ..Default::default()
+    };
+    registry.add("claude".into(), config).await.unwrap();
+    let err = registry.remove("claude").await.unwrap_err();
+    assert!(err.to_string().contains("cannot remove builtin"));
+}
+
+#[tokio::test]
+async fn fs_registry_cannot_disable_builtin() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+
+    let config = AcpAgentConfig {
+        command: "npx".into(),
+        enabled: true,
+        builtin: true,
+        ..Default::default()
+    };
+    registry.add("claude".into(), config).await.unwrap();
+    let err = registry.disable("claude").await.unwrap_err();
+    assert!(err.to_string().contains("cannot disable builtin"));
+}
+
+#[tokio::test]
+async fn fs_registry_enable_disable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+
+    let config = AcpAgentConfig {
+        command: "test".into(),
+        enabled: true,
+        ..Default::default()
+    };
+    registry.add("toggleable".into(), config).await.unwrap();
+
+    assert!(registry.disable("toggleable").await.unwrap());
+    let disabled = registry.get("toggleable").await.unwrap().unwrap();
+    assert!(!disabled.enabled);
+
+    assert!(registry.enable("toggleable").await.unwrap());
+    let enabled = registry.get("toggleable").await.unwrap().unwrap();
+    assert!(enabled.enabled);
+}
+
+#[tokio::test]
+async fn fs_registry_enabled_agents_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+
+    registry
+        .add(
+            "enabled-one".into(),
+            AcpAgentConfig {
+                command: "a".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    registry
+        .add(
+            "disabled-one".into(),
+            AcpAgentConfig {
+                command: "b".into(),
+                enabled: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let enabled = registry.enabled_agents().await.unwrap();
+    assert_eq!(enabled.len(), 1);
+    assert_eq!(enabled[0].0, "enabled-one");
+}
+
+#[tokio::test]
+async fn fs_registry_persists_to_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+
+    // Write
+    {
+        let registry = FSAcpRegistry::load(&path).await.unwrap();
+        registry
+            .add(
+                "persistent".into(),
+                AcpAgentConfig {
+                    command: "test".into(),
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    // Read back from disk
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+    let agent = registry.get("persistent").await.unwrap();
+    assert!(agent.is_some());
+    assert_eq!(agent.unwrap().command, "test");
+}
+
+#[tokio::test]
+async fn fs_registry_to_agent_command() {
+    let config = AcpAgentConfig {
+        command: "npx".into(),
+        args: vec!["-y".into(), "some-pkg".into()],
+        enabled: true,
+        ..Default::default()
+    };
+    let cmd = config.to_agent_command();
+    assert_eq!(cmd.program, "npx");
+    assert_eq!(cmd.args, vec!["-y", "some-pkg"]);
+    assert!(cmd.env.is_empty());
+}
+
+// -- Event type tests --
 
 #[test]
 fn event_types_are_clone_and_debug() {
