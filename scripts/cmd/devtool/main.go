@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/rararulab/rara/scripts/internal/agentmd"
 	"github.com/rararulab/rara/scripts/internal/worktree"
 	"github.com/urfave/cli/v3"
 )
@@ -15,6 +16,7 @@ func main() {
 		Name:  "devtool",
 		Usage: "Unified developer toolkit for rara",
 		Commands: []*cli.Command{
+			agentmd.Cmd(),
 			worktree.Cmd(),
 		},
 	}
