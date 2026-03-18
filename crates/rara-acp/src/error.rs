@@ -8,7 +8,20 @@ pub enum AcpError {
     #[snafu(display("Failed to spawn agent process: {source}"))]
     SpawnProcess { source: std::io::Error },
 
-    /// The ACP handshake with the remote agent did not complete successfully.
+    /// The ACP initialize handshake did not complete successfully.
+    #[snafu(display("ACP initialize handshake failed: {source}"))]
+    Initialize {
+        source: agent_client_protocol::Error,
+    },
+
+    /// Session creation failed on the remote agent.
+    #[snafu(display("ACP session creation failed: {source}"))]
+    NewSession {
+        source: agent_client_protocol::Error,
+    },
+
+    /// The ACP handshake failed due to a local setup problem (e.g. missing
+    /// stdio pipe) rather than a protocol-level error from the remote agent.
     #[snafu(display("ACP handshake failed: {message}"))]
     Handshake { message: String },
 
@@ -25,8 +38,10 @@ pub enum AcpError {
     AgentExited { message: String },
 
     /// The agent rejected or failed to process the prompt.
-    #[snafu(display("Prompt failed: {message}"))]
-    PromptFailed { message: String },
+    #[snafu(display("Prompt failed: {source}"))]
+    PromptFailed {
+        source: agent_client_protocol::Error,
+    },
 
     /// The remote agent advertises an ACP version we cannot speak.
     #[snafu(display("Unsupported ACP version: {version}"))]
