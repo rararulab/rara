@@ -14,12 +14,19 @@
 
 pub mod fold;
 
-/// Maximum character length for child/worker agent results passed back to
-/// the parent context. Child agents are expected to self-summarize via their
-/// system prompt; this limit is a safety fallback for unexpectedly large
-/// output. Uses `str::floor_char_boundary()` to avoid splitting multi-byte
-/// UTF-8 chars.
-pub(crate) const CHILD_RESULT_SAFETY_LIMIT: usize = 8000;
+/// Maximum **byte** length for child/worker agent results passed back to
+/// the parent context.  Child agents are instructed to self-summarize
+/// (target ≈ 1 500 chars) via their system prompt; this generous byte-level
+/// fallback only triggers when self-summarization produces unexpectedly
+/// large output.  Truncation uses `str::floor_char_boundary()` to avoid
+/// splitting multi-byte UTF-8 characters.
+pub(crate) const CHILD_RESULT_SAFETY_LIMIT_BYTES: usize = 8000;
+
+/// Structured-output instructions appended to child agent system prompts
+/// so they self-summarize before returning results to the parent.
+pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
+    "\n\nWhen done, provide a structured result:\n1. Summary (2-3 sentences)\n2. Key findings or \
+     outputs (bullet points)\nKeep your final response under 1500 characters.";
 
 use std::{
     collections::HashMap,
@@ -435,7 +442,7 @@ impl Default for ManifestLoader {
 const RESULT_PREVIEW_MAX_BYTES: usize = 2048;
 
 /// Truncate a string to at most `max_bytes` bytes on a valid char boundary.
-fn truncate_preview(s: &str, max_bytes: usize) -> String {
+pub(crate) fn truncate_preview(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }

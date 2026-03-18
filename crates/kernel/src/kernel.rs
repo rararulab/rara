@@ -906,10 +906,10 @@ impl Kernel {
             "child result received"
         );
 
-        use crate::agent::CHILD_RESULT_SAFETY_LIMIT;
+        use crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES;
         let output = &result.output;
-        let truncated_output = if output.len() > CHILD_RESULT_SAFETY_LIMIT {
-            let boundary = output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT);
+        let truncated_output = if output.len() > CHILD_RESULT_SAFETY_LIMIT_BYTES {
+            let boundary = output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT_BYTES);
             format!(
                 "{}...(truncated, full result in child tape {child_id})",
                 &output[..boundary],

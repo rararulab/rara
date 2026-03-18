@@ -73,8 +73,16 @@ impl ToolExecute for SpawnBackgroundTool {
         p: SpawnBackgroundParams,
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let manifest: AgentManifest = serde_json::from_value(p.manifest)
+        let mut manifest: AgentManifest = serde_json::from_value(p.manifest)
             .map_err(|e| anyhow::anyhow!("invalid manifest: {e}"))?;
+
+        // Ensure the background agent includes structured-output instructions
+        // so it self-summarizes before returning results to the parent.
+        if !manifest.system_prompt.contains("structured result") {
+            manifest
+                .system_prompt
+                .push_str(crate::agent::STRUCTURED_OUTPUT_SUFFIX);
+        }
 
         // Resolve principal from parent session.
         let principal = self

@@ -952,13 +952,10 @@ async fn execute_worker_step(
                         result.iterations, result.tool_calls
                     )
                 } else {
-                    use crate::agent::CHILD_RESULT_SAFETY_LIMIT;
-                    if result.output.len() > CHILD_RESULT_SAFETY_LIMIT {
-                        let boundary = result.output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT);
-                        format!("{}...(truncated)", &result.output[..boundary])
-                    } else {
-                        result.output.clone()
-                    }
+                    crate::agent::truncate_preview(
+                        &result.output,
+                        crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES,
+                    )
                 };
 
                 info!(
