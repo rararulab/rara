@@ -1771,7 +1771,7 @@ async fn handle_cascade_callback(
         }
 
         // "show" → build cascade trace and display in-place.
-        _ => {
+        "show" => {
             // Answer callback immediately to dismiss Telegram's loading spinner,
             // before any async data loading that could cause a timeout.
             let _ = bot.answer_callback_query(callback.id.clone()).await;
@@ -1780,6 +1780,13 @@ async fn handle_cascade_callback(
                 Ok(Some(s)) => s,
                 _ => {
                     warn!("cascade: trace not found for trace_id={trace_id}");
+                    let _ = bot
+                        .edit_message_text(
+                            ChatId(cid),
+                            MessageId(mid),
+                            "⚠️ Cascade not available: trace not found",
+                        )
+                        .await;
                     return;
                 }
             };
@@ -1788,6 +1795,13 @@ async fn handle_cascade_callback(
                 Ok(e) => e,
                 Err(e) => {
                     warn!(error = %e, "cascade: failed to read tape entries");
+                    let _ = bot
+                        .edit_message_text(
+                            ChatId(cid),
+                            MessageId(mid),
+                            "⚠️ Cascade not available: tape read error",
+                        )
+                        .await;
                     return;
                 }
             };
@@ -1826,6 +1840,9 @@ async fn handle_cascade_callback(
 
             if cascade.ticks.is_empty() {
                 warn!("cascade: trace is empty for trace_id={trace_id}");
+                let _ = bot
+                    .edit_message_text(ChatId(cid), MessageId(mid), "⚠️ Cascade trace is empty")
+                    .await;
                 return;
             }
 
@@ -1849,6 +1866,11 @@ async fn handle_cascade_callback(
                     "cascade: failed to edit message with cascade view"
                 );
             }
+        }
+
+        unknown => {
+            warn!(action = unknown, "cascade: unknown action");
+            let _ = bot.answer_callback_query(callback.id.clone()).await;
         }
     }
 }
