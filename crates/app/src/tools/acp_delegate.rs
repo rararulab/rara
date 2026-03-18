@@ -20,13 +20,13 @@
 
 use std::path::PathBuf;
 
-use async_trait::async_trait;
 use rara_acp::{
     AcpConnection,
     events::AcpEvent,
     registry::{AgentKind, AgentRegistry},
 };
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 use tracing::{debug, warn};
 
@@ -36,27 +36,22 @@ use tracing::{debug, warn};
 /// the Agent Communication Protocol (stdin/stdout JSON-RPC), and collects
 /// the agent's text output and tool call summaries into a single JSON
 /// response.
+#[derive(ToolDef)]
+#[tool(
+    name = "acp-delegate",
+    description = "Delegate a task to an external coding agent (Claude, Codex, or Gemini) via the \
+                   Agent Communication Protocol. The agent runs as a subprocess, executes the \
+                   prompt, and returns its text output and tool call summary.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct AcpDelegateTool;
 
 impl AcpDelegateTool {
-    /// Canonical tool name.
-    pub const NAME: &str = rara_kernel::tool_names::ACP_DELEGATE;
-
     /// Create a new instance.
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for AcpDelegateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Delegate a task to an external coding agent (Claude, Codex, or Gemini) via the Agent \
-         Communication Protocol. The agent runs as a subprocess, executes the prompt, and returns \
-         its text output and tool call summary."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -78,10 +73,10 @@ impl AgentTool for AcpDelegateTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let agent_name = params
             .get("agent")
