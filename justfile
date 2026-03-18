@@ -86,9 +86,9 @@ check-agent-md:
     @cd scripts && go build -o bin/devtool ./cmd/devtool/
     @scripts/bin/devtool check-agent-md
 
-[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md)")]
+[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md, check-deps)")]
 [group("👆 Code Quality")]
-lint: check-agent-md
+lint: check-agent-md check-deps
     @echo "🔍 Running clippy..."
     cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
     @echo "📚 Building documentation..."
@@ -322,6 +322,16 @@ devtool-build:
 [group("🌳 Worktree")]
 wt: devtool-build
     @{{DEVTOOL}} wt
+
+[doc("check crate dependency direction rules")]
+[group("👆 Code Quality")]
+check-deps: devtool-build
+    @{{DEVTOOL}} check-deps
+
+[doc("generate quality matrix report")]
+[group("📊 Quality")]
+quality-matrix: devtool-build
+    @{{DEVTOOL}} quality-matrix --output docs/src/quality-matrix.md
 
 # ========================================================================================
 # Dependency Management

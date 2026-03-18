@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/rararulab/rara/scripts/internal/agentmd"
+	"github.com/rararulab/rara/scripts/internal/deps"
+	"github.com/rararulab/rara/scripts/internal/quality"
 	"github.com/rararulab/rara/scripts/internal/worktree"
 	"github.com/urfave/cli/v3"
 )
@@ -17,7 +19,9 @@ func main() {
 		Usage: "Unified developer toolkit for rara",
 		Commands: []*cli.Command{
 			agentmd.Cmd(),
+			quality.Cmd(),
 			worktree.Cmd(),
+			deps.Cmd(),
 		},
 	}
 

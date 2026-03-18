@@ -26,6 +26,11 @@
 - [OpenTelemetry Integration](opentelemetry.md)
 - [Release Pipeline](release.md)
 
+# Development
+
+- [Harness Engineering](harness-engineering.md)
+- [Module Quality Matrix](quality-matrix.md)
+
 # Diary
 
 - [Rara's Diary](diary/README.md)
