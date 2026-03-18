@@ -1772,13 +1772,14 @@ async fn handle_cascade_callback(
 
         // "show" → build cascade trace and display in-place.
         _ => {
+            // Answer callback immediately to dismiss Telegram's loading spinner,
+            // before any async data loading that could cause a timeout.
+            let _ = bot.answer_callback_query(callback.id.clone()).await;
+
             let session_id = match handle.trace_service().get_session_id(trace_id).await {
                 Ok(Some(s)) => s,
                 _ => {
-                    let _ = bot
-                        .answer_callback_query(callback.id.clone())
-                        .text("Cascade not available: trace not found")
-                        .await;
+                    warn!("cascade: trace not found for trace_id={trace_id}");
                     return;
                 }
             };
@@ -1787,10 +1788,6 @@ async fn handle_cascade_callback(
                 Ok(e) => e,
                 Err(e) => {
                     warn!(error = %e, "cascade: failed to read tape entries");
-                    let _ = bot
-                        .answer_callback_query(callback.id.clone())
-                        .text("Cascade not available: tape read error")
-                        .await;
                     return;
                 }
             };
@@ -1828,16 +1825,9 @@ async fn handle_cascade_callback(
             );
 
             if cascade.ticks.is_empty() {
-                let _ = bot
-                    .answer_callback_query(callback.id.clone())
-                    .text("Cascade trace is empty")
-                    .await;
+                warn!("cascade: trace is empty for trace_id={trace_id}");
                 return;
             }
-
-            // Answer callback only after data is ready — errors above
-            // use answer_callback_query with toast text instead.
-            let _ = bot.answer_callback_query(callback.id.clone()).await;
 
             let html = render_cascade_html(&cascade);
             let hide_cb = format!("cas:hide:{chat_id_str}:{msg_id_str}:{trace_id}");
