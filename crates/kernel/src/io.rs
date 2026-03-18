@@ -930,12 +930,14 @@ pub enum StreamEvent {
     /// Client should display inline buttons for continue/stop.
     PauseTurn {
         session_key:     String,
+        pause_id:        u64,
         tool_calls_made: usize,
         elapsed_secs:    u64,
     },
     /// User resolved a pause-turn decision.
     PauseTurnResolved {
         session_key: String,
+        pause_id:    u64,
         continued:   bool,
     },
 }

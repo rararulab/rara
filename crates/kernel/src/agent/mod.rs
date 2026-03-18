@@ -894,8 +894,10 @@ pub(crate) async fn run_agent_loop(
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
     // ── Pause turn state ─────────────────────────────────────────────
-    let pause_interval = manifest.pause_turn_threshold.unwrap_or(15);
+    let pause_interval = manifest.pause_turn_threshold.unwrap_or(0);
     let mut next_pause_at: usize = pause_interval;
+    let mut pause_id_counter: u64 = 0;
+    let mut stopped_by_pause = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1830,19 +1832,23 @@ pub(crate) async fn run_agent_loop(
         // When cumulative tool calls reach the threshold, pause and ask
         // the user whether to continue or stop.
         if pause_interval > 0 && tool_calls_made >= next_pause_at {
+            pause_id_counter += 1;
+            let current_pause_id = pause_id_counter;
             let elapsed_secs = turn_start.elapsed().as_secs();
             stream_handle.emit(StreamEvent::PauseTurn {
                 session_key: session_key.to_string(),
+                pause_id: current_pause_id,
                 tool_calls_made,
                 elapsed_secs,
             });
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            handle.register_pause_turn(&session_key, tx);
+            handle.register_pause_turn(&session_key, current_pause_id, tx);
 
             info!(
                 tool_calls_made,
                 next_pause_at,
+                pause_id = current_pause_id,
                 elapsed_secs,
                 "agent loop paused at tool call threshold, awaiting user decision"
             );
@@ -1863,16 +1869,19 @@ pub(crate) async fn run_agent_loop(
                     next_pause_at = tool_calls_made + pause_interval;
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
+                        pause_id:    current_pause_id,
                         continued:   true,
                     });
                 }
                 _ => {
-                    // Stop or Timeout or channel closed
+                    // Stop or Timeout or channel closed — NOT max iterations
                     warn!(tool_calls_made, "agent loop stopped by user or timeout");
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
+                        pause_id:    current_pause_id,
                         continued:   false,
                     });
+                    stopped_by_pause = true;
                     break;
                 }
             }
@@ -1926,26 +1935,42 @@ pub(crate) async fn run_agent_loop(
         }
     }
 
-    // Max iterations exhausted — return partial results with failure markers
-    warn!(
-        max_iterations,
-        tool_calls_made, "inline agent loop hit max iterations limit, returning partial results"
-    );
-    let exhaustion_error = format!(
-        "max iterations exhausted ({max_iterations} iterations, {tool_calls_made} tool calls)"
-    );
-    // Emit a stream warning so adapters (Telegram, SSE) can surface it to the
-    // user immediately.
-    stream_handle.emit(StreamEvent::Progress {
-        stage: format!("[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"),
-    });
-    // If the agent spent the entire turn doing tool calls and produced no
-    // visible text, synthesise a fallback message so the user is not left with
-    // a blank response.
-    if last_accumulated_text.is_empty() {
-        last_accumulated_text =
-            format!("[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]");
-    }
+    // Determine exit reason and build appropriate error/message.
+    let exhaustion_error = if stopped_by_pause {
+        // User clicked "stop" or pause timed out — not an exhaustion error.
+        let msg = format!("agent stopped by user/timeout after {tool_calls_made} tool calls");
+        warn!(tool_calls_made, "agent loop stopped by pause decision");
+        stream_handle.emit(StreamEvent::Progress {
+            stage: format!("[已停止] 已执行 {tool_calls_made} 次工具调用。"),
+        });
+        if last_accumulated_text.is_empty() {
+            last_accumulated_text = format!("[已停止，已执行 {tool_calls_made} 次工具调用。]");
+        }
+        msg
+    } else {
+        // Max iterations exhausted — return partial results with failure markers
+        warn!(
+            max_iterations,
+            tool_calls_made,
+            "inline agent loop hit max iterations limit, returning partial results"
+        );
+        let msg = format!(
+            "max iterations exhausted ({max_iterations} iterations, {tool_calls_made} tool calls)"
+        );
+        // Emit a stream warning so adapters (Telegram, SSE) can surface it to the
+        // user immediately.
+        stream_handle.emit(StreamEvent::Progress {
+            stage: format!("[警告] 已达到最大迭代次数（{max_iterations}），任务可能未完成。"),
+        });
+        // If the agent spent the entire turn doing tool calls and produced no
+        // visible text, synthesise a fallback message so the user is not left with
+        // a blank response.
+        if last_accumulated_text.is_empty() {
+            last_accumulated_text =
+                format!("[已达到最大迭代次数，任务未完成。已执行 {tool_calls_made} 次工具调用。]");
+        }
+        msg
+    };
     let trace = TurnTrace {
         duration_ms: turn_start.elapsed().as_millis() as u64,
         model: model.clone(),

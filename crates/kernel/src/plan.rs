@@ -240,9 +240,10 @@ pub(crate) async fn run_plan_loop(
     let pause_interval = handle
         .session_manifest(&session_key)
         .await
-        .map(|m| m.pause_turn_threshold.unwrap_or(15))
-        .unwrap_or(15);
+        .map(|m| m.pause_turn_threshold.unwrap_or(0))
+        .unwrap_or(0);
     let mut next_pause_at: usize = pause_interval;
+    let mut pause_id_counter: u64 = 0;
 
     // Use an index-based loop so we can replace plan.steps on replan.
     let mut step_idx = 0;
@@ -321,19 +322,23 @@ pub(crate) async fn run_plan_loop(
 
         // ── Pause turn check (cumulative across steps) ───────────────
         if pause_interval > 0 && total_tool_calls >= next_pause_at {
+            pause_id_counter += 1;
+            let current_pause_id = pause_id_counter;
             let elapsed_secs = start.elapsed().as_secs();
             stream_handle.emit(StreamEvent::PauseTurn {
                 session_key: session_key.to_string(),
+                pause_id: current_pause_id,
                 tool_calls_made: total_tool_calls,
                 elapsed_secs,
             });
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            handle.register_pause_turn(&session_key, tx);
+            handle.register_pause_turn(&session_key, current_pause_id, tx);
 
             info!(
                 total_tool_calls,
                 next_pause_at,
+                pause_id = current_pause_id,
                 step = step_idx,
                 "plan loop paused at tool call threshold"
             );
@@ -353,6 +358,7 @@ pub(crate) async fn run_plan_loop(
                     next_pause_at = total_tool_calls + pause_interval;
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
+                        pause_id:    current_pause_id,
                         continued:   true,
                     });
                 }
@@ -364,6 +370,7 @@ pub(crate) async fn run_plan_loop(
                     );
                     stream_handle.emit(StreamEvent::PauseTurnResolved {
                         session_key: session_key.to_string(),
+                        pause_id:    current_pause_id,
                         continued:   false,
                     });
                     plan.status = PlanStatus::Failed;

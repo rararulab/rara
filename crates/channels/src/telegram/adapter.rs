@@ -1433,20 +1433,29 @@ async fn handle_guard_callback(
 
 /// Handle a pause-turn callback query (continue/stop) from an inline keyboard.
 ///
-/// Callback data format: `"turn:{action}:{session_key}"`
+/// Callback data format: `"turn:{action}:{session_key}:{pause_id}"`
 /// - `action` = "continue" → resume agent loop
 /// - `action` = "stop"     → stop agent loop
+/// - `pause_id` binds the callback to a specific pause instance
 async fn handle_turn_pause_callback(
     handle: &KernelHandle,
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
-    allowed_user_ids: &[i64],
+    allowed_chat_ids: &[i64],
 ) {
-    // Verify authorization.
-    let from_id = callback.from.id.0 as i64;
-    if !allowed_user_ids.is_empty() && !allowed_user_ids.contains(&from_id) {
-        warn!(user_id = from_id, "turn pause callback: unauthorized user");
+    // Verify authorization: check that the callback originates from an
+    // allowed chat (same list used for message authorization).
+    let cb_chat_id = callback
+        .message
+        .as_ref()
+        .map(|m| m.chat().id.0)
+        .unwrap_or(0);
+    if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&cb_chat_id) {
+        warn!(
+            chat_id = cb_chat_id,
+            "turn pause callback: unauthorized chat"
+        );
         let _ = bot
             .answer_callback_query(callback.id.clone())
             .text("⚠️ Unauthorized")
@@ -1454,18 +1463,26 @@ async fn handle_turn_pause_callback(
         return;
     }
 
-    // Parse "turn:continue:{session_key}" or "turn:stop:{session_key}"
-    let parts: Vec<&str> = data.splitn(3, ':').collect();
-    if parts.len() != 3 {
+    // Parse "turn:continue:{session_key}:{pause_id}" or
+    // "turn:stop:{session_key}:{pause_id}"
+    let parts: Vec<&str> = data.splitn(4, ':').collect();
+    if parts.len() != 4 {
         warn!(data, "turn pause callback: malformed data");
         return;
     }
 
-    let (action, session_key_str) = (parts[1], parts[2]);
+    let (action, session_key_str, pause_id_str) = (parts[1], parts[2], parts[3]);
     let session_key = match rara_kernel::session::SessionKey::try_from_raw(session_key_str) {
         Ok(k) => k,
         Err(e) => {
             warn!(error = %e, "turn pause callback: invalid session key");
+            return;
+        }
+    };
+    let pause_id: u64 = match pause_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            warn!(pause_id_str, "turn pause callback: invalid pause_id");
             return;
         }
     };
@@ -1479,7 +1496,7 @@ async fn handle_turn_pause_callback(
         }
     };
 
-    let resolved = handle.resolve_pause_turn(&session_key, decision);
+    let resolved = handle.resolve_pause_turn(&session_key, pause_id, decision);
 
     let answer_text = match decision {
         rara_kernel::io::PauseTurnDecision::Continue => "▶️ Continuing",
@@ -2503,7 +2520,7 @@ fn spawn_stream_forwarder(
                             progress.model = model;
                             progress.iterations = iterations;
                         }
-                        Ok(StreamEvent::PauseTurn { session_key, tool_calls_made, elapsed_secs }) => {
+                        Ok(StreamEvent::PauseTurn { session_key, pause_id, tool_calls_made, elapsed_secs }) => {
                             let text = format!(
                                 "⚠️ <b>Agent Paused</b>\n\n\
                                  已执行 <b>{tool_calls_made}</b> 次工具调用（耗时 {elapsed_secs}s）。\n\
@@ -2512,11 +2529,11 @@ fn spawn_stream_forwarder(
                             let keyboard = InlineKeyboardMarkup::new(vec![vec![
                                 InlineKeyboardButton::callback(
                                     "▶️ 继续",
-                                    format!("turn:continue:{session_key}"),
+                                    format!("turn:continue:{session_key}:{pause_id}"),
                                 ),
                                 InlineKeyboardButton::callback(
                                     "⏹ 停止",
-                                    format!("turn:stop:{session_key}"),
+                                    format!("turn:stop:{session_key}:{pause_id}"),
                                 ),
                             ]]);
                             let result = bot

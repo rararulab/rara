@@ -436,12 +436,14 @@ pub enum StreamEvent {
     /// Agent loop paused at tool call threshold — adapter should prompt user.
     PauseTurn {
         session_key:     String,
+        pause_id:        u64,
         tool_calls_made: usize,
         elapsed_secs:    u64,
     },
     /// Pause resolved by user.
     PauseTurnResolved {
         session_key: String,
+        pause_id:    u64,
         continued:   bool,
     },
 }

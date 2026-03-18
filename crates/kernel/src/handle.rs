@@ -530,24 +530,33 @@ impl KernelHandle {
     pub fn register_pause_turn(
         &self,
         session_key: &SessionKey,
+        pause_id: u64,
         tx: tokio::sync::oneshot::Sender<crate::io::PauseTurnDecision>,
     ) {
         self.process_table.with_mut(session_key, |session| {
-            session.pending_pause_turn = Some(tx);
+            session.pending_pause_turn = Some((pause_id, tx));
         });
     }
 
     /// Resolve a pending pause-turn decision.
     /// Called by channel adapters when user clicks continue/stop.
+    /// Only resolves if `pause_id` matches the pending one, preventing
+    /// stale buttons from resolving a newer pause.
     /// Returns `true` if the decision was delivered.
     pub fn resolve_pause_turn(
         &self,
         session_key: &SessionKey,
+        pause_id: u64,
         decision: crate::io::PauseTurnDecision,
     ) -> bool {
         self.process_table
             .with_mut(session_key, |session| {
-                if let Some(tx) = session.pending_pause_turn.take() {
+                if let Some((pending_id, _)) = &session.pending_pause_turn {
+                    if *pending_id != pause_id {
+                        return false; // stale callback — ignore
+                    }
+                }
+                if let Some((_, tx)) = session.pending_pause_turn.take() {
                     tx.send(decision).is_ok()
                 } else {
                     false
