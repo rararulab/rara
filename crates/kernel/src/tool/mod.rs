@@ -23,6 +23,27 @@ pub(crate) mod tape;
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
+use serde::de::DeserializeOwned;
+
+/// Typed tool execution trait.
+///
+/// Bridges strongly-typed parameter structs and the untyped
+/// `AgentTool::execute` interface. The `ToolDef` derive macro generates an
+/// `AgentTool` impl that deserializes `serde_json::Value` into `Self::Params`
+/// and delegates to [`ToolExecute::run`].
+#[async_trait]
+pub trait ToolExecute: Send + Sync {
+    /// The parameter struct for this tool.
+    /// Must derive both `serde::Deserialize` and `schemars::JsonSchema`.
+    type Params: DeserializeOwned + schemars::JsonSchema;
+
+    /// Execute the tool with typed parameters.
+    async fn run(&self, params: Self::Params, context: &ToolContext) -> anyhow::Result<ToolOutput>;
+}
+
+/// Empty parameter struct for tools that accept no parameters.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct EmptyParams {}
 
 /// A binary resource produced by a tool (e.g. a compressed screenshot).
 #[derive(Debug, Clone)]
@@ -233,6 +254,93 @@ impl Default for ToolRegistry {
     fn default() -> Self { Self::new() }
 }
 
+// Re-export the derive macro so tools can `use crate::tool::ToolDef`.
+pub use rara_tool_macro::ToolDef;
+
+/// Recursively clean a JSON Schema produced by `schemars` for LLM consumption.
+///
+/// - Removes: `$schema`, `title`, `definitions`/`$defs`
+/// - Preserves: `type`, `properties`, `required`, `description`, `enum`,
+///   `items`, `default`, `format`
+/// - Inline-resolves all `$ref` pointers and then drops the definitions block.
+pub fn clean_schema(schema: schemars::Schema) -> serde_json::Value {
+    let mut value = serde_json::to_value(schema).unwrap_or(serde_json::Value::Null);
+
+    // Extract definitions for $ref resolution before removing them.
+    let definitions = extract_definitions(&value);
+
+    // Resolve all $ref pointers inline.
+    resolve_refs(&mut value, &definitions);
+
+    // Strip noise fields.
+    clean_value(&mut value);
+
+    value
+}
+
+/// Extract the definitions/$defs map from the root schema.
+fn extract_definitions(
+    value: &serde_json::Value,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    let mut defs = std::collections::HashMap::new();
+    for key in &["definitions", "$defs"] {
+        if let Some(serde_json::Value::Object(map)) = value.get(*key) {
+            for (name, schema) in map {
+                defs.insert(name.clone(), schema.clone());
+            }
+        }
+    }
+    defs
+}
+
+/// Recursively resolve `$ref` pointers by inlining the referenced definition.
+fn resolve_refs(
+    value: &mut serde_json::Value,
+    definitions: &std::collections::HashMap<String, serde_json::Value>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(ref_path)) = map.get("$ref") {
+                let def_name = ref_path.rsplit('/').next().unwrap_or("").to_string();
+                if let Some(resolved) = definitions.get(&def_name) {
+                    let mut resolved = resolved.clone();
+                    resolve_refs(&mut resolved, definitions);
+                    clean_value(&mut resolved);
+                    *value = resolved;
+                    return;
+                }
+            }
+            for v in map.values_mut() {
+                resolve_refs(v, definitions);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                resolve_refs(v, definitions);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remove noise fields from a JSON Schema value.
+fn clean_value(value: &mut serde_json::Value) {
+    if let serde_json::Value::Object(map) = value {
+        map.remove("$schema");
+        map.remove("title");
+        map.remove("definitions");
+        map.remove("$defs");
+
+        for v in map.values_mut() {
+            clean_value(v);
+        }
+    } else if let serde_json::Value::Array(arr) = value {
+        for v in arr {
+            clean_value(v);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -376,5 +484,60 @@ mod tests {
 
         assert!(interceptor.called.load(Ordering::SeqCst));
         assert_eq!(result.json["intercepted"], true);
+    }
+
+    #[test]
+    fn clean_schema_removes_noise_fields() {
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct TestParams {
+            /// The name field
+            name:  String,
+            /// Optional count
+            count: Option<u32>,
+        }
+
+        let cleaned = super::clean_schema(schemars::schema_for!(TestParams));
+
+        // Noise fields must be gone.
+        assert!(cleaned.get("$schema").is_none());
+        assert!(cleaned.get("title").is_none());
+        assert!(cleaned.get("definitions").is_none());
+        assert!(cleaned.get("$defs").is_none());
+
+        // Structure must be preserved.
+        assert_eq!(cleaned["type"], "object");
+        assert!(cleaned["properties"]["name"].is_object());
+        assert!(cleaned["properties"]["count"].is_object());
+        assert_eq!(
+            cleaned["properties"]["name"]["description"],
+            "The name field"
+        );
+    }
+
+    #[test]
+    fn clean_schema_resolves_refs() {
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        enum Mode {
+            Fast,
+            Slow,
+        }
+
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct RefParams {
+            /// The mode
+            mode: Mode,
+        }
+
+        let cleaned = super::clean_schema(schemars::schema_for!(RefParams));
+
+        // $ref should be resolved inline.
+        let mode = &cleaned["properties"]["mode"];
+        assert!(mode.get("$ref").is_none(), "refs should be inlined");
+    }
+
+    #[test]
+    fn clean_schema_empty_params() {
+        let cleaned = super::clean_schema(schemars::schema_for!(super::EmptyParams));
+        assert_eq!(cleaned["type"], "object");
     }
 }

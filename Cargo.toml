@@ -112,6 +112,7 @@ members = [
     "crates/common/telemetry",
     "crates/common/crawl4ai",
     "crates/common/worker",
+    "crates/common/tool-macro",
     "crates/common/yunara-store",
     "crates/rara-model",
     "crates/domain/shared",
@@ -262,6 +263,7 @@ rara-soul = { path = "crates/soul" }
 rara-symphony = { path = "crates/symphony" }
 rara-vault = { path = "crates/rara-vault" }
 
+rara-tool-macro = { path = "crates/common/tool-macro" }
 yunara-store = { path = "crates/common/yunara-store" }
 
 # Config for 'cargo dist'
