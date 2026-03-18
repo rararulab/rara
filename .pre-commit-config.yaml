@@ -25,6 +25,13 @@ repos:
         types_or: [rust, toml]
         files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
 
+      - id: check-agent-md
+        name: check AGENT.md presence
+        entry: scripts/bin/devtool check-agent-md
+        language: system
+        pass_filenames: false
+        files: ^crates/
+
       - id: conventional-commit
         name: conventional commit message
         entry: scripts/check-conventional-commit.sh
