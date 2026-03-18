@@ -234,12 +234,18 @@ impl Client for RaraDelegate {
                     Some(AcpToolCallStatus::InProgress) => ToolCallStatus::Running,
                     _ => ToolCallStatus::Running,
                 };
-                let output = update
-                    .fields
-                    .raw_output
-                    .as_ref()
-                    .map(|v| v.to_string())
-                    .or_else(|| update.fields.title.clone());
+                // Prefer title (human-readable summary) over raw_output which
+                // can be very large (e.g. full file contents from a read tool).
+                let output = update.fields.title.clone().or_else(|| {
+                    update.fields.raw_output.as_ref().map(|v| {
+                        let s = v.to_string();
+                        if s.len() > 1024 {
+                            format!("{}… (truncated)", &s[..1024])
+                        } else {
+                            s
+                        }
+                    })
+                });
                 self.emit(AcpEvent::ToolCallUpdate {
                     id: update.tool_call_id.to_string(),
                     status,

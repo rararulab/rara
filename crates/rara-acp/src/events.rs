@@ -94,6 +94,10 @@ pub enum ToolCallStatus {
 pub enum StopReason {
     /// The agent decided to end its turn normally.
     EndTurn,
+    /// The agent reached the maximum number of tokens.
+    MaxTokens,
+    /// The agent refused to continue the task.
+    Refusal,
     /// The turn was cancelled by the client.
     Cancelled,
     /// The turn ended due to an error.

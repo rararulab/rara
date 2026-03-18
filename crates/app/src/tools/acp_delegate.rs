@@ -18,12 +18,12 @@
 //! prompt over the Agent Communication Protocol, collects streaming events,
 //! and returns a structured JSON summary.
 
-use std::path::PathBuf;
+use std::{future::Future, path::PathBuf, pin::Pin};
 
 use rara_acp::{
-    AcpConnection,
-    events::AcpEvent,
-    registry::{AgentKind, AgentRegistry},
+    AcpThread, PermissionRequestInfo, RequestPermissionOutcome, SelectedPermissionOutcome,
+    events::{AcpEvent, StopReason, ToolCallStatus},
+    registry::AgentKind,
 };
 use rara_kernel::tool::{ToolContext, ToolOutput};
 use rara_tool_macro::ToolDef;
@@ -94,9 +94,6 @@ impl AcpDelegateTool {
             .map(PathBuf::from)
             .unwrap_or_else(|| rara_paths::workspace_dir().clone());
 
-        // Resolve agent kind from the string parameter.  Only built-in
-        // agents are supported — the enum in parameters_schema() enforces
-        // this, but we validate here too for defense in depth.
         let agent_kind = match agent_name {
             "claude" => AgentKind::Claude,
             "codex" => AgentKind::Codex,
@@ -109,158 +106,131 @@ impl AcpDelegateTool {
             }
         };
 
-        let registry = AgentRegistry::with_defaults();
-        // Safe to unwrap: built-in agents are always in the default registry.
-        let command = registry
-            .resolve(&agent_kind)
-            .expect("built-in agent missing from default registry — this is a bug")
-            .clone();
+        // Spawn the AcpThread — handles subprocess, handshake, and session
+        // creation internally.
+        let mut thread = AcpThread::spawn(agent_kind, cwd)
+            .await
+            .map_err(|e| anyhow::anyhow!("ACP spawn failed: {e}"))?;
 
-        let prompt = prompt.to_string();
+        // Collect streaming events into structured output.
+        let mut text_chunks: Vec<String> = Vec::new();
+        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+        let mut files_accessed: Vec<serde_json::Value> = Vec::new();
 
-        // The ACP protocol is !Send (uses spawn_local internally).  The
-        // AgentTool::execute future must be Send, so we cannot use LocalSet
-        // on the current runtime.  Instead we spawn a dedicated
-        // single-threaded (current_thread) tokio runtime on a background OS
-        // thread and run the entire ACP session there.
-        let result = tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build current-thread runtime for ACP");
+        let stop_reason = thread
+            .prompt(
+                prompt,
+                |event| {
+                    collect_event(
+                        event,
+                        &mut text_chunks,
+                        &mut tool_calls,
+                        &mut files_accessed,
+                    );
+                },
+                // Auto-approve all permission requests.  When ToolContext
+                // gains ApprovalManager support, this should forward to the
+                // user for interactive confirmation instead.
+                auto_approve_resolver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("ACP prompt failed: {e}"))?;
 
-            let local = tokio::task::LocalSet::new();
-            local.block_on(&rt, async move {
-                run_acp_session(&command, &cwd, &prompt).await
-            })
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("ACP worker thread panicked: {e}"))?;
-
-        match result {
-            Ok(output) => Ok(output.into()),
-            Err(e) => Ok(json!({
-                "error": format!("{e:#}"),
-                "agent": agent_name,
-            })
-            .into()),
+        // Graceful shutdown — kills subprocess and reaps.
+        if let Err(e) = thread.shutdown().await {
+            warn!(error = %e, "ACP shutdown error (non-fatal)");
         }
+
+        let stop_reason_str = match &stop_reason {
+            StopReason::EndTurn => "end_turn",
+            StopReason::MaxTokens => "max_tokens",
+            StopReason::Refusal => "refusal",
+            StopReason::Cancelled => "cancelled",
+            StopReason::Error(_) => "error",
+        };
+
+        let combined_text = text_chunks.join("");
+        Ok(json!({
+            "text": combined_text,
+            "stop_reason": stop_reason_str,
+            "tool_calls": tool_calls,
+            "files_accessed": files_accessed,
+        })
+        .into())
     }
 }
 
-/// Run a complete ACP session: connect, create session, send prompt, collect
-/// events, and return a JSON summary.
-async fn run_acp_session(
-    command: &rara_acp::registry::AgentCommand,
-    cwd: &std::path::Path,
-    prompt: &str,
-) -> anyhow::Result<serde_json::Value> {
-    // Connect and perform handshake.
-    let (mut conn, mut event_rx) = AcpConnection::connect(command, cwd, None)
-        .await
-        .map_err(|e| anyhow::anyhow!("ACP connect failed: {e}"))?;
+/// Auto-approve permission resolver: selects AllowAlways > AllowOnce > first.
+///
+/// This is a placeholder until ToolContext exposes ApprovalManager for
+/// interactive permission forwarding.
+fn auto_approve_resolver(
+    info: PermissionRequestInfo,
+) -> Pin<Box<dyn Future<Output = RequestPermissionOutcome> + Send>> {
+    Box::pin(async move {
+        let selected = info
+            .options
+            .iter()
+            .find(|o| o.kind == "AllowAlways")
+            .or_else(|| info.options.iter().find(|o| o.kind == "AllowOnce"));
 
-    // Create a new session.
-    conn.new_session()
-        .await
-        .map_err(|e| anyhow::anyhow!("ACP new_session failed: {e}"))?;
+        let option_id = match selected {
+            Some(opt) => opt.id.clone(),
+            None => match info.options.first() {
+                Some(first) => first.id.clone(),
+                None => return RequestPermissionOutcome::Cancelled,
+            },
+        };
 
-    // Collect events concurrently while the prompt is running.  The
-    // delegate emits events via `send().await` with backpressure, so we
-    // must actively drain the channel to avoid stalling the agent.
-    let mut text_chunks: Vec<String> = Vec::new();
-    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-    let mut files_accessed: Vec<serde_json::Value> = Vec::new();
+        debug!(option_id = %option_id, tool = %info.tool_title, "auto-approved permission");
+        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id))
+    })
+}
 
-    let collector = tokio::task::spawn_local({
-        async move {
-            let mut texts = Vec::new();
-            let mut tools = Vec::new();
-            let mut files = Vec::new();
-
-            while let Some(event) = event_rx.recv().await {
-                match event {
-                    AcpEvent::Text(text) => texts.push(text),
-                    AcpEvent::Thinking(_) => {}
-                    AcpEvent::ToolCallStarted { id, title } => {
-                        tools.push(json!({
-                            "id": id,
-                            "title": title,
-                            "status": "started",
-                        }));
-                    }
-                    AcpEvent::ToolCallUpdate { id, status, output } => {
-                        let status_str = match status {
-                            rara_acp::events::ToolCallStatus::Running => "running",
-                            rara_acp::events::ToolCallStatus::Completed => "completed",
-                            rara_acp::events::ToolCallStatus::Failed => "failed",
-                        };
-                        tools.push(json!({
-                            "id": id,
-                            "status": status_str,
-                            "output": output,
-                        }));
-                    }
-                    AcpEvent::FileAccess { path, operation } => {
-                        let op = match operation {
-                            rara_acp::events::FileOperation::Read => "read",
-                            rara_acp::events::FileOperation::Write => "write",
-                        };
-                        files.push(json!({
-                            "path": path.display().to_string(),
-                            "operation": op,
-                        }));
-                    }
-                    AcpEvent::Plan { title, steps } => {
-                        debug!(title = ?title, steps = steps.len(), "agent plan received");
-                    }
-                    AcpEvent::PermissionAutoApproved { description } => {
-                        debug!(description, "permission auto-approved");
-                    }
-                    // Don't break on ProcessExited or TurnComplete — there
-                    // may still be events queued behind them from the delegate.
-                    // The collector exits when the channel closes (all senders
-                    // dropped after shutdown).
-                    AcpEvent::ProcessExited { .. }
-                    | AcpEvent::TurnComplete { .. }
-                    | AcpEvent::PermissionRequested { .. } => {}
-                }
-            }
-            (texts, tools, files)
+/// Accumulate a single ACP event into the output collectors.
+fn collect_event(
+    event: &AcpEvent,
+    text_chunks: &mut Vec<String>,
+    tool_calls: &mut Vec<serde_json::Value>,
+    files_accessed: &mut Vec<serde_json::Value>,
+) {
+    match event {
+        AcpEvent::Text(text) => text_chunks.push(text.clone()),
+        AcpEvent::ToolCallStarted { id, title } => {
+            tool_calls.push(json!({
+                "id": id,
+                "title": title,
+                "status": "started",
+            }));
         }
-    });
-
-    // Send the prompt — runs concurrently with the event collector above.
-    let response = conn
-        .send_prompt(prompt)
-        .await
-        .map_err(|e| anyhow::anyhow!("ACP prompt failed: {e}"))?;
-
-    // Shut down the agent — this kills the child and reaps the process,
-    // which closes the event channel and lets the collector finish.
-    if let Err(e) = conn.shutdown().await {
-        warn!(error = %e, "ACP shutdown error (non-fatal)");
+        AcpEvent::ToolCallUpdate { id, status, output } => {
+            let status_str = match status {
+                ToolCallStatus::Running => "running",
+                ToolCallStatus::Completed => "completed",
+                ToolCallStatus::Failed => "failed",
+            };
+            tool_calls.push(json!({
+                "id": id,
+                "status": status_str,
+                "output": output,
+            }));
+        }
+        AcpEvent::FileAccess { path, operation } => {
+            let op = match operation {
+                rara_acp::events::FileOperation::Read => "read",
+                rara_acp::events::FileOperation::Write => "write",
+            };
+            files_accessed.push(json!({
+                "path": path.display().to_string(),
+                "operation": op,
+            }));
+        }
+        AcpEvent::Plan { title, steps } => {
+            debug!(title = ?title, steps = steps.len(), "agent plan received");
+        }
+        AcpEvent::PermissionAutoApproved { description } => {
+            debug!(description, "permission auto-approved");
+        }
+        _ => {}
     }
-
-    // Wait for the collector to drain remaining events.
-    match collector.await {
-        Ok((texts, tools, files)) => {
-            text_chunks = texts;
-            tool_calls = tools;
-            files_accessed = files;
-        }
-        Err(e) => {
-            warn!(error = %e, "event collector task failed");
-        }
-    }
-
-    let stop_reason = format!("{:?}", response.stop_reason);
-    let combined_text = text_chunks.join("");
-
-    Ok(json!({
-        "text": combined_text,
-        "stop_reason": stop_reason,
-        "tool_calls": tool_calls,
-        "files_accessed": files_accessed,
-    }))
 }

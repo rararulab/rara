@@ -21,8 +21,8 @@ pub enum AcpError {
     SessionNotFound { session_id: String },
 
     /// The remote agent process exited unexpectedly.
-    #[snafu(display("Agent process exited with code {code}"))]
-    AgentExited { code: i32 },
+    #[snafu(display("Agent process exited unexpectedly: {message}"))]
+    AgentExited { message: String },
 
     /// The agent rejected or failed to process the prompt.
     #[snafu(display("Prompt failed: {message}"))]
