@@ -1721,8 +1721,8 @@ impl Kernel {
             return mode;
         }
 
-        // Default: reactive (v1).
-        ExecutionMode::Reactive
+        // Default: plan-execute (v2).
+        ExecutionMode::Plan
     }
 
     /// # What this method does
