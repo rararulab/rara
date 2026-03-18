@@ -7,6 +7,10 @@ on:
       - "crates/**"
       - "scripts/internal/quality/**"
 
+concurrency:
+  group: quality-matrix
+  cancel-in-progress: true
+
 permissions:
   contents: write
 

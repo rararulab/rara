@@ -128,11 +128,12 @@ func renderAggregateStats(b *strings.Builder, crates []CrateInfo) {
 // renderByLayer writes the per-layer breakdown table.
 func renderByLayer(b *strings.Builder, crates []CrateInfo) {
 	type layerStats struct {
-		name      string
-		count     int
-		docSum    int // sum of doc percentages
-		withAgent int
-		withTests int
+		name         string
+		count        int
+		docSum       int // sum of doc percentages for crates with pub items
+		docCratesCnt int // number of crates with at least one pub item
+		withAgent    int
+		withTests    int
 	}
 
 	layerMap := make(map[string]*layerStats)
@@ -145,8 +146,11 @@ func renderByLayer(b *strings.Builder, crates []CrateInfo) {
 			layerMap[c.Layer] = ls
 		}
 		ls.count++
+		// Only include crates with pub items in the doc coverage average,
+		// so that crates with zero pub items don't pull down the average.
 		if c.PubItems > 0 {
 			ls.docSum += c.DocPercent()
+			ls.docCratesCnt++
 		}
 		if c.HasAgentMD {
 			ls.withAgent++
@@ -166,8 +170,8 @@ func renderByLayer(b *strings.Builder, crates []CrateInfo) {
 			continue
 		}
 		avgDoc := 0
-		if ls.count > 0 {
-			avgDoc = ls.docSum / ls.count
+		if ls.docCratesCnt > 0 {
+			avgDoc = ls.docSum / ls.docCratesCnt
 		}
 		b.WriteString(fmt.Sprintf("| %s | %d | %d%% | %d | %d |\n",
 			name, ls.count, avgDoc, ls.withAgent, ls.withTests))
@@ -184,8 +188,8 @@ func renderByLayer(b *strings.Builder, crates []CrateInfo) {
 		}
 		if !found {
 			avgDoc := 0
-			if ls.count > 0 {
-				avgDoc = ls.docSum / ls.count
+			if ls.docCratesCnt > 0 {
+				avgDoc = ls.docSum / ls.docCratesCnt
 			}
 			b.WriteString(fmt.Sprintf("| %s | %d | %d%% | %d | %d |\n",
 				name, ls.count, avgDoc, ls.withAgent, ls.withTests))
@@ -197,7 +201,9 @@ func renderByLayer(b *strings.Builder, crates []CrateInfo) {
 func renderPriorityActions(b *strings.Builder, crates []CrateInfo) {
 	b.WriteString("## Priority Actions\n\n")
 
-	// 1. AGENT.md gap
+	actionNum := 0
+
+	// AGENT.md gap
 	var missingAgent []CrateInfo
 	for _, c := range crates {
 		if !c.HasAgentMD {
@@ -207,12 +213,13 @@ func renderPriorityActions(b *strings.Builder, crates []CrateInfo) {
 	sort.Slice(missingAgent, func(i, j int) bool { return missingAgent[i].LOC > missingAgent[j].LOC })
 
 	if len(missingAgent) > 0 {
+		actionNum++
 		targets := topN(missingAgent, 4)
-		b.WriteString(fmt.Sprintf("1. **AGENT.md gap**: %d of %d crates lack an AGENT.md. High-priority targets: %s.\n",
-			len(missingAgent), len(crates), formatCrateList(targets)))
+		b.WriteString(fmt.Sprintf("%d. **AGENT.md gap**: %d of %d crates lack an AGENT.md. High-priority targets: %s.\n",
+			actionNum, len(missingAgent), len(crates), formatCrateList(targets)))
 	}
 
-	// 2. Test gap
+	// Test gap
 	var missingTests []CrateInfo
 	for _, c := range crates {
 		if !c.HasTests {
@@ -222,12 +229,13 @@ func renderPriorityActions(b *strings.Builder, crates []CrateInfo) {
 	sort.Slice(missingTests, func(i, j int) bool { return missingTests[i].LOC > missingTests[j].LOC })
 
 	if len(missingTests) > 0 {
+		actionNum++
 		targets := topN(missingTests, 4)
-		b.WriteString(fmt.Sprintf("2. **Test gap**: %d crates have zero tests. Critical gaps: %s.\n",
-			len(missingTests), formatCrateList(targets)))
+		b.WriteString(fmt.Sprintf("%d. **Test gap**: %d crates have zero tests. Critical gaps: %s.\n",
+			actionNum, len(missingTests), formatCrateList(targets)))
 	}
 
-	// 3. Doc coverage
+	// Doc coverage
 	var lowDoc []CrateInfo
 	for _, c := range crates {
 		if c.PubItems > 0 && c.DocPercent() < 50 {
@@ -238,12 +246,13 @@ func renderPriorityActions(b *strings.Builder, crates []CrateInfo) {
 	sort.Slice(lowDoc, func(i, j int) bool { return lowDoc[i].LOC > lowDoc[j].LOC })
 
 	if len(lowDoc) > 0 {
+		actionNum++
 		target := lowDoc[0]
-		b.WriteString(fmt.Sprintf("3. **Doc coverage**: Only %d crates exceed 50%% doc coverage. The highest-impact target: `%s` (%s LOC, %d%%).\n",
-			docOver50, target.Name, formatNumber(target.LOC), target.DocPercent()))
+		b.WriteString(fmt.Sprintf("%d. **Doc coverage**: Only %d crates exceed 50%% doc coverage. The highest-impact target: `%s` (%s LOC, %d%%).\n",
+			actionNum, docOver50, target.Name, formatNumber(target.LOC), target.DocPercent()))
 	}
 
-	// 4. Common layer health
+	// Common layer health
 	commonNoTests := 0
 	commonTotal := 0
 	for _, c := range crates {
@@ -255,8 +264,9 @@ func renderPriorityActions(b *strings.Builder, crates []CrateInfo) {
 		}
 	}
 	if commonTotal > 0 && commonNoTests > commonTotal/2 {
-		b.WriteString(fmt.Sprintf("4. **Common layer**: The foundational `common/` crates have gaps — %d of %d lack tests. Since every other layer depends on them, improving common/ has outsized impact.\n",
-			commonNoTests, commonTotal))
+		actionNum++
+		b.WriteString(fmt.Sprintf("%d. **Common layer**: The foundational `common/` crates have gaps — %d of %d lack tests. Since every other layer depends on them, improving common/ has outsized impact.\n",
+			actionNum, commonNoTests, commonTotal))
 	}
 }
 

@@ -12,8 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v3"
 )
 
@@ -50,6 +50,7 @@ var layerMap = map[string]int{
 	"rara-paths":         0,
 	"rara-model":         0,
 	"rara-domain-shared": 0,
+	"rara-api":           0, // protobuf-generated type definitions, no workspace deps
 
 	// Layer 1 — core primitives (depend only on layer 0)
 	"rara-soul":         1,
@@ -81,7 +82,6 @@ var layerMap = map[string]int{
 
 	// Layer 6 — entry
 	"rara-cli": 6,
-	"rara-api": 0, // protobuf-generated type definitions, no workspace deps
 }
 
 // allowedViolations lists known dependency direction violations that
@@ -192,6 +192,12 @@ func runCheckDeps() error {
 	return nil
 }
 
+// workspaceProbe is a minimal struct to detect whether a Cargo.toml
+// contains a [workspace] section.
+type workspaceProbe struct {
+	Workspace *struct{} `toml:"workspace"`
+}
+
 // findWorkspaceRoot walks up from cwd to find the directory containing
 // a Cargo.toml with [workspace].
 func findWorkspaceRoot() (string, error) {
@@ -202,7 +208,8 @@ func findWorkspaceRoot() (string, error) {
 	for {
 		candidate := filepath.Join(dir, "Cargo.toml")
 		if data, err := os.ReadFile(candidate); err == nil {
-			if strings.Contains(string(data), "[workspace]") {
+			var probe workspaceProbe
+			if err := toml.Unmarshal(data, &probe); err == nil && probe.Workspace != nil {
 				return dir, nil
 			}
 		}
@@ -214,50 +221,34 @@ func findWorkspaceRoot() (string, error) {
 	}
 }
 
-// parseWorkspaceAliases extracts the alias-to-package mapping from
-// [workspace.dependencies] entries that have a path = "..." field.
-// For example: `rara-kernel = { path = "crates/kernel" }` maps
-// the alias "rara-kernel" to whatever package name is declared
-// in that path's Cargo.toml.
-//
-// We use a simpler approach: the alias IS the package name as used
-// in dependency declarations. We just need to know which aliases
-// are workspace crates (have a path).
+// cargoWorkspace is used to decode the root Cargo.toml.
+type cargoWorkspace struct {
+	Workspace struct {
+		Dependencies map[string]any `toml:"dependencies"`
+	} `toml:"workspace"`
+}
+
+// parseWorkspaceAliases extracts workspace crate names from the root
+// Cargo.toml by looking for [workspace.dependencies] entries that
+// have a `path` field (i.e. local workspace crates, not external deps).
 func parseWorkspaceAliases(rootToml string) (map[string]bool, error) {
 	data, err := os.ReadFile(rootToml)
 	if err != nil {
 		return nil, err
 	}
 
+	var ws cargoWorkspace
+	if err := toml.Unmarshal(data, &ws); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", rootToml, err)
+	}
+
 	aliases := make(map[string]bool)
-	lines := strings.Split(string(data), "\n")
-	inWorkspaceDeps := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if trimmed == "[workspace.dependencies]" {
-			inWorkspaceDeps = true
-			continue
-		}
-		// New section starts
-		if strings.HasPrefix(trimmed, "[") && trimmed != "[workspace.dependencies]" {
-			if inWorkspaceDeps {
-				inWorkspaceDeps = false
-			}
-			continue
-		}
-
-		if !inWorkspaceDeps {
-			continue
-		}
-
-		// Look for lines like: rara-kernel = { path = "crates/kernel" }
-		if strings.Contains(trimmed, "path =") {
-			parts := strings.SplitN(trimmed, "=", 2)
-			if len(parts) >= 1 {
-				alias := strings.TrimSpace(parts[0])
-				aliases[alias] = true
+	for name, val := range ws.Workspace.Dependencies {
+		// Inline table entries with a path field are workspace crates.
+		// e.g. rara-kernel = { path = "crates/kernel" }
+		if tbl, ok := val.(map[string]any); ok {
+			if _, hasPath := tbl["path"]; hasPath {
+				aliases[name] = true
 			}
 		}
 	}
@@ -294,81 +285,54 @@ func findCrateTomlFiles(root string) ([]string, error) {
 	return files, nil
 }
 
+// crateCargo is used to decode a crate-level Cargo.toml.
+type crateCargo struct {
+	Package struct {
+		Name string `toml:"name"`
+	} `toml:"package"`
+	Dependencies      map[string]any `toml:"dependencies"`
+	BuildDependencies map[string]any `toml:"build-dependencies"`
+	// dev-dependencies are intentionally excluded: they don't affect the
+	// runtime dependency graph, so a dev-only import of a higher-layer
+	// crate (e.g. a test helper) should not count as a layer violation.
+}
+
 // parseCrateDeps extracts the package name and workspace crate dependencies
-// from a crate's Cargo.toml file.
+// from a crate's Cargo.toml file. Only [dependencies] and
+// [build-dependencies] are considered; [dev-dependencies] are excluded
+// because they do not affect the runtime dependency graph.
 func parseCrateDeps(tomlPath string, workspaceCrates map[string]bool) (string, []string, error) {
 	data, err := os.ReadFile(tomlPath)
 	if err != nil {
 		return "", nil, err
 	}
 
-	lines := strings.Split(string(data), "\n")
+	var crate crateCargo
+	if err := toml.Unmarshal(data, &crate); err != nil {
+		return "", nil, fmt.Errorf("parsing %s: %w", tomlPath, err)
+	}
 
-	// Extract package name
-	pkgName := ""
-	inPackage := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "[package]" {
-			inPackage = true
-			continue
-		}
-		if strings.HasPrefix(trimmed, "[") && trimmed != "[package]" {
-			inPackage = false
-			continue
-		}
-		if inPackage && strings.HasPrefix(trimmed, "name") {
-			parts := strings.SplitN(trimmed, "=", 2)
-			if len(parts) == 2 {
-				pkgName = strings.Trim(strings.TrimSpace(parts[1]), "\"")
+	if crate.Package.Name == "" {
+		return "", nil, fmt.Errorf("no package name found in %s", tomlPath)
+	}
+
+	var deps []string
+	// Collect workspace crate deps from both [dependencies] and [build-dependencies].
+	for _, section := range []map[string]any{crate.Dependencies, crate.BuildDependencies} {
+		for name, val := range section {
+			if !workspaceCrates[name] {
+				continue
+			}
+			// Accept both `dep = { workspace = true }` and `dep.workspace = true`.
+			if tbl, ok := val.(map[string]any); ok {
+				if ws, exists := tbl["workspace"]; exists {
+					if b, ok := ws.(bool); ok && b {
+						deps = append(deps, name)
+					}
+				}
 			}
 		}
 	}
 
-	if pkgName == "" {
-		return "", nil, fmt.Errorf("no package name found in %s", tomlPath)
-	}
-
-	// Extract dependencies that are workspace crates
-	var deps []string
-	inDeps := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Match [dependencies], [dev-dependencies], [dependencies.*]
-		if strings.HasPrefix(trimmed, "[") {
-			inDeps = trimmed == "[dependencies]" ||
-				strings.HasPrefix(trimmed, "[dependencies.")
-			continue
-		}
-
-		if !inDeps {
-			continue
-		}
-
-		// Skip empty lines and comments
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-
-		// Extract dependency name
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		depName := strings.TrimSpace(parts[0])
-		depValue := strings.TrimSpace(parts[1])
-
-		// Only care about workspace dependencies
-		if !strings.Contains(depValue, "workspace") {
-			continue
-		}
-
-		// Check if this is a known workspace crate
-		if workspaceCrates[depName] {
-			deps = append(deps, depName)
-		}
-	}
-
-	return pkgName, deps, nil
+	return crate.Package.Name, deps, nil
 }

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 // CrateInfo holds quality metrics for a single crate.
@@ -80,7 +82,7 @@ func discoverCrates(root string) ([]CrateInfo, error) {
 		ci.HasAgentMD = fileExists(filepath.Join(crateDir, "AGENT.md"))
 		ci.HasTests = detectTests(crateDir)
 		ci.PubItems, ci.DocItems = countDocCoverage(crateDir)
-		ci.LOC = countLOC(crateDir)
+		ci.LOC = countTotalLines(crateDir)
 
 		crates = append(crates, ci)
 		return nil
@@ -97,22 +99,25 @@ func discoverCrates(root string) ([]CrateInfo, error) {
 	return crates, nil
 }
 
-// parseCrateName extracts the `name = "..."` field from Cargo.toml.
+// parseCrateName extracts the [package].name field from Cargo.toml.
 func parseCrateName(cargoPath string) (string, error) {
-	f, err := os.Open(cargoPath)
+	data, err := os.ReadFile(cargoPath)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	re := regexp.MustCompile(`^name\s*=\s*"([^"]+)"`)
-	for scanner.Scan() {
-		if m := re.FindStringSubmatch(scanner.Text()); m != nil {
-			return m[1], nil
-		}
+	var cargo struct {
+		Package struct {
+			Name string `toml:"name"`
+		} `toml:"package"`
 	}
-	return "", fmt.Errorf("no name field in %s", cargoPath)
+	if err := toml.Unmarshal(data, &cargo); err != nil {
+		return "", fmt.Errorf("parsing %s: %w", cargoPath, err)
+	}
+	if cargo.Package.Name == "" {
+		return "", fmt.Errorf("no name field in %s", cargoPath)
+	}
+	return cargo.Package.Name, nil
 }
 
 // determineLayer classifies a crate based on its directory path.
@@ -221,23 +226,36 @@ func countDocCoverage(crateDir string) (pubItems, docItems int) {
 }
 
 // hasDocComment checks if lines immediately before index i contain a /// comment.
+// When searching upward, only doc comments (///), inner doc comments (//!),
+// attributes (#[...]), and blank lines are skipped. A regular // comment
+// terminates the search — it is not a doc comment and should not be
+// "transparent" to a /// further above.
 func hasDocComment(lines []string, idx int) bool {
 	for j := idx - 1; j >= 0; j-- {
 		trimmed := strings.TrimSpace(lines[j])
 		if docCommentRe.MatchString(lines[j]) {
 			return true
 		}
-		// Skip attribute lines like #[derive(...)], #[serde(...)], etc.
-		if strings.HasPrefix(trimmed, "#[") || strings.HasPrefix(trimmed, "//") || trimmed == "" {
+		// Skip blank lines and attributes.
+		if trimmed == "" || strings.HasPrefix(trimmed, "#[") {
 			continue
 		}
+		// Skip inner doc comments (//!).
+		if strings.HasPrefix(trimmed, "//!") {
+			continue
+		}
+		// A regular // comment is NOT a doc comment — stop searching.
+		// This prevents false positives where a /// far above a //
+		// comment would incorrectly count as documentation.
 		break
 	}
 	return false
 }
 
-// countLOC counts total lines in all .rs files in the crate directory.
-func countLOC(crateDir string) int {
+// countTotalLines counts total lines (including blanks and comments) in all
+// .rs files in the crate directory. This is not traditional LOC which
+// excludes blanks/comments — it is a raw line count used for crate sizing.
+func countTotalLines(crateDir string) int {
 	total := 0
 	_ = filepath.Walk(crateDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || !strings.HasSuffix(path, ".rs") {
