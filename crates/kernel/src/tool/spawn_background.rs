@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde_json::Value;
 use tracing::info;
 
@@ -21,7 +21,7 @@ use crate::{
     handle::KernelHandle,
     io::{AgentEvent, StreamEvent},
     session::{BackgroundTaskEntry, SessionKey},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
 
 /// Builtin tool that spawns a background agent for long-running tasks.
@@ -29,33 +29,29 @@ use crate::{
 /// The agent runs independently — the parent's turn continues and completes
 /// normally. When the background agent finishes, the kernel triggers a
 /// proactive turn on the parent to deliver the result.
+#[derive(ToolDef)]
+#[tool(
+    name = "spawn-background",
+    description = "Spawn a background agent to handle a long-running task. The agent runs \
+                   independently and results are delivered when complete. You cannot interact \
+                   with the background agent after spawning it.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct SpawnBackgroundTool {
     handle:      KernelHandle,
     session_key: SessionKey,
 }
 
 impl SpawnBackgroundTool {
-    pub const NAME: &str = crate::tool_names::SPAWN_BACKGROUND;
-
     pub fn new(handle: KernelHandle, session_key: SessionKey) -> Self {
         Self {
             handle,
             session_key,
         }
     }
-}
 
-#[async_trait]
-impl AgentTool for SpawnBackgroundTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Spawn a background agent to handle a long-running task. The agent runs independently and \
-         results are delivered when complete. You cannot interact with the background agent after \
-         spawning it."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         serde_json::json!({
             "type": "object",
             "required": ["manifest", "input", "description"],
@@ -79,7 +75,7 @@ impl AgentTool for SpawnBackgroundTool {
         })
     }
 
-    async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let input = params["input"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: input"))?

@@ -20,93 +20,68 @@
 //! plan executor (kernel loop).
 
 use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
+use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::plan::{ExecutionMode, Plan, PlanStatus, PlanStep};
 
 /// LLM-callable tool that creates a structured execution plan.
+#[derive(ToolDef)]
+#[tool(
+    name = "create-plan",
+    description = "Create a structured execution plan for complex tasks. The plan will be \
+                   executed step by step with independent context per step."
+)]
 pub struct CreatePlanTool;
-
-impl CreatePlanTool {
-    pub const NAME: &str = crate::tool_names::CREATE_PLAN;
-}
 
 // ============================================================================
 // Parameter types
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
-struct StepInput {
+/// Execution mode for a plan step.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StepMode {
+    /// Execute in the main agent context.
+    #[default]
+    Inline,
+    /// Execute in an independent worker session.
+    Worker,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StepInput {
+    /// Natural language description of what this step should accomplish
     task:       String,
+    /// Execution mode: inline (main agent) or worker (independent session)
     #[serde(default)]
-    mode:       Option<String>,
+    mode:       StepMode,
+    /// Criteria for considering this step complete
     acceptance: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct CreatePlanParams {
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreatePlanParams {
+    /// The overall goal of the plan
     goal:  String,
+    /// The steps to execute
     steps: Vec<StepInput>,
 }
 
 // ============================================================================
-// AgentTool impl
+// ToolExecute impl
 // ============================================================================
 
 #[async_trait]
-impl super::AgentTool for CreatePlanTool {
-    fn name(&self) -> &str { Self::NAME }
+impl super::ToolExecute for CreatePlanTool {
+    type Params = CreatePlanParams;
 
-    fn description(&self) -> &str {
-        "Create a structured execution plan for complex tasks. The plan will be executed step by \
-         step with independent context per step."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "required": ["goal", "steps"],
-            "properties": {
-                "goal": {
-                    "type": "string",
-                    "description": "The overall goal of the plan"
-                },
-                "steps": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "required": ["task", "acceptance"],
-                        "properties": {
-                            "task": {
-                                "type": "string",
-                                "description": "Natural language description of what this step should accomplish"
-                            },
-                            "mode": {
-                                "type": "string",
-                                "enum": ["inline", "worker"],
-                                "default": "inline",
-                                "description": "Execution mode: inline (main agent) or worker (independent session)"
-                            },
-                            "acceptance": {
-                                "type": "string",
-                                "description": "Criteria for considering this step complete"
-                            }
-                        }
-                    }
-                }
-            }
-        })
-    }
-
-    async fn execute(
+    async fn run(
         &self,
-        params: serde_json::Value,
+        input: CreatePlanParams,
         _context: &super::ToolContext,
     ) -> anyhow::Result<super::ToolOutput> {
-        let input: CreatePlanParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid create_plan params: {e}"))?;
-
         if input.steps.is_empty() {
             return Err(anyhow::anyhow!("plan must have at least one step"));
         }
@@ -116,9 +91,9 @@ impl super::AgentTool for CreatePlanTool {
             .into_iter()
             .enumerate()
             .map(|(index, s)| {
-                let mode = match s.mode.as_deref() {
-                    Some("worker") => ExecutionMode::Worker,
-                    _ => ExecutionMode::Inline,
+                let mode = match s.mode {
+                    StepMode::Worker => ExecutionMode::Worker,
+                    StepMode::Inline => ExecutionMode::Inline,
                 };
                 PlanStep {
                     index,
