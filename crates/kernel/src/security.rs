@@ -101,6 +101,28 @@ impl Default for ApprovalPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// ResolveError
+// ---------------------------------------------------------------------------
+
+/// Error from resolving an approval request.
+#[derive(Debug, Clone)]
+pub enum ResolveError {
+    /// The request timed out before the user responded.
+    Expired,
+    /// The request ID was never seen.
+    NotFound(Uuid),
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Expired => write!(f, "approval request has expired"),
+            Self::NotFound(id) => write!(f, "no pending approval request: {id}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ApprovalManager
 // ---------------------------------------------------------------------------
 
@@ -120,6 +142,7 @@ struct PendingRequest {
 /// or the request times out.
 pub struct ApprovalManager {
     pending:    DashMap<Uuid, PendingRequest>,
+    expired:    DashMap<Uuid, Timestamp>,
     policy:     RwLock<ApprovalPolicy>,
     /// Broadcast channel for notifying external listeners (e.g. Telegram
     /// adapter) when a new approval request is submitted.
@@ -131,6 +154,7 @@ impl ApprovalManager {
         let (request_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             pending: DashMap::new(),
+            expired: DashMap::new(),
             policy: RwLock::new(policy),
             request_tx,
         }
@@ -201,6 +225,7 @@ impl ApprovalManager {
                 decision
             }
             _ => {
+                self.expired.insert(id, Timestamp::now());
                 self.pending.remove(&id);
                 warn!(request_id = %id, "approval request timed out");
                 ApprovalDecision::TimedOut
@@ -215,7 +240,7 @@ impl ApprovalManager {
         request_id: Uuid,
         decision: ApprovalDecision,
         decided_by: Option<String>,
-    ) -> std::result::Result<ApprovalResponse, String> {
+    ) -> std::result::Result<ApprovalResponse, ResolveError> {
         match self.pending.remove(&request_id) {
             Some((_, pending)) => {
                 let response = ApprovalResponse {
@@ -228,7 +253,13 @@ impl ApprovalManager {
                 info!(request_id = %request_id, ?decision, "approval resolved");
                 Ok(response)
             }
-            None => Err(format!("no pending approval request: {request_id}")),
+            None => {
+                if self.expired.remove(&request_id).is_some() {
+                    Err(ResolveError::Expired)
+                } else {
+                    Err(ResolveError::NotFound(request_id))
+                }
+            }
         }
     }
 

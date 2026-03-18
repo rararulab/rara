@@ -229,7 +229,11 @@ impl Kernel {
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
         let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new(
             rara_paths::workspace_dir().clone(),
-            vec![rara_paths::config_dir().clone()],
+            vec![
+                rara_paths::config_dir().clone(),
+                rara_paths::data_dir().clone(),
+                rara_paths::temp_dir().clone(),
+            ],
         ));
 
         let syscall = SyscallDispatcher::new(

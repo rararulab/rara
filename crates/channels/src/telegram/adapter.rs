@@ -93,7 +93,7 @@ use rara_kernel::{
         EgressError, Endpoint, EndpointAddress, IOError, InteractionType, PlatformOutbound,
         RawPlatformMessage, ReplyContext, StreamHubRef,
     },
-    security::{ApprovalDecision, ApprovalRequest},
+    security::{ApprovalDecision, ApprovalRequest, ResolveError},
 };
 use teloxide::{
     payloads::{
@@ -1514,7 +1514,8 @@ async fn handle_guard_callback(
         let status = match (&decision, &result) {
             (ApprovalDecision::Approved, Ok(_)) => format!("✅ <b>Approved</b> by @{decided_by}"),
             (ApprovalDecision::Denied, Ok(_)) => format!("❌ <b>Denied</b> by @{decided_by}"),
-            (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(e)),
+            (_, Err(ResolveError::Expired)) => "⏰ <b>Expired</b> — request timed out".to_string(),
+            (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(&e.to_string())),
             _ => "Done".to_string(),
         };
 
