@@ -16,12 +16,12 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use jiff::Timestamp;
 use rara_kernel::{
     handle::KernelHandle,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
@@ -29,13 +29,20 @@ use tokio::sync::RwLock;
 ///
 /// Returns session keys, agent names, state, metrics, and timestamps so Mita
 /// can decide which sessions to inspect further with `read_tape`.
+#[derive(ToolDef)]
+#[tool(
+    name = "list-sessions",
+    description = "List all live sessions currently running in the kernel process table. Returns \
+                   session key, agent name, state, metrics, and timestamps. Use this to discover \
+                   sessions worth inspecting.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct ListSessionsTool {
     kernel_handle: Arc<RwLock<Option<KernelHandle>>>,
 }
 
 impl ListSessionsTool {
-    pub const NAME: &str = "list-sessions";
-
     pub fn new() -> Self {
         Self {
             kernel_handle: Arc::new(RwLock::new(None)),
@@ -47,19 +54,8 @@ impl ListSessionsTool {
     pub fn handle_ref(&self) -> Arc<RwLock<Option<KernelHandle>>> {
         Arc::clone(&self.kernel_handle)
     }
-}
 
-#[async_trait]
-impl AgentTool for ListSessionsTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List all live sessions currently running in the kernel process table. Returns session \
-         key, agent name, state, metrics, and timestamps. Use this to discover sessions worth \
-         inspecting."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -70,14 +66,14 @@ impl AgentTool for ListSessionsTool {
                 },
                 "updated_since": {
                     "type": "string",
-                    "description": "ISO 8601 timestamp — only return sessions with activity after this time (e.g. '2025-01-01T00:00:00Z')"
+                    "description": "ISO 8601 timestamp \u{2014} only return sessions with activity after this time (e.g. '2025-01-01T00:00:00Z')"
                 }
             },
             "required": []
         })
     }
 
-    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
         let updated_since: Option<Timestamp> = params
             .get("updated_since")

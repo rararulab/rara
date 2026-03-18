@@ -18,29 +18,26 @@
 //! Supports single (unique) replacement and replace-all modes.
 
 use anyhow::{Context, bail};
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Layer 1 primitive: edit a file by exact string replacement.
+#[derive(ToolDef)]
+#[tool(
+    name = "edit-file",
+    description = "Edit a file by replacing an exact string with a new string. By default, the \
+                   old_string must appear exactly once in the file. Use replace_all=true to \
+                   replace all occurrences.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct EditFileTool;
 
 impl EditFileTool {
-    pub const NAME: &str = "edit-file";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for EditFileTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Edit a file by replacing an exact string with a new string. By default, the old_string \
-         must appear exactly once in the file. Use replace_all=true to replace all occurrences."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -65,10 +62,10 @@ impl AgentTool for EditFileTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("file_path")

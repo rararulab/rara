@@ -17,38 +17,34 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
 use rara_skills::{
     clawhub::{ClawhubClient, ClawhubSort},
     marketplace::MarketplaceService,
 };
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 
+#[derive(ToolDef)]
+#[tool(
+    name = "marketplace",
+    description = "Browse, search, install, enable/disable plugins from Claude Code marketplace \
+                   repos and ClawHub (clawhub.ai). Actions: browse, search, install, enable, \
+                   disable, add_source, refresh, clawhub_search, clawhub_browse, clawhub_install.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct MarketplaceTool {
     service: Arc<MarketplaceService>,
     clawhub: Arc<ClawhubClient>,
 }
 
 impl MarketplaceTool {
-    pub const NAME: &str = "marketplace";
-
     pub fn new(service: Arc<MarketplaceService>, clawhub: Arc<ClawhubClient>) -> Self {
         Self { service, clawhub }
     }
-}
 
-#[async_trait]
-impl AgentTool for MarketplaceTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Browse, search, install, enable/disable plugins from Claude Code marketplace repos and \
-         ClawHub (clawhub.ai). Actions: browse, search, install, enable, disable, add_source, \
-         refresh, clawhub_search, clawhub_browse, clawhub_install."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -96,7 +92,7 @@ impl AgentTool for MarketplaceTool {
         })
     }
 
-    async fn execute(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let action = params
             .get("action")
             .and_then(|v| v.as_str())

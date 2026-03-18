@@ -14,37 +14,33 @@
 
 //! Tool for tracing a message's execution history by `rara_message_id`.
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::TapeService,
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 
 /// Searches the current session tape for all entries associated with a
 /// given `rara_message_id`, returning the full execution trace including
 /// metadata.
+#[derive(ToolDef)]
+#[tool(
+    name = "debug_trace",
+    description = "Look up all tape entries related to a specific rara_message_id in the current \
+                   session. Returns the full execution trace (messages, tool calls, results) with \
+                   metadata. Only use when the user asks to debug or trace a specific message.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct DebugTraceTool {
     tape_service: TapeService,
 }
 
 impl DebugTraceTool {
-    pub const NAME: &str = "debug_trace";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for DebugTraceTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Look up all tape entries related to a specific rara_message_id in the current session. \
-         Returns the full execution trace (messages, tool calls, results) with metadata. Only use \
-         when the user asks to debug or trace a specific message."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -61,7 +57,7 @@ impl AgentTool for DebugTraceTool {
         })
     }
 
-    async fn execute(&self, params: Value, ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let message_id = params
             .get("message_id")
             .and_then(|v| v.as_str())

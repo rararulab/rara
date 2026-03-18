@@ -17,21 +17,27 @@
 //! Issues an HTTP GET or POST request and returns the response status, content
 //! type, and body (truncated to 100 KB).
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Maximum response body size in bytes (100 KB).
 const MAX_BODY_BYTES: usize = 100 * 1024;
 
 /// Layer 1 primitive: issue an HTTP request.
+#[derive(ToolDef)]
+#[tool(
+    name = "http-fetch",
+    description = "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body \
+                   (truncated to 100KB). Useful for checking job posting pages or external APIs.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct HttpFetchTool {
     client: reqwest::Client,
 }
 
 impl HttpFetchTool {
-    pub const NAME: &str = "http-fetch";
-
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
@@ -40,18 +46,8 @@ impl HttpFetchTool {
                 .unwrap_or_default(),
         }
     }
-}
 
-#[async_trait]
-impl AgentTool for HttpFetchTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body (truncated \
-         to 100KB). Useful for checking job posting pages or external APIs."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -69,10 +65,10 @@ impl AgentTool for HttpFetchTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let url = params
             .get("url")

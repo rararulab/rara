@@ -21,41 +21,40 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use super::{categories, embedding::EmbeddingService, items};
-use crate::tool::{AgentTool, ToolContext, ToolOutput};
+use crate::tool::{ToolContext, ToolOutput};
 
 /// LLM-callable tool for querying the Knowledge Layer.
+#[derive(ToolDef)]
+#[tool(
+    name = "memory",
+    description = "Search and read the user's long-term memory. Supports three actions:\n- \
+                   search: semantic search across memory items\n- categories: list all memory \
+                   categories for the user\n- read_category: read the full content of a specific \
+                   category file",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct MemoryTool {
     pool:          SqlitePool,
     embedding_svc: Arc<EmbeddingService>,
 }
 
 impl MemoryTool {
-    pub const NAME: &str = crate::tool_names::MEMORY;
-
+    /// Create a new `MemoryTool` with the given database pool and embedding
+    /// service.
     pub fn new(pool: SqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
         Self {
             pool,
             embedding_svc,
         }
     }
-}
 
-#[async_trait]
-impl AgentTool for MemoryTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Search and read the user's long-term memory. Supports three actions:\n- search: semantic \
-         search across memory items\n- categories: list all memory categories for the user\n- \
-         read_category: read the full content of a specific category file"
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -77,7 +76,7 @@ impl AgentTool for MemoryTool {
         })
     }
 
-    async fn execute(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let action = params.get("action").and_then(Value::as_str).unwrap_or("");
 
         let username = context.user_id.as_str();
@@ -105,9 +104,7 @@ impl AgentTool for MemoryTool {
             _ => Ok(json!({"error": format!("unknown action: {action}")}).into()),
         }
     }
-}
 
-impl MemoryTool {
     async fn exec_search(&self, username: &str, query: &str) -> anyhow::Result<Value> {
         // Embed the query.
         let embeddings = self.embedding_svc.embed(&[query.to_string()]).await?;

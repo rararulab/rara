@@ -17,32 +17,28 @@
 //! Lists entries in a directory with name, type, and size metadata.
 
 use anyhow::Context;
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Maximum number of directory entries to return.
 const MAX_ENTRIES: usize = 1000;
 
 /// Layer 1 primitive: list directory contents.
+#[derive(ToolDef)]
+#[tool(
+    name = "list-directory",
+    description = "List the contents of a directory. Returns each entry's name, type \
+                   (file/dir/symlink), and size in bytes (for files). Maximum 1000 entries.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct ListDirectoryTool;
 
 impl ListDirectoryTool {
-    pub const NAME: &str = "list-directory";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for ListDirectoryTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List the contents of a directory. Returns each entry's name, type (file/dir/symlink), and \
-         size in bytes (for files). Maximum 1000 entries."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -55,10 +51,10 @@ impl AgentTool for ListDirectoryTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("path")

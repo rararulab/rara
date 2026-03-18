@@ -14,38 +14,35 @@
 
 //! Mita-exclusive tool: read tape entries from a specific session.
 
-use async_trait::async_trait;
 use rara_kernel::{
     memory::{TapeService, user_tape_name},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 
 /// Mita tool that reads tape entries from a specified session.
 ///
 /// Supports a `recent_n` parameter to limit results to the most recent
 /// N entries, avoiding overwhelming Mita's context with long histories.
+#[derive(ToolDef)]
+#[tool(
+    name = "read-tape",
+    description = "Read tape entries from a session or user tape. Returns message history \
+                   including user messages, assistant responses, and tool calls. Use `recent_n` \
+                   to limit to the most recent entries. Provide either `session_id` or `user_id`, \
+                   not both.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct ReadTapeTool {
     tape_service: TapeService,
 }
 
 impl ReadTapeTool {
-    pub const NAME: &str = "read-tape";
-
     pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
-}
 
-#[async_trait]
-impl AgentTool for ReadTapeTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Read tape entries from a session or user tape. Returns message history including user \
-         messages, assistant responses, and tool calls. Use `recent_n` to limit to the most recent \
-         entries. Provide either `session_id` or `user_id`, not both."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -66,7 +63,7 @@ impl AgentTool for ReadTapeTool {
         })
     }
 
-    async fn execute(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, params: Value, _ctx: &ToolContext) -> anyhow::Result<ToolOutput> {
         let session_id = params.get("session_id").and_then(|v| v.as_str());
         let user_id = params.get("user_id").and_then(|v| v.as_str());
 

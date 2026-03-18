@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rara_domain_shared::settings::SettingsProvider;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Sensitive-key substrings. If a settings key contains any of these
@@ -29,43 +29,22 @@ use serde_json::json;
 const SENSITIVE_FRAGMENTS: &[&str] = &["api_key", "token", "password", "secret"];
 
 /// Agent tool that reads and modifies runtime settings.
+#[derive(ToolDef)]
+#[tool(
+    name = "settings",
+    description = "Read and modify runtime settings. Use 'list' to see all settings, 'get' to \
+                   read a specific key, 'set' to update a value.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct SettingsTool {
     settings: Arc<dyn SettingsProvider>,
 }
 
 impl SettingsTool {
-    pub const NAME: &str = "settings";
-
     pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
-}
 
-/// Mask a value if the key looks sensitive.
-fn maybe_mask(key: &str, value: &str) -> String {
-    let key_lower = key.to_ascii_lowercase();
-    let is_sensitive = SENSITIVE_FRAGMENTS
-        .iter()
-        .any(|frag| key_lower.contains(frag));
-    if is_sensitive {
-        if value.len() < 6 {
-            "****".to_owned()
-        } else {
-            format!("{}****", &value[..6])
-        }
-    } else {
-        value.to_owned()
-    }
-}
-
-#[async_trait]
-impl AgentTool for SettingsTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Read and modify runtime settings. Use 'list' to see all settings, 'get' to read a \
-         specific key, 'set' to update a value."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -87,10 +66,10 @@ impl AgentTool for SettingsTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let action = params
             .get("action")
@@ -136,6 +115,23 @@ impl AgentTool for SettingsTool {
             }
             other => Ok(json!({ "error": format!("unknown action: {other}") }).into()),
         }
+    }
+}
+
+/// Mask a value if the key looks sensitive.
+fn maybe_mask(key: &str, value: &str) -> String {
+    let key_lower = key.to_ascii_lowercase();
+    let is_sensitive = SENSITIVE_FRAGMENTS
+        .iter()
+        .any(|frag| key_lower.contains(frag));
+    if is_sensitive {
+        if value.len() < 6 {
+            "****".to_owned()
+        } else {
+            format!("{}****", &value[..6])
+        }
+    } else {
+        value.to_owned()
     }
 }
 

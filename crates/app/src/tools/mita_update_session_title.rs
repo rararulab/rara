@@ -18,35 +18,31 @@
 //! that were created without one (e.g. when the auto-title LLM call
 //! failed or the session predates the auto-title feature).
 
-use async_trait::async_trait;
 use rara_kernel::{
     session::{SessionIndexRef, SessionKey},
-    tool::{AgentTool, ToolContext, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Mita-exclusive tool: update a session's title.
+#[derive(ToolDef)]
+#[tool(
+    name = "update-session-title",
+    description = "Update the title of a session. Use this to set a concise, descriptive title \
+                   for sessions that are missing one. The title should be max 30 characters and \
+                   match the language of the conversation.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct UpdateSessionTitleTool {
     session_index: SessionIndexRef,
 }
 
 impl UpdateSessionTitleTool {
-    pub const NAME: &str = "update-session-title";
-
     pub fn new(session_index: SessionIndexRef) -> Self { Self { session_index } }
-}
 
-#[async_trait]
-impl AgentTool for UpdateSessionTitleTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Update the title of a session. Use this to set a concise, descriptive title for sessions \
-         that are missing one. The title should be max 30 characters and match the language of the \
-         conversation."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "required": ["session_key", "title"],
@@ -63,7 +59,7 @@ impl AgentTool for UpdateSessionTitleTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,

@@ -14,34 +14,30 @@
 
 //! Session info tool for querying current session metadata.
 
-use async_trait::async_trait;
 use rara_kernel::{
     session::SessionIndexRef,
-    tool::{AgentTool, ToolOutput},
+    tool::{ToolContext, ToolOutput},
 };
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Agent tool that retrieves metadata for the current session.
+#[derive(ToolDef)]
+#[tool(
+    name = "get-session-info",
+    description = "Get metadata for the current session, including uploaded image paths and other \
+                   session-specific information.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct SessionInfoTool {
     session_index: SessionIndexRef,
 }
 
 impl SessionInfoTool {
-    pub const NAME: &str = "get-session-info";
-
     pub fn new(session_index: SessionIndexRef) -> Self { Self { session_index } }
-}
 
-#[async_trait]
-impl AgentTool for SessionInfoTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Get metadata for the current session, including uploaded image paths and other \
-         session-specific information."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {},
@@ -49,10 +45,10 @@ impl AgentTool for SessionInfoTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         _params: serde_json::Value,
-        context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let session_key = &context.session_key;
 

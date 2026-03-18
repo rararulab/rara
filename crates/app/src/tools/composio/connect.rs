@@ -1,30 +1,27 @@
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use super::shared::ComposioShared;
 
 /// Get an OAuth connection URL for a Composio-supported app.
+#[derive(ToolDef)]
+#[tool(
+    name = "composio_connect",
+    description = "Get an OAuth connection URL to authorize a third-party app via Composio. \
+                   Returns a redirect URL the user should open in their browser to complete \
+                   authorization.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub(super) struct ComposioConnectTool {
     shared: ComposioShared,
 }
 
 impl ComposioConnectTool {
-    pub const NAME: &str = "composio_connect";
-
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
-}
 
-#[async_trait]
-impl AgentTool for ComposioConnectTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Get an OAuth connection URL to authorize a third-party app via Composio. Returns a \
-         redirect URL the user should open in their browser to complete authorization."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -44,7 +41,7 @@ impl AgentTool for ComposioConnectTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,

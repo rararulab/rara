@@ -17,8 +17,8 @@
 //! Mita (the LLM) generates the proposed soul content herself, then passes
 //! it to this tool for validation, snapshotting, and writing.
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 use tracing::info;
 
@@ -29,28 +29,24 @@ use super::notify::push_notification;
 /// Mita generates the new soul content and passes it as `proposed_soul`.
 /// The tool validates boundaries, snapshots the old soul, and writes the new
 /// one.
+#[derive(ToolDef)]
+#[tool(
+    name = "evolve-soul",
+    description = "Write an evolved soul.md for an agent. You (Mita) must generate the full \
+                   proposed soul content (frontmatter + markdown body) based on the accumulated \
+                   state signals (emerged traits, style drift, discovered interests, relationship \
+                   stage). The tool validates boundaries, snapshots the current soul, and writes \
+                   the new version. The proposed_soul must preserve all immutable_traits and \
+                   respect formality bounds from the current soul's boundaries section.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct EvolveSoulTool;
 
 impl EvolveSoulTool {
-    pub const NAME: &str = "evolve-soul";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for EvolveSoulTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Write an evolved soul.md for an agent. You (Mita) must generate the full proposed soul \
-         content (frontmatter + markdown body) based on the accumulated state signals (emerged \
-         traits, style drift, discovered interests, relationship stage). The tool validates \
-         boundaries, snapshots the current soul, and writes the new version. The proposed_soul \
-         must preserve all immutable_traits and respect formality bounds from the current soul's \
-         boundaries section."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -71,7 +67,7 @@ impl AgentTool for EvolveSoulTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,
@@ -136,7 +132,11 @@ impl AgentTool for EvolveSoulTool {
             state.append_history(rara_soul::state::HistoryEntry {
                 timestamp:   jiff::Timestamp::now(),
                 r#type:      "soul_evolved".to_string(),
-                description: format!("v{} → v{}: {reason}", current_version, current_version + 1,),
+                description: format!(
+                    "v{} \u{2192} v{}: {reason}",
+                    current_version,
+                    current_version + 1,
+                ),
             });
             let _ = rara_soul::loader::save_state(agent, &state);
         }
@@ -152,7 +152,10 @@ impl AgentTool for EvolveSoulTool {
 
         push_notification(
             _context,
-            format!("🧬 Soul evolved: {agent} v{current_version} → v{new_version}\n{reason}"),
+            format!(
+                "\u{1f9ec} Soul evolved: {agent} v{current_version} \u{2192} \
+                 v{new_version}\n{reason}"
+            ),
         );
 
         Ok(json!({
@@ -169,6 +172,8 @@ impl AgentTool for EvolveSoulTool {
 
 #[cfg(test)]
 mod tests {
+    use rara_kernel::tool::AgentTool;
+
     use super::*;
 
     #[test]

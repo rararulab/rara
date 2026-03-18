@@ -17,6 +17,9 @@ pub mod config_sync;
 mod context_mode;
 pub mod flatten;
 pub mod gateway;
+// Re-export `rara_kernel::tool` so the `ToolDef` proc macro can resolve
+// `crate::tool::AgentTool` in derived impls.
+pub(crate) use rara_kernel::tool;
 mod tools;
 
 use std::{

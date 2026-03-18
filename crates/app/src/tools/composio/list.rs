@@ -1,31 +1,27 @@
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 use super::shared::ComposioShared;
 
 /// List available Composio actions, optionally filtered by app and search
 /// query.
+#[derive(ToolDef)]
+#[tool(
+    name = "composio_list",
+    description = "List available actions/tools on Composio. Filter by app name (e.g. 'gmail', \
+                   'notion', 'github') and/or search query to find specific actions.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub(super) struct ComposioListTool {
     shared: ComposioShared,
 }
 
 impl ComposioListTool {
-    pub const NAME: &str = "composio_list";
-
     pub(super) fn new(shared: ComposioShared) -> Self { Self { shared } }
-}
 
-#[async_trait]
-impl AgentTool for ComposioListTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List available actions/tools on Composio. Filter by app name (e.g. 'gmail', 'notion', \
-         'github') and/or search query to find specific actions."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -41,7 +37,7 @@ impl AgentTool for ComposioListTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         _context: &ToolContext,

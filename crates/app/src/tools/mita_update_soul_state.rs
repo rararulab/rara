@@ -20,9 +20,9 @@
 //! - `style_drift`
 //! - `discovered_interests`
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
 use rara_soul::state::{EmergedTrait, HistoryEntry, RelationshipStage, StyleDrift};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 use tracing::info;
 
@@ -37,27 +37,24 @@ const UPDATABLE_FIELDS: &[&str] = &[
 ];
 
 /// Mita-exclusive tool: update a specific field in an agent's soul state.
+#[derive(ToolDef)]
+#[tool(
+    name = "update-soul-state",
+    description = "Update a specific field in an agent's soul state. Fields:\n- \
+                   relationship_stage: one of \"stranger\", \"acquaintance\", \"friend\", \
+                   \"close_friend\"\n- emerged_traits: array of {\"trait\": \"...\", \
+                   \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}\n- style_drift: \
+                   {\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}\n- \
+                   discovered_interests: array of strings",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct UpdateSoulStateTool;
 
 impl UpdateSoulStateTool {
-    pub const NAME: &str = "update-soul-state";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for UpdateSoulStateTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Update a specific field in an agent's soul state. Fields:\n- relationship_stage: one of \
-         \"stranger\", \"acquaintance\", \"friend\", \"close_friend\"\n- emerged_traits: array of \
-         {\"trait\": \"...\", \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}\n- style_drift: \
-         {\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}\n- \
-         discovered_interests: array of strings"
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -78,7 +75,7 @@ impl AgentTool for UpdateSoulStateTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
         context: &ToolContext,
@@ -223,7 +220,10 @@ impl AgentTool for UpdateSoulStateTool {
         rara_soul::loader::save_state(agent, &state)
             .map_err(|e| anyhow::anyhow!("failed to save soul state: {e}"))?;
 
-        push_notification(context, format!("⚙️ Soul state updated: {agent}.{field}"));
+        push_notification(
+            context,
+            format!("\u{2699}\u{fe0f} Soul state updated: {agent}.{field}"),
+        );
 
         Ok(json!({
             "status": "ok",

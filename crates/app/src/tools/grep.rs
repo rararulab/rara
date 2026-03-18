@@ -19,8 +19,8 @@
 //! not installed.
 
 use anyhow::{Context, bail};
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Maximum output size in bytes (50 KB).
@@ -30,25 +30,21 @@ const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_MATCHES: usize = 100;
 
 /// Layer 1 primitive: regex search across files.
+#[derive(ToolDef)]
+#[tool(
+    name = "grep",
+    description = "Search file contents using a regex pattern via ripgrep (rg). Supports file \
+                   type filtering with glob patterns, context lines, and case-insensitive search. \
+                   Output is truncated to 50KB / 100 matches.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct GrepTool;
 
 impl GrepTool {
-    pub const NAME: &str = "grep";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for GrepTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Search file contents using a regex pattern via ripgrep (rg). Supports file type filtering \
-         with glob patterns, context lines, and case-insensitive search. Output is truncated to \
-         50KB / 100 matches."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -77,10 +73,10 @@ impl AgentTool for GrepTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let pattern = params
             .get("pattern")

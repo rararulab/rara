@@ -21,8 +21,8 @@
 //! file up to a budget derived from the model's context window size.
 
 use anyhow::Context;
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
+use rara_tool_macro::ToolDef;
 use serde_json::json;
 
 /// Maximum total output size in bytes per page (50 KB).
@@ -119,26 +119,22 @@ fn read_page(all_lines: &[&str], offset: usize, limit: usize) -> PageResult {
 }
 
 /// Layer 1 primitive: read a file with line numbers.
+#[derive(ToolDef)]
+#[tool(
+    name = "read-file",
+    description = "Read a file from the filesystem. Returns content with line number prefixes \
+                   (like cat -n). Without offset/limit, adaptively reads up to the context-window \
+                   budget (multiple pages auto-stitched). Use offset and limit to read a specific \
+                   range. Detects binary files. Long lines are truncated at 2000 characters.",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct ReadFileTool;
 
 impl ReadFileTool {
-    pub const NAME: &str = "read-file";
-
     pub fn new() -> Self { Self }
-}
 
-#[async_trait]
-impl AgentTool for ReadFileTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Read a file from the filesystem. Returns content with line number prefixes (like cat -n). \
-         Without offset/limit, adaptively reads up to the context-window budget (multiple pages \
-         auto-stitched). Use offset and limit to read a specific range. Detects binary files. Long \
-         lines are truncated at 2000 characters."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
+    fn schema() -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
@@ -159,10 +155,10 @@ impl AgentTool for ReadFileTool {
         })
     }
 
-    async fn execute(
+    async fn exec(
         &self,
         params: serde_json::Value,
-        context: &rara_kernel::tool::ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let raw_path = params
             .get("file_path")

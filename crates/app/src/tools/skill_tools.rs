@@ -14,9 +14,9 @@
 
 //! Layer 2 service tools for managing agent skills.
 
-use async_trait::async_trait;
-use rara_kernel::tool::{AgentTool, ToolOutput};
+use rara_kernel::tool::{ToolContext, ToolOutput};
 use rara_skills::registry::InMemoryRegistry;
+use rara_tool_macro::ToolDef;
 use serde_json::{Value, json};
 
 /// Format a SKILL.md file with YAML frontmatter (new format).
@@ -49,26 +49,22 @@ fn format_skill_md(
 // ---------------------------------------------------------------------------
 
 /// Tool that lists all available skills with their metadata.
+#[derive(ToolDef)]
+#[tool(
+    name = "list-skills",
+    description = "List all available skills with their metadata (name, description, \
+                   allowed_tools, source, eligibility).",
+    params_schema = "Self::schema()",
+    execute_fn = "self.exec"
+)]
 pub struct ListSkillsTool {
     registry: InMemoryRegistry,
 }
 
 impl ListSkillsTool {
-    pub const NAME: &str = "list-skills";
-
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
-}
 
-#[async_trait]
-impl AgentTool for ListSkillsTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "List all available skills with their metadata (name, description, allowed_tools, source, \
-         eligibility)."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema() -> Value {
         json!({
             "type": "object",
             "properties": {},
@@ -76,11 +72,7 @@ impl AgentTool for ListSkillsTool {
         })
     }
 
-    async fn execute(
-        &self,
-        _params: Value,
-        _context: &rara_kernel::tool::ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
+    async fn exec(&self, _params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
         let skills: Vec<Value> = self
             .registry
             .list_all()
@@ -109,25 +101,21 @@ impl AgentTool for ListSkillsTool {
 
 /// Tool that creates a new skill by writing a `SKILL.md` file inside a skill
 /// directory and inserting the parsed metadata into the registry.
+#[derive(ToolDef)]
+#[tool(
+    name = "create-skill",
+    description = "Create a new skill by writing a SKILL.md file with frontmatter and prompt body.",
+    params_schema = "Self::schema_create()",
+    execute_fn = "self.exec_create"
+)]
 pub struct CreateSkillTool {
     registry: InMemoryRegistry,
 }
 
 impl CreateSkillTool {
-    pub const NAME: &str = "create-skill";
-
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
-}
 
-#[async_trait]
-impl AgentTool for CreateSkillTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Create a new skill by writing a SKILL.md file with frontmatter and prompt body."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema_create() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -153,10 +141,10 @@ impl AgentTool for CreateSkillTool {
         })
     }
 
-    async fn execute(
+    async fn exec_create(
         &self,
         params: Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let name = params
             .get("name")
@@ -218,25 +206,21 @@ impl AgentTool for CreateSkillTool {
 // ---------------------------------------------------------------------------
 
 /// Tool that deletes a skill by removing its directory and unregistering it.
+#[derive(ToolDef)]
+#[tool(
+    name = "delete-skill",
+    description = "Delete a skill by removing its directory and unregistering it.",
+    params_schema = "Self::schema_delete()",
+    execute_fn = "self.exec_delete"
+)]
 pub struct DeleteSkillTool {
     registry: InMemoryRegistry,
 }
 
 impl DeleteSkillTool {
-    pub const NAME: &str = "delete-skill";
-
     pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
-}
 
-#[async_trait]
-impl AgentTool for DeleteSkillTool {
-    fn name(&self) -> &str { Self::NAME }
-
-    fn description(&self) -> &str {
-        "Delete a skill by removing its directory and unregistering it."
-    }
-
-    fn parameters_schema(&self) -> Value {
+    fn schema_delete() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -249,10 +233,10 @@ impl AgentTool for DeleteSkillTool {
         })
     }
 
-    async fn execute(
+    async fn exec_delete(
         &self,
         params: Value,
-        _context: &rara_kernel::tool::ToolContext,
+        _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let name = params
             .get("name")

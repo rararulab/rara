@@ -14,6 +14,7 @@ axum = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 rara-kernel = { workspace = true }
+rara-tool-macro.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
