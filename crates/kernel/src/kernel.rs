@@ -906,10 +906,7 @@ impl Kernel {
             "child result received"
         );
 
-        // Safety fallback for child results. Child agents are expected to
-        // self-summarize via their system prompt. This limit only triggers
-        // if self-summarization produces unexpectedly large output.
-        const CHILD_RESULT_SAFETY_LIMIT: usize = 8000;
+        use crate::agent::CHILD_RESULT_SAFETY_LIMIT;
         let output = &result.output;
         let truncated_output = if output.len() > CHILD_RESULT_SAFETY_LIMIT {
             let boundary = output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT);

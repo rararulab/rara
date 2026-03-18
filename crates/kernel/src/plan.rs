@@ -952,13 +952,9 @@ async fn execute_worker_step(
                         result.iterations, result.tool_calls
                     )
                 } else {
-                    // Safety fallback: if self-summarization fails to be concise,
-                    // truncate at a generous char boundary to protect parent context.
-                    const WORKER_RESULT_SAFETY_LIMIT: usize = 8000;
-                    if result.output.len() > WORKER_RESULT_SAFETY_LIMIT {
-                        let boundary = result
-                            .output
-                            .floor_char_boundary(WORKER_RESULT_SAFETY_LIMIT);
+                    use crate::agent::CHILD_RESULT_SAFETY_LIMIT;
+                    if result.output.len() > CHILD_RESULT_SAFETY_LIMIT {
+                        let boundary = result.output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT);
                         format!("{}...(truncated)", &result.output[..boundary])
                     } else {
                         result.output.clone()

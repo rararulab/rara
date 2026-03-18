@@ -14,6 +14,13 @@
 
 pub mod fold;
 
+/// Maximum character length for child/worker agent results passed back to
+/// the parent context. Child agents are expected to self-summarize via their
+/// system prompt; this limit is a safety fallback for unexpectedly large
+/// output. Uses `str::floor_char_boundary()` to avoid splitting multi-byte
+/// UTF-8 chars.
+pub(crate) const CHILD_RESULT_SAFETY_LIMIT: usize = 8000;
+
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
