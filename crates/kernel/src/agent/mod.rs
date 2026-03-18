@@ -893,6 +893,9 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    // ── Pause turn state ─────────────────────────────────────────────
+    let pause_interval = manifest.pause_turn_threshold.unwrap_or(15);
+    let mut next_pause_at: usize = pause_interval;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1821,6 +1824,58 @@ pub(crate) async fn run_agent_loop(
                 },
                 tool_calls: tool_call_traces,
             });
+        }
+
+        // ── Pause turn check ─────────────────────────────────────────
+        // When cumulative tool calls reach the threshold, pause and ask
+        // the user whether to continue or stop.
+        if pause_interval > 0 && tool_calls_made >= next_pause_at {
+            let elapsed_secs = turn_start.elapsed().as_secs();
+            stream_handle.emit(StreamEvent::PauseTurn {
+                session_key: session_key.to_string(),
+                tool_calls_made,
+                elapsed_secs,
+            });
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle.register_pause_turn(&session_key, tx);
+
+            info!(
+                tool_calls_made,
+                next_pause_at,
+                elapsed_secs,
+                "agent loop paused at tool call threshold, awaiting user decision"
+            );
+
+            let decision = tokio::select! {
+                result = tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    rx,
+                ) => result,
+                _ = turn_cancel.cancelled() => {
+                    return Err(KernelError::Interrupted);
+                }
+            };
+
+            match decision {
+                Ok(Ok(crate::io::PauseTurnDecision::Continue)) => {
+                    info!(tool_calls_made, "user chose to continue agent loop");
+                    next_pause_at = tool_calls_made + pause_interval;
+                    stream_handle.emit(StreamEvent::PauseTurnResolved {
+                        session_key: session_key.to_string(),
+                        continued: true,
+                    });
+                }
+                _ => {
+                    // Stop or Timeout or channel closed
+                    warn!(tool_calls_made, "agent loop stopped by user or timeout");
+                    stream_handle.emit(StreamEvent::PauseTurnResolved {
+                        session_key: session_key.to_string(),
+                        continued: false,
+                    });
+                    break;
+                }
+            }
         }
 
         // ── Runtime context guard ──────────────────────────────────────

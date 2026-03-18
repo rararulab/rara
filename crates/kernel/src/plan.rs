@@ -237,6 +237,12 @@ pub(crate) async fn run_plan_loop(
     let mut last_model = String::new();
     let mut final_texts: Vec<String> = Vec::new();
     let mut replan_count = 0usize;
+    let pause_interval = handle
+        .session_manifest(&session_key)
+        .await
+        .map(|m| m.pause_turn_threshold.unwrap_or(15))
+        .unwrap_or(15);
+    let mut next_pause_at: usize = pause_interval;
 
     // Use an index-based loop so we can replace plan.steps on replan.
     let mut step_idx = 0;
@@ -312,6 +318,55 @@ pub(crate) async fn run_plan_loop(
             summary: summary.clone(),
             outcome: outcome.clone(),
         });
+
+        // ── Pause turn check (cumulative across steps) ───────────────
+        if pause_interval > 0 && total_tool_calls >= next_pause_at {
+            let elapsed_secs = start.elapsed().as_secs();
+            stream_handle.emit(StreamEvent::PauseTurn {
+                session_key: session_key.to_string(),
+                tool_calls_made: total_tool_calls,
+                elapsed_secs,
+            });
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle.register_pause_turn(&session_key, tx);
+
+            info!(
+                total_tool_calls,
+                next_pause_at,
+                step = step_idx,
+                "plan loop paused at tool call threshold"
+            );
+
+            let decision = tokio::select! {
+                result = tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    rx,
+                ) => result,
+                _ = turn_cancel.cancelled() => {
+                    return Err(KernelError::Interrupted);
+                }
+            };
+
+            match decision {
+                Ok(Ok(crate::io::PauseTurnDecision::Continue)) => {
+                    next_pause_at = total_tool_calls + pause_interval;
+                    stream_handle.emit(StreamEvent::PauseTurnResolved {
+                        session_key: session_key.to_string(),
+                        continued: true,
+                    });
+                }
+                _ => {
+                    warn!(total_tool_calls, step = step_idx, "plan loop stopped by user or timeout");
+                    stream_handle.emit(StreamEvent::PauseTurnResolved {
+                        session_key: session_key.to_string(),
+                        continued: false,
+                    });
+                    plan.status = PlanStatus::Failed;
+                    break;
+                }
+            }
+        }
 
         // -- Replan check -----------------------------------------------------
         if needs_replan {

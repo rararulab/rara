@@ -1431,6 +1431,98 @@ async fn handle_guard_callback(
     }
 }
 
+/// Handle a pause-turn callback query (continue/stop) from an inline keyboard.
+///
+/// Callback data format: `"turn:{action}:{session_key}"`
+/// - `action` = "continue" → resume agent loop
+/// - `action` = "stop"     → stop agent loop
+async fn handle_turn_pause_callback(
+    handle: &KernelHandle,
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    allowed_user_ids: &[i64],
+) {
+    // Verify authorization.
+    let from_id = callback.from.id.0 as i64;
+    if !allowed_user_ids.is_empty() && !allowed_user_ids.contains(&from_id) {
+        warn!(user_id = from_id, "turn pause callback: unauthorized user");
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("⚠️ Unauthorized")
+            .await;
+        return;
+    }
+
+    // Parse "turn:continue:{session_key}" or "turn:stop:{session_key}"
+    let parts: Vec<&str> = data.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        warn!(data, "turn pause callback: malformed data");
+        return;
+    }
+
+    let (action, session_key_str) = (parts[1], parts[2]);
+    let session_key = match rara_kernel::session::SessionKey::try_from_raw(session_key_str) {
+        Ok(k) => k,
+        Err(e) => {
+            warn!(error = %e, "turn pause callback: invalid session key");
+            return;
+        }
+    };
+
+    let decision = match action {
+        "continue" => rara_kernel::io::PauseTurnDecision::Continue,
+        "stop" => rara_kernel::io::PauseTurnDecision::Stop,
+        _ => {
+            warn!(action, "turn pause callback: unknown action");
+            return;
+        }
+    };
+
+    let resolved = handle.resolve_pause_turn(&session_key, decision);
+
+    let answer_text = match decision {
+        rara_kernel::io::PauseTurnDecision::Continue => "▶️ Continuing",
+        rara_kernel::io::PauseTurnDecision::Stop => "⏹ Stopped",
+    };
+    let _ = bot
+        .answer_callback_query(callback.id.clone())
+        .text(answer_text)
+        .await;
+
+    // Edit message to show decision, remove buttons.
+    if let Some(msg) = &callback.message {
+        let decided_by = callback.from.username.as_deref().unwrap_or("unknown");
+        let (msg_id, chat_id, original_text) = match msg {
+            teloxide::types::MaybeInaccessibleMessage::Regular(m) => {
+                (m.id, m.chat.id, m.text().unwrap_or("Pause decision").to_owned())
+            }
+            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => {
+                (m.message_id, m.chat.id, "Pause decision".to_owned())
+            }
+        };
+
+        let status = if resolved {
+            match decision {
+                rara_kernel::io::PauseTurnDecision::Continue => {
+                    format!("▶️ <b>Continued</b> by @{decided_by}")
+                }
+                rara_kernel::io::PauseTurnDecision::Stop => {
+                    format!("⏹ <b>Stopped</b> by @{decided_by}")
+                }
+            }
+        } else {
+            "⚠️ Decision expired (agent already finished or timed out)".to_string()
+        };
+
+        let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
+        let _ = bot
+            .edit_message_text(chat_id, msg_id, new_text)
+            .parse_mode(ParseMode::Html)
+            .await;
+    }
+}
+
 /// Handle a trace show/hide callback query from an inline keyboard button.
 ///
 /// Callback data format: `"trace:{action}:{chat_id}:{msg_id}"`
@@ -1602,6 +1694,10 @@ async fn handle_update(
         if let Some(data) = &callback.data {
             if data.starts_with("guard:") {
                 handle_guard_callback(handle, bot, callback, data, allowed_chat_ids).await;
+                return;
+            }
+            if data.starts_with("turn:") {
+                handle_turn_pause_callback(handle, bot, callback, data, allowed_chat_ids).await;
                 return;
             }
             if data.starts_with("trace:") {
@@ -2404,6 +2500,34 @@ fn spawn_stream_forwarder(
                             // stash for the ExecutionTrace built in RecvError::Closed.
                             progress.model = model;
                             progress.iterations = iterations;
+                        }
+                        Ok(StreamEvent::PauseTurn { session_key, tool_calls_made, elapsed_secs }) => {
+                            let text = format!(
+                                "⚠️ <b>Agent Paused</b>\n\n\
+                                 已执行 <b>{tool_calls_made}</b> 次工具调用（耗时 {elapsed_secs}s）。\n\
+                                 是否继续？",
+                            );
+                            let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                InlineKeyboardButton::callback(
+                                    "▶️ 继续",
+                                    format!("turn:continue:{session_key}"),
+                                ),
+                                InlineKeyboardButton::callback(
+                                    "⏹ 停止",
+                                    format!("turn:stop:{session_key}"),
+                                ),
+                            ]]);
+                            let result = bot
+                                .send_message(ChatId(chat_id), &text)
+                                .parse_mode(ParseMode::Html)
+                                .reply_markup(keyboard)
+                                .await;
+                            if let Err(e) = result {
+                                warn!(error = %e, "forward_stream: failed to send pause prompt");
+                            }
+                        }
+                        Ok(StreamEvent::PauseTurnResolved { .. }) => {
+                            // Informational only — already handled by callback.
                         }
                         Ok(_) => {} // Ignore: Progress (stage changes have no TG UX)
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
