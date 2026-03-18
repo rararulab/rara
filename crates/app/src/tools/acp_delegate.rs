@@ -16,7 +16,8 @@
 //!
 //! Spawns a child agent process, sends a prompt over the Agent Communication
 //! Protocol, collects streaming events, and returns a structured JSON summary.
-//! Agents are resolved dynamically from the [`AcpRegistry`].
+//! Agents are resolved dynamically from the
+//! [`AcpRegistry`](rara_acp::AcpRegistry).
 
 use std::{future::Future, path::PathBuf, pin::Pin};
 
@@ -35,7 +36,8 @@ use tracing::{debug, warn};
 /// The tool spawns the requested agent as a subprocess, communicates using
 /// the Agent Communication Protocol (stdin/stdout JSON-RPC), and collects
 /// the agent's text output and tool call summaries into a single JSON
-/// response.  Agents are resolved from the [`AcpRegistry`] at runtime.
+/// response.  Agents are resolved from the
+/// [`AcpRegistry`](rara_acp::AcpRegistry) at runtime.
 #[derive(ToolDef)]
 #[tool(
     name = "acp-delegate",
