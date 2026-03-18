@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
+mod acp_delegate;
+mod acp_tools;
 mod bash;
 mod composio;
 mod debug_trace;
@@ -50,6 +52,8 @@ mod tape_info;
 mod user_note;
 mod write_file;
 
+use acp_delegate::AcpDelegateTool;
+use acp_tools::{InstallAcpAgentTool, ListAcpAgentsTool, RemoveAcpAgentTool};
 use bash::BashTool;
 use debug_trace::DebugTraceTool;
 use edit_file::EditFileTool;
@@ -136,6 +140,12 @@ pub fn rara_tool_names() -> Vec<String> {
         tool_names::BROWSER_HANDLE_DIALOG,
         tool_names::BROWSER_CONSOLE_MESSAGES,
         tool_names::BROWSER_NETWORK_REQUESTS,
+        // ACP delegation
+        AcpDelegateTool::TOOL_NAME,
+        // ACP management
+        InstallAcpAgentTool::TOOL_NAME,
+        ListAcpAgentsTool::TOOL_NAME,
+        RemoveAcpAgentTool::TOOL_NAME,
     ]
     .into_iter()
     .map(String::from)
@@ -153,6 +163,7 @@ pub struct ToolDeps {
     pub marketplace_service:    std::sync::Arc<rara_skills::marketplace::MarketplaceService>,
     pub clawhub_client:         std::sync::Arc<rara_skills::clawhub::ClawhubClient>,
     pub dock_mutation_sink:     rara_dock::DockMutationSink,
+    pub acp_registry:           rara_acp::AcpRegistryRef,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -229,6 +240,12 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // Mita soul evolution tools
         Arc::new(UpdateSoulStateTool::new()),
         Arc::new(EvolveSoulTool::new()),
+        // ACP delegation
+        Arc::new(AcpDelegateTool::new(deps.acp_registry.clone())),
+        // ACP management tools
+        Arc::new(InstallAcpAgentTool::new(deps.acp_registry.clone())),
+        Arc::new(ListAcpAgentsTool::new(deps.acp_registry.clone())),
+        Arc::new(RemoveAcpAgentTool::new(deps.acp_registry)),
     ];
 
     for tool in tools {
