@@ -46,4 +46,32 @@ pub enum AcpError {
     /// The remote agent advertises an ACP version we cannot speak.
     #[snafu(display("Unsupported ACP version: {version}"))]
     UnsupportedVersion { version: String },
+
+    /// The requested tool call does not exist in the thread.
+    #[snafu(display("Tool call not found: {tool_call_id}"))]
+    ToolCallNotFound { tool_call_id: String },
+
+    /// Failed to load or parse the registry from disk.
+    #[snafu(display("Failed to load ACP registry: {source}"))]
+    RegistryLoad { source: std::io::Error },
+
+    /// Failed to parse the registry JSON.
+    #[snafu(display("Failed to parse ACP registry: {source}"))]
+    RegistryParse { source: serde_json::Error },
+
+    /// Failed to save the registry to disk.
+    #[snafu(display("Failed to save ACP registry: {source}"))]
+    RegistrySave { source: std::io::Error },
+
+    /// Failed to serialize the registry to JSON.
+    #[snafu(display("Failed to serialize ACP registry: {source}"))]
+    RegistrySerialize { source: serde_json::Error },
+
+    /// An operation on a builtin agent was rejected.
+    #[snafu(display("Builtin agent protection: {message}"))]
+    BuiltinProtection { message: String },
+
+    /// The registry path was not configured.
+    #[snafu(display("ACP registry path not configured"))]
+    RegistryPathNotSet,
 }

@@ -463,8 +463,8 @@ impl AcpThread {
         let tc =
             self.tool_calls
                 .get_mut(tool_call_id)
-                .ok_or_else(|| AcpError::SessionNotFound {
-                    session_id: tool_call_id.into(),
+                .ok_or_else(|| AcpError::ToolCallNotFound {
+                    tool_call_id: tool_call_id.into(),
                 })?;
 
         let prev = std::mem::replace(&mut tc.status, AcpToolCallStatus::Running);

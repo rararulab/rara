@@ -143,27 +143,25 @@ impl ListAcpAgentsTool {
         _params: Value,
         _context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        let all_names = self
+        let all = self
             .registry
-            .list()
+            .all_agents()
             .await
             .map_err(|e| anyhow::anyhow!("failed to list ACP agents: {e}"))?;
 
         let mut agents = Vec::new();
         let mut enabled_count = 0usize;
-        for name in &all_names {
-            if let Ok(Some(config)) = self.registry.get(name).await {
-                if config.enabled {
-                    enabled_count += 1;
-                }
-                agents.push(json!({
-                    "name": name,
-                    "command": config.command,
-                    "args": config.args,
-                    "enabled": config.enabled,
-                    "builtin": config.builtin,
-                }));
+        for (name, config) in &all {
+            if config.enabled {
+                enabled_count += 1;
             }
+            agents.push(json!({
+                "name": name,
+                "command": config.command,
+                "args": config.args,
+                "enabled": config.enabled,
+                "builtin": config.builtin,
+            }));
         }
 
         Ok(json!({

@@ -96,6 +96,39 @@ async fn fs_registry_cannot_disable_builtin() {
 }
 
 #[tokio::test]
+async fn fs_registry_cannot_overwrite_builtin_with_non_builtin() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acp-agents.json");
+    let registry = FSAcpRegistry::load(&path).await.unwrap();
+
+    let builtin = AcpAgentConfig {
+        command: "npx".into(),
+        enabled: true,
+        builtin: true,
+        ..Default::default()
+    };
+    registry.add("claude".into(), builtin).await.unwrap();
+
+    // A non-builtin config should not overwrite the builtin.
+    let non_builtin = AcpAgentConfig {
+        command: "my-claude".into(),
+        enabled: true,
+        builtin: false,
+        ..Default::default()
+    };
+    let err = registry
+        .add("claude".into(), non_builtin)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("cannot overwrite builtin"));
+
+    // The original config should be unchanged.
+    let retrieved = registry.get("claude").await.unwrap().unwrap();
+    assert_eq!(retrieved.command, "npx");
+    assert!(retrieved.builtin);
+}
+
+#[tokio::test]
 async fn fs_registry_enable_disable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("acp-agents.json");

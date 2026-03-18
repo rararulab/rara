@@ -670,19 +670,7 @@ async fn ensure_builtin_acp_agents(registry: &rara_acp::registry::FSAcpRegistry)
     ];
 
     for (name, command, args) in builtins {
-        if let Ok(Some(existing)) = registry.get(name).await {
-            if !existing.enabled || !existing.builtin {
-                let mut fixed = existing;
-                fixed.enabled = true;
-                fixed.builtin = true;
-                if let Err(e) = registry.add(name.to_string(), fixed).await {
-                    warn!(error = %e, agent = name, "failed to fix ACP agent config");
-                }
-            }
-            continue;
-        }
-
-        let config = AcpAgentConfig {
+        let expected = AcpAgentConfig {
             command: command.to_string(),
             args,
             enabled: true,
@@ -690,7 +678,24 @@ async fn ensure_builtin_acp_agents(registry: &rara_acp::registry::FSAcpRegistry)
             ..Default::default()
         };
 
-        if let Err(e) = registry.add(name.to_string(), config).await {
+        if let Ok(Some(existing)) = registry.get(name).await {
+            // Fix any drift: update command/args, ensure enabled + builtin.
+            let needs_update = !existing.enabled
+                || !existing.builtin
+                || existing.command != expected.command
+                || existing.args != expected.args;
+
+            if needs_update {
+                if let Err(e) = registry.add(name.to_string(), expected).await {
+                    warn!(error = %e, agent = name, "failed to fix ACP agent config");
+                } else {
+                    info!(agent = name, "updated builtin ACP agent config");
+                }
+            }
+            continue;
+        }
+
+        if let Err(e) = registry.add(name.to_string(), expected).await {
             warn!(error = %e, agent = name, "failed to register builtin ACP agent");
         } else {
             info!(agent = name, "registered builtin ACP agent");
