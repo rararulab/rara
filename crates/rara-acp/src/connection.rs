@@ -41,6 +41,16 @@ pub struct AgentCommand {
     pub env:     Vec<(String, String)>,
 }
 
+impl std::fmt::Display for AgentCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.program)?;
+        for arg in &self.args {
+            write!(f, " {arg}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Handle to a running ACP agent subprocess.
 ///
 /// The connection manages the full lifecycle: spawn the child process,
@@ -95,12 +105,8 @@ impl AcpConnection {
             cmd.spawn().context(error::SpawnProcessSnafu)?
         };
 
-        let full_cmd = std::iter::once(command.program.as_str())
-            .chain(command.args.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join(" ");
         info!(
-            cmd = %full_cmd,
+            cmd = %command,
             cwd = %cwd.display(),
             "spawned ACP agent subprocess"
         );
@@ -207,7 +213,10 @@ impl AcpConnection {
                 Ok((conn_handle, event_rx))
             }
             Err(init_err) => {
-                // Give the child a moment to flush stderr before we read it.
+                // Best-effort: give the child a moment to flush stderr before
+                // we read the buffer.  100ms is enough for fast exits (e.g.
+                // npm 404) but may truncate slow producers — acceptable since
+                // the primary protocol error is always included.
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let captured = stderr_buf.lock().await;
                 let stderr_snippet = captured.trim();
