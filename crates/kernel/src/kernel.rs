@@ -906,13 +906,16 @@ impl Kernel {
             "child result received"
         );
 
-        // Truncate for display / proactive turn directive.
-        const CHILD_RESULT_MAX_CHARS: usize = 2000;
+        // Safety fallback for child results. Child agents are expected to
+        // self-summarize via their system prompt. This limit only triggers
+        // if self-summarization produces unexpectedly large output.
+        const CHILD_RESULT_SAFETY_LIMIT: usize = 8000;
         let output = &result.output;
-        let truncated_output = if output.len() > CHILD_RESULT_MAX_CHARS {
+        let truncated_output = if output.len() > CHILD_RESULT_SAFETY_LIMIT {
+            let boundary = output.floor_char_boundary(CHILD_RESULT_SAFETY_LIMIT);
             format!(
                 "{}...(truncated, full result in child tape {child_id})",
-                &output[..CHILD_RESULT_MAX_CHARS],
+                &output[..boundary],
             )
         } else {
             output.clone()
