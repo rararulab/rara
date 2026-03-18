@@ -171,25 +171,18 @@ impl AcpConnection {
             )
             .client_info(Implementation::new("rara", env!("CARGO_PKG_VERSION")));
 
-        let init_result = conn_handle.conn.initialize(init_request).await;
+        let init_response = conn_handle
+            .conn
+            .initialize(init_request)
+            .await
+            .context(error::InitializeSnafu)?;
 
-        match init_result {
-            Ok(init_response) => {
-                debug!(
-                    agent_info = ?init_response.agent_info,
-                    protocol_version = %init_response.protocol_version,
-                    "ACP handshake completed"
-                );
-                Ok((conn_handle, event_rx))
-            }
-            Err(e) => {
-                // Drop conn_handle to kill and reap the child process.
-                drop(conn_handle);
-                Err(AcpError::Handshake {
-                    message: format!("{e:?}"),
-                })
-            }
-        }
+        debug!(
+            agent_info = ?init_response.agent_info,
+            protocol_version = %init_response.protocol_version,
+            "ACP handshake completed"
+        );
+        Ok((conn_handle, event_rx))
     }
 
     /// Create a new session on the connected agent.
@@ -202,9 +195,7 @@ impl AcpConnection {
             .conn
             .new_session(request)
             .await
-            .map_err(|e| AcpError::Handshake {
-                message: format!("session/new failed: {e:?}"),
-            })?;
+            .context(error::NewSessionSnafu)?;
 
         let session_id = response.session_id;
         info!(session_id = %session_id, "ACP session created");
@@ -232,9 +223,7 @@ impl AcpConnection {
             .conn
             .prompt(request)
             .await
-            .map_err(|e| AcpError::PromptFailed {
-                message: format!("{e:?}"),
-            })?;
+            .context(error::PromptFailedSnafu)?;
 
         debug!(stop_reason = ?response.stop_reason, "prompt turn completed");
         Ok(response)
