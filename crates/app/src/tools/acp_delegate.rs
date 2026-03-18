@@ -160,12 +160,13 @@ impl ToolExecute for AcpDelegateTool {
         }
 
         let command = config.to_agent_command();
+        let cmd_display = command.to_string();
 
         // Spawn the AcpThread — handles subprocess, handshake, and session
         // creation internally.
         let mut thread = AcpThread::spawn(&params.agent, command, cwd)
             .await
-            .map_err(|e| anyhow::anyhow!("ACP spawn failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("ACP spawn failed (cmd: `{cmd_display}`): {e}"))?;
 
         // Collect streaming events into structured output.
         let mut text_chunks: Vec<String> = Vec::new();

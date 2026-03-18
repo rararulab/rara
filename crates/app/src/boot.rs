@@ -643,64 +643,7 @@ async fn init_acp_registry() -> std::result::Result<rara_acp::AcpRegistryRef, Wh
     let registry = FSAcpRegistry::load(&path)
         .await
         .whatever_context("failed to load ACP registry")?;
-    ensure_builtin_acp_agents(&registry).await;
     Ok(Arc::new(registry))
-}
-
-/// Register built-in ACP agents if not already present, or fix their config
-/// if it was changed.
-async fn ensure_builtin_acp_agents(registry: &rara_acp::registry::FSAcpRegistry) {
-    use rara_acp::registry::{AcpAgentConfig, AcpRegistry};
-
-    let builtins = [
-        (
-            "claude",
-            "npx",
-            vec![
-                "-y".to_string(),
-                "@anthropic-ai/claude-code-acp".to_string(),
-            ],
-        ),
-        (
-            "codex",
-            "npx",
-            vec!["-y".to_string(), "@anthropic-ai/codex-acp".to_string()],
-        ),
-        ("gemini", "gemini", vec!["--acp".to_string()]),
-    ];
-
-    for (name, command, args) in builtins {
-        let expected = AcpAgentConfig {
-            command: command.to_string(),
-            args,
-            enabled: true,
-            builtin: true,
-            ..Default::default()
-        };
-
-        if let Ok(Some(existing)) = registry.get(name).await {
-            // Fix any drift: update command/args, ensure enabled + builtin.
-            let needs_update = !existing.enabled
-                || !existing.builtin
-                || existing.command != expected.command
-                || existing.args != expected.args;
-
-            if needs_update {
-                if let Err(e) = registry.add(name.to_string(), expected).await {
-                    warn!(error = %e, agent = name, "failed to fix ACP agent config");
-                } else {
-                    info!(agent = name, "updated builtin ACP agent config");
-                }
-            }
-            continue;
-        }
-
-        if let Err(e) = registry.add(name.to_string(), expected).await {
-            warn!(error = %e, agent = name, "failed to register builtin ACP agent");
-        } else {
-            info!(agent = name, "registered builtin ACP agent");
-        }
-    }
 }
 
 // =========================================================================
