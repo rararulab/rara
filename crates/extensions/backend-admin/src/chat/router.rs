@@ -37,6 +37,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use rara_kernel::{cascade::CascadeTrace, channel::types::ChatMessage};
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
 use serde::Deserialize;
 use tracing::instrument;
@@ -94,6 +95,20 @@ pub struct SetFavoritesRequest {
     pub model_ids: Vec<String>,
 }
 
+/// Query parameters for `GET /sessions/{key}/messages`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ListMessagesQuery {
+    /// Maximum number of messages to return (default: 200).
+    pub limit: Option<usize>,
+}
+
+/// Query parameters for `GET /sessions/{key}/trace`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct GetTraceQuery {
+    /// Sequence number of the message to build a trace for.
+    pub seq: usize,
+}
+
 /// Request body for `PUT /channel-bindings`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct BindChannelRequest {
@@ -126,6 +141,8 @@ fn session_routes(service: SessionService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(create_session, list_sessions))
         .routes(routes!(get_session, update_session, delete_session))
+        .routes(routes!(list_messages, clear_messages))
+        .routes(routes!(get_cascade_trace))
         .routes(routes!(bind_channel))
         .routes(routes!(get_channel_binding))
         .with_state(service)
@@ -282,6 +299,75 @@ async fn delete_session(
 ) -> Result<StatusCode, ChatError> {
     service.delete_session(&parse_session_key(&key)?).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/v1/chat/sessions/{key}/messages` — list conversation messages.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{key}/messages",
+    tag = "chat",
+    params(
+        ("key" = String, Path, description = "Session key"),
+        ("limit" = Option<usize>, Query, description = "Maximum messages to return (default 200)"),
+    ),
+    responses(
+        (status = 200, description = "List of chat messages", body = Vec<serde_json::Value>),
+    )
+)]
+#[instrument(skip(service))]
+async fn list_messages(
+    State(service): State<SessionService>,
+    Path(key): Path<String>,
+    Query(q): Query<ListMessagesQuery>,
+) -> Result<Json<Vec<ChatMessage>>, ChatError> {
+    let messages = service
+        .list_messages(&parse_session_key(&key)?, q.limit.unwrap_or(200))
+        .await?;
+    Ok(Json(messages))
+}
+
+/// `DELETE /api/v1/chat/sessions/{key}/messages` — clear all messages.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/chat/sessions/{key}/messages",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    responses(
+        (status = 204, description = "Messages cleared"),
+    )
+)]
+#[instrument(skip(service))]
+async fn clear_messages(
+    State(service): State<SessionService>,
+    Path(key): Path<String>,
+) -> Result<StatusCode, ChatError> {
+    service.clear_messages(&parse_session_key(&key)?).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/v1/chat/sessions/{key}/trace` — get cascade execution trace.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{key}/trace",
+    tag = "chat",
+    params(
+        ("key" = String, Path, description = "Session key"),
+        ("seq" = usize, Query, description = "Message sequence number to trace"),
+    ),
+    responses(
+        (status = 200, description = "Cascade execution trace", body = serde_json::Value),
+    )
+)]
+#[instrument(skip(service))]
+async fn get_cascade_trace(
+    State(service): State<SessionService>,
+    Path(key): Path<String>,
+    Query(q): Query<GetTraceQuery>,
+) -> Result<Json<CascadeTrace>, ChatError> {
+    let trace = service
+        .get_cascade_trace(&parse_session_key(&key)?, q.seq)
+        .await?;
+    Ok(Json(trace))
 }
 
 /// `PUT /api/v1/chat/channel-bindings` — bind an external channel to a
