@@ -3,9 +3,12 @@
 //! These tests verify the registry, event types, and error types without
 //! spawning a real ACP agent process.
 
+use agent_client_protocol::{RequestPermissionOutcome, SelectedPermissionOutcome};
 use rara_acp::{
-    AcpEvent, AgentCommand, AgentKind, AgentRegistry, FileOperation, StopReason, ToolCallStatus,
+    AcpEvent, AcpThreadStatus, AgentCommand, AgentKind, AgentRegistry, FileOperation,
+    PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus,
 };
+use tokio::sync::{mpsc, oneshot};
 
 #[test]
 fn registry_resolves_builtin_agents() {
@@ -78,6 +81,15 @@ fn event_types_are_clone_and_debug() {
         AcpEvent::PermissionAutoApproved {
             description: "approved".into(),
         },
+        AcpEvent::PermissionRequested {
+            tool_call_id: "tc-2".into(),
+            tool_title:   "write_file".into(),
+            options:      vec![PermissionOptionInfo {
+                id:    "allow".into(),
+                label: "Allow".into(),
+                kind:  "allow_once".into(),
+            }],
+        },
         AcpEvent::FileAccess {
             path:      "/tmp/test.rs".into(),
             operation: FileOperation::Read,
@@ -108,4 +120,110 @@ fn tool_call_status_equality() {
     assert_eq!(ToolCallStatus::Completed, ToolCallStatus::Completed);
     assert_eq!(ToolCallStatus::Failed, ToolCallStatus::Failed);
     assert_ne!(ToolCallStatus::Running, ToolCallStatus::Failed);
+}
+
+// -- AcpThread + PermissionBridge tests --
+
+#[tokio::test]
+async fn permission_bridge_roundtrip() {
+    let (perm_tx, mut perm_rx) = mpsc::channel::<PermissionBridge>(8);
+
+    // Simulate a bridge arriving from the delegate.
+    let (reply_tx, reply_rx) = oneshot::channel();
+    perm_tx
+        .send(PermissionBridge {
+            tool_call_id: "tc-1".into(),
+            tool_title: "Write auth.rs".into(),
+            options: vec![
+                PermissionOptionInfo {
+                    id:    "allow".into(),
+                    label: "Allow".into(),
+                    kind:  "allow_once".into(),
+                },
+                PermissionOptionInfo {
+                    id:    "deny".into(),
+                    label: "Deny".into(),
+                    kind:  "reject_once".into(),
+                },
+            ],
+            reply_tx,
+        })
+        .await
+        .unwrap();
+
+    let bridge = perm_rx.recv().await.unwrap();
+    assert_eq!(bridge.tool_title, "Write auth.rs");
+    assert_eq!(bridge.tool_call_id, "tc-1");
+    assert_eq!(bridge.options.len(), 2);
+
+    // Simulate user approval.
+    let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+        agent_client_protocol::PermissionOptionId::new("allow"),
+    ));
+    bridge.reply_tx.send(outcome).unwrap();
+
+    let result = reply_rx.await.unwrap();
+    assert!(matches!(result, RequestPermissionOutcome::Selected(_)));
+}
+
+#[tokio::test]
+async fn dropped_reply_tx_yields_recv_error() {
+    let (perm_tx, mut perm_rx) = mpsc::channel::<PermissionBridge>(8);
+
+    let (_reply_tx, reply_rx) = oneshot::channel::<RequestPermissionOutcome>();
+    perm_tx
+        .send(PermissionBridge {
+            tool_call_id: "tc-2".into(),
+            tool_title:   "Delete data".into(),
+            options:      vec![],
+            reply_tx:     _reply_tx,
+        })
+        .await
+        .unwrap();
+
+    let bridge = perm_rx.recv().await.unwrap();
+    // Drop the reply_tx — simulates handler crash or timeout.
+    drop(bridge.reply_tx);
+
+    // The original reply_rx should get a RecvError (channel closed).
+    assert!(reply_rx.await.is_err());
+}
+
+#[test]
+fn thread_status_transitions() {
+    let status = AcpThreadStatus::Ready;
+    assert!(matches!(status, AcpThreadStatus::Ready));
+
+    let status = AcpThreadStatus::Generating;
+    assert!(matches!(status, AcpThreadStatus::Generating));
+
+    let status = AcpThreadStatus::WaitingForConfirmation {
+        tool_call_id: "tc-1".into(),
+        tool_title:   "Write file".into(),
+        options:      vec![],
+    };
+    assert!(matches!(
+        status,
+        AcpThreadStatus::WaitingForConfirmation { .. }
+    ));
+
+    let status = AcpThreadStatus::TurnComplete {
+        stop_reason: StopReason::EndTurn,
+    };
+    assert!(matches!(status, AcpThreadStatus::TurnComplete { .. }));
+
+    let status = AcpThreadStatus::Disconnected;
+    assert!(matches!(status, AcpThreadStatus::Disconnected));
+}
+
+#[test]
+fn permission_option_info_is_clone_and_debug() {
+    let opt = PermissionOptionInfo {
+        id:    "allow-once".into(),
+        label: "Allow Once".into(),
+        kind:  "allow_once".into(),
+    };
+    let cloned = opt.clone();
+    assert_eq!(cloned.id, "allow-once");
+    assert!(!format!("{cloned:?}").is_empty());
 }
