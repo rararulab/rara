@@ -9,14 +9,20 @@ publish = false
 
 [dependencies]
 agent-client-protocol = { version = "0.10.2", features = ["unstable"] }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
+bon = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+smart-default = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

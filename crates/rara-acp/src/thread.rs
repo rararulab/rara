@@ -16,9 +16,9 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
+    connection::AgentCommand,
     error::AcpError,
     events::{AcpEvent, PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus},
-    registry::{AgentKind, AgentRegistry},
 };
 
 /// Commands sent from AcpThread (Send) to the connection actor (!Send).
@@ -140,7 +140,7 @@ pub struct PermissionRequestInfo {
 /// from rara's own Session. One rara Session may spawn multiple AcpThreads
 /// (e.g., delegate to Claude, then Codex).
 pub struct AcpThread {
-    agent_kind:    AgentKind,
+    agent_name:    String,
     session_id:    Option<agent_client_protocol::SessionId>,
     status:        AcpThreadStatus,
     entries:       Vec<AcpThreadEntry>,
@@ -154,14 +154,15 @@ pub struct AcpThread {
 impl AcpThread {
     /// Spawn a new AcpThread: starts the agent subprocess, performs handshake,
     /// creates ACP session. Returns a ready-to-use handle.
-    pub async fn spawn(agent_kind: AgentKind, cwd: PathBuf) -> Result<Self, AcpError> {
-        let registry = AgentRegistry::with_defaults();
-        let command = registry
-            .resolve(&agent_kind)
-            .ok_or_else(|| AcpError::Handshake {
-                message: format!("unknown agent kind: {agent_kind}"),
-            })?
-            .clone();
+    ///
+    /// The caller is responsible for resolving the agent name to an
+    /// [`AgentCommand`] via the [`AcpRegistry`](crate::registry::AcpRegistry).
+    pub async fn spawn(
+        agent_name: impl Into<String>,
+        command: AgentCommand,
+        cwd: PathBuf,
+    ) -> Result<Self, AcpError> {
+        let agent_name = agent_name.into();
 
         // Channels: command (thread -> actor), event (actor -> thread),
         // permission (delegate -> thread).
@@ -192,13 +193,13 @@ impl AcpThread {
         })??;
 
         info!(
-            agent = %agent_kind,
+            agent = %agent_name,
             session_id = %session_id,
             "AcpThread spawned"
         );
 
         Ok(Self {
-            agent_kind,
+            agent_name,
             session_id: Some(session_id),
             status: AcpThreadStatus::Ready,
             entries: Vec::new(),
@@ -511,8 +512,8 @@ impl AcpThread {
         self.session_id.as_ref()
     }
 
-    /// The agent kind.
-    pub fn agent_kind(&self) -> &AgentKind { &self.agent_kind }
+    /// The agent name.
+    pub fn agent_name(&self) -> &str { &self.agent_name }
 }
 
 /// Map ACP protocol stop reason to our crate-level [`StopReason`].
@@ -531,7 +532,7 @@ fn map_stop_reason(reason: agent_client_protocol::StopReason) -> StopReason {
 /// Owns the `!Send` AcpConnection and processes commands from the AcpThread
 /// handle.
 async fn run_connection_actor(
-    command: crate::registry::AgentCommand,
+    command: crate::connection::AgentCommand,
     cwd: PathBuf,
     mut cmd_rx: mpsc::Receiver<AcpCommand>,
     event_fwd_tx: mpsc::Sender<AcpEvent>,
