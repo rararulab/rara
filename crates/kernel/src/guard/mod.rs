@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Security guard system — taint tracking + pattern-based rule scanning.
+//! Security guard system — taint tracking, pattern scanning, and path-scope
+//! enforcement.
 //!
-//! Prevents prompt injection attacks by:
-//! 1. Tracking data provenance labels (taint) through the LLM context
-//! 2. Scanning tool arguments for known dangerous patterns
+//! Sits between permission checks and tool execution in the agent loop.
+//! Three layers, checked in order (short-circuits on first block):
+//! 1. **Taint tracking** — data provenance labels through the LLM context
+//! 2. **Pattern scanning** — known dangerous patterns in tool arguments
+//! 3. **Path-scope enforcement** — restricts file-access tools to the workspace
 
 pub mod path_scope;
 pub mod pattern;

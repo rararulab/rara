@@ -193,6 +193,9 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     let list_sessions_handle_ref = list_sessions.handle_ref();
 
     // Core tools
+    // SYNC: file-access tools are guarded by PathScopeGuard. When adding a new
+    // tool that reads/writes files, also add it to the constant arrays in
+    // `rara_kernel::guard::path_scope::{FILE_PATH_TOOLS, PATH_TOOLS}`.
     let tools: Vec<AgentToolRef> = vec![
         Arc::new(BashTool::new()),
         Arc::new(ReadFileTool::new()),

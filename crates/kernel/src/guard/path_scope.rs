@@ -20,6 +20,18 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// Tools that use a `file_path` parameter.
+///
+/// SYNC: when adding a new file-access tool to the registry
+/// (`crates/app/src/tools/mod.rs`), add it here too.
+pub const FILE_PATH_TOOLS: &[&str] = &["read-file", "write-file", "edit-file"];
+
+/// Tools that use a `path` parameter.
+///
+/// SYNC: when adding a new file-access tool to the registry
+/// (`crates/app/src/tools/mod.rs`), add it here too.
+pub const PATH_TOOLS: &[&str] = &["grep", "list-directory", "find-files"];
+
 /// Guard that restricts file-access tools to a workspace directory and optional
 /// whitelist entries.
 ///
@@ -57,12 +69,13 @@ impl PathScopeGuard {
     /// within scope. Returns `Some(reason)` if the path escapes the workspace
     /// and all whitelist entries.
     pub fn check(&self, tool_name: &str, args: &serde_json::Value) -> Option<String> {
-        // SYNC: keep in sync with tool registry (crates/app/src/tools/mod.rs)
-        let param_name = match tool_name {
-            "read-file" | "write-file" | "edit-file" => "file_path",
-            "grep" | "list-directory" | "find-files" => "path",
+        let param_name = if FILE_PATH_TOOLS.contains(&tool_name) {
+            "file_path"
+        } else if PATH_TOOLS.contains(&tool_name) {
+            "path"
+        } else {
             // Not a file-access tool — pass through.
-            _ => return None,
+            return None;
         };
 
         let raw_path = match args.get(param_name).and_then(|v| v.as_str()) {
@@ -116,6 +129,11 @@ pub(crate) fn normalize_path(path: &Path) -> PathBuf {
             }
             Component::ParentDir => {
                 // Go up one level, but never pop past the root.
+                // NOTE: For pure relative paths (empty accumulator), the `..`
+                // is preserved as-is. This is safe in `check()` because
+                // relative paths are always joined to the workspace (absolute)
+                // before normalization, so the accumulator is never empty
+                // there. Keep this in mind if reusing this function elsewhere.
                 if !out.pop() {
                     out.push(component);
                 }
