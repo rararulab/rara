@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde_json::Value;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use tracing::info;
 
 use crate::{
@@ -21,12 +23,12 @@ use crate::{
     handle::KernelHandle,
     io::{AgentEvent, StreamEvent},
     session::{BackgroundTaskEntry, SessionKey},
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Builtin tool that spawns a background agent for long-running tasks.
 ///
-/// The agent runs independently — the parent's turn continues and completes
+/// The agent runs independently — the parent\'s turn continues and completes
 /// normally. When the background agent finishes, the kernel triggers a
 /// proactive turn on the parent to deliver the result.
 #[derive(ToolDef)]
@@ -34,9 +36,7 @@ use crate::{
     name = "spawn-background",
     description = "Spawn a background agent to handle a long-running task. The agent runs \
                    independently and results are delivered when complete. You cannot interact \
-                   with the background agent after spawning it.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   with the background agent after spawning it."
 )]
 pub struct SpawnBackgroundTool {
     handle:      KernelHandle,
@@ -50,64 +50,49 @@ impl SpawnBackgroundTool {
             session_key,
         }
     }
+}
 
-    fn schema() -> Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["manifest", "input", "description"],
-            "properties": {
-                "manifest": {
-                    "type": "object",
-                    "description": "Agent manifest for the background agent",
-                    "required": ["name", "system_prompt"],
-                    "properties": {
-                        "name": { "type": "string", "description": "Unique name for this background agent" },
-                        "description": { "type": "string", "description": "Agent description" },
-                        "system_prompt": { "type": "string", "description": "System prompt defining agent behavior" },
-                        "model": { "type": "string", "description": "LLM model identifier (inherits parent if omitted)" },
-                        "tools": { "type": "array", "items": { "type": "string" }, "description": "Tool names this agent can use" },
-                        "max_iterations": { "type": "integer", "description": "Maximum LLM iterations" }
-                    }
-                },
-                "input": { "type": "string", "description": "The task instruction to send to the background agent" },
-                "description": { "type": "string", "description": "Short human-readable description of the task (shown in status)" }
-            }
-        })
-    }
+/// Parameters for the `spawn-background` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SpawnBackgroundParams {
+    /// Agent manifest for the background agent (name, system_prompt, etc.).
+    manifest:    serde_json::Value,
+    /// The task instruction to send to the background agent.
+    input:       String,
+    /// Short human-readable description of the task (shown in status).
+    description: String,
+}
 
-    async fn exec(&self, params: Value, context: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let input = params["input"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: input"))?
-            .to_string();
-        let description = params["description"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: description"))?
-            .to_string();
-        let manifest_value = params
-            .get("manifest")
-            .ok_or_else(|| anyhow::anyhow!("missing required field: manifest"))?;
+#[async_trait]
+impl ToolExecute for SpawnBackgroundTool {
+    type Output = serde_json::Value;
+    type Params = SpawnBackgroundParams;
 
-        let manifest: AgentManifest = serde_json::from_value(manifest_value.clone())
+    async fn run(
+        &self,
+        p: SpawnBackgroundParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
+        let manifest: AgentManifest = serde_json::from_value(p.manifest)
             .map_err(|e| anyhow::anyhow!("invalid manifest: {e}"))?;
 
         // Resolve principal from parent session.
         let principal = self
             .handle
             .process_table()
-            .with(&self.session_key, |p| p.principal.clone())
+            .with(&self.session_key, |proc| proc.principal.clone())
             .ok_or_else(|| anyhow::anyhow!("parent session not found: {}", self.session_key))?;
 
         info!(
             parent = %self.session_key,
             agent = %manifest.name,
-            description = %description,
+            description = %p.description,
             "spawning background agent"
         );
 
         let agent_handle = self
             .handle
-            .spawn_child(&self.session_key, &principal, manifest.clone(), input)
+            .spawn_child(&self.session_key, &principal, manifest.clone(), p.input)
             .await
             .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
 
@@ -119,20 +104,20 @@ impl SpawnBackgroundTool {
             BackgroundTaskEntry {
                 child_key,
                 agent_name: manifest.name.clone(),
-                description: description.clone(),
+                description: p.description.clone(),
                 created_at: jiff::Timestamp::now(),
                 trigger_message_id: context.rara_message_id.clone(),
             },
         );
 
-        // Emit BackgroundTaskStarted to parent's active streams so clients
+        // Emit BackgroundTaskStarted to parent\'s active streams so clients
         // can display an ongoing status indicator with elapsed timer.
         self.handle.stream_hub().emit_to_session(
             &self.session_key,
             StreamEvent::BackgroundTaskStarted {
                 task_id:     child_key.to_string(),
                 agent_name:  manifest.name.clone(),
-                description: description.clone(),
+                description: p.description.clone(),
             },
         );
 
@@ -151,7 +136,6 @@ impl SpawnBackgroundTool {
             "agent_name": manifest.name,
             "status": "spawned",
             "message": "Background agent is now running. Results will be delivered when complete."
-        })
-        .into())
+        }))
     }
 }

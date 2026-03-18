@@ -43,8 +43,10 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
-use serde_json::Value;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::{
@@ -52,7 +54,7 @@ use crate::{
     handle::KernelHandle,
     io::AgentEvent,
     session::{SessionKey, Signal},
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 
 /// Maximum character length for the compressed result returned to the caller.
@@ -81,9 +83,7 @@ pub(crate) const FOLD_BRANCH_NAME_PREFIX: &str = "fold-branch-";
     name = "fold-branch",
     description = "Spawn a child agent for a focused sub-task, wait for completion, and return a \
                    compressed result. Use this when you need the result inline (synchronous). For \
-                   fire-and-forget tasks, use spawn-background instead.",
-    params_schema = "Self::schema()",
-    execute_fn = "self.exec"
+                   fire-and-forget tasks, use spawn-background instead."
 )]
 pub struct FoldBranchTool {
     handle:         KernelHandle,
@@ -103,81 +103,61 @@ impl FoldBranchTool {
             context_folder,
         }
     }
+}
 
-    fn schema() -> Value {
-        serde_json::json!({
-            "type": "object",
-            "required": ["task", "instruction"],
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "Short name describing the sub-task"
-                },
-                "instruction": {
-                    "type": "string",
-                    "description": "Detailed instruction for the child agent"
-                },
-                "tools": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Tool names the child agent can use (inherits parent if omitted)"
-                },
-                "max_iterations": {
-                    "type": "integer",
-                    "description": "Maximum LLM iterations for the child agent"
-                },
-                "timeout_secs": {
-                    "type": "integer",
-                    "description": "Timeout in seconds for the child agent (default: 120)"
-                }
-            }
-        })
-    }
+/// Parameters for the `fold-branch` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FoldBranchParams {
+    /// Short name describing the sub-task.
+    task:           String,
+    /// Detailed instruction for the child agent.
+    instruction:    String,
+    /// Tool names the child agent can use (inherits parent if omitted).
+    tools:          Option<Vec<String>>,
+    /// Maximum LLM iterations for the child agent.
+    max_iterations: Option<usize>,
+    /// Timeout in seconds for the child agent (default: 120).
+    timeout_secs:   Option<u64>,
+}
 
-    async fn exec(&self, params: Value, _context: &ToolContext) -> anyhow::Result<ToolOutput> {
-        let task = params["task"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: task"))?
-            .to_string();
-        let instruction = params["instruction"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: instruction"))?
-            .to_string();
+#[async_trait]
+impl ToolExecute for FoldBranchTool {
+    type Output = serde_json::Value;
+    type Params = FoldBranchParams;
+
+    async fn run(
+        &self,
+        p: FoldBranchParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<serde_json::Value> {
         // SECURITY: When tools is omitted, inherit the parent's tool whitelist.
         // An empty `tools` vec in AgentManifest means "allow ALL tools" (see
         // ToolRegistry::build_for_agent), so defaulting to `vec![]` would
         // silently escalate the child's privileges beyond the parent's scope.
-        let tools: Vec<String> = match params.get("tools") {
-            Some(v) => serde_json::from_value(v.clone())
-                .map_err(|e| anyhow::anyhow!("invalid tools array: {e}"))?,
+        let tools = match p.tools {
+            Some(t) => t,
             None => self
                 .handle
                 .process_table()
-                .with(&self.session_key, |p| p.manifest.tools.clone())
+                .with(&self.session_key, |proc| proc.manifest.tools.clone())
                 .unwrap_or_default(),
         };
-        let max_iterations = params
-            .get("max_iterations")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
-        let timeout_secs = params
-            .get("timeout_secs")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(120);
+
+        let timeout_secs = p.timeout_secs.unwrap_or(120);
 
         // The name prefix is significant: `handle_child_completed` uses it to
         // identify fold-branch children and skip the automatic tape-persist
         // step (see FOLD_BRANCH_NAME_PREFIX doc comment).
         let manifest = AgentManifest {
-            name: format!("{}{}", FOLD_BRANCH_NAME_PREFIX, task),
+            name: format!("{}{}", FOLD_BRANCH_NAME_PREFIX, p.task),
             role: Default::default(),
-            description: format!("Fold-branch child for: {task}"),
+            description: format!("Fold-branch child for: {}", p.task),
             model: None,
             system_prompt: "You are a focused sub-agent. Complete the assigned task concisely."
                 .to_string(),
             soul_prompt: None,
             provider_hint: None,
-            max_iterations,
+            max_iterations: p.max_iterations,
             tools,
             max_children: Some(0),
             max_context_tokens: None,
@@ -192,19 +172,19 @@ impl FoldBranchTool {
         let principal = self
             .handle
             .process_table()
-            .with(&self.session_key, |p| p.principal.clone())
+            .with(&self.session_key, |proc| proc.principal.clone())
             .ok_or_else(|| anyhow::anyhow!("parent session not found: {}", self.session_key))?;
 
         info!(
             parent = %self.session_key,
-            task = %task,
+            task = %p.task,
             timeout_secs = timeout_secs,
             "spawning fold-branch child agent"
         );
 
         let agent_handle = self
             .handle
-            .spawn_child(&self.session_key, &principal, manifest, instruction)
+            .spawn_child(&self.session_key, &principal, manifest, p.instruction)
             .await
             .map_err(|e| anyhow::anyhow!("fold-branch spawn failed: {e}"))?;
 
@@ -244,8 +224,7 @@ impl FoldBranchTool {
                     "task_id": child_key.to_string(),
                     "status": "timeout",
                     "message": format!("fold-branch child timed out after {timeout_secs}s")
-                })
-                .into());
+                }));
             }
         };
 
@@ -265,7 +244,6 @@ impl FoldBranchTool {
             "task_id": child_key.to_string(),
             "status": "completed",
             "result": compressed
-        })
-        .into())
+        }))
     }
 }

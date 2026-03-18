@@ -24,12 +24,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use async_trait::async_trait;
 use rara_kernel::{
     session::SessionKey,
-    tool::{ToolContext, ToolOutput},
+    tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use serde_json::json;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     models::{Actor, DockAnnotation, DockBlock, DockFact, DockMutation, MutationOp},
@@ -75,45 +77,40 @@ impl DockMutationSink {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Shared result type
 // ---------------------------------------------------------------------------
 
 /// Generate a unique annotation ID.
 fn next_annotation_id() -> String { format!("ann-{}", ulid::Ulid::new()) }
 
-/// Wrap a [`DockMutation`] into a successful [`ToolOutput`].
-///
-/// Returns a compact confirmation (op + id) rather than the full mutation
-/// so that the truncated `result_preview` does not matter.
-fn mutation_output(mutation: &DockMutation) -> anyhow::Result<ToolOutput> {
-    let summary = json!({
-        "ok": true,
-        "op": mutation.op,
-        "id": mutation.block.as_ref().map(|b| &b.id)
-            .or(mutation.fact.as_ref().map(|f| &f.id))
-            .or(mutation.annotation.as_ref().map(|a| &a.id))
-            .or(mutation.id.as_ref()),
-    });
-    Ok(summary.into())
+/// Compact confirmation returned by all dock mutation tools.
+#[derive(Debug, Clone, Serialize)]
+pub struct DockMutationResult {
+    /// Whether the mutation was accepted.
+    ok: bool,
+    /// The mutation operation performed.
+    op: MutationOp,
+    /// The ID of the affected entity.
+    id: String,
 }
 
-/// Extract a required string parameter or return an error.
-fn required_str(params: &serde_json::Value, key: &str) -> anyhow::Result<String> {
-    params
-        .get(key)
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .ok_or_else(|| anyhow::anyhow!("missing required parameter: {key}"))
-}
-
-/// Extract an optional string parameter.
-fn optional_str(params: &serde_json::Value, key: &str) -> Option<String> {
-    params.get(key).and_then(|v| v.as_str()).map(String::from)
-}
-
-/// Extract an optional f64 parameter.
-fn optional_f64(params: &serde_json::Value, key: &str) -> Option<f64> {
-    params.get(key).and_then(|v| v.as_f64())
+impl DockMutationResult {
+    /// Build a success result from a completed mutation.
+    fn from_mutation(mutation: &DockMutation) -> Self {
+        let id = mutation
+            .block
+            .as_ref()
+            .map(|b| b.id.clone())
+            .or_else(|| mutation.fact.as_ref().map(|f| f.id.clone()))
+            .or_else(|| mutation.annotation.as_ref().map(|a| a.id.clone()))
+            .or_else(|| mutation.id.clone())
+            .unwrap_or_default();
+        Self {
+            ok: true,
+            op: mutation.op.clone(),
+            id,
+        }
+    }
 }
 
 // ===========================================================================
@@ -124,9 +121,7 @@ fn optional_f64(params: &serde_json::Value, key: &str) -> Option<f64> {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.block.add",
-    description = "Add a new content block to the dock canvas. Returns the mutation to apply.",
-    params_schema = "Self::schema_block_add()",
-    execute_fn = "self.exec_block_add"
+    description = "Add a new content block to the dock canvas. Returns the mutation to apply."
 )]
 pub struct DockBlockAddTool {
     sink: DockMutationSink,
@@ -135,44 +130,37 @@ pub struct DockBlockAddTool {
 impl DockBlockAddTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_block_add() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "block_type": {
-                    "type": "string",
-                    "description": "The type of block (e.g. 'text', 'code', 'image')"
-                },
-                "html": {
-                    "type": "string",
-                    "description": "HTML content of the block"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "Optional block ID (auto-generated if omitted)"
-                }
-            },
-            "required": ["block_type", "html"]
-        })
-    }
+/// Parameters for `dock.block.add`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BlockAddParams {
+    /// The type of block (e.g. "text", "code", "image").
+    block_type: String,
+    /// HTML content of the block.
+    html:       String,
+    /// Optional block ID (auto-generated if omitted).
+    id:         Option<String>,
+}
 
-    async fn exec_block_add(
+#[async_trait]
+impl ToolExecute for DockBlockAddTool {
+    type Output = DockMutationResult;
+    type Params = BlockAddParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BlockAddParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let block_type = required_str(&params, "block_type")?;
-        let html = required_str(&params, "html")?;
-        let id = optional_str(&params, "id").unwrap_or_else(next_block_id);
-
+    ) -> anyhow::Result<DockMutationResult> {
+        let id = p.id.unwrap_or_else(next_block_id);
         let mutation = DockMutation {
             op:         MutationOp::BlockAdd,
             actor:      Actor::Agent,
             block:      Some(DockBlock {
                 id,
-                block_type,
-                html,
+                block_type: p.block_type,
+                html: p.html,
                 diff: None,
             }),
             fact:       None,
@@ -180,7 +168,7 @@ impl DockBlockAddTool {
             id:         None,
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -188,9 +176,7 @@ impl DockBlockAddTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.block.update",
-    description = "Update the HTML content of an existing canvas block.",
-    params_schema = "Self::schema_block_update()",
-    execute_fn = "self.exec_block_update"
+    description = "Update the HTML content of an existing canvas block."
 )]
 pub struct DockBlockUpdateTool {
     sink: DockMutationSink,
@@ -199,47 +185,42 @@ pub struct DockBlockUpdateTool {
 impl DockBlockUpdateTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_block_update() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The block ID to update"
-                },
-                "html": {
-                    "type": "string",
-                    "description": "New HTML content for the block"
-                }
-            },
-            "required": ["id", "html"]
-        })
-    }
+/// Parameters for `dock.block.update`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BlockUpdateParams {
+    /// The block ID to update.
+    id:   String,
+    /// New HTML content for the block.
+    html: String,
+}
 
-    async fn exec_block_update(
+#[async_trait]
+impl ToolExecute for DockBlockUpdateTool {
+    type Output = DockMutationResult;
+    type Params = BlockUpdateParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BlockUpdateParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let id = required_str(&params, "id")?;
-        let html = required_str(&params, "html")?;
-
+    ) -> anyhow::Result<DockMutationResult> {
         let mutation = DockMutation {
             op:         MutationOp::BlockUpdate,
             actor:      Actor::Agent,
             block:      Some(DockBlock {
-                id,
+                id:         p.id,
                 block_type: String::new(),
-                html,
-                diff: None,
+                html:       p.html,
+                diff:       None,
             }),
             fact:       None,
             annotation: None,
             id:         None,
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -247,9 +228,7 @@ impl DockBlockUpdateTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.block.remove",
-    description = "Remove a canvas block by ID.",
-    params_schema = "Self::schema_block_remove()",
-    execute_fn = "self.exec_block_remove"
+    description = "Remove a canvas block by ID."
 )]
 pub struct DockBlockRemoveTool {
     sink: DockMutationSink,
@@ -258,37 +237,35 @@ pub struct DockBlockRemoveTool {
 impl DockBlockRemoveTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_block_remove() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The block ID to remove"
-                }
-            },
-            "required": ["id"]
-        })
-    }
+/// Parameters for `dock.block.remove`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BlockRemoveParams {
+    /// The block ID to remove.
+    id: String,
+}
 
-    async fn exec_block_remove(
+#[async_trait]
+impl ToolExecute for DockBlockRemoveTool {
+    type Output = DockMutationResult;
+    type Params = BlockRemoveParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: BlockRemoveParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let id = required_str(&params, "id")?;
-
+    ) -> anyhow::Result<DockMutationResult> {
         let mutation = DockMutation {
             op:         MutationOp::BlockRemove,
             actor:      Actor::Agent,
             block:      None,
             fact:       None,
             annotation: None,
-            id:         Some(id),
+            id:         Some(p.id),
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -300,9 +277,7 @@ impl DockBlockRemoveTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.fact.add",
-    description = "Add a shared fact to the dock session. Facts persist across turns.",
-    params_schema = "Self::schema_fact_add()",
-    execute_fn = "self.exec_fact_add"
+    description = "Add a shared fact to the dock session. Facts persist across turns."
 )]
 pub struct DockFactAddTool {
     sink: DockMutationSink,
@@ -311,46 +286,42 @@ pub struct DockFactAddTool {
 impl DockFactAddTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_fact_add() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The fact content"
-                },
-                "source": {
-                    "type": "string",
-                    "description": "Optional source label (defaults to 'agent')"
-                }
-            },
-            "required": ["content"]
-        })
-    }
+/// Parameters for `dock.fact.add`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FactAddParams {
+    /// The fact content.
+    content: String,
+    /// Optional source label (defaults to "agent").
+    source:  Option<String>,
+}
 
-    async fn exec_fact_add(
+#[async_trait]
+impl ToolExecute for DockFactAddTool {
+    type Output = DockMutationResult;
+    type Params = FactAddParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: FactAddParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let content = required_str(&params, "content")?;
+    ) -> anyhow::Result<DockMutationResult> {
         let id = next_fact_id();
-
         let mutation = DockMutation {
             op:         MutationOp::FactAdd,
             actor:      Actor::Agent,
             block:      None,
             fact:       Some(DockFact {
                 id,
-                content,
+                content: p.content,
                 source: Actor::Agent,
             }),
             annotation: None,
             id:         None,
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -358,9 +329,7 @@ impl DockFactAddTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.fact.update",
-    description = "Update the content of an existing shared fact.",
-    params_schema = "Self::schema_fact_update()",
-    execute_fn = "self.exec_fact_update"
+    description = "Update the content of an existing shared fact."
 )]
 pub struct DockFactUpdateTool {
     sink: DockMutationSink,
@@ -369,57 +338,47 @@ pub struct DockFactUpdateTool {
 impl DockFactUpdateTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_fact_update() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The fact ID to update"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "New fact content"
-                }
-            },
-            "required": ["id", "content"]
-        })
-    }
+/// Parameters for `dock.fact.update`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FactUpdateParams {
+    /// The fact ID to update.
+    id:      String,
+    /// New fact content.
+    content: String,
+}
 
-    async fn exec_fact_update(
+#[async_trait]
+impl ToolExecute for DockFactUpdateTool {
+    type Output = DockMutationResult;
+    type Params = FactUpdateParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: FactUpdateParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let id = required_str(&params, "id")?;
-        let content = required_str(&params, "content")?;
-
+    ) -> anyhow::Result<DockMutationResult> {
         let mutation = DockMutation {
             op:         MutationOp::FactUpdate,
             actor:      Actor::Agent,
             block:      None,
             fact:       Some(DockFact {
-                id,
-                content,
-                source: Actor::Agent,
+                id:      p.id,
+                content: p.content,
+                source:  Actor::Agent,
             }),
             annotation: None,
             id:         None,
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
 /// Remove a shared fact.
 #[derive(ToolDef)]
-#[tool(
-    name = "dock.fact.remove",
-    description = "Remove a shared fact by ID.",
-    params_schema = "Self::schema_fact_remove()",
-    execute_fn = "self.exec_fact_remove"
-)]
+#[tool(name = "dock.fact.remove", description = "Remove a shared fact by ID.")]
 pub struct DockFactRemoveTool {
     sink: DockMutationSink,
 }
@@ -427,37 +386,35 @@ pub struct DockFactRemoveTool {
 impl DockFactRemoveTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_fact_remove() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The fact ID to remove"
-                }
-            },
-            "required": ["id"]
-        })
-    }
+/// Parameters for `dock.fact.remove`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FactRemoveParams {
+    /// The fact ID to remove.
+    id: String,
+}
 
-    async fn exec_fact_remove(
+#[async_trait]
+impl ToolExecute for DockFactRemoveTool {
+    type Output = DockMutationResult;
+    type Params = FactRemoveParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: FactRemoveParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let id = required_str(&params, "id")?;
-
+    ) -> anyhow::Result<DockMutationResult> {
         let mutation = DockMutation {
             op:         MutationOp::FactRemove,
             actor:      Actor::Agent,
             block:      None,
             fact:       None,
             annotation: None,
-            id:         Some(id),
+            id:         Some(p.id),
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -469,9 +426,7 @@ impl DockFactRemoveTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.annotation.add",
-    description = "Add an annotation to the dock canvas, optionally attached to a block.",
-    params_schema = "Self::schema_ann_add()",
-    execute_fn = "self.exec_ann_add"
+    description = "Add an annotation to the dock canvas, optionally attached to a block."
 )]
 pub struct DockAnnotationAddTool {
     sink: DockMutationSink,
@@ -480,52 +435,42 @@ pub struct DockAnnotationAddTool {
 impl DockAnnotationAddTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_ann_add() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "Annotation text content"
-                },
-                "block_id": {
-                    "type": "string",
-                    "description": "Optional block to attach the annotation to"
-                },
-                "selection_text": {
-                    "type": "string",
-                    "description": "Optional selected text within the block"
-                },
-                "anchor_y": {
-                    "type": "number",
-                    "description": "Optional vertical anchor position"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "Optional annotation ID (auto-generated if omitted)"
-                }
-            },
-            "required": ["content"]
-        })
-    }
+/// Parameters for `dock.annotation.add`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnnotationAddParams {
+    /// Annotation text content.
+    content:        String,
+    /// Optional block to attach the annotation to.
+    block_id:       Option<String>,
+    /// Optional selected text within the block.
+    selection_text: Option<String>,
+    /// Optional vertical anchor position.
+    anchor_y:       Option<f64>,
+    /// Optional annotation ID (auto-generated if omitted).
+    id:             Option<String>,
+}
 
-    async fn exec_ann_add(
+#[async_trait]
+impl ToolExecute for DockAnnotationAddTool {
+    type Output = DockMutationResult;
+    type Params = AnnotationAddParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: AnnotationAddParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let content = required_str(&params, "content")?;
-        let block_id = optional_str(&params, "block_id").unwrap_or_default();
-        let anchor_y = optional_f64(&params, "anchor_y").unwrap_or(0.0);
-        let id = optional_str(&params, "id").unwrap_or_else(next_annotation_id);
+    ) -> anyhow::Result<DockMutationResult> {
+        let block_id = p.block_id.unwrap_or_default();
+        let anchor_y = p.anchor_y.unwrap_or(0.0);
+        let id = p.id.unwrap_or_else(next_annotation_id);
 
-        let selection =
-            optional_str(&params, "selection_text").map(|text| crate::models::DockSelection {
-                start: 0,
-                end: text.len(),
-                text,
-            });
+        let selection = p.selection_text.map(|text| crate::models::DockSelection {
+            start: 0,
+            end: text.len(),
+            text,
+        });
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -540,7 +485,7 @@ impl DockAnnotationAddTool {
             annotation: Some(DockAnnotation {
                 id,
                 block_id,
-                content,
+                content: p.content,
                 author: Actor::Agent,
                 anchor_y,
                 timestamp: now_ms,
@@ -549,7 +494,7 @@ impl DockAnnotationAddTool {
             id:         None,
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -557,9 +502,7 @@ impl DockAnnotationAddTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.annotation.update",
-    description = "Update an existing annotation.",
-    params_schema = "Self::schema_ann_update()",
-    execute_fn = "self.exec_ann_update"
+    description = "Update an existing annotation."
 )]
 pub struct DockAnnotationUpdateTool {
     sink: DockMutationSink,
@@ -568,52 +511,41 @@ pub struct DockAnnotationUpdateTool {
 impl DockAnnotationUpdateTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_ann_update() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The annotation ID to update"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "New annotation content"
-                },
-                "block_id": {
-                    "type": "string",
-                    "description": "Optional new block attachment"
-                },
-                "selection_text": {
-                    "type": "string",
-                    "description": "Optional updated selection text"
-                },
-                "anchor_y": {
-                    "type": "number",
-                    "description": "Optional updated vertical anchor"
-                }
-            },
-            "required": ["id", "content"]
-        })
-    }
+/// Parameters for `dock.annotation.update`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnnotationUpdateParams {
+    /// The annotation ID to update.
+    id:             String,
+    /// New annotation content.
+    content:        String,
+    /// Optional new block attachment.
+    block_id:       Option<String>,
+    /// Optional updated selection text.
+    selection_text: Option<String>,
+    /// Optional updated vertical anchor.
+    anchor_y:       Option<f64>,
+}
 
-    async fn exec_ann_update(
+#[async_trait]
+impl ToolExecute for DockAnnotationUpdateTool {
+    type Output = DockMutationResult;
+    type Params = AnnotationUpdateParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: AnnotationUpdateParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let id = required_str(&params, "id")?;
-        let content = required_str(&params, "content")?;
-        let block_id = optional_str(&params, "block_id").unwrap_or_default();
-        let anchor_y = optional_f64(&params, "anchor_y").unwrap_or(0.0);
+    ) -> anyhow::Result<DockMutationResult> {
+        let block_id = p.block_id.unwrap_or_default();
+        let anchor_y = p.anchor_y.unwrap_or(0.0);
 
-        let selection =
-            optional_str(&params, "selection_text").map(|text| crate::models::DockSelection {
-                start: 0,
-                end: text.len(),
-                text,
-            });
+        let selection = p.selection_text.map(|text| crate::models::DockSelection {
+            start: 0,
+            end: text.len(),
+            text,
+        });
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -626,9 +558,9 @@ impl DockAnnotationUpdateTool {
             block:      None,
             fact:       None,
             annotation: Some(DockAnnotation {
-                id,
+                id: p.id,
                 block_id,
-                content,
+                content: p.content,
                 author: Actor::Agent,
                 anchor_y,
                 timestamp: now_ms,
@@ -637,7 +569,7 @@ impl DockAnnotationUpdateTool {
             id:         None,
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
@@ -645,9 +577,7 @@ impl DockAnnotationUpdateTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.annotation.remove",
-    description = "Remove an annotation by ID.",
-    params_schema = "Self::schema_ann_remove()",
-    execute_fn = "self.exec_ann_remove"
+    description = "Remove an annotation by ID."
 )]
 pub struct DockAnnotationRemoveTool {
     sink: DockMutationSink,
@@ -656,37 +586,35 @@ pub struct DockAnnotationRemoveTool {
 impl DockAnnotationRemoveTool {
     /// Create with a shared mutation sink.
     pub fn new(sink: DockMutationSink) -> Self { Self { sink } }
+}
 
-    fn schema_ann_remove() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The annotation ID to remove"
-                }
-            },
-            "required": ["id"]
-        })
-    }
+/// Parameters for `dock.annotation.remove`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnnotationRemoveParams {
+    /// The annotation ID to remove.
+    id: String,
+}
 
-    async fn exec_ann_remove(
+#[async_trait]
+impl ToolExecute for DockAnnotationRemoveTool {
+    type Output = DockMutationResult;
+    type Params = AnnotationRemoveParams;
+
+    async fn run(
         &self,
-        params: serde_json::Value,
+        p: AnnotationRemoveParams,
         context: &ToolContext,
-    ) -> anyhow::Result<ToolOutput> {
-        let id = required_str(&params, "id")?;
-
+    ) -> anyhow::Result<DockMutationResult> {
         let mutation = DockMutation {
             op:         MutationOp::AnnotationRemove,
             actor:      Actor::Agent,
             block:      None,
             fact:       None,
             annotation: None,
-            id:         Some(id),
+            id:         Some(p.id),
         };
         self.sink.push(context.session_key, mutation.clone());
-        mutation_output(&mutation)
+        Ok(DockMutationResult::from_mutation(&mutation))
     }
 }
 
