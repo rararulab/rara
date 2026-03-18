@@ -328,6 +328,11 @@ wt: devtool-build
 check-deps: devtool-build
     @{{DEVTOOL}} check-deps
 
+[doc("generate quality matrix report")]
+[group("📊 Quality")]
+quality-matrix: devtool-build
+    @{{DEVTOOL}} quality-matrix --output docs/src/quality-matrix.md
+
 # ========================================================================================
 # Dependency Management
 # ========================================================================================
