@@ -443,8 +443,11 @@ impl Kernel {
                     .syscall
                     .job_wheel()
                     .lock()
-                    .ok()
-                    .and_then(|w| w.next_deadline())
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "job_wheel mutex poisoned, recovering inner data");
+                        e.into_inner()
+                    })
+                    .next_deadline()
                     .map(|ts| {
                         let now_ts = jiff::Timestamp::now();
                         let delta = ts.duration_since(now_ts);
@@ -512,9 +515,14 @@ impl Kernel {
                     info!(processor_id = id, "event processor shutting down");
                     // Persist scheduled jobs on shutdown.
                     if id == 0 {
-                        if let Ok(wheel) = self.syscall.job_wheel().lock() {
-                            wheel.persist();
-                        }
+                        self.syscall
+                            .job_wheel()
+                            .lock()
+                            .unwrap_or_else(|e| {
+                                warn!(error = %e, "job_wheel mutex poisoned during shutdown, recovering");
+                                e.into_inner()
+                            })
+                            .persist();
                     }
                     for event in queue.drain(1024) {
                         if matches!(event.kind, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
@@ -1086,9 +1094,14 @@ impl Kernel {
                 {
                     if let Ok(uuid) = uuid::Uuid::parse_str(job_id_str) {
                         let job_id = crate::schedule::JobId(uuid);
-                        if let Ok(mut wheel) = self.syscall.job_wheel().lock() {
-                            wheel.complete_in_flight(&job_id);
-                        }
+                        self.syscall
+                            .job_wheel()
+                            .lock()
+                            .unwrap_or_else(|e| {
+                                warn!(error = %e, "job_wheel mutex poisoned, recovering");
+                                e.into_inner()
+                            })
+                            .complete_in_flight(&job_id);
                     }
                 }
             }
