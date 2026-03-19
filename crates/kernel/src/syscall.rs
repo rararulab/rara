@@ -268,6 +268,7 @@ impl SyscallDispatcher {
                     risk_level: crate::security::ApprovalManager::classify_risk(&tool_name),
                     requested_at: Timestamp::now(),
                     timeout_secs: policy.timeout_secs,
+                    context: None,
                 };
 
                 // Spawn a task so the event loop is not blocked while waiting

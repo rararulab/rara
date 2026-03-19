@@ -870,6 +870,9 @@ pub enum StreamEvent {
     /// Emitted by the agent when an iteration ends with tool calls — the
     /// narration text is noise and should not be shown to the user.
     TextClear,
+    /// LLM's reasoning/rationale for the upcoming batch of tool calls.
+    /// Emitted once per iteration, before the first `ToolCallStart`.
+    TurnRationale { text: String },
     /// A tool call has started executing.
     ToolCallStart {
         name:      String,

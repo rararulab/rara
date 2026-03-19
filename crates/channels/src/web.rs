@@ -108,6 +108,8 @@ pub enum WebEvent {
         success:        bool,
         error:          Option<String>,
     },
+    /// LLM's rationale for the current tool call batch.
+    TurnRationale { text: String },
     /// Progress stage update.
     Progress { stage: String },
     /// Turn metrics summary (sent before Done).
@@ -183,6 +185,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     match event {
         StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
         StreamEvent::ReasoningDelta { .. } | StreamEvent::TextClear => None,
+        StreamEvent::TurnRationale { text } => Some(WebEvent::TurnRationale { text }),
         StreamEvent::ToolCallStart {
             name,
             id,
@@ -1050,6 +1053,18 @@ mod tests {
                         && media_type == "image/png"
                         && data == "AAAA"
                 )
+        ));
+    }
+
+    #[test]
+    fn turn_rationale_is_forwarded_to_web_clients() {
+        let event = StreamEvent::TurnRationale {
+            text: "checking logs".to_owned(),
+        };
+
+        assert!(matches!(
+            stream_event_to_web_event(event),
+            Some(WebEvent::TurnRationale { text }) if text == "checking logs"
         ));
     }
 

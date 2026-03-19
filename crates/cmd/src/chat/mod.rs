@@ -482,6 +482,7 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             let name = tool_display_name(&name).to_owned();
             CliEvent::ToolCallStart { name, summary }
         }
+        StreamEvent::TurnRationale { text } => CliEvent::TurnRationale { text },
         StreamEvent::ToolCallEnd {
             success,
             result_preview,

@@ -46,6 +46,13 @@ use std::{
     time::Instant,
 };
 
+use tokio::task::AbortHandle;
+use uuid::Uuid;
+
+/// Tracks abort handles for guard approval expiry tasks so they can be
+/// cancelled when the user resolves an approval before the timeout fires.
+static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::new(DashMap::new);
+
 /// Matches complete tool-call XML blocks (open + close, possibly mismatched
 /// names).
 static TOOL_CALL_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -229,6 +236,8 @@ struct ProgressMessage {
     /// Index of the currently executing step (0-based), `None` before first
     /// step starts.
     plan_current_step: Option<usize>,
+    /// High-level rationale for the current turn, shown above tool lines.
+    turn_rationale:    Option<String>,
 }
 
 impl ProgressMessage {
@@ -252,6 +261,7 @@ impl ProgressMessage {
             plan_steps: None,
             plan_goal: None,
             plan_current_step: None,
+            turn_rationale: None,
         }
     }
 
@@ -408,6 +418,10 @@ fn render_progress(
     let phases = aggregate_phases(tools);
     let mut lines = Vec::new();
 
+    if let Some(ref rationale) = progress.turn_rationale {
+        lines.push(format!("\u{1f4ad} {rationale}"));
+    }
+
     // Count in-progress phases.
     let active = phases.iter().filter(|p| !p.all_finished).count();
     if active > 1 {
@@ -489,6 +503,10 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
     )];
     lines.push(String::new());
+
+    if let Some(ref rationale) = progress.turn_rationale {
+        lines.push(format!("\u{1f4ad} {rationale}"));
+    }
 
     for (i, step) in steps.iter().enumerate() {
         let (icon, suffix) = match &step.status {
@@ -1482,6 +1500,12 @@ async fn handle_guard_callback(
         .unwrap_or("unknown")
         .to_string();
 
+    // Cancel the auto-expiry task before resolving so it cannot race with the
+    // message edit below.
+    if let Some((_, abort_handle)) = GUARD_EXPIRY_HANDLES.remove(&request_id) {
+        abort_handle.abort();
+    }
+
     let result =
         handle
             .security()
@@ -1515,15 +1539,24 @@ async fn handle_guard_callback(
             (ApprovalDecision::Approved, Ok(_)) => format!("✅ <b>Approved</b> by @{decided_by}"),
             (ApprovalDecision::Denied, Ok(_)) => format!("❌ <b>Denied</b> by @{decided_by}"),
             (_, Err(ResolveError::Expired)) => "⏰ <b>Expired</b> — request timed out".to_string(),
+            (_, Err(ResolveError::NotFound(_))) => {
+                "⏰ <b>Expired</b> — request already resolved or timed out".to_string()
+            }
+            // Future-proof: catch any new ResolveError variants.
+            #[allow(unreachable_patterns)]
             (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(&e.to_string())),
-            _ => "Done".to_string(),
+            (_, Ok(_)) => "Done".to_string(),
         };
 
-        // Preserve original message content and append the decision status.
+        // Preserve original message content, append the decision status,
+        // and remove the inline keyboard so buttons cannot be clicked again.
         let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
         let _ = bot
             .edit_message_text(chat_id, msg_id, new_text)
             .parse_mode(ParseMode::Html)
+            .reply_markup(InlineKeyboardMarkup::new(
+                Vec::<Vec<InlineKeyboardButton>>::new(),
+            ))
             .await;
     }
 
@@ -1855,7 +1888,7 @@ async fn handle_cascade_callback(
                 _ => String::new(),
             };
 
-            // Extract only the turn that corresponds to this trace.
+            // Locate the turn slice for this trace.
             let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
             let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
                 let ts_ms = ulid.timestamp_ms() as i64;
@@ -1868,7 +1901,12 @@ async fn handle_cascade_callback(
                 &entries
             };
 
-            let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
+            // Try pre-built trace first; fall back to post-hoc build for
+            // legacy sessions.
+            let cascade = rara_kernel::cascade::load_persisted_cascade(turn_entries)
+                .unwrap_or_else(|| {
+                    rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id)
+                });
 
             tracing::debug!(
                 ticks = cascade.ticks.len(),
@@ -1958,13 +1996,35 @@ async fn approval_listener(
                         guard_html_escape(&args_summary),
                     ));
                 }
+                if let Some(ctx) = &req.context {
+                    text.push_str(&format!(
+                        "<b>Context:</b> {}\n",
+                        guard_html_escape(ctx),
+                    ));
+                }
+                // Compute expiration time for display
+                let expires_at = req
+                    .requested_at
+                    .checked_add(jiff::SignedDuration::from_secs(req.timeout_secs as i64))
+                    .unwrap_or(req.requested_at);
+                let requested_str = req.requested_at.strftime("%H:%M:%S");
+                let expires_str = expires_at.strftime("%H:%M:%S");
+
                 text.push_str(&format!(
                     "<b>Reason:</b> {summary}\n\
                      <b>Risk:</b> {risk:?}\n\n\
-                     Approve or deny this action:",
+                     ⏱ <b>Requested:</b> {requested}\n\
+                     ⏳ <b>Expires:</b> {timeout}s (at {expires})",
                     summary = guard_html_escape(&req.summary),
                     risk = req.risk_level,
+                    requested = requested_str,
+                    timeout = req.timeout_secs,
+                    expires = expires_str,
                 ));
+
+                // Keep the info block separate from the action prompt so the
+                // expiry task can reuse `text` without the prompt line.
+                let display_text = format!("{text}\n\nApprove or deny this action:");
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![
                     InlineKeyboardButton::callback("✅ Approve", format!("guard:approve:{}", req.id)),
@@ -1972,13 +2032,50 @@ async fn approval_listener(
                 ]]);
 
                 let result = bot
-                    .send_message(ChatId(chat_id), &text)
+                    .send_message(ChatId(chat_id), &display_text)
                     .parse_mode(ParseMode::Html)
                     .reply_markup(keyboard)
                     .await;
 
-                if let Err(e) = result {
-                    warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                match result {
+                    Ok(sent_msg) => {
+                        // Spawn a delayed task to auto-expire the message when
+                        // the approval timeout elapses. The abort handle is
+                        // stored so `handle_guard_callback` can cancel it if
+                        // the user responds before the timeout.
+                        let expiry_bot = bot.clone();
+                        let expiry_chat_id = ChatId(chat_id);
+                        let expiry_msg_id = sent_msg.id;
+                        let timeout_secs = req.timeout_secs;
+                        let request_id = req.id;
+                        let expires_display = expires_str.to_string();
+                        let info_text = text.clone();
+
+                        let handle = tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
+
+                            // Remove our own entry from the map.
+                            GUARD_EXPIRY_HANDLES.remove(&request_id);
+
+                            // Edit message: remove keyboard and show expiry status.
+                            let expired_text = format!(
+                                "{}\n\n⏰ <b>Expired</b> — timed out at {}",
+                                info_text, expires_display,
+                            );
+                            let _ = expiry_bot
+                                .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
+                                .parse_mode(ParseMode::Html)
+                                .reply_markup(InlineKeyboardMarkup::new(
+                                    Vec::<Vec<InlineKeyboardButton>>::new(),
+                                ))
+                                .await;
+                        });
+
+                        GUARD_EXPIRY_HANDLES.insert(request_id, handle.abort_handle());
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                    }
                 }
             }
         }
@@ -2608,6 +2705,10 @@ fn spawn_stream_forwarder(
                                     }
                                 }
                             }
+                        }
+                        Ok(StreamEvent::TurnRationale { text }) => {
+                            progress.turn_rationale = Some(text);
+                            progress_dirty = true;
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
                             let (display, summary) = tool_display_info(&name, &arguments);
@@ -3582,5 +3683,56 @@ mod strip_tool_call_xml_tests {
         assert!(!result.contains("tool_call"));
         assert!(result.contains("Before"));
         assert!(result.contains("after"));
+    }
+}
+
+#[cfg(test)]
+mod render_progress_tests {
+    use super::*;
+
+    /// Helper: build a minimal `ProgressMessage` for rendering tests.
+    fn test_progress(turn_rationale: Option<&str>) -> ProgressMessage {
+        let mut pm = ProgressMessage::new("test-msg-id".into());
+        pm.turn_rationale = turn_rationale.map(String::from);
+        pm
+    }
+
+    /// Helper: build a finished `ToolProgress` entry so the renderer has
+    /// something to display.
+    fn finished_tool(name: &str) -> ToolProgress {
+        ToolProgress {
+            id:         "tool-1".into(),
+            name:       name.into(),
+            activity:   name.into(),
+            summary:    String::new(),
+            started_at: Instant::now(),
+            finished:   true,
+            success:    true,
+            duration:   Some(std::time::Duration::from_millis(100)),
+            error:      None,
+        }
+    }
+
+    #[test]
+    fn render_progress_includes_rationale_when_present() {
+        let pm = test_progress(Some("Reading config files"));
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        assert!(
+            output.contains("Reading config files"),
+            "expected rationale in output, got: {output}"
+        );
+    }
+
+    #[test]
+    fn render_progress_omits_rationale_when_none() {
+        let pm = test_progress(None);
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        // The thought-bubble emoji prefix used for rationale should be absent.
+        assert!(
+            !output.contains("\u{1f4ad}"),
+            "expected no rationale line, got: {output}"
+        );
     }
 }

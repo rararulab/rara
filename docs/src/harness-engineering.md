@@ -50,30 +50,12 @@ scripts/bin/devtool check-deps
 
 **Runs in:** PR lint CI (blocking).
 
-### `devtool quality-matrix`
-
-Scans all crates and generates a health dashboard covering:
-
-- **AGENT.md** — does the crate have agent guidelines?
-- **Tests** — does the crate have `#[cfg(test)]` or a `tests/` directory?
-- **Doc coverage** — what percentage of `pub` items have `///` doc comments?
-- **Total lines** — crate size as a proxy for risk
-
-```bash
-just quality-matrix           # Generate and write to docs/src/quality-matrix.md
-scripts/bin/devtool quality-matrix              # Print to stdout
-scripts/bin/devtool quality-matrix --output f   # Write to file
-```
-
-**Runs in:** push to `main` (non-blocking, auto-commits updated report).
-
 ## CI Integration
 
 | Check | Trigger | Blocking? | Purpose |
 |-------|---------|-----------|---------|
 | `check-agent-md` | PR lint | Yes | Prevent crates without agent guidelines |
 | `check-deps` | PR lint | Yes | Prevent architecture layer violations |
-| `quality-matrix` | Push to main | No | Track quality trends over time |
 | `cargo clippy -D warnings` | PR lint | Yes | Code quality |
 | `cargo +nightly fmt --check` | PR lint | Yes | Formatting consistency |
 | `buf lint` | PR lint | Yes | Protobuf schema quality |

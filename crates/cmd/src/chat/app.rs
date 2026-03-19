@@ -266,6 +266,9 @@ impl ChatState {
                 self.active_tool = None;
                 self.status_msg = Some(format!("Error: {message}"));
             }
+            CliEvent::TurnRationale { text } => {
+                self.status_msg = Some(text);
+            }
             CliEvent::Done => self.finalize_stream(),
         }
     }
