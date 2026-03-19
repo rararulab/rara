@@ -1078,7 +1078,7 @@ function ActivityTree({ stream }: { stream: StreamState }) {
         </div>
       )}
       {stream.turnRationale && (
-        <div className="text-muted-foreground/70 text-[11px] leading-4">
+        <div className="text-muted-foreground/70 text-[11px] leading-4" aria-label="LLM reasoning">
           💭 {stream.turnRationale}
         </div>
       )}
