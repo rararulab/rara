@@ -3096,12 +3096,11 @@ fn spawn_stream_forwarder(
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
 
-                            // ── Finalize: convert progress → compact summary + trace button ──
-                            // The progress message (which showed live tool activity) is
-                            // replaced with a one-line summary. An inline keyboard button
-                            // lets the user toggle the full execution trace on demand.
-                            // The trace is stored in TraceStore with 1-hour TTL.
-                            if let Some(mid) = progress.message_id {
+                            // ── Finalize: always create trace + compact summary ──
+                            // Every agent turn (including pure text replies) gets a
+                            // compact summary with trace/cascade buttons. If no
+                            // progress message exists yet, send a new one.
+                            {
                                 let plan_steps = std::mem::take(&mut progress.saved_plan_steps);
 
                                 let trace = ExecutionTrace {
@@ -3124,6 +3123,24 @@ fn spawn_stream_forwarder(
                                 };
 
                                 let compact = render_compact_summary(&trace);
+                                // Reuse existing progress message or send a new one
+                                // (pure text replies have no progress message yet).
+                                let mid = if let Some(mid) = progress.message_id {
+                                    mid
+                                } else {
+                                    match bot
+                                        .send_message(ChatId(chat_id), &compact)
+                                        .parse_mode(ParseMode::Html)
+                                        .await
+                                    {
+                                        Ok(msg) => msg.id,
+                                        Err(e) => {
+                                            warn!(error = %e, "failed to send trace summary");
+                                            break;
+                                        }
+                                    }
+                                };
+
                                 // Persist trace to SQLite, then show compact summary
                                 // with inline button containing the trace_id.
                                 let session_name = session_id.to_string();
@@ -3156,11 +3173,15 @@ fn spawn_stream_forwarder(
                                     }
                                     Err(e) => {
                                         warn!(error = %e, "failed to persist execution trace");
-                                        // Still show compact summary, just without the button.
-                                        let _ = bot
-                                            .edit_message_text(ChatId(chat_id), mid, &compact)
-                                            .parse_mode(ParseMode::Html)
-                                            .await;
+                                        // For progress messages, edit to show compact
+                                        // without buttons. For newly sent messages the
+                                        // compact text is already visible.
+                                        if progress.message_id.is_some() {
+                                            let _ = bot
+                                                .edit_message_text(ChatId(chat_id), mid, &compact)
+                                                .parse_mode(ParseMode::Html)
+                                                .await;
+                                        }
                                     }
                                 }
                             }
