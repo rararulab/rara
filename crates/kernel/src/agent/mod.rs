@@ -1560,10 +1560,14 @@ pub(crate) async fn run_agent_loop(
 
             // Emit ToolCallStart BEFORE parsing so the forwarder always
             // receives it — even if argument parsing fails below.
+            // Pre-parse arguments for display purposes (summary extraction);
+            // fall back to empty object if the buffer is malformed.
+            let start_args = serde_json::from_str(&tool_call.arguments_buf)
+                .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
             stream_handle.emit(StreamEvent::ToolCallStart {
                 name:      tool_call.name.clone(),
                 id:        tool_call.id.clone(),
-                arguments: serde_json::Value::Object(Default::default()),
+                arguments: start_args,
             });
 
             let args = match parse_tool_call_arguments(&tool_call.arguments_buf) {
