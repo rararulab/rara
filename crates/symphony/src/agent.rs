@@ -351,6 +351,73 @@ Issue #{number}: {title}
         })
     }
 
+    /// Spawn a `ralph run --rpc` verify session for an issue's branch.
+    ///
+    /// Similar to `start_review` but uses the verify hats config and a prompt
+    /// that instructs the agent to review the PR diff, run tests, fix issues,
+    /// and push fixes to the PR branch.
+    pub async fn start_verify<P: AsRef<Path>>(
+        &self,
+        issue: &TrackedIssue,
+        workspace: P,
+        verify_config: &crate::config::VerifyConfig,
+    ) -> Result<AgentHandle> {
+        let branch = format!("issue-{}-{}", issue.number, slug(&issue.title));
+        let prompt = format!(
+            "Verify the changes on branch `{branch}` for issue #{number} ({title}).\n\n## \
+             Instructions\n\n1. Review the PR diff using `gh pr diff` or by inspecting the \
+             changed files.\n2. Run `cargo check`, `cargo test`, and `cargo clippy` to verify \
+             correctness.\n3. Fix any issues found — commit and push fixes to the PR branch.\n4. \
+             After all fixes are applied, run the full verification suite again.\n5. Report your \
+             findings.\n",
+            number = issue.number,
+            title = issue.title,
+        );
+
+        let prompt_path = workspace.as_ref().join("PROMPT.md");
+        tokio::fs::write(&prompt_path, &prompt)
+            .await
+            .context(WorkspaceIoSnafu {
+                message: format!("failed to write verify prompt {}", prompt_path.display()),
+            })?;
+
+        let mut args = vec![
+            "run".to_owned(),
+            "--rpc".to_owned(),
+            "-H".to_owned(),
+            verify_config.hats_file.clone(),
+        ];
+        if let Some(backend) = &verify_config.backend {
+            args.push("-b".to_owned());
+            args.push(backend.clone());
+        }
+
+        let command = self.format_command(&args);
+        let mut cmd = Command::new(&self.config.command);
+        for arg in &args {
+            cmd.arg(arg);
+        }
+
+        cmd.current_dir(workspace.as_ref());
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().context(WorkspaceIoSnafu {
+            message: format!(
+                "failed to spawn `{command}` in {}",
+                workspace.as_ref().display()
+            ),
+        })?;
+        let stdin = child.stdin.take();
+
+        Ok(AgentHandle {
+            child,
+            stdin,
+            started_at: Instant::now(),
+        })
+    }
+
     /// Write `PROMPT.md` into the issue worktree and spawn a non-interactive
     /// `ralph run` subprocess whose output is consumed by symphony.
     pub async fn start<P: AsRef<Path>>(
