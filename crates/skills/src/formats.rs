@@ -685,4 +685,51 @@ mod tests {
 
         assert_eq!(extract_description_from_body(""), "");
     }
+
+    #[test]
+    fn hybrid_repo_detected_as_claude_code_but_scan_returns_empty() {
+        // A repo with marketplace.json but no plugin.json in the source dir,
+        // and native SKILL.md files — the ClaudeCode adapter should return
+        // empty so the caller can fallback to SKILL.md scanning.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create marketplace.json pointing to root (no plugin.json there).
+        let claude_dir = root.join(".claude-plugin");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("marketplace.json"),
+            r#"{
+                "name": "hybrid-repo",
+                "plugins": [
+                    { "name": "my-skills", "source": "./" }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        // Create native SKILL.md files.
+        let skill_dir = root.join("skills/my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: test\n---\n# My Skill\nDoes stuff.",
+        )
+        .unwrap();
+
+        // detect_format sees marketplace.json → ClaudeCode.
+        let format = detect_format(root);
+        assert_eq!(format, PluginFormat::ClaudeCode);
+
+        // But ClaudeCode scan returns empty (no plugin.json in source dir).
+        let adapter = ClaudeCodeAdapter;
+        let results = adapter.scan_skills(root).unwrap();
+        assert!(
+            results.is_empty(),
+            "ClaudeCode adapter should return empty for hybrid repo, got: {results:?}"
+        );
+
+        // Verify SKILL.md files exist (caller would fallback to scan_repo_skills).
+        assert!(has_skill_md_recursive(root));
+    }
 }
