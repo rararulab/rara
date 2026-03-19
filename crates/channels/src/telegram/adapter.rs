@@ -693,6 +693,8 @@ fn render_cascade_html(cascade: &rara_kernel::cascade::CascadeTrace) -> String {
     use rara_kernel::cascade::CascadeEntryKind;
 
     const MAX_ENTRY_CHARS: usize = 300;
+    // 96 bytes of headroom below Telegram's 4096-char limit for the
+    // truncation marker and any trailing whitespace.
     const MAX_TOTAL_CHARS: usize = 4000;
 
     let mut text = String::from("\u{1f50d} <b>Cascade Trace</b>\n");
@@ -701,18 +703,19 @@ fn render_cascade_html(cascade: &rara_kernel::cascade::CascadeTrace) -> String {
         cascade.summary.tick_count, cascade.summary.tool_call_count, cascade.summary.total_entries,
     ));
 
-    for tick in &cascade.ticks {
+    let mut truncated = false;
+
+    'outer: for tick in &cascade.ticks {
+        let checkpoint = text.len();
+        text.push_str(&format!("\n\u{25b6} <b>TICK {}</b>\n", tick.index + 1));
         if text.len() > MAX_TOTAL_CHARS {
-            text.push_str("\n\u{2026}(truncated)");
+            text.truncate(checkpoint);
+            truncated = true;
             break;
         }
 
-        text.push_str(&format!("\n\u{25b6} <b>TICK {}</b>\n", tick.index + 1));
-
         for entry in &tick.entries {
-            if text.len() > MAX_TOTAL_CHARS {
-                break;
-            }
+            let checkpoint = text.len();
 
             let (emoji, label) = match entry.kind {
                 CascadeEntryKind::UserInput => ("\u{1f4ac}", "User Input"),
@@ -734,23 +737,31 @@ fn render_cascade_html(cascade: &rara_kernel::cascade::CascadeTrace) -> String {
                 entry.content.clone()
             };
 
+            // Use a placeholder for empty content to avoid empty blockquote tags.
+            let display_content = if content.is_empty() {
+                "(empty)"
+            } else {
+                &content
+            };
+
             text.push_str(&format!(
                 "  {emoji} <b>{label}</b> \u{00b7} <code>{}</code>\n<blockquote>{}</blockquote>\n",
                 trace_html_escape(&entry.id),
-                trace_html_escape(&content),
+                trace_html_escape(display_content),
             ));
+
+            // If this entry pushed us over budget, roll back to avoid
+            // truncating inside HTML tags (which produces malformed HTML
+            // that Telegram rejects).
+            if text.len() > MAX_TOTAL_CHARS {
+                text.truncate(checkpoint);
+                truncated = true;
+                break 'outer;
+            }
         }
     }
 
-    // Hard-truncate to stay within Telegram's 4096-char message limit.
-    if text.len() > MAX_TOTAL_CHARS {
-        let truncate_at = text
-            .char_indices()
-            .take_while(|(i, _)| *i <= 3990)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(3990.min(text.len()));
-        text.truncate(truncate_at);
+    if truncated {
         text.push_str("\n\u{2026}(truncated)");
     }
 
@@ -1931,7 +1942,7 @@ async fn handle_cascade_callback(
             if let Err(e) = bot
                 .edit_message_text(ChatId(cid), MessageId(mid), &html)
                 .parse_mode(ParseMode::Html)
-                .reply_markup(keyboard)
+                .reply_markup(keyboard.clone())
                 .await
             {
                 warn!(
@@ -1939,8 +1950,24 @@ async fn handle_cascade_callback(
                     chat_id = cid,
                     msg_id = mid,
                     html_len = html.len(),
-                    "cascade: failed to edit message with cascade view"
+                    "cascade: failed to edit message with cascade view, retrying as plain text"
                 );
+                // Fallback: show a plain-text error so the user gets feedback
+                // instead of silent failure ("no response").
+                let fallback = format!(
+                    "\u{26a0}\u{fe0f} Cascade rendering failed (HTML too complex, {} \
+                     bytes).\nTicks: {}, entries: {}",
+                    html.len(),
+                    cascade.summary.tick_count,
+                    cascade.summary.total_entries,
+                );
+                if let Err(e2) = bot
+                    .edit_message_text(ChatId(cid), MessageId(mid), &fallback)
+                    .reply_markup(keyboard)
+                    .await
+                {
+                    warn!(error = %e2, "cascade: plain-text fallback also failed");
+                }
             }
         }
 
