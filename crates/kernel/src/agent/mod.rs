@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod fold;
+pub(crate) mod repetition;
 
 /// Maximum **byte** length for child/worker agent results passed back to
 /// the parent context.  Child agents are instructed to self-summarize
@@ -1213,6 +1214,7 @@ pub(crate) async fn run_agent_loop(
         let stream_start = Instant::now();
         let mut first_token_at: Option<Instant> = None;
         let mut accumulated_text = String::new();
+        let mut repetition_guard = repetition::RepetitionGuard::new();
         let mut accumulated_reasoning = String::new();
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
@@ -1262,6 +1264,20 @@ pub(crate) async fn run_agent_loop(
                             }
                         }
                         accumulated_text.push_str(&text);
+
+                        // Check for LLM repetition loop.
+                        if let Some(trunc_byte) = repetition_guard.feed(&text, &accumulated_text) {
+                            warn!(
+                                iteration,
+                                total_len = accumulated_text.len(),
+                                truncated_at = trunc_byte,
+                                "repetition loop detected, truncating output"
+                            );
+                            accumulated_text.truncate(trunc_byte);
+                            stream_task.abort();
+                            break;
+                        }
+
                         stream_handle.emit(StreamEvent::TextDelta { text });
                     }
                 }
