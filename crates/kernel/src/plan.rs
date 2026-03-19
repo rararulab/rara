@@ -600,6 +600,15 @@ pub(crate) async fn run_plan_loop(
             },
             rara_message_id,
         },
+        cascade:    crate::cascade::CascadeTrace {
+            message_id: String::new(),
+            ticks:      Vec::new(),
+            summary:    crate::cascade::CascadeSummary {
+                tick_count:      0,
+                tool_call_count: 0,
+                total_entries:   0,
+            },
+        },
     })
 }
 
@@ -1202,6 +1211,15 @@ mod tests {
                 success,
                 error: error.map(|s| s.to_owned()),
                 rara_message_id: MessageId::new(),
+            },
+            cascade:    crate::cascade::CascadeTrace {
+                message_id: String::new(),
+                ticks:      Vec::new(),
+                summary:    crate::cascade::CascadeSummary {
+                    tick_count:      0,
+                    tool_call_count: 0,
+                    total_entries:   0,
+                },
             },
         }
     }

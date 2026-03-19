@@ -515,6 +515,8 @@ pub struct AgentTurnResult {
     pub model:      String,
     /// Detailed trace of the turn for observability.
     pub trace:      TurnTrace,
+    /// Structured cascade trace built in real time during the turn.
+    pub cascade:    crate::cascade::CascadeTrace,
 }
 
 impl AgentTurnResult {
@@ -536,6 +538,15 @@ impl AgentTurnResult {
                 success:          true,
                 error:            None,
                 rara_message_id:  crate::io::MessageId::new(),
+            },
+            cascade:    crate::cascade::CascadeTrace {
+                message_id: String::new(),
+                ticks:      Vec::new(),
+                summary:    crate::cascade::CascadeSummary {
+                    tick_count:      0,
+                    tool_call_count: 0,
+                    total_entries:   0,
+                },
             },
         }
     }
@@ -928,6 +939,8 @@ pub(crate) async fn run_agent_loop(
     let mut last_accumulated_text = String::new();
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
+    let mut cascade_builder = crate::cascade::CascadeBuilder::new(rara_message_id.to_string());
+    cascade_builder.push_user(0, &input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
     let mut consecutive_silent_iters: usize = 0;
@@ -1461,6 +1474,18 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await;
 
+            cascade_builder.push_assistant(
+                0,
+                &accumulated_text,
+                if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(&accumulated_reasoning)
+                },
+                jiff::Timestamp::now(),
+                None,
+            );
+
             let text_preview: String = accumulated_text.chars().take(200).collect();
             iteration_traces.push(IterationTrace {
                 index: iteration,
@@ -1493,12 +1518,22 @@ pub(crate) async fn run_agent_loop(
                 }
             }
 
+            let cascade = cascade_builder.finish();
+            let _ = tape
+                .append_event(
+                    tape_name,
+                    "cascade.trace",
+                    serde_json::to_value(&cascade).unwrap_or_default(),
+                )
+                .await;
+
             return Ok(AgentTurnResult {
                 text: accumulated_text,
                 iterations: iteration + 1,
                 tool_calls: tool_calls_made,
                 model: model.clone(),
                 trace,
+                cascade,
             });
         }
 
@@ -1619,6 +1654,18 @@ pub(crate) async fn run_agent_loop(
                 .await;
         }
 
+        cascade_builder.push_assistant(
+            0,
+            &accumulated_text,
+            if accumulated_reasoning.is_empty() {
+                None
+            } else {
+                Some(&accumulated_reasoning)
+            },
+            jiff::Timestamp::now(),
+            None,
+        );
+
         // Persist tool calls to tape.
         if !assistant_tool_calls.is_empty() {
             let calls_json: Vec<serde_json::Value> = assistant_tool_calls
@@ -1647,6 +1694,14 @@ pub(crate) async fn run_agent_loop(
                     tool_call_meta,
                 )
                 .await;
+        }
+
+        {
+            let calls_for_cascade: Vec<(&str, &str)> = assistant_tool_calls
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.arguments.as_str()))
+                .collect();
+            cascade_builder.push_tool_calls(0, &calls_for_cascade, jiff::Timestamp::now(), None);
         }
 
         iter_span.record("tool_count", valid_tool_calls.len());
@@ -1890,6 +1945,17 @@ pub(crate) async fn run_agent_loop(
                     .ok(),
                 )
                 .await;
+            {
+                let results_strs: Vec<String> = results_json
+                    .iter()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect();
+                let results_refs: Vec<&str> = results_strs.iter().map(|s| s.as_str()).collect();
+                cascade_builder.push_tool_results(0, &results_refs, jiff::Timestamp::now(), None);
+            }
             if should_remind_tape_anchor(&tool_names, &results_json) {
                 needs_anchor_reminder = true;
             }
@@ -2141,12 +2207,22 @@ pub(crate) async fn run_agent_loop(
         }
     }
 
+    let cascade = cascade_builder.finish();
+    let _ = tape
+        .append_event(
+            tape_name,
+            "cascade.trace",
+            serde_json::to_value(&cascade).unwrap_or_default(),
+        )
+        .await;
+
     Ok(AgentTurnResult {
         text: last_accumulated_text,
         iterations: actual_iterations,
         tool_calls: tool_calls_made,
         model: model.clone(),
         trace,
+        cascade,
     })
 }
 
