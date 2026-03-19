@@ -1988,6 +1988,12 @@ async fn approval_listener(
                         guard_html_escape(&args_summary),
                     ));
                 }
+                if let Some(ctx) = &req.context {
+                    text.push_str(&format!(
+                        "<b>Context:</b> {}\n",
+                        guard_html_escape(ctx),
+                    ));
+                }
                 // Compute expiration time for display
                 let expires_at = req
                     .requested_at

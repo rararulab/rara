@@ -1882,6 +1882,7 @@ pub(crate) async fn run_agent_loop(
                             risk_level,
                             requested_at: jiff::Timestamp::now(),
                             timeout_secs: 120,
+                            context:      None,
                         };
 
                         let decision = approval_manager.request_approval(approval_req).await;
