@@ -40,7 +40,6 @@ mod mita_update_soul_state;
 mod mita_write_user_note;
 mod notify;
 mod read_file;
-mod screenshot;
 mod send_email;
 mod send_image;
 mod session_info;
@@ -72,7 +71,6 @@ use mita_update_session_title::UpdateSessionTitleTool;
 use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use read_file::ReadFileTool;
-use screenshot::ScreenshotTool;
 use send_email::SendEmailTool;
 use send_image::SendImageTool;
 use session_info::SessionInfoTool;
@@ -96,7 +94,6 @@ pub fn rara_tool_names() -> Vec<String> {
         EditFileTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
-        ScreenshotTool::TOOL_NAME,
         HttpFetchTool::TOOL_NAME,
         SendEmailTool::TOOL_NAME,
         SendImageTool::TOOL_NAME,
@@ -184,8 +181,6 @@ pub struct ToolRegistrationResult {
 /// wired after kernel startup (e.g. the `DispatchRaraTool` needs a
 /// `KernelHandle`).
 pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistrationResult {
-    let project_root = rara_paths::workspace_dir().clone();
-
     // Mita tools — constructed first so we can capture the handle refs.
     let dispatch_rara = Arc::new(DispatchRaraTool::new(deps.tape_service.clone()));
     let dispatch_handle_ref = dispatch_rara.handle_ref();
@@ -209,8 +204,6 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(SendImageTool::new()),
         Arc::new(SetAvatarTool::new(deps.settings.clone())),
         Arc::new(SettingsTool::new(deps.settings.clone())),
-        // Screenshot
-        Arc::new(ScreenshotTool::new(project_root)),
         // Skill tools
         Arc::new(ListSkillsTool::new(deps.skill_registry.clone())),
         Arc::new(CreateSkillTool::new(deps.skill_registry.clone())),
