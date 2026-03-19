@@ -639,11 +639,11 @@ impl<'a> ChatRequest<'a> {
                 .collect();
 
             let tool_choice = match &request.tool_choice {
-                ToolChoice::Auto => None,
-                ToolChoice::None => Some(serde_json::json!("none")),
+                ToolChoice::Auto => Some(serde_json::json!("auto")),
+                ToolChoice::None => Some(serde_json::json!("auto")),
                 ToolChoice::Required => Some(serde_json::json!("required")),
                 ToolChoice::Specific(name) => {
-                    Some(serde_json::json!({"type": "function", "function": {"name": name}}))
+                    Some(serde_json::json!({"type": "function", "name": name}))
                 }
             };
 

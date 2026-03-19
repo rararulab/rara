@@ -244,6 +244,8 @@ pub enum ToolChoice {
     None,
     Required,
     Specific(String),
+    // TODO: support me later
+    // AllowedTools(Vec<String>),
 }
 
 // ---------------------------------------------------------------------------
