@@ -24,11 +24,12 @@ use rara_kernel::{
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
 };
+use rara_mcp::manager::mgr::{ConnectionStatus, McpManager};
 use snafu::ResultExt;
 
 use super::client::{
     BotServiceClient, BotServiceError, ChannelBinding, CheckoutResult, DiscoveryJob, McpServerInfo,
-    SessionDetail, SessionListItem, SessionSnafu, TapeSnafu,
+    McpServerStatus, SessionDetail, SessionListItem, SessionSnafu, TapeSnafu,
 };
 
 /// A [`BotServiceClient`] that calls [`SessionIndex`] and [`TapeService`]
@@ -37,6 +38,8 @@ pub struct KernelBotServiceClient {
     sessions: Arc<dyn SessionIndex>,
     tape:     TapeService,
     handle:   Option<KernelHandle>,
+    /// Optional MCP manager for managing MCP server connections.
+    mcp:      Option<McpManager>,
 }
 
 impl KernelBotServiceClient {
@@ -45,12 +48,24 @@ impl KernelBotServiceClient {
         sessions: Arc<dyn SessionIndex>,
         tape: TapeService,
         handle: impl Into<Option<KernelHandle>>,
+        mcp: impl Into<Option<McpManager>>,
     ) -> Self {
         Self {
             sessions,
             tape,
             handle: handle.into(),
+            mcp: mcp.into(),
         }
+    }
+}
+
+/// Convert an [`McpManager`] [`ConnectionStatus`] to the client-facing
+/// [`McpServerStatus`] enum.
+fn connection_status_to_mcp_status(status: ConnectionStatus) -> McpServerStatus {
+    match status {
+        ConnectionStatus::Connected => McpServerStatus::Connected,
+        ConnectionStatus::Connecting => McpServerStatus::Connecting,
+        ConnectionStatus::Disconnected => McpServerStatus::Disconnected,
     }
 }
 
@@ -322,41 +337,108 @@ impl BotServiceClient for KernelBotServiceClient {
         })
     }
 
-    // -- MCP servers (not yet implemented) ------------------------------------
+    // -- MCP servers -----------------------------------------------------------
 
     async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, BotServiceError> {
-        Err(BotServiceError::Service {
-            message: "MCP management not available via kernel client".to_owned(),
-        })
+        let mcp = self.mcp.as_ref().ok_or_else(|| BotServiceError::Service {
+            message: "MCP management not configured".to_owned(),
+        })?;
+        let registry = mcp.registry().await;
+        let names = registry
+            .list()
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("failed to list MCP servers: {e}"),
+            })?;
+        let mut servers = Vec::with_capacity(names.len());
+        for name in names {
+            let status = connection_status_to_mcp_status(mcp.server_connection_status(&name).await);
+            servers.push(McpServerInfo { name, status });
+        }
+        Ok(servers)
     }
 
-    async fn get_mcp_server(&self, _name: &str) -> Result<McpServerInfo, BotServiceError> {
-        Err(BotServiceError::Service {
-            message: "MCP management not available via kernel client".to_owned(),
+    async fn get_mcp_server(&self, name: &str) -> Result<McpServerInfo, BotServiceError> {
+        let mcp = self.mcp.as_ref().ok_or_else(|| BotServiceError::Service {
+            message: "MCP management not configured".to_owned(),
+        })?;
+        let registry = mcp.registry().await;
+        registry
+            .get(name)
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("registry error: {e}"),
+            })?
+            .ok_or_else(|| BotServiceError::Service {
+                message: format!("MCP server '{name}' not found"),
+            })?;
+        let status = connection_status_to_mcp_status(mcp.server_connection_status(name).await);
+        Ok(McpServerInfo {
+            name: name.to_owned(),
+            status,
         })
     }
 
     async fn add_mcp_server(
         &self,
-        _name: &str,
-        _command: &str,
-        _args: &[String],
+        name: &str,
+        command: &str,
+        args: &[String],
     ) -> Result<McpServerInfo, BotServiceError> {
-        Err(BotServiceError::Service {
-            message: "MCP management not available via kernel client".to_owned(),
+        use std::collections::HashMap;
+
+        use rara_mcp::manager::registry::{McpServerConfig, TransportType};
+
+        let mcp = self.mcp.as_ref().ok_or_else(|| BotServiceError::Service {
+            message: "MCP management not configured".to_owned(),
+        })?;
+
+        let config = McpServerConfig::builder()
+            .command(command)
+            .args(args.to_vec())
+            .env(HashMap::new())
+            .transport(TransportType::Stdio)
+            .enabled(true)
+            .build();
+        mcp.add_server(name.to_owned(), config, true)
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("failed to add MCP server: {e}"),
+            })?;
+        let status = connection_status_to_mcp_status(mcp.server_connection_status(name).await);
+        Ok(McpServerInfo {
+            name: name.to_owned(),
+            status,
         })
     }
 
-    async fn start_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> {
-        Err(BotServiceError::Service {
-            message: "MCP management not available via kernel client".to_owned(),
-        })
+    async fn start_mcp_server(&self, name: &str) -> Result<(), BotServiceError> {
+        let mcp = self.mcp.as_ref().ok_or_else(|| BotServiceError::Service {
+            message: "MCP management not configured".to_owned(),
+        })?;
+        mcp.restart_server(name)
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("failed to start MCP server: {e}"),
+            })
     }
 
-    async fn remove_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> {
-        Err(BotServiceError::Service {
-            message: "MCP management not available via kernel client".to_owned(),
-        })
+    async fn remove_mcp_server(&self, name: &str) -> Result<(), BotServiceError> {
+        let mcp = self.mcp.as_ref().ok_or_else(|| BotServiceError::Service {
+            message: "MCP management not configured".to_owned(),
+        })?;
+        let removed = mcp
+            .remove_server(name)
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("failed to remove MCP server: {e}"),
+            })?;
+        if !removed {
+            return Err(BotServiceError::Service {
+                message: format!("MCP server '{name}' not found"),
+            });
+        }
+        Ok(())
     }
 
     async fn delete_session(&self, key: &str) -> Result<(), BotServiceError> {
@@ -558,7 +640,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let tape = temp_tape_service(tmp.path()).await;
         let sessions = Arc::new(InMemorySessionIndex::default());
-        let client = KernelBotServiceClient::new(sessions.clone(), tape.clone(), None);
+        let client = KernelBotServiceClient::new(
+            sessions.clone(),
+            tape.clone(),
+            None::<KernelHandle>,
+            None::<McpManager>,
+        );
 
         let root_key = SessionKey::new();
         let root_raw = root_key.to_string();

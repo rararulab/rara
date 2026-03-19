@@ -487,6 +487,7 @@ pub async fn start_with_options(
             rara.session_index.clone(),
             rara.tape_service.clone(),
             kernel_handle.clone(),
+            rara.mcp_manager.clone(),
         ))
     };
 
