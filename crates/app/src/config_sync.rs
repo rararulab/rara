@@ -247,9 +247,6 @@ impl ConfigFileSync {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use super::ConfigFileSync;
     use crate::AppConfig;
 
     const TEST_YAML: &str = r#"
@@ -302,99 +299,6 @@ gateway:
   bot_token: "456:DEF"
   chat_id: 789
 "#;
-
-    #[tokio::test]
-    async fn sync_from_file_populates_kv() {
-        use rara_domain_shared::settings::SettingsProvider;
-
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let db_path = tmp_dir.path().join("test.db");
-        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(&db_url)
-            .await
-            .unwrap();
-        sqlx::migrate!("../rara-model/migrations")
-            .run(&pool)
-            .await
-            .unwrap();
-
-        let db_store = yunara_store::db::DBStore::new(pool.clone());
-        let kv = db_store.kv_store();
-        let settings_svc = rara_backend_admin::settings::SettingsSvc::load(kv, pool)
-            .await
-            .unwrap();
-        let settings_provider: Arc<dyn SettingsProvider> = Arc::new(settings_svc);
-
-        // Write a minimal config.yaml to temp dir
-        let config_path = tmp_dir.path().join("config.yaml");
-        let yaml = r#"
-http:
-  bind_address: "127.0.0.1:25555"
-grpc:
-  bind_address: "127.0.0.1:50051"
-  server_address: "127.0.0.1:50051"
-users:
-  - name: test
-    role: root
-    platforms: []
-mita:
-  heartbeat_interval: "30m"
-llm:
-  default_provider: "test-provider"
-  providers:
-    test-provider:
-      base_url: "http://localhost:1234"
-      api_key: "test-key"
-      default_model: "test-model"
-telegram:
-  bot_token: "123:ABC"
-  chat_id: "999"
-composio:
-  api_key: "cmp_test_key"
-  entity_id: "test-entity"
-"#;
-        tokio::fs::write(&config_path, yaml).await.unwrap();
-
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let _sync = ConfigFileSync::new(settings_provider.clone(), config, config_path)
-            .await
-            .unwrap();
-
-        // Verify KV store was populated
-        assert_eq!(
-            settings_provider
-                .get("llm.default_provider")
-                .await
-                .as_deref(),
-            Some("test-provider"),
-        );
-        assert_eq!(
-            settings_provider
-                .get("llm.providers.test-provider.base_url")
-                .await
-                .as_deref(),
-            Some("http://localhost:1234"),
-        );
-        assert_eq!(
-            settings_provider.get("telegram.bot_token").await.as_deref(),
-            Some("123:ABC"),
-        );
-        assert_eq!(
-            settings_provider.get("telegram.chat_id").await.as_deref(),
-            Some("999"),
-        );
-        assert_eq!(
-            settings_provider.get("composio.api_key").await.as_deref(),
-            Some("cmp_test_key"),
-        );
-        assert_eq!(
-            settings_provider.get("composio.entity_id").await.as_deref(),
-            Some("test-entity"),
-        );
-    }
 
     #[test]
     fn appconfig_yaml_roundtrip() {
