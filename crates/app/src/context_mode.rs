@@ -187,12 +187,101 @@ impl OutputInterceptor for ContextModeInterceptor {
     }
 }
 
-/// Build a human-readable summary instead of truncating raw JSON.
+/// Extract top-level JSON keys with type/size hints for a compact preview.
+fn extract_structure_preview(json_str: &str) -> String {
+    const MAX_PREVIEW_LEN: usize = 200;
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        let bytes = json_str.len();
+        let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
+        return format!("{bytes} bytes, ~{lines} lines");
+    };
+
+    let Some(obj) = value.as_object() else {
+        return match &value {
+            serde_json::Value::Array(arr) => format!("[...{} items]", arr.len()),
+            other => {
+                let s = other.to_string();
+                if s.len() > 80 {
+                    format!("{}...", &s[..s.floor_char_boundary(80)])
+                } else {
+                    s
+                }
+            }
+        };
+    };
+
+    let mut parts = Vec::new();
+    let mut total_len = 4; // "{ " + " }"
+    for (key, val) in obj {
+        let hint = match val {
+            serde_json::Value::Array(arr) => format!("[...{} items]", arr.len()),
+            serde_json::Value::Object(map) => format!("{{...{} keys}}", map.len()),
+            serde_json::Value::String(s) => {
+                if s.len() > 50 {
+                    format!("\"{}...\"", &s[..s.floor_char_boundary(50)])
+                } else {
+                    format!("\"{s}\"")
+                }
+            }
+            other => other.to_string(),
+        };
+        let part = format!("{key}: {hint}");
+        total_len += part.len() + 2;
+        if total_len > MAX_PREVIEW_LEN {
+            parts.push("...".to_owned());
+            break;
+        }
+        parts.push(part);
+    }
+
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// Build a human-readable summary for an indexed tool output.
 fn build_summary(tool_name: &str, json_str: &str) -> String {
     let bytes = json_str.len();
-    let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
+    let structure = extract_structure_preview(json_str);
     format!(
-        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use context-mode search to retrieve \
-         specific content.",
+        "[INDEXED] {tool_name} output ({bytes} bytes).\nStructure: {structure}\nTo retrieve \
+         details, call: context-mode search(query=\"<your query>\")"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_preview_object_with_array() {
+        let json = r#"{"servers":[{"name":"a"},{"name":"b"}],"status":"ok"}"#;
+        let preview = extract_structure_preview(json);
+        assert!(preview.contains("servers: [...2 items]"));
+        assert!(preview.contains("status: \"ok\""));
+    }
+
+    #[test]
+    fn extract_preview_fallback_on_invalid_json() {
+        let preview = extract_structure_preview("not json {{{");
+        assert!(preview.contains("bytes"));
+    }
+
+    #[test]
+    fn extract_preview_caps_length() {
+        let mut obj = serde_json::Map::new();
+        for i in 0..50 {
+            obj.insert(format!("key_{i}"), serde_json::json!("value"));
+        }
+        let json = serde_json::to_string(&obj).expect("serialization should succeed");
+        let preview = extract_structure_preview(&json);
+        assert!(preview.len() <= 250);
+    }
+
+    #[test]
+    fn build_summary_includes_indexed_tag() {
+        let json = r#"{"data":[1,2,3]}"#;
+        let summary = build_summary("test-tool", json);
+        assert!(summary.contains("[INDEXED]"));
+        assert!(summary.contains("context-mode search"));
+    }
 }
