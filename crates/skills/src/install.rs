@@ -374,7 +374,7 @@ async fn scan_repo_skills(
 
 /// Parse `owner/repo` from a source string.
 /// Accepts `owner/repo`, `https://github.com/owner/repo`, or with trailing slash/`.git`.
-fn parse_source(source: &str) -> Result<(String, String)> {
+pub fn parse_source(source: &str) -> Result<(String, String)> {
     let s = source.trim().trim_end_matches('/').trim_end_matches(".git");
     let s = s
         .strip_prefix("https://github.com/")
