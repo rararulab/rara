@@ -41,7 +41,8 @@ pub struct SettingsParams {
 #[tool(
     name = "settings",
     description = "Read and modify runtime settings. Use 'list' to see all settings, 'get' to \
-                   read a specific key, 'set' to update a value."
+                   read a specific key, 'set' to update a value.",
+    bypass_interceptor
 )]
 pub struct SettingsTool {
     settings: Arc<dyn SettingsProvider>,

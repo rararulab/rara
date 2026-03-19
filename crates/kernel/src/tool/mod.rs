@@ -119,6 +119,13 @@ pub trait OutputInterceptor: Send + Sync {
     /// Optionally transform a tool's output. Receives the tool name and the
     /// original output; returns the (possibly replaced) output.
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput;
+
+    /// Optional system prompt fragment injected when this interceptor is
+    /// active.
+    ///
+    /// Returns guidance text that teaches the LLM how to interact with
+    /// intercepted (indexed) tool outputs.
+    fn system_prompt_fragment(&self) -> Option<&str> { None }
 }
 
 /// Shared reference to an output interceptor.
@@ -183,6 +190,11 @@ pub trait AgentTool: Send + Sync {
         params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput>;
+
+    /// Whether this tool's output should bypass the output interceptor
+    /// (e.g. context-mode indexing). Tools with binary, always-small, or
+    /// write-only output should override this to return `true`.
+    fn bypass_output_interceptor(&self) -> bool { false }
 }
 
 /// Registry of available tools for an agent run.

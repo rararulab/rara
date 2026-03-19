@@ -49,11 +49,12 @@ pub fn derive_tool_def(input: TokenStream) -> TokenStream {
 
 /// Parsed `#[tool(...)]` attributes.
 struct ToolAttrs {
-    name:          LitStr,
-    description:   LitStr,
-    params_schema: Option<Expr>,
-    execute_fn:    Option<Expr>,
-    manual_impl:   bool,
+    name:               LitStr,
+    description:        LitStr,
+    params_schema:      Option<Expr>,
+    execute_fn:         Option<Expr>,
+    manual_impl:        bool,
+    bypass_interceptor: bool,
 }
 
 fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
@@ -62,6 +63,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
     let mut params_schema: Option<Expr> = None;
     let mut execute_fn: Option<Expr> = None;
     let mut manual_impl = false;
+    let mut bypass_interceptor = false;
 
     for attr in &input.attrs {
         if !attr.path().is_ident("tool") {
@@ -86,6 +88,14 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
                 meta.input.parse::<Token![=]>()?;
                 let lit: LitBool = meta.input.parse()?;
                 manual_impl = lit.value();
+            } else if meta.path.is_ident("bypass_interceptor") {
+                if meta.input.peek(Token![=]) {
+                    meta.input.parse::<Token![=]>()?;
+                    let lit: LitBool = meta.input.parse()?;
+                    bypass_interceptor = lit.value();
+                } else {
+                    bypass_interceptor = true;
+                }
             } else {
                 return Err(meta.error(format!(
                     "unknown tool attribute: `{}`",
@@ -110,6 +120,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
         params_schema,
         execute_fn,
         manual_impl,
+        bypass_interceptor,
     })
 }
 
@@ -162,6 +173,14 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         }
     };
 
+    let bypass_impl = if attrs.bypass_interceptor {
+        quote! {
+            fn bypass_output_interceptor(&self) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+
     let expanded = quote! {
         #constants
 
@@ -182,6 +201,8 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             ) -> anyhow::Result<crate::tool::ToolOutput> {
                 #execute_body
             }
+
+            #bypass_impl
         }
     };
 

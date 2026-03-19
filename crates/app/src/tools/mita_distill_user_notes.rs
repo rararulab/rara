@@ -61,7 +61,8 @@ pub struct DistillUserNotesResult {
                    areas\n\nRules:\n- Preserve all valid information from the previous anchor \
                    summary\n- When information conflicts, prefer the most recent note and note \
                    the change\n- Remove completed TODOs and outdated information\n- Omit sections \
-                   with no information"
+                   with no information",
+    bypass_interceptor
 )]
 pub struct DistillUserNotesTool {
     tape_service: TapeService,

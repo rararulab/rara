@@ -70,7 +70,8 @@ pub struct WriteUserNoteResult {
                    user_id.\n\nCategories:\n- preference: User preferences (language, style, \
                    tools they like)\n- fact: Important facts about the user (name, role, \
                    projects)\n- todo: Tasks or reminders for the user\n- general: Anything else \
-                   worth remembering"
+                   worth remembering",
+    bypass_interceptor
 )]
 pub struct MitaWriteUserNoteTool {
     tape_service: TapeService,

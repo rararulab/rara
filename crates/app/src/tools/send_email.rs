@@ -45,7 +45,8 @@ pub struct SendEmailParams {
     name = "send-email",
     description = "Send an email via Gmail SMTP. Requires Gmail address and App Password to be \
                    configured in settings, and auto_send_enabled must be true. Supports optional \
-                   PDF file attachment by providing the absolute path to the file on disk."
+                   PDF file attachment by providing the absolute path to the file on disk.",
+    bypass_interceptor
 )]
 pub struct SendEmailTool {
     settings: std::sync::Arc<dyn SettingsProvider>,

@@ -51,7 +51,8 @@ pub struct EvolveSoulParams {
                    state signals (emerged traits, style drift, discovered interests, relationship \
                    stage). The tool validates boundaries, snapshots the current soul, and writes \
                    the new version. The proposed_soul must preserve all immutable_traits and \
-                   respect formality bounds from the current soul's boundaries section."
+                   respect formality bounds from the current soul's boundaries section.",
+    bypass_interceptor
 )]
 pub struct EvolveSoulTool;
 

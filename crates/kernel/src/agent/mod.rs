@@ -1035,6 +1035,14 @@ pub(crate) async fn run_agent_loop(
         None
     };
 
+    // Pre-fetch interceptor system prompt fragment (avoids per-iteration lock).
+    let interceptor_fragment: Option<String> = {
+        let guard = output_interceptor.read().await;
+        guard
+            .as_ref()
+            .and_then(|i| i.system_prompt_fragment().map(str::to_owned))
+    };
+
     for iteration in 0..max_iterations {
         // ── Auto-fold: pressure-driven context compression ───────────
         // Runs BEFORE rebuild so the new anchor (if created) takes effect
@@ -1133,6 +1141,15 @@ pub(crate) async fn run_agent_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to rebuild messages from tape: {e}"),
             })?;
+
+        // Inject output interceptor system prompt (e.g. context-mode guidance).
+        if let Some(ref fragment) = interceptor_fragment {
+            let insert_pos = messages
+                .iter()
+                .position(|m| m.role != crate::llm::Role::System)
+                .unwrap_or(messages.len());
+            messages.insert(insert_pos, crate::llm::Message::system(fragment.clone()));
+        }
 
         // Conditional injections (tape search reminder only on first iteration)
         if iteration == 0 && should_remind_tape_search(&input_text) {

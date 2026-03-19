@@ -17,9 +17,12 @@
 //! Indexes large tool outputs into the context-mode MCP server and replaces
 //! them with compact references.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -34,42 +37,17 @@ const SERVER_NAME: &str = "context-mode";
 /// Tool name prefix used by context-mode MCP server.
 const TOOL_PREFIX: &str = "context-mode__";
 
-/// Tools excluded from interception (their output is binary, always small,
-/// or must be returned verbatim to the agent).
-///
-/// Everything else is intercepted by default — any tool that can produce
-/// large textual output will be indexed into context-mode when it exceeds
-/// the size threshold.
-const NON_INTERCEPTABLE_TOOLS: &[&str] = &[
-    // Binary / image tools
-    "send_image",
-    "screenshot",
-    "set_avatar",
-    // Scheduler tools (tiny confirmation output)
-    "schedule_once",
-    "schedule_interval",
-    "schedule_cron",
-    "schedule_remove",
-    "schedule_list",
-    // Small metadata tools
-    "settings",
-    "session_info",
-    "tape_info",
-    "tape_handoff",
-    // MCP server admin (small output)
-    "install_mcp_server",
-    "remove_mcp_server",
-    "list_mcp_servers",
-    // Write-only / confirmation-only tools
-    "send_email",
-    "update_soul_state",
-    "evolve_soul",
-    "write_user_note",
-    "distill_user_notes",
-];
-
 /// Default output size threshold in bytes (8 KB).
 const DEFAULT_THRESHOLD: usize = 8 * 1024;
+
+/// Static system prompt fragment injected when context-mode is active.
+const CONTEXT_MODE_PROMPT_FRAGMENT: &str =
+    "[Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
+     indexed. When you see a tool result containing `[INDEXED]`, the full output has been stored \
+     in a searchable index. To retrieve specific content:\n- Call: context-mode \
+     search(query=\"keyword or phrase\")\n- The search returns matching excerpts from the indexed \
+     output.\nDo NOT assume the indexed output is empty or unavailable — always search when you \
+     need the details.";
 
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -117,9 +95,10 @@ pub struct InterceptorStatsSnapshot {
 }
 
 pub struct ContextModeInterceptor {
-    manager:   McpManager,
-    threshold: usize,
-    stats:     Arc<InterceptorStats>,
+    manager:    McpManager,
+    threshold:  usize,
+    stats:      Arc<InterceptorStats>,
+    bypass_set: HashSet<String>,
 }
 
 impl ContextModeInterceptor {
@@ -128,11 +107,23 @@ impl ContextModeInterceptor {
             manager,
             threshold: DEFAULT_THRESHOLD,
             stats: Arc::new(InterceptorStats::new()),
+            bypass_set: HashSet::new(),
         }
     }
 
     pub fn with_threshold(mut self, threshold: usize) -> Self {
         self.threshold = threshold;
+        self
+    }
+
+    /// Set the tool names that should bypass interception.
+    ///
+    /// Built from `AgentTool::bypass_output_interceptor()` at startup. Note:
+    /// dynamically registered MCP tools are not included — they are always
+    /// eligible for interception, which is the correct default for most MCP
+    /// tools.
+    pub fn with_bypass_set(mut self, set: HashSet<String>) -> Self {
+        self.bypass_set = set;
         self
     }
 
@@ -145,7 +136,7 @@ impl OutputInterceptor for ContextModeInterceptor {
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput {
         // Intercept everything by default — skip only tools whose output is
         // binary, always small, or must be returned verbatim.
-        if NON_INTERCEPTABLE_TOOLS.contains(&tool_name) {
+        if self.bypass_set.contains(tool_name) {
             return output;
         }
 
@@ -208,14 +199,107 @@ impl OutputInterceptor for ContextModeInterceptor {
             }
         }
     }
+
+    fn system_prompt_fragment(&self) -> Option<&str> { Some(CONTEXT_MODE_PROMPT_FRAGMENT) }
 }
 
-/// Build a human-readable summary instead of truncating raw JSON.
+/// Extract top-level JSON keys with type/size hints for a compact preview.
+fn extract_structure_preview(json_str: &str) -> String {
+    /// Soft limit on structure preview length. The actual output may slightly
+    /// exceed this due to the final key being added before the check triggers.
+    const MAX_PREVIEW_LEN: usize = 200;
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        let bytes = json_str.len();
+        let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
+        return format!("{bytes} bytes, ~{lines} lines");
+    };
+
+    let Some(obj) = value.as_object() else {
+        return match &value {
+            serde_json::Value::Array(arr) => format!("[...{} items]", arr.len()),
+            other => {
+                let s = other.to_string();
+                if s.len() > 80 {
+                    format!("{}...", &s[..s.floor_char_boundary(80)])
+                } else {
+                    s
+                }
+            }
+        };
+    };
+
+    let mut parts = Vec::new();
+    let mut total_len = 4; // "{ " + " }"
+    for (key, val) in obj {
+        let hint = match val {
+            serde_json::Value::Array(arr) => format!("[...{} items]", arr.len()),
+            serde_json::Value::Object(map) => format!("{{...{} keys}}", map.len()),
+            serde_json::Value::String(s) => {
+                if s.len() > 50 {
+                    format!("\"{}...\"", &s[..s.floor_char_boundary(50)])
+                } else {
+                    format!("\"{s}\"")
+                }
+            }
+            other => other.to_string(),
+        };
+        let part = format!("{key}: {hint}");
+        total_len += part.len() + 2;
+        if total_len > MAX_PREVIEW_LEN {
+            parts.push("...".to_owned());
+            break;
+        }
+        parts.push(part);
+    }
+
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// Build a human-readable summary for an indexed tool output.
 fn build_summary(tool_name: &str, json_str: &str) -> String {
     let bytes = json_str.len();
-    let lines = json_str.chars().filter(|&c| c == '\n').count() + 1;
+    let structure = extract_structure_preview(json_str);
     format!(
-        "{tool_name} output: {bytes} bytes, ~{lines} lines. Use context-mode search to retrieve \
-         specific content.",
+        "[INDEXED] {tool_name} output ({bytes} bytes).\nStructure: {structure}\nTo retrieve \
+         details, call: context-mode search(query=\"<your query>\")"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_preview_object_with_array() {
+        let json = r#"{"servers":[{"name":"a"},{"name":"b"}],"status":"ok"}"#;
+        let preview = extract_structure_preview(json);
+        assert!(preview.contains("servers: [...2 items]"));
+        assert!(preview.contains("status: \"ok\""));
+    }
+
+    #[test]
+    fn extract_preview_fallback_on_invalid_json() {
+        let preview = extract_structure_preview("not json {{{");
+        assert!(preview.contains("bytes"));
+    }
+
+    #[test]
+    fn extract_preview_caps_length() {
+        let mut obj = serde_json::Map::new();
+        for i in 0..50 {
+            obj.insert(format!("key_{i}"), serde_json::json!("value"));
+        }
+        let json = serde_json::to_string(&obj).expect("serialization should succeed");
+        let preview = extract_structure_preview(&json);
+        assert!(preview.len() <= 250);
+    }
+
+    #[test]
+    fn build_summary_includes_indexed_tag() {
+        let json = r#"{"data":[1,2,3]}"#;
+        let summary = build_summary("test-tool", json);
+        assert!(summary.contains("[INDEXED]"));
+        assert!(summary.contains("context-mode search"));
+    }
 }

@@ -165,21 +165,6 @@ pub(crate) async fn boot(
         .await
         .whatever_context("Failed to initialize MCP manager")?;
 
-    // -- output interceptor (context-mode) --------------------------------
-
-    let output_interceptor: rara_kernel::tool::DynamicOutputInterceptor = {
-        let status = mcp_manager.server_connection_status("context-mode").await;
-        if status == rara_mcp::manager::mgr::ConnectionStatus::Connected {
-            info!("context-mode connected, enabling output interceptor");
-            Arc::new(tokio::sync::RwLock::new(Some(Arc::new(
-                crate::context_mode::ContextModeInterceptor::new(mcp_manager.clone()),
-            ))))
-        } else {
-            info!("context-mode not available, output interceptor disabled");
-            Arc::new(tokio::sync::RwLock::new(None))
-        }
-    };
-
     // -- ACP agent registry ------------------------------------------------
 
     let acp_registry = init_acp_registry().await?;
@@ -222,6 +207,29 @@ pub(crate) async fn boot(
             warn!("Browser subsystem disabled: {e}");
         }
     }
+
+    // -- output interceptor (context-mode) --------------------------------
+    // Built after tools so we can derive the bypass set from the registry.
+
+    let bypass_set: std::collections::HashSet<String> = tool_registry
+        .iter()
+        .filter(|(_, tool)| tool.bypass_output_interceptor())
+        .map(|(name, _)| name.to_owned())
+        .collect();
+
+    let output_interceptor: rara_kernel::tool::DynamicOutputInterceptor = {
+        let status = mcp_manager.server_connection_status("context-mode").await;
+        if status == rara_mcp::manager::mgr::ConnectionStatus::Connected {
+            info!("context-mode connected, enabling output interceptor");
+            Arc::new(tokio::sync::RwLock::new(Some(Arc::new(
+                crate::context_mode::ContextModeInterceptor::new(mcp_manager.clone())
+                    .with_bypass_set(bypass_set),
+            ))))
+        } else {
+            info!("context-mode not available, output interceptor disabled");
+            Arc::new(tokio::sync::RwLock::new(None))
+        }
+    };
 
     let tools = Arc::new(tool_registry);
 

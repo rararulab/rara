@@ -82,7 +82,8 @@ async fn register_job(
     name = "schedule-once",
     description = "Schedule a one-shot future agent turn. `message` is the prompt that will be \
                    sent to the LLM when the job fires, so write it like a user instruction and \
-                   name any required skills explicitly."
+                   name any required skills explicitly.",
+    bypass_interceptor
 )]
 pub struct ScheduleOnceTool;
 
@@ -129,7 +130,8 @@ impl ToolExecute for ScheduleOnceTool {
     name = "schedule-interval",
     description = "Schedule a repeating future agent turn. `message` is the prompt that will be \
                    sent to the LLM each time the job fires, so write it like a user instruction \
-                   and name any required skills explicitly."
+                   and name any required skills explicitly.",
+    bypass_interceptor
 )]
 pub struct ScheduleIntervalTool;
 
@@ -186,7 +188,8 @@ impl ToolExecute for ScheduleIntervalTool {
     description = "Schedule a future agent turn using a 6-field cron expression: 'sec min hour \
                    day month weekday'. `message` is the prompt that will be sent to the LLM \
                    whenever the job fires, so write it like a user instruction and name any \
-                   required skills explicitly."
+                   required skills explicitly.",
+    bypass_interceptor
 )]
 pub struct ScheduleCronTool;
 
@@ -255,7 +258,8 @@ impl ToolExecute for ScheduleCronTool {
 #[derive(ToolDef)]
 #[tool(
     name = "schedule-remove",
-    description = "Remove a previously scheduled task by its job ID."
+    description = "Remove a previously scheduled task by its job ID.",
+    bypass_interceptor
 )]
 pub struct ScheduleRemoveTool;
 
@@ -302,7 +306,8 @@ impl ToolExecute for ScheduleRemoveTool {
 #[derive(ToolDef)]
 #[tool(
     name = "schedule-list",
-    description = "List all scheduled tasks across sessions."
+    description = "List all scheduled tasks across sessions.",
+    bypass_interceptor
 )]
 pub struct ScheduleListTool;
 
