@@ -50,11 +50,7 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 | **With AGENT.md** | 31 | 100% |
 | **With tests** | 11 | 35% |
 | **Doc coverage > 50%** | 23 | 74% |
-<<<<<<< HEAD
 | **Total Rust LOC** | 88,283 | — |
-=======
-| **Total Rust LOC** | 88,258 | — |
->>>>>>> 62dd1dc7 (refactor(symphony): fix path typo and eliminate ensure+expect pattern (#636))
 
 ### By Layer
 

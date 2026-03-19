@@ -47,6 +47,7 @@ struct RunningIssue {
     started_at: Instant,
     log_path:   PathBuf,
     output:     ProcessOutputSummaryHandle,
+    attempt:    u32,
 }
 
 struct FinishedIssue {
@@ -275,7 +276,7 @@ impl IssueRuntime {
                         FinishedIssue {
                             issue:     run.issue,
                             workspace: run.workspace,
-                            attempt:   0,
+                            attempt:   run.attempt,
                             failed_at: Instant::now(),
                         },
                     );
@@ -298,7 +299,7 @@ impl IssueRuntime {
                     FinishedIssue {
                         issue:     run.issue,
                         workspace: run.workspace,
-                        attempt:   0,
+                        attempt:   run.attempt,
                         failed_at: Instant::now(),
                     },
                 );
@@ -324,7 +325,7 @@ impl IssueRuntime {
                 FinishedIssue {
                     issue:     run.issue,
                     workspace: run.workspace,
-                    attempt:   0,
+                    attempt:   run.attempt,
                     failed_at: Instant::now(),
                 },
             );
@@ -382,7 +383,8 @@ impl IssueRuntime {
     /// Exponential backoff: min(2^attempt * 60s, max_retry_backoff).
     fn retry_delay(&self, attempt: u32) -> Duration {
         let base = Duration::from_secs(60);
-        let exp = base.saturating_mul(1u32.wrapping_shl(attempt));
+        let shift = attempt.min(31);
+        let exp = base.saturating_mul(1u32 << shift);
         exp.min(self.config.max_retry_backoff)
     }
 
@@ -414,29 +416,32 @@ impl IssueRuntime {
                 "retrying failed issue"
             );
 
-            // Clean up old workspace before re-provisioning
-            self.cleanup_workspace(&finished.issue.repo, &finished.workspace);
-
             let issue = finished.issue;
-            if let Err(err) = self
+            match self
                 .start_issue(tracker, issue.clone(), Some(next_attempt))
                 .await
             {
-                error!(
-                    issue_id = %issue_id,
-                    attempt = next_attempt,
-                    error = %err,
-                    "failed to retry issue"
-                );
-                self.failed.insert(
-                    issue_id,
-                    FinishedIssue {
-                        issue,
-                        workspace: finished.workspace,
-                        attempt: next_attempt,
-                        failed_at: Instant::now(),
-                    },
-                );
+                Ok(()) => {
+                    // Clean up old workspace only after successful re-provisioning
+                    self.cleanup_workspace(&issue.repo, &finished.workspace);
+                }
+                Err(err) => {
+                    error!(
+                        issue_id = %issue_id,
+                        attempt = next_attempt,
+                        error = %err,
+                        "failed to retry issue"
+                    );
+                    self.failed.insert(
+                        issue_id,
+                        FinishedIssue {
+                            issue,
+                            workspace: finished.workspace,
+                            attempt: next_attempt,
+                            failed_at: Instant::now(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -558,6 +563,7 @@ impl IssueRuntime {
                 started_at: handle.started_at,
                 log_path,
                 output,
+                attempt: attempt.unwrap_or(0),
             },
         );
         Ok(())
@@ -748,13 +754,20 @@ struct ProcessOutputSummaryHandle(std::sync::Arc<std::sync::Mutex<ProcessOutputS
 
 impl ProcessOutputSummaryHandle {
     fn record(&self, stream_name: &'static str, line: String) {
-        if let Ok(mut guard) = self.0.lock() {
-            guard.record(stream_name, line);
+        match self.0.lock() {
+            Ok(mut guard) => guard.record(stream_name, line),
+            Err(_) => warn!("ProcessOutputSummary mutex poisoned, dropping output line"),
         }
     }
 
     fn snapshot(&self) -> ProcessOutputSummary {
-        self.0.lock().map(|g| g.clone()).unwrap_or_default()
+        match self.0.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                warn!("ProcessOutputSummary mutex poisoned, recovering");
+                poisoned.into_inner().clone()
+            }
+        }
     }
 }
 
