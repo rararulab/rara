@@ -91,6 +91,9 @@ impl StepOutcome {
 }
 
 /// A planned step to be executed.
+// TODO: add `tools: Vec<String>` field for per-step tool scoping (e.g.,
+// `["*"]` = all tools, `["read_file", "grep"]` = restricted). Requires
+// schema changes to `CreatePlanTool` and LLM prompt updates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     pub index:      usize,
@@ -116,6 +119,20 @@ pub struct Plan {
     pub steps:      Vec<PlanStep>,
     pub past_steps: Vec<PastStep>,
     pub status:     PlanStatus,
+}
+
+/// Per-step trace for plan-mode observability.
+///
+/// Collected during the step loop and embedded into `TurnTrace.iterations`
+/// as synthetic `IterationTrace` entries (one per step).
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanStepTrace {
+    pub step_index: usize,
+    pub task:       String,
+    pub outcome:    String,
+    pub iterations: usize,
+    pub tool_calls: usize,
+    pub model:      String,
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +289,7 @@ pub(crate) async fn run_plan_loop(
         .map(|s| s.task.as_str())
         .collect::<Vec<_>>()
         .join("，");
-    let estimated_duration_secs = Some((plan.steps.len() as u32) * 10);
+    let estimated_duration_secs = None;
 
     stream_handle.emit(StreamEvent::PlanCreated {
         goal: plan.goal.clone(),
@@ -287,6 +304,7 @@ pub(crate) async fn run_plan_loop(
     let mut plan = plan;
     let mut total_iterations = 0usize;
     let mut total_tool_calls = 0usize;
+    let mut step_traces: Vec<PlanStepTrace> = Vec::new();
     let mut last_model = String::new();
     let mut final_texts: Vec<String> = Vec::new();
     let mut replan_count = 0usize;
@@ -319,6 +337,9 @@ pub(crate) async fn run_plan_loop(
             step_status:  PlanStepStatus::Running,
             status_text:  format!("正在执行第{}步：{}…", step.index + 1, step.task),
         });
+
+        let iters_before = total_iterations;
+        let tools_before = total_tool_calls;
 
         let (outcome, summary) = match step.mode {
             ExecutionMode::Inline => {
@@ -378,6 +399,15 @@ pub(crate) async fn run_plan_loop(
             outcome,
             StepOutcome::Failed { .. } | StepOutcome::NeedsReplan { .. }
         );
+
+        step_traces.push(PlanStepTrace {
+            step_index: step.index,
+            task:       step.task.clone(),
+            outcome:    outcome.label().to_owned(),
+            iterations: total_iterations - iters_before,
+            tool_calls: total_tool_calls - tools_before,
+            model:      last_model.clone(),
+        });
 
         past_steps.push(PastStep {
             index:   step.index,
@@ -529,13 +559,22 @@ pub(crate) async fn run_plan_loop(
                     warn!(
                         session_key = %session_key,
                         error = %e,
-                        "plan executor: replan LLM call failed, aborting"
+                        "plan executor: replan LLM call failed, falling back to remaining steps"
                     );
                     stream_handle.emit(StreamEvent::PlanReplan {
                         reason: reason.clone(),
                     });
-                    plan.status = PlanStatus::Failed;
-                    break;
+
+                    // If this was the last step, there is nothing left to try.
+                    if step_idx + 1 >= plan.steps.len() {
+                        plan.status = PlanStatus::Failed;
+                        break;
+                    }
+
+                    // Otherwise skip the failed step and continue with the
+                    // remaining original steps.
+                    step_idx += 1;
+                    continue;
                 }
             }
         }
@@ -589,7 +628,20 @@ pub(crate) async fn run_plan_loop(
             duration_ms: start.elapsed().as_millis() as u64,
             model: last_model,
             input_text: Some(user_text),
-            iterations: vec![],
+            iterations: step_traces
+                .iter()
+                .map(|st| crate::agent::IterationTrace {
+                    index:          st.step_index,
+                    first_token_ms: None,
+                    stream_ms:      0,
+                    text_preview:   format!(
+                        "[step {}] {} → {}",
+                        st.step_index, st.task, st.outcome
+                    ),
+                    reasoning_text: None,
+                    tool_calls:     Vec::new(),
+                })
+                .collect(),
             final_text_len,
             total_tool_calls,
             success: plan.status == PlanStatus::Completed,
