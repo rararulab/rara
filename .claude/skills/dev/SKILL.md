@@ -179,49 +179,24 @@ Create a draft PR **before** starting review, so review findings can be posted a
 
 Save the PR number as `{PR}`. Post to issue: "Draft PR created: #{PR} — starting code review."
 
-### Step 3.1: CLI Review
+### Step 3.1: Subagent Review
 
-Launch a **fresh Claude CLI session** to review the diff. This ensures the reviewer has zero context from the implementation phase — no bias, no assumptions.
+Dispatch a **code-reviewer subagent** (via the Agent tool with `subagent_type: "superpowers:code-reviewer"`) to review the diff. Subagents start with zero context from the implementation phase — no bias, no assumptions.
 
 Determine the correct base branch:
 - Small task: `origin/main`
 - Large task (stacked PRs): `origin/feat/{name}`
 
-```bash
-claude -p \
-  --allowedTools "Bash(git:*) Bash(gh:*) Bash(cargo:*) Read Glob Grep" \
-  --add-dir "{worktree-path}" \
-  "You are a code reviewer for the rara project.
+The subagent prompt MUST include:
+- The worktree path and instruction to run `git -C {worktree-path} diff origin/{base}...HEAD`
+- PR number `{PR}` and issue number `{ISSUE}`
+- Two-pass review instructions:
+  - **Pass 1 — Critical:** security vulnerabilities, data races, logic errors, CLAUDE.md constraint violations
+  - **Pass 2 — Quality:** dead code, naming inconsistency, missing doc comments, test coverage gaps, code organization
+- Instruction to post findings as a PR comment via `gh pr comment {PR} --body '<review>'`
+- Required format: `## Code Review`, `### Critical Issues`, `### Quality Issues`, `**Verdict:** Clean` or `N issues to fix`
 
-Review the diff for PR #{PR} (issue #{ISSUE}).
-
-Run: git -C {worktree-path} diff origin/{base}...HEAD
-
-Two-pass review:
-
-Pass 1 — Critical:
-- Security vulnerabilities (SQL injection, command injection, XSS)
-- Data races and concurrency issues
-- Logic errors (wrong conditions, off-by-one, null handling)
-- CLAUDE.md constraint violations (wrong error handling, missing builders, imperative style)
-
-Pass 2 — Quality:
-- Dead code or unused imports
-- Naming inconsistency with existing codebase
-- Missing doc comments on pub items
-- Test coverage gaps for new functionality
-- Code organization (logic in wrong module, missing re-exports)
-
-After review, post your findings as a PR comment:
-  gh pr comment {PR} --body '<your review in markdown>'
-
-Format: ## Code Review, ### Critical Issues, ### Quality Issues, **Verdict:** Clean or N issues to fix.
-
-If clean, end with: **Verdict: Clean — ready to ship**
-If issues found, list each with file:line and description."
-```
-
-**Parse the CLI output** to determine the verdict:
+**Parse the subagent result** to determine the verdict:
 - **Clean:** proceed to Phase 4
 - **Issues found:** proceed to Step 3.2
 
@@ -244,7 +219,7 @@ Post fix summary to PR as a "Fixes Applied" comment: each fix with file:line, wh
 
 After all fixes are applied:
 
-1. Push fixes and launch another CLI review session (same command as Step 3.1)
+1. Push fixes and dispatch another code-reviewer subagent (same as Step 3.1)
 2. If new issues found → back to Step 3.2
 3. **Max 3 rounds** — if still not clean after 3 rounds, escalate to user
 4. Clean → proceed to Phase 4
@@ -333,7 +308,7 @@ git branch -d issue-{ISSUE}-{name}
 - **Bulk dumps** — Do NOT post raw tool output as issue comments. Summarize with context and conclusions.
 - **Comment spam** — Do NOT post a comment for every single file read. Group related findings into one comment per logical step.
 - **Skipping the trail** — Do NOT skip issue/PR comments "to save time". The audit trail is the point.
-- **Self-reviewing** — Do NOT review your own implementation in the same context. Always use a fresh CLI session.
+- **Self-reviewing** — Do NOT review your own implementation in the same context. Always use a fresh code-reviewer subagent.
 
 ## Important Rules
 
@@ -341,6 +316,6 @@ git branch -d issue-{ISSUE}-{name}
 - **Never skip the worktree** — all implementation happens in `.worktrees/`, never in the main checkout
 - **Never skip review** — even if the change looks trivial, run at least one CLI review pass
 - **Draft PR before review** — create the PR as draft before Phase 3 so review comments land on the PR
-- **Fresh context for review** — always use `claude -p` for review, never inline review in the implementing session
+- **Fresh context for review** — always use a code-reviewer subagent for review, never inline review in the implementing session
 - **Research before escalating** — the agent must demonstrate it tried to solve the problem
 - **Labels are mandatory** — every issue and PR must have type + component labels
