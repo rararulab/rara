@@ -53,6 +53,10 @@ pub struct TrackedIssue {
     pub priority:   u32,
     /// Current lifecycle state.
     pub state:      IssueState,
+    /// Workflow state name from the tracker (e.g. "Todo", "In Progress").
+    /// For GitHub issues this is always "open"; for Linear it reflects the
+    /// actual workflow state.
+    pub state_name: String,
     /// When the issue was created.
     pub created_at: DateTime<Utc>,
 }
@@ -152,6 +156,7 @@ impl GitHubIssueTracker {
                     labels,
                     priority,
                     state: IssueState::Active,
+                    state_name: "open".to_owned(),
                     created_at: item.created_at,
                 }
             })
@@ -539,6 +544,7 @@ impl IssueTracker for LinearIssueTracker {
                     labels,
                     priority,
                     state: IssueState::Active,
+                    state_name: node.state.name.clone(),
                     created_at: node.created_at,
                 });
             }
@@ -768,6 +774,7 @@ mod tests {
             labels: vec![],
             priority,
             state: IssueState::Active,
+            state_name: "open".to_owned(),
             created_at,
         }
     }

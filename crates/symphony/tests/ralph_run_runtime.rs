@@ -122,6 +122,7 @@ fn default_prompt_requires_push_pr_and_linear_comment() {
             labels:     vec![],
             priority:   1,
             state:      IssueState::Active,
+            state_name: "Todo".to_owned(),
             created_at: Utc::now(),
         },
         attempt:          None,
