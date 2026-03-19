@@ -1630,14 +1630,9 @@ pub(crate) async fn run_agent_loop(
             };
             let trimmed = rationale_source.trim();
             if !trimmed.is_empty() {
-                const MAX_RATIONALE_CHARS: usize = 200;
-                let text = if trimmed.chars().count() > MAX_RATIONALE_CHARS {
-                    let truncated: String = trimmed.chars().take(MAX_RATIONALE_CHARS).collect();
-                    format!("{}…", truncated.trim_end())
-                } else {
-                    trimmed.to_owned()
-                };
-                stream_handle.emit(StreamEvent::TurnRationale { text });
+                stream_handle.emit(StreamEvent::TurnRationale {
+                    text: trimmed.to_owned(),
+                });
             }
         }
 
