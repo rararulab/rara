@@ -15,7 +15,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
@@ -52,6 +52,8 @@ struct RunningIssue {
 struct FinishedIssue {
     issue:     TrackedIssue,
     workspace: WorkspaceInfo,
+    attempt:   u32,
+    failed_at: Instant,
 }
 
 /// Top-level service that polls issue trackers, manages per-issue `ralph run`
@@ -203,7 +205,7 @@ impl IssueRuntime {
                 continue;
             }
 
-            if let Err(err) = self.start_issue(tracker, issue).await {
+            if let Err(err) = self.start_issue(tracker, issue, None).await {
                 error!(
                     issue_id = %issue_id,
                     issue_identifier = %issue_identifier,
@@ -214,6 +216,9 @@ impl IssueRuntime {
                 );
             }
         }
+
+        // Retry eligible failed issues after their backoff period
+        self.retry_failed_issues(tracker).await;
     }
 
     async fn shutdown(&mut self) {
@@ -270,6 +275,8 @@ impl IssueRuntime {
                         FinishedIssue {
                             issue:     run.issue,
                             workspace: run.workspace,
+                            attempt:   0,
+                            failed_at: Instant::now(),
                         },
                     );
                     continue;
@@ -291,6 +298,8 @@ impl IssueRuntime {
                     FinishedIssue {
                         issue:     run.issue,
                         workspace: run.workspace,
+                        attempt:   0,
+                        failed_at: Instant::now(),
                     },
                 );
             }
@@ -315,6 +324,8 @@ impl IssueRuntime {
                 FinishedIssue {
                     issue:     run.issue,
                     workspace: run.workspace,
+                    attempt:   0,
+                    failed_at: Instant::now(),
                 },
             );
         }
@@ -368,9 +379,76 @@ impl IssueRuntime {
         }
     }
 
+    /// Exponential backoff: min(2^attempt * 60s, max_retry_backoff).
+    fn retry_delay(&self, attempt: u32) -> Duration {
+        let base = Duration::from_secs(60);
+        let exp = base.saturating_mul(1u32.wrapping_shl(attempt));
+        exp.min(self.config.max_retry_backoff)
+    }
+
+    /// Re-dispatch failed issues whose backoff period has elapsed.
+    async fn retry_failed_issues(&mut self, tracker: &dyn IssueTracker) {
+        let eligible: Vec<String> = self
+            .failed
+            .iter()
+            .filter(|(_, finished)| {
+                let delay = self.retry_delay(finished.attempt);
+                finished.failed_at.elapsed() >= delay
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for issue_id in eligible {
+            if self.running.len() >= self.config.max_concurrent_agents {
+                break;
+            }
+
+            let Some(finished) = self.failed.remove(&issue_id) else {
+                continue;
+            };
+
+            let next_attempt = finished.attempt + 1;
+            info!(
+                issue_id = %issue_id,
+                attempt = next_attempt,
+                "retrying failed issue"
+            );
+
+            // Clean up old workspace before re-provisioning
+            self.cleanup_workspace(&finished.issue.repo, &finished.workspace);
+
+            let issue = finished.issue;
+            if let Err(err) = self
+                .start_issue(tracker, issue.clone(), Some(next_attempt))
+                .await
+            {
+                error!(
+                    issue_id = %issue_id,
+                    attempt = next_attempt,
+                    error = %err,
+                    "failed to retry issue"
+                );
+                self.failed.insert(
+                    issue_id,
+                    FinishedIssue {
+                        issue,
+                        workspace: finished.workspace,
+                        attempt: next_attempt,
+                        failed_at: Instant::now(),
+                    },
+                );
+            }
+        }
+    }
+
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
     /// transition the issue to `In Progress` once the child is live.
-    async fn start_issue(&mut self, tracker: &dyn IssueTracker, issue: TrackedIssue) -> Result<()> {
+    async fn start_issue(
+        &mut self,
+        tracker: &dyn IssueTracker,
+        issue: TrackedIssue,
+        attempt: Option<u32>,
+    ) -> Result<()> {
         let repo = self.repo_config(&issue.repo).with_context(|_| {
             crate::error::WorkspaceContextSnafu {
                 message: format!(
@@ -414,7 +492,7 @@ impl IssueRuntime {
 
         let task = AgentTask {
             issue: issue.clone(),
-            attempt: None,
+            attempt,
             workflow_content,
         };
         let mut handle = self
@@ -838,6 +916,29 @@ mod tests {
             .expect("configured repo should resolve");
 
         assert_eq!(repo.url, "https://example.com/custom.git");
+    }
+
+    #[test]
+    fn retry_delay_grows_exponentially_up_to_max() {
+        let runtime = IssueRuntime::new(
+            SymphonyConfig::builder()
+                .enabled(true)
+                .poll_interval(Duration::from_secs(30))
+                .max_concurrent_agents(2)
+                .stall_timeout(Duration::from_secs(30 * 60))
+                .max_retry_backoff(Duration::from_secs(600))
+                .workflow_file("WORKFLOW.md".to_owned())
+                .agent(AgentConfig::default())
+                .repos(vec![])
+                .build(),
+            crate::agent::RalphAgent::new(AgentConfig::default()),
+        );
+
+        assert_eq!(runtime.retry_delay(0), Duration::from_secs(60));
+        assert_eq!(runtime.retry_delay(1), Duration::from_secs(120));
+        assert_eq!(runtime.retry_delay(2), Duration::from_secs(240));
+        assert_eq!(runtime.retry_delay(3), Duration::from_secs(480));
+        assert_eq!(runtime.retry_delay(4), Duration::from_secs(600)); // capped
     }
 
     #[test]
