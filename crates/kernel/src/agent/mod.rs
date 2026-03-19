@@ -1215,6 +1215,7 @@ pub(crate) async fn run_agent_loop(
         let mut first_token_at: Option<Instant> = None;
         let mut accumulated_text = String::new();
         let mut repetition_guard = repetition::RepetitionGuard::new();
+        let mut repetition_aborted = false;
         let mut accumulated_reasoning = String::new();
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
@@ -1274,10 +1275,16 @@ pub(crate) async fn run_agent_loop(
                                 "repetition loop detected, truncating output"
                             );
                             accumulated_text.truncate(trunc_byte);
+                            repetition_aborted = true;
                             stream_task.abort();
                             break;
                         }
 
+                        // Emit AFTER repetition check: when the guard fires, the
+                        // triggering delta is intentionally not forwarded. Prior
+                        // deltas (including repeated text) were already streamed;
+                        // the final Reply will carry the truncated version, so the
+                        // Telegram adapter's prefix-slicing reconciles the mismatch.
                         stream_handle.emit(StreamEvent::TextDelta { text });
                     }
                 }
@@ -1343,8 +1350,29 @@ pub(crate) async fn run_agent_loop(
 
         // Wait for the stream task to complete (the driver accumulates the
         // full response internally).
+        // When repetition_aborted is true, stream_task was intentionally
+        // aborted — treat cancellation as success with valid truncated text.
+        // We skip the driver_result error path entirely since the stream
+        // was cut short on purpose and last_usage will be None (P1: accepted,
+        // logged as warning below).
         let driver_result = match stream_task.await {
-            Ok(result) => result,
+            Ok(result) => {
+                if repetition_aborted {
+                    // Stream completed before abort took effect; result is
+                    // available but we already truncated accumulated_text.
+                    None
+                } else {
+                    Some(result)
+                }
+            }
+            Err(join_err) if join_err.is_cancelled() && repetition_aborted => {
+                // Expected: we aborted the stream intentionally.
+                warn!(
+                    iteration,
+                    "repetition abort: token usage unavailable for this iteration"
+                );
+                None
+            }
             Err(join_err) if join_err.is_cancelled() => {
                 return Err(KernelError::Interrupted);
             }
@@ -1355,7 +1383,7 @@ pub(crate) async fn run_agent_loop(
             }
         };
 
-        if let Err(ref e) = driver_result {
+        if let Some(Err(ref e)) = driver_result {
             if !context_window_recovery_used && matches!(e, KernelError::ContextWindow) {
                 context_window_recovery_used = true;
             }
@@ -1386,6 +1414,7 @@ pub(crate) async fn run_agent_loop(
                 message: format!("Model \"{model}\" returned an error during streaming: {e}"),
             });
         }
+        // driver_result is None when repetition_aborted — skip error path above.
 
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
         iter_span.record("has_tools", has_tool_calls);
