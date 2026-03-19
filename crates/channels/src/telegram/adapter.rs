@@ -46,6 +46,13 @@ use std::{
     time::Instant,
 };
 
+use tokio::task::AbortHandle;
+use uuid::Uuid;
+
+/// Tracks abort handles for guard approval expiry tasks so they can be
+/// cancelled when the user resolves an approval before the timeout fires.
+static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::new(DashMap::new);
+
 /// Matches complete tool-call XML blocks (open + close, possibly mismatched
 /// names).
 static TOOL_CALL_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -1493,6 +1500,12 @@ async fn handle_guard_callback(
         .unwrap_or("unknown")
         .to_string();
 
+    // Cancel the auto-expiry task before resolving so it cannot race with the
+    // message edit below.
+    if let Some((_, abort_handle)) = GUARD_EXPIRY_HANDLES.remove(&request_id) {
+        abort_handle.abort();
+    }
+
     let result =
         handle
             .security()
@@ -1526,15 +1539,24 @@ async fn handle_guard_callback(
             (ApprovalDecision::Approved, Ok(_)) => format!("✅ <b>Approved</b> by @{decided_by}"),
             (ApprovalDecision::Denied, Ok(_)) => format!("❌ <b>Denied</b> by @{decided_by}"),
             (_, Err(ResolveError::Expired)) => "⏰ <b>Expired</b> — request timed out".to_string(),
+            (_, Err(ResolveError::NotFound(_))) => {
+                "⏰ <b>Expired</b> — request already resolved or timed out".to_string()
+            }
+            // Future-proof: catch any new ResolveError variants.
+            #[allow(unreachable_patterns)]
             (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(&e.to_string())),
-            _ => "Done".to_string(),
+            (_, Ok(_)) => "Done".to_string(),
         };
 
-        // Preserve original message content and append the decision status.
+        // Preserve original message content, append the decision status,
+        // and remove the inline keyboard so buttons cannot be clicked again.
         let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
         let _ = bot
             .edit_message_text(chat_id, msg_id, new_text)
             .parse_mode(ParseMode::Html)
+            .reply_markup(InlineKeyboardMarkup::new(
+                Vec::<Vec<InlineKeyboardButton>>::new(),
+            ))
             .await;
     }
 
@@ -1974,13 +1996,35 @@ async fn approval_listener(
                         guard_html_escape(&args_summary),
                     ));
                 }
+                if let Some(ctx) = &req.context {
+                    text.push_str(&format!(
+                        "<b>Context:</b> {}\n",
+                        guard_html_escape(ctx),
+                    ));
+                }
+                // Compute expiration time for display
+                let expires_at = req
+                    .requested_at
+                    .checked_add(jiff::SignedDuration::from_secs(req.timeout_secs as i64))
+                    .unwrap_or(req.requested_at);
+                let requested_str = req.requested_at.strftime("%H:%M:%S");
+                let expires_str = expires_at.strftime("%H:%M:%S");
+
                 text.push_str(&format!(
                     "<b>Reason:</b> {summary}\n\
                      <b>Risk:</b> {risk:?}\n\n\
-                     Approve or deny this action:",
+                     ⏱ <b>Requested:</b> {requested}\n\
+                     ⏳ <b>Expires:</b> {timeout}s (at {expires})",
                     summary = guard_html_escape(&req.summary),
                     risk = req.risk_level,
+                    requested = requested_str,
+                    timeout = req.timeout_secs,
+                    expires = expires_str,
                 ));
+
+                // Keep the info block separate from the action prompt so the
+                // expiry task can reuse `text` without the prompt line.
+                let display_text = format!("{text}\n\nApprove or deny this action:");
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![
                     InlineKeyboardButton::callback("✅ Approve", format!("guard:approve:{}", req.id)),
@@ -1988,13 +2032,50 @@ async fn approval_listener(
                 ]]);
 
                 let result = bot
-                    .send_message(ChatId(chat_id), &text)
+                    .send_message(ChatId(chat_id), &display_text)
                     .parse_mode(ParseMode::Html)
                     .reply_markup(keyboard)
                     .await;
 
-                if let Err(e) = result {
-                    warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                match result {
+                    Ok(sent_msg) => {
+                        // Spawn a delayed task to auto-expire the message when
+                        // the approval timeout elapses. The abort handle is
+                        // stored so `handle_guard_callback` can cancel it if
+                        // the user responds before the timeout.
+                        let expiry_bot = bot.clone();
+                        let expiry_chat_id = ChatId(chat_id);
+                        let expiry_msg_id = sent_msg.id;
+                        let timeout_secs = req.timeout_secs;
+                        let request_id = req.id;
+                        let expires_display = expires_str.to_string();
+                        let info_text = text.clone();
+
+                        let handle = tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
+
+                            // Remove our own entry from the map.
+                            GUARD_EXPIRY_HANDLES.remove(&request_id);
+
+                            // Edit message: remove keyboard and show expiry status.
+                            let expired_text = format!(
+                                "{}\n\n⏰ <b>Expired</b> — timed out at {}",
+                                info_text, expires_display,
+                            );
+                            let _ = expiry_bot
+                                .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
+                                .parse_mode(ParseMode::Html)
+                                .reply_markup(InlineKeyboardMarkup::new(
+                                    Vec::<Vec<InlineKeyboardButton>>::new(),
+                                ))
+                                .await;
+                        });
+
+                        GUARD_EXPIRY_HANDLES.insert(request_id, handle.abort_handle());
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                    }
                 }
             }
         }

@@ -68,6 +68,8 @@ pub struct ApprovalRequest {
     pub risk_level:   RiskLevel,
     pub requested_at: Timestamp,
     pub timeout_secs: u64,
+    /// Optional context explaining why the agent wants to call this tool.
+    pub context:      Option<String>,
 }
 
 /// Response after an approval request is resolved.
