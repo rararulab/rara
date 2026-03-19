@@ -1619,14 +1619,14 @@ pub(crate) async fn run_agent_loop(
         last_accumulated_text = accumulated_text.clone();
 
         // Emit turn-level rationale — the LLM's reasoning for the upcoming
-        // tool calls.  Prefer extended-thinking (accumulated_reasoning) over
-        // regular content (accumulated_text) since the former is the model's
-        // internal chain-of-thought.
+        // tool calls.  Prefer regular content (accumulated_text) over
+        // extended-thinking (accumulated_reasoning) since the latter is the
+        // model's internal chain-of-thought and should not be shown to users.
         if has_tool_calls {
-            let rationale_source = if accumulated_reasoning.trim().is_empty() {
-                &accumulated_text
-            } else {
+            let rationale_source = if accumulated_text.trim().is_empty() {
                 &accumulated_reasoning
+            } else {
+                &accumulated_text
             };
             let trimmed = rationale_source.trim();
             if !trimmed.is_empty() {
