@@ -70,36 +70,52 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
     let format = detect_format(&target);
     let (skills_meta, skill_states) = match format {
         PluginFormat::Skill => scan_repo_skills(&target, install_dir).await?,
-        _ => match scan_with_adapter(&target, format) {
-            Some(result) => {
-                let entries = result?;
-                let relative = target
-                    .strip_prefix(install_dir)
-                    .unwrap_or(&target)
-                    .to_string_lossy()
-                    .to_string();
-                let meta: Vec<SkillMetadata> = entries.iter().map(|e| e.metadata.clone()).collect();
-                let states: Vec<SkillState> = entries
-                    .iter()
-                    .map(|e| SkillState {
-                        name:          e.metadata.name.clone(),
-                        relative_path: relative.clone(),
-                        trusted:       false,
-                        enabled:       true,
-                    })
-                    .collect();
-                (meta, states)
-            }
-            None => {
-                let _ = tokio::fs::remove_dir_all(&target).await;
-                return InstallSnafu {
-                    message: format!(
-                        "no adapter available for format '{format}' in repo '{source}'"
-                    ),
+        _ => {
+            let adapter_result = match scan_with_adapter(&target, format) {
+                Some(result) => {
+                    let entries = result?;
+                    let relative = target
+                        .strip_prefix(install_dir)
+                        .unwrap_or(&target)
+                        .to_string_lossy()
+                        .to_string();
+                    let meta: Vec<SkillMetadata> =
+                        entries.iter().map(|e| e.metadata.clone()).collect();
+                    let states: Vec<SkillState> = entries
+                        .iter()
+                        .map(|e| SkillState {
+                            name:          e.metadata.name.clone(),
+                            relative_path: relative.clone(),
+                            trusted:       false,
+                            enabled:       true,
+                        })
+                        .collect();
+                    (meta, states)
                 }
-                .fail();
+                None => (Vec::new(), Vec::new()),
+            };
+
+            // Fallback: hybrid repos may use a non-Skill manifest (e.g.
+            // marketplace.json) alongside native SKILL.md files. When the
+            // format-specific adapter finds nothing, try SKILL.md scanning.
+            let (ref meta, _) = adapter_result;
+            if meta.is_empty() {
+                let (fallback_meta, fallback_states) =
+                    scan_repo_skills(&target, install_dir).await?;
+                if fallback_meta.is_empty() {
+                    adapter_result
+                } else {
+                    tracing::info!(
+                        format = %format,
+                        count = fallback_meta.len(),
+                        "adapter scan empty, fell back to SKILL.md scanning"
+                    );
+                    (fallback_meta, fallback_states)
+                }
+            } else {
+                adapter_result
             }
-        },
+        }
     };
 
     if skills_meta.is_empty() {
