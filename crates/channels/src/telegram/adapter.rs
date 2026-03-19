@@ -1974,12 +1974,25 @@ async fn approval_listener(
                         guard_html_escape(&args_summary),
                     ));
                 }
+                // Compute expiration time for display
+                let expires_at = req
+                    .requested_at
+                    .checked_add(jiff::SignedDuration::from_secs(req.timeout_secs as i64))
+                    .unwrap_or(req.requested_at);
+                let requested_str = req.requested_at.strftime("%H:%M:%S");
+                let expires_str = expires_at.strftime("%H:%M:%S");
+
                 text.push_str(&format!(
                     "<b>Reason:</b> {summary}\n\
                      <b>Risk:</b> {risk:?}\n\n\
+                     ⏱ <b>Requested:</b> {requested}\n\
+                     ⏳ <b>Expires:</b> {timeout}s (at {expires})\n\n\
                      Approve or deny this action:",
                     summary = guard_html_escape(&req.summary),
                     risk = req.risk_level,
+                    requested = requested_str,
+                    timeout = req.timeout_secs,
+                    expires = expires_str,
                 ));
 
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![
