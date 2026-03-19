@@ -2,7 +2,7 @@
 
 When a feature is too large for a single PR (> ~400 lines of change, or spans multiple crates/layers), use stacked PRs to break it into reviewable increments.
 
-**When to use**: Only for large features that benefit from incremental decomposition. Small/independent tasks continue using the standard workflow (`@docs/workflow.md`).
+**When to use**: Only for large features that benefit from incremental decomposition. Small/independent tasks continue using the [standard workflow](workflow.md).
 
 ```
 1. CREATE EPIC ISSUE  →  gh issue create for the overall feature
