@@ -122,6 +122,27 @@ impl ToolExecute for BashTool {
     }
 }
 
+/// Predicates and actions that `rtk find` does not support.  When the
+/// rewriter turns a `find` invocation into `rtk find` but the original
+/// command contains any of these tokens, we fall back to the raw `find`
+/// command to avoid a runtime error.
+const RTK_FIND_UNSUPPORTED: &[&str] = &[
+    "-o", "-or", "-not", "!", "\\(", "\\)", "(", ")", "-exec", "-execdir", "-delete", "-ok",
+    "-print0",
+];
+
+/// Returns `true` when `cmd` is a `find` invocation that uses compound
+/// predicates or actions unsupported by `rtk find`.
+fn has_unsupported_find_predicates(cmd: &str) -> bool {
+    let trimmed = cmd.trim_start();
+    if !trimmed.starts_with("find ") {
+        return false;
+    }
+    RTK_FIND_UNSUPPORTED
+        .iter()
+        .any(|tok| trimmed.split_whitespace().any(|w| w == *tok))
+}
+
 /// Try to rewrite a command via `rtk rewrite` for token-optimized output.
 /// Falls back to the original command if rtk is unavailable or declines the
 /// rewrite.
@@ -135,6 +156,14 @@ async fn rtk_rewrite(command: &str) -> String {
         Ok(output) if output.status.success() => {
             let rewritten = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !rewritten.is_empty() && rewritten != command {
+                // rtk find cannot handle compound predicates — fall back.
+                if rewritten.starts_with("rtk find") && has_unsupported_find_predicates(command) {
+                    tracing::debug!(
+                        original = command,
+                        "rtk rewrite skipped: compound find predicates"
+                    );
+                    return command.to_string();
+                }
                 tracing::debug!(original = command, rewritten = %rewritten, "rtk rewrite applied");
                 return rewritten;
             }
