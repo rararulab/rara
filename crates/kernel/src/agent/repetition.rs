@@ -36,9 +36,13 @@ const CHECK_INTERVAL: usize = 500;
 /// the point at which the output should be truncated (keeping only the
 /// first occurrence plus the probe).
 pub(crate) struct RepetitionGuard {
+    /// Characters accumulated since the last check.
     chars_since_check: usize,
     /// Running total of characters fed so far, avoiding O(n) recount.
     total_chars:       usize,
+    /// Running total of bytes fed so far, used to compute probe start
+    /// byte offset in O(1) instead of O(n) `char_indices().nth()`.
+    total_bytes:       usize,
 }
 
 impl RepetitionGuard {
@@ -47,6 +51,7 @@ impl RepetitionGuard {
         Self {
             chars_since_check: 0,
             total_chars:       0,
+            total_bytes:       0,
         }
     }
 
@@ -60,6 +65,13 @@ impl RepetitionGuard {
         let delta_chars = delta.chars().count();
         self.chars_since_check += delta_chars;
         self.total_chars += delta_chars;
+        self.total_bytes += delta.len();
+
+        debug_assert_eq!(
+            self.total_bytes,
+            accumulated.len(),
+            "RepetitionGuard byte count drifted from accumulated length"
+        );
 
         let total_chars = self.total_chars;
         if total_chars < MIN_CHECK_LEN {
@@ -71,13 +83,20 @@ impl RepetitionGuard {
 
         self.chars_since_check = 0;
 
-        // Convert the last PROBE_LEN chars into a byte-bounded slice.
-        let probe_char_start = total_chars - PROBE_LEN;
-        let probe_start_byte = accumulated
-            .char_indices()
-            .nth(probe_char_start)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+        // Compute the byte offset of the probe start. We know total_bytes
+        // matches accumulated.len(), so the probe spans the last N bytes
+        // corresponding to the last PROBE_LEN chars.  Walk backwards from
+        // the end to find the byte boundary — O(PROBE_LEN) not O(total).
+        let probe_char_count = PROBE_LEN.min(total_chars);
+        let mut probe_start_byte = self.total_bytes;
+        let mut chars_remaining = probe_char_count;
+        for (i, _) in accumulated.char_indices().rev() {
+            chars_remaining -= 1;
+            if chars_remaining == 0 {
+                probe_start_byte = i;
+                break;
+            }
+        }
 
         let probe = &accumulated[probe_start_byte..];
         let search_hay = &accumulated[..probe_start_byte];
@@ -174,6 +193,7 @@ mod tests {
         assert!(result.is_some(), "CJK repetition must be detected");
 
         let trunc = result.unwrap();
+        // CJK chars are 3 bytes each in UTF-8, so byte-level bound is 3x char count.
         assert!(
             trunc <= cjk_block.len() + PROBE_LEN * 3 + 3,
             "CJK truncation index {trunc} unexpectedly large"
@@ -242,6 +262,24 @@ mod tests {
         assert!(
             trunc <= two_copies,
             "truncation point {trunc} should be at most 2x paragraph length ({two_copies})"
+        );
+    }
+
+    #[test]
+    fn debug_assert_catches_drift() {
+        // Verify that mismatched accumulated length triggers debug_assert.
+        // We can only test this in debug mode (default for `cargo test`).
+        let mut guard = RepetitionGuard::new();
+        let delta = "hello";
+        guard.feed(delta, delta); // correct: 5 bytes fed, accumulated is 5 bytes
+
+        // Now feed a delta but pass wrong accumulated (shorter than expected).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.feed("world", "helloworl"); // 9 bytes but guard expects 10
+        }));
+        assert!(
+            result.is_err(),
+            "debug_assert should catch byte-count drift"
         );
     }
 }
