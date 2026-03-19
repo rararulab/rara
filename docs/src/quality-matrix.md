@@ -10,7 +10,7 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 
 | Crate | Layer | AGENT.md | Tests | Docs | LOC | Notes |
 |-------|-------|----------|-------|------|----:|-------|
-| `rara-kernel` | kernel | ✅ | ✅ | ✅ 524/618 (84%) | 31,411 | — |
+| `rara-kernel` | kernel | ✅ | ✅ | ✅ 524/618 (84%) | 31,577 | — |
 | `rara-app` | app | ✅ | ✅ | ⚠️ 100/209 (47%) | 11,324 | — |
 | `rara-channels` | app | ✅ | ✅ | ✅ 69/75 (92%) | 8,385 | Excellent docs |
 | `rara-skills` | app | ✅ | ✅ | ✅ 84/103 (81%) | 4,487 | — |
@@ -18,7 +18,7 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 | `common-worker` | common | ✅ | ❌ | ✅ 70/80 (87%) | 3,857 | No tests |
 | `rara-mcp` | integrations | ✅ | ❌ | ✅ 18/24 (75%) | 3,519 | No tests |
 | `rara-backend-admin` | extensions | ✅ | ❌ | ✅ 24/41 (58%) | 3,284 | No tests |
-| `rara-symphony` | app | ✅ | ✅ | ⚠️ 12/33 (36%) | 2,951 | — |
+| `rara-symphony` | app | ✅ | ✅ | ⚠️ 12/33 (36%) | 2,976 | — |
 | `rara-dock` | app | ✅ | ✅ | ✅ 64/72 (88%) | 2,394 | — |
 | `rara-acp` | app | ✅ | ✅ | ✅ 29/29 (100%) | 2,183 | Fully documented |
 | `rara-soul` | app | ✅ | ✅ | ✅ 34/34 (100%) | 1,223 | Fully documented |
@@ -50,7 +50,7 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 | **With AGENT.md** | 31 | 100% |
 | **With tests** | 11 | 35% |
 | **Doc coverage > 50%** | 23 | 74% |
-| **Total Rust LOC** | 88,092 | — |
+| **Total Rust LOC** | 88,283 | — |
 
 ### By Layer
 

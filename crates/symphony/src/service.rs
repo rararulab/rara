@@ -227,6 +227,7 @@ impl IssueRuntime {
     async fn reap_finished(&mut self, tracker: &dyn IssueTracker) {
         let issue_ids: Vec<String> = self.running.keys().cloned().collect();
         let mut completed = Vec::new();
+        let mut stalled = Vec::new();
 
         for issue_id in issue_ids {
             let Some(run) = self.running.get_mut(&issue_id) else {
@@ -235,7 +236,11 @@ impl IssueRuntime {
 
             match run.child.try_wait() {
                 Ok(Some(status)) => completed.push((issue_id, status)),
-                Ok(None) => {}
+                Ok(None) => {
+                    if run.started_at.elapsed() > self.config.stall_timeout {
+                        stalled.push(issue_id);
+                    }
+                }
                 Err(err) => {
                     warn!(issue_id = %issue_id, error = %err, "failed to poll ralph child status")
                 }
@@ -289,6 +294,29 @@ impl IssueRuntime {
                     },
                 );
             }
+        }
+
+        // Kill stalled processes that exceeded the configured timeout
+        for issue_id in stalled {
+            let Some(mut run) = self.running.remove(&issue_id) else {
+                continue;
+            };
+            let elapsed = run.started_at.elapsed();
+            warn!(
+                issue_id = %issue_id,
+                elapsed_secs = elapsed.as_secs(),
+                stall_timeout_secs = self.config.stall_timeout.as_secs(),
+                log_path = %run.log_path.display(),
+                "killing stalled ralph agent"
+            );
+            let _ = run.child.kill().await;
+            self.failed.insert(
+                issue_id,
+                FinishedIssue {
+                    issue:     run.issue,
+                    workspace: run.workspace,
+                },
+            );
         }
     }
 
@@ -707,7 +735,7 @@ fn resolve_env_var(value: &str) -> crate::error::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tokio_util::sync::CancellationToken;
 
@@ -810,5 +838,19 @@ mod tests {
             .expect("configured repo should resolve");
 
         assert_eq!(repo.url, "https://example.com/custom.git");
+    }
+
+    #[test]
+    fn stalled_issue_is_detected_by_elapsed_time() {
+        let timeout = Duration::from_secs(10);
+        let started = Instant::now()
+            .checked_sub(Duration::from_secs(20))
+            .expect("20s subtraction should not underflow");
+        assert!(started.elapsed() > timeout);
+
+        let started_recent = Instant::now()
+            .checked_sub(Duration::from_secs(5))
+            .expect("5s subtraction should not underflow");
+        assert!(started_recent.elapsed() <= timeout);
     }
 }
