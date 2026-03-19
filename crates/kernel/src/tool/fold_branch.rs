@@ -168,6 +168,7 @@ impl ToolExecute for FoldBranchTool {
             sandbox: None,
             default_execution_mode: None,
             tool_call_limit: None,
+            worker_timeout_secs: None,
         };
 
         // Resolve principal from parent session.

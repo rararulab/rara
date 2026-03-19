@@ -125,6 +125,12 @@ pub struct Plan {
 ///
 /// Collected during the step loop and embedded into `TurnTrace.iterations`
 /// as synthetic `IterationTrace` entries (one per step).
+///
+/// **Temporary**: ideally `TurnTrace` would have a dedicated
+/// `plan_steps: Vec<PlanStepTrace>` field instead of reusing
+/// `iterations`. The current approach fills `IterationTrace` with
+/// placeholder values (`stream_ms: 0`, `tool_calls: vec![]`). This
+/// should be revisited when `TurnTrace` is next refactored.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanStepTrace {
     pub step_index: usize,
@@ -144,9 +150,10 @@ const MAX_REPLAN_ATTEMPTS: usize = 3;
 /// Max LLM iterations per worker step — keeps impossible tasks from burning
 /// time.
 const WORKER_MAX_ITERATIONS: usize = 12;
-/// Timeout (seconds) for a worker step to complete before being treated as
-/// failed. Prevents stuck workers from blocking the plan loop indefinitely.
-const WORKER_TIMEOUT_SECS: u64 = 300;
+/// Default timeout (seconds) for a worker step when not configured via
+/// `AgentManifest.worker_timeout_secs`. Prevents stuck workers from
+/// blocking the plan loop indefinitely.
+const DEFAULT_WORKER_TIMEOUT_SECS: u64 = 300;
 
 /// System prompt for the planning LLM call.
 const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner. Analyze the user's request and decompose it into a structured execution plan.
@@ -303,6 +310,10 @@ pub(crate) async fn run_plan_loop(
 
     // -- Phase 2: Execute steps -----------------------------------------------
 
+    let worker_timeout_secs = manifest
+        .worker_timeout_secs
+        .unwrap_or(DEFAULT_WORKER_TIMEOUT_SECS);
+
     let mut past_steps: Vec<PastStep> = Vec::new();
     let mut plan = plan;
     let mut total_iterations = 0usize;
@@ -370,8 +381,14 @@ pub(crate) async fn run_plan_loop(
                 .await
             }
             ExecutionMode::Worker => {
-                let worker_result =
-                    execute_worker_step(handle, session_key, &step, turn_cancel).await;
+                let worker_result = execute_worker_step(
+                    handle,
+                    session_key,
+                    &step,
+                    turn_cancel,
+                    worker_timeout_secs,
+                )
+                .await;
                 // Accumulate worker metrics into the plan-level totals.
                 total_iterations += worker_result.iterations;
                 total_tool_calls += worker_result.tool_calls;
@@ -938,6 +955,7 @@ async fn execute_worker_step(
     session_key: SessionKey,
     step: &PlanStep,
     turn_cancel: &CancellationToken,
+    worker_timeout_secs: u64,
 ) -> WorkerStepResult {
     let failed = |reason: String| WorkerStepResult {
         outcome:    StepOutcome::Failed {
@@ -987,6 +1005,7 @@ async fn execute_worker_step(
         sandbox:                None,
         default_execution_mode: None,
         tool_call_limit:        None,
+        worker_timeout_secs:    None,
     };
 
     info!(
@@ -1014,7 +1033,7 @@ async fn execute_worker_step(
     // Wait for the child to complete, with timeout and cancellation.
     let mut rx = agent_handle.result_rx;
     let mut milestones = Vec::new();
-    let timeout = tokio::time::Duration::from_secs(WORKER_TIMEOUT_SECS);
+    let timeout = tokio::time::Duration::from_secs(worker_timeout_secs);
 
     let recv_result = tokio::time::timeout(timeout, async {
         loop {
@@ -1099,20 +1118,29 @@ async fn execute_worker_step(
             failed(reason)
         }
         Err(_) => {
-            // Timeout — terminate the child to release resources.
+            // Timeout — terminate the child and give it a short grace
+            // period to shut down. This is best-effort: if the signal is
+            // ignored or the child hangs, we log and move on.
+            warn!(session_key = %session_key, step = step.index, "worker timed out, sending terminate signal");
             if let Err(e) = handle.send_signal(child_key, crate::session::Signal::Terminate) {
                 warn!(
                     session_key = %session_key,
                     step = step.index,
                     error = %e,
-                    "plan executor: failed to terminate timed-out worker"
+                    "plan executor: failed to send terminate to timed-out worker"
                 );
+            } else {
+                // Drain remaining events for up to 5s so the child has a
+                // chance to clean up. If it doesn't exit, we proceed anyway.
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+                    while rx.recv().await.is_some() {}
+                })
+                .await;
             }
             let reason = format!(
                 "worker for step {} timed out after {}s",
-                step.index, WORKER_TIMEOUT_SECS
+                step.index, worker_timeout_secs
             );
-            warn!(session_key = %session_key, step = step.index, "worker timed out");
             failed(reason)
         }
     }
@@ -1336,16 +1364,23 @@ async fn execute_inline_step(
     )
     .await;
 
-    // Merge the fork back into the parent tape to preserve audit history.
-    // Always merge regardless of step outcome — failed steps are still
-    // valuable for tracing.
+    // Always clean up the fork — merge on success/failure, discard only
+    // if merge itself fails. This prevents orphan fork files from
+    // accumulating on disk (e.g. after panics or cancellation).
     if let Some(ref fork) = fork_name {
         if let Err(e) = tape.store().merge(fork, tape_name).await {
             warn!(
                 step = step.index,
                 error = %e,
-                "plan executor: failed to merge fork back to parent tape"
+                "plan executor: merge failed, discarding fork to avoid leak"
             );
+            if let Err(e2) = tape.store().discard(fork).await {
+                warn!(
+                    step = step.index,
+                    error = %e2,
+                    "plan executor: discard also failed, fork file may be orphaned"
+                );
+            }
         }
     }
 

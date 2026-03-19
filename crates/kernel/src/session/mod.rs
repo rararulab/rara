@@ -237,6 +237,10 @@ pub struct AgentRunLoopResult {
 
 /// Serde default for backward-compatible deserialization of persisted
 /// results that lack the `success` field.
+///
+/// Defaults to `true` because historical results were only persisted on
+/// successful completion — failed turns did not write an
+/// `AgentRunLoopResult` to the session store.
 fn default_success() -> bool { true }
 
 /// Control signals for agent processes.

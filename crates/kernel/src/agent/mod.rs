@@ -260,6 +260,12 @@ pub struct AgentManifest {
     /// UI would hit the 120s timeout and silently stop.
     #[serde(default)]
     pub tool_call_limit:        Option<usize>,
+    /// Timeout in seconds for plan-mode worker steps. When a worker exceeds
+    /// this duration it is terminated and the step is treated as failed.
+    ///
+    /// **Default: `None` (uses 300s fallback).**
+    #[serde(default)]
+    pub worker_timeout_secs:    Option<u64>,
 }
 
 /// Process environment — isolated per-agent context.
