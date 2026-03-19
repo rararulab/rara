@@ -229,7 +229,19 @@ pub struct AgentRunLoopResult {
     pub iterations: usize,
     /// Number of tool calls made.
     pub tool_calls: usize,
+    /// Whether the agent loop completed successfully (false when max
+    /// iterations exhausted or an error occurred).
+    #[serde(default = "default_success")]
+    pub success:    bool,
 }
+
+/// Serde default for backward-compatible deserialization of persisted
+/// results that lack the `success` field.
+///
+/// Defaults to `true` because historical results were only persisted on
+/// successful completion — failed turns did not write an
+/// `AgentRunLoopResult` to the session store.
+fn default_success() -> bool { true }
 
 /// Control signals for agent processes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]

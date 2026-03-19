@@ -91,6 +91,9 @@ impl StepOutcome {
 }
 
 /// A planned step to be executed.
+// TODO: add `tools: Vec<String>` field for per-step tool scoping (e.g.,
+// `["*"]` = all tools, `["read_file", "grep"]` = restricted). Requires
+// schema changes to `CreatePlanTool` and LLM prompt updates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     pub index:      usize,
@@ -118,6 +121,26 @@ pub struct Plan {
     pub status:     PlanStatus,
 }
 
+/// Per-step trace for plan-mode observability.
+///
+/// Collected during the step loop and embedded into `TurnTrace.iterations`
+/// as synthetic `IterationTrace` entries (one per step).
+///
+/// **Temporary**: ideally `TurnTrace` would have a dedicated
+/// `plan_steps: Vec<PlanStepTrace>` field instead of reusing
+/// `iterations`. The current approach fills `IterationTrace` with
+/// placeholder values (`stream_ms: 0`, `tool_calls: vec![]`). This
+/// should be revisited when `TurnTrace` is next refactored.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanStepTrace {
+    pub step_index: usize,
+    pub task:       String,
+    pub outcome:    String,
+    pub iterations: usize,
+    pub tool_calls: usize,
+    pub model:      String,
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -127,6 +150,10 @@ const MAX_REPLAN_ATTEMPTS: usize = 3;
 /// Max LLM iterations per worker step — keeps impossible tasks from burning
 /// time.
 const WORKER_MAX_ITERATIONS: usize = 12;
+/// Default timeout (seconds) for a worker step when not configured via
+/// `AgentManifest.worker_timeout_secs`. Prevents stuck workers from
+/// blocking the plan loop indefinitely.
+const DEFAULT_WORKER_TIMEOUT_SECS: u64 = 300;
 
 /// System prompt for the planning LLM call.
 const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner. Analyze the user's request and decompose it into a structured execution plan.
@@ -272,7 +299,7 @@ pub(crate) async fn run_plan_loop(
         .map(|s| s.task.as_str())
         .collect::<Vec<_>>()
         .join("，");
-    let estimated_duration_secs = Some((plan.steps.len() as u32) * 10);
+    let estimated_duration_secs = None;
 
     stream_handle.emit(StreamEvent::PlanCreated {
         goal: plan.goal.clone(),
@@ -283,10 +310,15 @@ pub(crate) async fn run_plan_loop(
 
     // -- Phase 2: Execute steps -----------------------------------------------
 
+    let worker_timeout_secs = manifest
+        .worker_timeout_secs
+        .unwrap_or(DEFAULT_WORKER_TIMEOUT_SECS);
+
     let mut past_steps: Vec<PastStep> = Vec::new();
     let mut plan = plan;
     let mut total_iterations = 0usize;
     let mut total_tool_calls = 0usize;
+    let mut step_traces: Vec<PlanStepTrace> = Vec::new();
     let mut last_model = String::new();
     let mut final_texts: Vec<String> = Vec::new();
     let mut replan_count = 0usize;
@@ -320,12 +352,17 @@ pub(crate) async fn run_plan_loop(
             status_text:  format!("正在执行第{}步：{}…", step.index + 1, step.task),
         });
 
+        let iters_before = total_iterations;
+        let tools_before = total_tool_calls;
+
         let (outcome, summary) = match step.mode {
             ExecutionMode::Inline => {
                 execute_inline_step(
                     handle,
                     session_key,
                     &step,
+                    &plan.goal,
+                    &past_steps,
                     stream_handle,
                     turn_cancel,
                     tape.clone(),
@@ -343,7 +380,20 @@ pub(crate) async fn run_plan_loop(
                 )
                 .await
             }
-            ExecutionMode::Worker => execute_worker_step(handle, session_key, &step).await,
+            ExecutionMode::Worker => {
+                let worker_result = execute_worker_step(
+                    handle,
+                    session_key,
+                    &step,
+                    turn_cancel,
+                    worker_timeout_secs,
+                )
+                .await;
+                // Accumulate worker metrics into the plan-level totals.
+                total_iterations += worker_result.iterations;
+                total_tool_calls += worker_result.tool_calls;
+                (worker_result.outcome, worker_result.summary)
+            }
         };
 
         let (step_status, end_status) = match &outcome {
@@ -378,6 +428,15 @@ pub(crate) async fn run_plan_loop(
             outcome,
             StepOutcome::Failed { .. } | StepOutcome::NeedsReplan { .. }
         );
+
+        step_traces.push(PlanStepTrace {
+            step_index: step.index,
+            task:       step.task.clone(),
+            outcome:    outcome.label().to_owned(),
+            iterations: total_iterations - iters_before,
+            tool_calls: total_tool_calls - tools_before,
+            model:      last_model.clone(),
+        });
 
         past_steps.push(PastStep {
             index:   step.index,
@@ -529,13 +588,22 @@ pub(crate) async fn run_plan_loop(
                     warn!(
                         session_key = %session_key,
                         error = %e,
-                        "plan executor: replan LLM call failed, aborting"
+                        "plan executor: replan LLM call failed, falling back to remaining steps"
                     );
                     stream_handle.emit(StreamEvent::PlanReplan {
                         reason: reason.clone(),
                     });
-                    plan.status = PlanStatus::Failed;
-                    break;
+
+                    // If this was the last step, there is nothing left to try.
+                    if step_idx + 1 >= plan.steps.len() {
+                        plan.status = PlanStatus::Failed;
+                        break;
+                    }
+
+                    // Otherwise skip the failed step and continue with the
+                    // remaining original steps.
+                    step_idx += 1;
+                    continue;
                 }
             }
         }
@@ -589,7 +657,20 @@ pub(crate) async fn run_plan_loop(
             duration_ms: start.elapsed().as_millis() as u64,
             model: last_model,
             input_text: Some(user_text),
-            iterations: vec![],
+            iterations: step_traces
+                .iter()
+                .map(|st| crate::agent::IterationTrace {
+                    index:          st.step_index,
+                    first_token_ms: None,
+                    stream_ms:      0,
+                    text_preview:   format!(
+                        "[step {}] {} → {}",
+                        st.step_index, st.task, st.outcome
+                    ),
+                    reasoning_text: None,
+                    tool_calls:     Vec::new(),
+                })
+                .collect(),
             final_text_len,
             total_tool_calls,
             success: plan.status == PlanStatus::Completed,
@@ -856,16 +937,35 @@ async fn replan_via_llm(
 // Worker execution
 // ---------------------------------------------------------------------------
 
+/// Result of executing a worker step, including metrics for the caller.
+struct WorkerStepResult {
+    outcome:    StepOutcome,
+    summary:    String,
+    iterations: usize,
+    tool_calls: usize,
+}
+
 /// Execute a plan step by spawning an independent worker child session.
 ///
 /// Uses `KernelHandle::spawn_child` to create a child agent that runs
-/// the step's task independently. Waits for completion and returns the
-/// outcome.
+/// the step's task independently. Waits for completion (with timeout and
+/// cancellation support) and returns the outcome plus metrics.
 async fn execute_worker_step(
     handle: &KernelHandle,
     session_key: SessionKey,
     step: &PlanStep,
-) -> (StepOutcome, String) {
+    turn_cancel: &CancellationToken,
+    worker_timeout_secs: u64,
+) -> WorkerStepResult {
+    let failed = |reason: String| WorkerStepResult {
+        outcome:    StepOutcome::Failed {
+            reason: reason.clone(),
+        },
+        summary:    reason,
+        iterations: 0,
+        tool_calls: 0,
+    };
+
     // Look up the principal from the parent session.
     let principal = match handle
         .process_table()
@@ -874,12 +974,7 @@ async fn execute_worker_step(
         Some(p) => p,
         None => {
             let reason = format!("session {} not found for worker spawn", session_key);
-            return (
-                StepOutcome::Failed {
-                    reason: reason.clone(),
-                },
-                reason,
-            );
+            return failed(reason);
         }
     };
 
@@ -910,6 +1005,7 @@ async fn execute_worker_step(
         sandbox:                None,
         default_execution_mode: None,
         tool_call_limit:        None,
+        worker_timeout_secs:    None,
     };
 
     info!(
@@ -928,63 +1024,126 @@ async fn execute_worker_step(
         Err(e) => {
             let reason = format!("failed to spawn worker: {e}");
             warn!(session_key = %session_key, step = step.index, error = %e, "worker spawn failed");
-            return (
-                StepOutcome::Failed {
-                    reason: reason.clone(),
-                },
-                reason,
-            );
+            return failed(reason);
         }
     };
 
-    // Wait for the child to complete, collecting milestones.
+    let child_key = agent_handle.session_key.clone();
+
+    // Wait for the child to complete, with timeout and cancellation.
     let mut rx = agent_handle.result_rx;
     let mut milestones = Vec::new();
+    let timeout = tokio::time::Duration::from_secs(worker_timeout_secs);
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            crate::io::AgentEvent::Milestone { stage, detail } => {
-                milestones.push(format!("{}: {}", stage, detail.unwrap_or_default()));
-            }
-            crate::io::AgentEvent::Done(result) => {
-                let summary = if result.output.is_empty() {
-                    format!(
-                        "Worker completed ({} iterations, {} tool calls)",
-                        result.iterations, result.tool_calls
-                    )
-                } else {
-                    crate::agent::truncate_preview(
-                        &result.output,
-                        crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES,
-                    )
-                };
-
-                info!(
-                    session_key = %session_key,
-                    step = step.index,
-                    iterations = result.iterations,
-                    tool_calls = result.tool_calls,
-                    milestones = milestones.len(),
-                    "plan executor: worker completed"
-                );
-
-                return (StepOutcome::Success, summary);
+    let recv_result = tokio::time::timeout(timeout, async {
+        loop {
+            tokio::select! {
+                event = rx.recv() => {
+                    match event {
+                        Some(crate::io::AgentEvent::Milestone { stage, detail }) => {
+                            milestones.push(format!("{}: {}", stage, detail.unwrap_or_default()));
+                        }
+                        Some(crate::io::AgentEvent::Done(result)) => return Some(result),
+                        // Channel closed without Done — worker dropped.
+                        None => return None,
+                    }
+                }
+                _ = turn_cancel.cancelled() => return None,
             }
         }
-    }
+    })
+    .await;
 
-    // Channel closed without a Done event — worker was dropped.
-    let reason = format!(
-        "worker for step {} was dropped without producing a result",
-        step.index
-    );
-    warn!(session_key = %session_key, step = step.index, "worker dropped without result");
-    (
-        StepOutcome::Failed {
-            reason: reason.clone(),
-        },
-        reason,
-    )
+    match recv_result {
+        Ok(Some(result)) => {
+            let summary = if result.output.is_empty() {
+                format!(
+                    "Worker completed ({} iterations, {} tool calls)",
+                    result.iterations, result.tool_calls
+                )
+            } else {
+                crate::agent::truncate_preview(
+                    &result.output,
+                    crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES,
+                )
+            };
+
+            info!(
+                session_key = %session_key,
+                step = step.index,
+                success = result.success,
+                iterations = result.iterations,
+                tool_calls = result.tool_calls,
+                milestones = milestones.len(),
+                "plan executor: worker completed"
+            );
+
+            // Mirror classify_step_result logic: treat unsuccessful
+            // completion (e.g. max iterations exhausted) as replan trigger.
+            let outcome = if result.success {
+                StepOutcome::Success
+            } else {
+                let reason = format!(
+                    "worker did not complete successfully ({} iterations, {} tool calls)",
+                    result.iterations, result.tool_calls
+                );
+                warn!(
+                    session_key = %session_key,
+                    step = step.index,
+                    "plan executor: worker finished with success=false, requesting replan"
+                );
+                StepOutcome::NeedsReplan { reason }
+            };
+
+            WorkerStepResult {
+                outcome,
+                summary,
+                iterations: result.iterations,
+                tool_calls: result.tool_calls,
+            }
+        }
+        Ok(None) if turn_cancel.is_cancelled() => {
+            // Parent was cancelled — propagate without extra noise.
+            let reason = format!("worker for step {} cancelled", step.index);
+            warn!(session_key = %session_key, step = step.index, "worker cancelled by user");
+            failed(reason)
+        }
+        Ok(None) => {
+            // Channel closed without Done — worker dropped.
+            let reason = format!(
+                "worker for step {} was dropped without producing a result",
+                step.index
+            );
+            warn!(session_key = %session_key, step = step.index, "worker dropped without result");
+            failed(reason)
+        }
+        Err(_) => {
+            // Timeout — terminate the child and give it a short grace
+            // period to shut down. This is best-effort: if the signal is
+            // ignored or the child hangs, we log and move on.
+            warn!(session_key = %session_key, step = step.index, "worker timed out, sending terminate signal");
+            if let Err(e) = handle.send_signal(child_key, crate::session::Signal::Terminate) {
+                warn!(
+                    session_key = %session_key,
+                    step = step.index,
+                    error = %e,
+                    "plan executor: failed to send terminate to timed-out worker"
+                );
+            } else {
+                // Drain remaining events for up to 5s so the child has a
+                // chance to clean up. If it doesn't exit, we proceed anyway.
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+                    while rx.recv().await.is_some() {}
+                })
+                .await;
+            }
+            let reason = format!(
+                "worker for step {} timed out after {}s",
+                step.index, worker_timeout_secs
+            );
+            failed(reason)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,7 +1238,47 @@ fn classify_step_result(
     }
 }
 
+/// Build an enriched user prompt that includes plan context for an inline step.
+///
+/// When a step runs in a forked tape, it has no prior conversation history.
+/// This function injects enough context (goal + completed step summaries)
+/// so the agent can continue coherently.
+fn build_step_prompt(plan_goal: &str, past_steps: &[PastStep], step: &PlanStep) -> String {
+    let mut parts = Vec::with_capacity(3);
+
+    parts.push(format!("Plan goal: {plan_goal}"));
+
+    if !past_steps.is_empty() {
+        let steps_desc: String = past_steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "- Step {}: {} [{}] — {}",
+                    s.index + 1,
+                    s.task,
+                    s.outcome.label(),
+                    s.summary,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("Completed steps:\n{steps_desc}"));
+    }
+
+    parts.push(format!(
+        "Current task: {}\nAcceptance criteria: {}",
+        step.task, step.acceptance,
+    ));
+
+    parts.join("\n\n")
+}
+
 /// Execute a single plan step inline using `run_agent_loop`.
+///
+/// For steps after step 0, the tape is partially forked so the agent loop
+/// runs in an isolated context containing only plan-level summaries —
+/// not the full history of previous steps. The fork is merged back after
+/// completion to preserve the audit trail.
 ///
 /// Returns `(StepOutcome, summary_text)`.
 #[allow(clippy::too_many_arguments)]
@@ -1087,6 +1286,8 @@ async fn execute_inline_step(
     handle: &KernelHandle,
     session_key: SessionKey,
     step: &PlanStep,
+    plan_goal: &str,
+    past_steps: &[PastStep],
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
     tape: TapeService,
@@ -1102,15 +1303,58 @@ async fn execute_inline_step(
     last_model: &mut String,
     final_texts: &mut Vec<String>,
 ) -> (StepOutcome, String) {
-    // Delegate to run_agent_loop with the step's task as the user text.
+    // For step 0, run directly against the parent tape so the original
+    // user message provides natural context. For subsequent steps, fork
+    // the tape at the current position to isolate each step's context.
+    let (effective_tape_name, fork_name) = if step.index == 0 {
+        (tape_name.to_owned(), None)
+    } else {
+        match tape.last_entry_id(tape_name).await {
+            Ok(last_id) => match tape.store().fork(tape_name, Some(last_id)).await {
+                Ok(name) => {
+                    info!(
+                        step = step.index,
+                        fork = %name,
+                        "plan executor: forked tape for inline step"
+                    );
+                    (name.clone(), Some(name))
+                }
+                Err(e) => {
+                    warn!(
+                        step = step.index,
+                        error = %e,
+                        "plan executor: fork failed, falling back to shared tape"
+                    );
+                    (tape_name.to_owned(), None)
+                }
+            },
+            Err(e) => {
+                warn!(
+                    step = step.index,
+                    error = %e,
+                    "plan executor: last_entry_id failed, falling back to shared tape"
+                );
+                (tape_name.to_owned(), None)
+            }
+        }
+    };
+
+    // When running in a fork, enrich the user prompt with plan context
+    // since the forked tape has no prior conversation.
+    let user_text = if fork_name.is_some() {
+        build_step_prompt(plan_goal, past_steps, step)
+    } else {
+        step.task.clone()
+    };
+
     let result = crate::agent::run_agent_loop(
         handle,
         session_key,
-        step.task.clone(),
+        user_text,
         stream_handle,
         turn_cancel,
-        tape,
-        tape_name,
+        tape.clone(),
+        &effective_tape_name,
         tool_context,
         milestone_tx,
         output_interceptor,
@@ -1119,6 +1363,26 @@ async fn execute_inline_step(
         rara_message_id,
     )
     .await;
+
+    // Always clean up the fork — merge on success/failure, discard only
+    // if merge itself fails. This prevents orphan fork files from
+    // accumulating on disk (e.g. after panics or cancellation).
+    if let Some(ref fork) = fork_name {
+        if let Err(e) = tape.store().merge(fork, tape_name).await {
+            warn!(
+                step = step.index,
+                error = %e,
+                "plan executor: merge failed, discarding fork to avoid leak"
+            );
+            if let Err(e2) = tape.store().discard(fork).await {
+                warn!(
+                    step = step.index,
+                    error = %e2,
+                    "plan executor: discard also failed, fork file may be orphaned"
+                );
+            }
+        }
+    }
 
     let (outcome, summary, text_to_keep) = classify_step_result(result, step.index);
     *total_iterations += outcome.iterations_consumed;

@@ -1102,6 +1102,7 @@ impl Kernel {
                     output:     "process ended".to_string(),
                     iterations: 0,
                     tool_calls: 0,
+                    success:    false,
                 });
 
                 // Send final result through mpsc channel if spawn_child is waiting.
@@ -1399,6 +1400,7 @@ impl Kernel {
             sandbox:                None,
             default_execution_mode: None,
             tool_call_limit:        None,
+            worker_timeout_secs:    None,
         };
 
         // 3. Spawn the agent.
@@ -2506,6 +2508,7 @@ impl Kernel {
                     output:     turn.text.clone(),
                     iterations: turn.iterations,
                     tool_calls: turn.tool_calls,
+                    success:    turn.trace.success,
                 };
                 let _ = self.process_table.set_result(session_key, result.clone());
 
