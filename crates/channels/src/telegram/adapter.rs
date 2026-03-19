@@ -238,6 +238,9 @@ struct ProgressMessage {
     plan_current_step: Option<usize>,
     /// High-level rationale for the current turn, shown above tool lines.
     turn_rationale:    Option<String>,
+    /// Whether the LLM is currently in extended thinking (reasoning) phase.
+    /// Set on first `ReasoningDelta`, cleared on first `ToolCallStart`.
+    thinking:          bool,
 }
 
 impl ProgressMessage {
@@ -262,6 +265,7 @@ impl ProgressMessage {
             plan_goal: None,
             plan_current_step: None,
             turn_rationale: None,
+            thinking: false,
         }
     }
 
@@ -411,7 +415,14 @@ fn render_progress(
     progress: &ProgressMessage,
 ) -> String {
     if tools.is_empty() {
-        return String::new();
+        if !progress.thinking {
+            return String::new();
+        }
+        // Thinking phase with no tools yet — show the loading hint so the
+        // user sees immediate feedback instead of silence.
+        let mut lines = vec![progress.loading_hint.clone()];
+        lines.push(format!("✳ {}", format_duration_compact(turn_elapsed)));
+        return lines.join("\n");
     }
 
     // Aggregate consecutive tools with the same activity into phases.
@@ -2738,6 +2749,9 @@ fn spawn_stream_forwarder(
                             progress_dirty = true;
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
+                            // Transition out of thinking phase.
+                            progress.thinking = false;
+
                             let (display, summary) = tool_display_info(&name, &arguments);
                             let activity = tool_activity_label(&name).to_owned();
                             progress.tools.push(ToolProgress {
@@ -3010,6 +3024,28 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::ReasoningDelta { text }) => {
+                            // Show thinking feedback on first reasoning token.
+                            if !progress.thinking {
+                                progress.thinking = true;
+                                // Send initial thinking message immediately so
+                                // the user sees feedback instead of silence.
+                                if progress.message_id.is_none() {
+                                    let _ = bot
+                                        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+                                        .await;
+                                    let text = progress.render_text();
+                                    if !text.is_empty() {
+                                        if let Ok(msg) = bot
+                                            .send_message(ChatId(chat_id), &text)
+                                            .await
+                                        {
+                                            progress.message_id = Some(msg.id);
+                                        }
+                                    }
+                                    progress.last_edit = Instant::now();
+                                }
+                            }
+
                             // Collect reasoning preview for trace detail view.
                             // Hard-truncated to ~500 chars to bound memory; the
                             // full reasoning stays in the kernel's TurnTrace.
@@ -3217,7 +3253,7 @@ fn spawn_stream_forwarder(
                     // Also refresh when tools are still running so the elapsed
                     // timer keeps ticking even without new stream events.
                     let has_running = progress.tools.iter().any(|t| !t.finished);
-                    if (progress_dirty || has_running) && !progress.tools.is_empty() {
+                    if (progress_dirty || has_running) && (!progress.tools.is_empty() || progress.thinking) {
                         let text = progress.render_text();
                         match progress.message_id {
                             Some(mid) => {
@@ -3781,6 +3817,47 @@ mod render_progress_tests {
         assert!(
             !output.contains("\u{1f4ad}"),
             "expected no rationale line, got: {output}"
+        );
+    }
+
+    #[test]
+    fn render_progress_shows_loading_hint_when_thinking() {
+        let mut pm = test_progress(None);
+        pm.thinking = true;
+        let output = render_progress(&[], std::time::Duration::from_secs(2), &pm);
+        assert!(
+            output.contains(&pm.loading_hint),
+            "expected loading hint in output, got: {output}"
+        );
+        assert!(
+            output.contains('\u{2733}'),
+            "expected footer with elapsed time, got: {output}"
+        );
+    }
+
+    #[test]
+    fn render_progress_empty_when_not_thinking_and_no_tools() {
+        let pm = test_progress(None);
+        let output = render_progress(&[], std::time::Duration::from_secs(1), &pm);
+        assert!(
+            output.is_empty(),
+            "expected empty output when not thinking and no tools, got: {output}"
+        );
+    }
+
+    #[test]
+    fn render_progress_shows_tools_not_hint_after_thinking_ends() {
+        let mut pm = test_progress(None);
+        pm.thinking = false;
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        assert!(
+            !output.contains(&pm.loading_hint),
+            "expected no loading hint once tools are present, got: {output}"
+        );
+        assert!(
+            output.contains("read_file"),
+            "expected tool name in output, got: {output}"
         );
     }
 }
