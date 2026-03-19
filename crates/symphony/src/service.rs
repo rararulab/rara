@@ -535,8 +535,7 @@ impl IssueRuntime {
                         status = ?status.code(),
                         "verify failed — rolling back to coding completed state"
                     );
-                    // Tag the issue with AutoVerifyFailed so it can be
-                    // manually triaged.
+                    // Tag the issue with AutoVerifyFailed for observability.
                     if let Err(err) = tracker.add_label(&run.issue, "AutoVerifyFailed").await {
                         warn!(
                             issue_id = %issue_id,
@@ -544,22 +543,35 @@ impl IssueRuntime {
                             "failed to add AutoVerifyFailed label"
                         );
                     }
-                    self.failed.insert(
-                        issue_id.clone(),
-                        FinishedIssue {
-                            issue:     run.issue,
-                            workspace: run.workspace,
-                            attempt:   run.attempt,
-                            failed_at: Instant::now(),
-                        },
-                    );
+                    // Roll back to the coding-completed state (e.g. "ToVerify")
+                    // so the verify pipeline re-picks it on a subsequent poll
+                    // cycle. Do NOT insert into self.failed — that would route
+                    // retries through the coding pipeline via start_issue().
+                    let rollback = self.completed_issue_state();
+                    if let Err(err) = tracker.transition_issue(&run.issue, rollback).await {
+                        warn!(
+                            issue_id = %issue_id,
+                            state = rollback,
+                            error = %err,
+                            "failed to roll back issue state after verify failure"
+                        );
+                    }
+                    // Preserve workspace for the next verify attempt.
                 }
             } else if let Some(run) = self.verifying.get(issue_id) {
                 if run.started_at.elapsed() > self.config.stall_timeout {
                     let mut run = self.verifying.remove(issue_id).expect("key just checked");
                     warn!(issue_id = %issue_id, "killing stalled verifier");
                     let _ = run.child.kill().await;
-                    self.cleanup_workspace(&run.issue.repo, &run.workspace);
+                    // Roll back to coding-completed state so the verify
+                    // pipeline can re-pick it. Preserve workspace.
+                    if let Err(err) = tracker.add_label(&run.issue, "AutoVerifyFailed").await {
+                        warn!(issue_id = %issue_id, error = %err, "failed to add AutoVerifyFailed label");
+                    }
+                    let rollback = self.completed_issue_state();
+                    if let Err(err) = tracker.transition_issue(&run.issue, rollback).await {
+                        warn!(issue_id = %issue_id, state = rollback, error = %err, "failed to roll back stalled verify issue");
+                    }
                 }
             }
         }
