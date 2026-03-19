@@ -192,21 +192,21 @@ pub(crate) async fn boot(
 
     // -- browser subsystem -------------------------------------------------
 
-    match rara_kernel::browser::BrowserManager::start(rara_kernel::browser::BrowserConfig::default())
-        .await
-    {
-        Ok(manager) => {
-            let manager_ref: rara_kernel::browser::BrowserManagerRef =
-                std::sync::Arc::new(manager);
-            for tool in rara_kernel::tool::browser::browser_tools(manager_ref) {
-                tool_registry.register(tool);
-            }
-            info!("Browser subsystem initialized with Lightpanda");
-        }
-        Err(e) => {
-            warn!("Browser subsystem disabled: {e}");
-        }
-    }
+    // match rara_kernel::browser::BrowserManager::start(rara_kernel::browser::BrowserConfig::default())
+    //     .await
+    // {
+    //     Ok(manager) => {
+    //         let manager_ref: rara_kernel::browser::BrowserManagerRef =
+    //             std::sync::Arc::new(manager);
+    //         for tool in rara_kernel::tool::browser::browser_tools(manager_ref) {
+    //             tool_registry.register(tool);
+    //         }
+    //         info!("Browser subsystem initialized with Lightpanda");
+    //     }
+    //     Err(e) => {
+    //         warn!("Browser subsystem disabled: {e}");
+    //     }
+    // }
 
     // -- output interceptor (context-mode) --------------------------------
     // Built after tools so we can derive the bypass set from the registry.
