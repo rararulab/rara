@@ -22,9 +22,9 @@ use chrono::Utc;
 use snafu::ResultExt;
 use tokio::{
     fs::OpenOptions,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStderr, ChildStdout},
-    sync::{Mutex, mpsc},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    process::Child,
+    sync::mpsc,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -246,7 +246,7 @@ impl IssueRuntime {
             let Some(run) = self.running.remove(&issue_id) else {
                 continue;
             };
-            let output = run.output.snapshot().await;
+            let output = run.output.snapshot();
 
             if status.success() {
                 info!(
@@ -427,10 +427,10 @@ impl IssueRuntime {
         );
 
         if let Some(stdout) = handle.child.stdout.take() {
-            spawn_output_logger(output.clone(), log_writer.clone(), "stdout", stdout);
+            spawn_stream_logger(output.clone(), log_writer.clone(), "stdout", stdout);
         }
         if let Some(stderr) = handle.child.stderr.take() {
-            spawn_error_logger(output.clone(), log_writer, "stderr", stderr);
+            spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
         }
 
         let started_state = self.started_issue_state();
@@ -520,31 +520,16 @@ impl IssueRuntime {
     }
 }
 
-fn spawn_output_logger(
+fn spawn_stream_logger<R: AsyncRead + Unpin + Send + 'static>(
     output: ProcessOutputSummaryHandle,
     log_writer: IssueLogWriter,
     stream_name: &'static str,
-    stdout: ChildStdout,
+    reader: R,
 ) {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
+        let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            output.record(stream_name, line.clone()).await;
-            let _ = log_writer.record(stream_name, &line).await;
-        }
-    });
-}
-
-fn spawn_error_logger(
-    output: ProcessOutputSummaryHandle,
-    log_writer: IssueLogWriter,
-    stream_name: &'static str,
-    stderr: ChildStderr,
-) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            output.record(stream_name, line.clone()).await;
+            output.record(stream_name, line.clone());
             let _ = log_writer.record(stream_name, &line).await;
         }
     });
@@ -625,13 +610,7 @@ async fn spawn_issue_log_writer(
         })?;
 
     let (sender, mut receiver) = mpsc::channel::<String>(256);
-    let log_path = log_path.to_path_buf();
     tokio::spawn(async move {
-        let open_result = OpenOptions::new().append(true).open(&log_path).await;
-        let Ok(mut file) = open_result else {
-            return;
-        };
-
         while let Some(entry) = receiver.recv().await {
             if file.write_all(entry.as_bytes()).await.is_err() {
                 return;
@@ -659,14 +638,18 @@ fn lnav_hint() -> String {
 }
 
 #[derive(Debug, Clone, Default)]
-struct ProcessOutputSummaryHandle(std::sync::Arc<Mutex<ProcessOutputSummary>>);
+struct ProcessOutputSummaryHandle(std::sync::Arc<std::sync::Mutex<ProcessOutputSummary>>);
 
 impl ProcessOutputSummaryHandle {
-    async fn record(&self, stream_name: &'static str, line: String) {
-        self.0.lock().await.record(stream_name, line);
+    fn record(&self, stream_name: &'static str, line: String) {
+        if let Ok(mut guard) = self.0.lock() {
+            guard.record(stream_name, line);
+        }
     }
 
-    async fn snapshot(&self) -> ProcessOutputSummary { self.0.lock().await.clone() }
+    fn snapshot(&self) -> ProcessOutputSummary {
+        self.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
