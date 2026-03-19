@@ -46,6 +46,13 @@ use std::{
     time::Instant,
 };
 
+use tokio::task::AbortHandle;
+use uuid::Uuid;
+
+/// Tracks abort handles for guard approval expiry tasks so they can be
+/// cancelled when the user resolves an approval before the timeout fires.
+static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::new(DashMap::new);
+
 /// Matches complete tool-call XML blocks (open + close, possibly mismatched
 /// names).
 static TOOL_CALL_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -1499,6 +1506,11 @@ async fn handle_guard_callback(
             .approval()
             .resolve(request_id, decision, Some(decided_by.clone()));
 
+    // Cancel the auto-expiry task since the user has already resolved this request.
+    if let Some((_, abort_handle)) = GUARD_EXPIRY_HANDLES.remove(&request_id) {
+        abort_handle.abort();
+    }
+
     // Answer the callback query (removes the loading spinner on the button).
     let answer_text = match decision {
         ApprovalDecision::Approved => "✅ Approved",
@@ -2006,8 +2018,45 @@ async fn approval_listener(
                     .reply_markup(keyboard)
                     .await;
 
-                if let Err(e) = result {
-                    warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                match result {
+                    Ok(sent_msg) => {
+                        // Spawn a delayed task to auto-expire the message when
+                        // the approval timeout elapses. The abort handle is
+                        // stored so `handle_guard_callback` can cancel it if
+                        // the user responds before the timeout.
+                        let expiry_bot = bot.clone();
+                        let expiry_chat_id = ChatId(chat_id);
+                        let expiry_msg_id = sent_msg.id;
+                        let timeout_secs = req.timeout_secs;
+                        let request_id = req.id;
+                        let expires_display = expires_str.to_string();
+                        let original_text = text.clone();
+
+                        let handle = tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
+
+                            // Remove our own entry from the map.
+                            GUARD_EXPIRY_HANDLES.remove(&request_id);
+
+                            // Edit message: remove keyboard and show expiry status.
+                            let expired_text = format!(
+                                "{}\n\n⏰ <b>Expired</b> — timed out at {}",
+                                original_text, expires_display,
+                            );
+                            let _ = expiry_bot
+                                .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
+                                .parse_mode(ParseMode::Html)
+                                .reply_markup(InlineKeyboardMarkup::new(
+                                    Vec::<Vec<InlineKeyboardButton>>::new(),
+                                ))
+                                .await;
+                        });
+
+                        GUARD_EXPIRY_HANDLES.insert(request_id, handle.abort_handle());
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "telegram approval listener: failed to send approval prompt");
+                    }
                 }
             }
         }
