@@ -40,13 +40,31 @@ use crate::{
     workspace::{WorkspaceInfo, WorkspaceManager, workflow_file},
 };
 
+/// Tracks the state of a running ralph instance based on RPC events.
+#[derive(Debug, Clone, Default)]
+struct RunState {
+    /// Current iteration number.
+    iteration:      u32,
+    /// Currently active hat name.
+    current_hat:    String,
+    /// Accumulated cost across all iterations.
+    total_cost_usd: f64,
+    /// Whether the loop has terminated.
+    terminated:     bool,
+    /// Termination reason if terminated.
+    term_reason:    Option<String>,
+}
+
 struct RunningIssue {
     issue:      TrackedIssue,
     workspace:  WorkspaceInfo,
     child:      Child,
+    stdin:      Option<tokio::process::ChildStdin>,
     started_at: Instant,
     log_path:   PathBuf,
     output:     ProcessOutputSummaryHandle,
+    rpc_rx:     mpsc::Receiver<crate::rpc::RpcEvent>,
+    run_state:  RunState,
 }
 
 struct FinishedIssue {
@@ -230,6 +248,26 @@ impl IssueRuntime {
     }
 
     async fn reap_finished(&mut self, tracker: &dyn IssueTracker) {
+        // Drain available RPC events for all running issues.
+        for run in self.running.values_mut() {
+            while let Ok(event) = run.rpc_rx.try_recv() {
+                match &event {
+                    crate::rpc::RpcEvent::IterationStart { iteration, hat, .. } => {
+                        run.run_state.iteration = *iteration;
+                        run.run_state.current_hat = hat.clone();
+                    }
+                    crate::rpc::RpcEvent::IterationEnd { cost_usd, .. } => {
+                        run.run_state.total_cost_usd += cost_usd;
+                    }
+                    crate::rpc::RpcEvent::LoopTerminated { reason, .. } => {
+                        run.run_state.terminated = true;
+                        run.run_state.term_reason = Some(reason.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let issue_ids: Vec<String> = self.running.keys().cloned().collect();
         let mut completed = Vec::new();
         let mut stalled = Vec::new();
@@ -532,8 +570,18 @@ impl IssueRuntime {
             "spawned ralph task runner"
         );
 
+        let (rpc_tx, rpc_rx) = mpsc::channel::<crate::rpc::RpcEvent>(256);
+
         if let Some(stdout) = handle.child.stdout.take() {
-            spawn_stream_logger(output.clone(), log_writer.clone(), "stdout", stdout);
+            // Forward unparseable lines to the log file as fallback.
+            let lw = log_writer.clone();
+            let (raw_tx, mut raw_rx) = mpsc::channel::<String>(256);
+            tokio::spawn(async move {
+                while let Some(line) = raw_rx.recv().await {
+                    let _ = lw.record("stdout", &line).await;
+                }
+            });
+            crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
         }
         if let Some(stderr) = handle.child.stderr.take() {
             spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
@@ -555,9 +603,12 @@ impl IssueRuntime {
                 issue,
                 workspace,
                 child: handle.child,
+                stdin: handle.stdin,
                 started_at: handle.started_at,
                 log_path,
                 output,
+                rpc_rx,
+                run_state: RunState::default(),
             },
         );
         Ok(())
