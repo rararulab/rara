@@ -33,13 +33,6 @@ repos:
         types_or: [rust, toml]
         files: \.(rs|toml)$|Cargo\.lock$|rust-toolchain\.toml$
 
-      - id: quality-matrix
-        name: quality matrix
-        entry: bash -c 'go run ./scripts/cmd/devtool/ quality-matrix --output docs/src/quality-matrix.md && git diff --quiet docs/src/quality-matrix.md || { echo "quality-matrix.md updated — please git add and re-commit"; exit 1; }'
-        language: system
-        pass_filenames: false
-        files: ^(crates/|scripts/internal/quality/)
-
       - id: check-agent-md
         name: check AGENT.md presence
         entry: go run ./scripts/cmd/devtool/ check-agent-md
