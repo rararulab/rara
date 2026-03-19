@@ -650,6 +650,23 @@ fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::
     medium_results >= 2
 }
 
+/// Returns `true` if any tool result JSON indicates a tape anchor was created.
+///
+/// Checks result payloads for known anchor-creation signatures rather than
+/// hardcoding tool names, so new anchor-creating tools are automatically
+/// covered.
+fn did_create_anchor(results_json: &[serde_json::Value]) -> bool {
+    results_json.iter().any(|json| {
+        // `tape` tool anchor action returns {"anchor_name": ...}
+        json.get("anchor_name").is_some()
+            // `tape-handoff` tool returns {"output": "handoff created: ..."}
+            || json
+                .get("output")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.starts_with("handoff created"))
+    })
+}
+
 /// Resolve the soul prompt for an agent at runtime.
 ///
 /// Loads the soul file and runtime state via `rara_soul::load_and_render`,
@@ -1871,10 +1888,9 @@ pub(crate) async fn run_agent_loop(
                 needs_anchor_reminder = true;
             }
             // Reset session-length counter when the agent creates an anchor.
-            if tool_names
-                .iter()
-                .any(|n| n == "tape-handoff" || n == "tape")
-            {
+            // Detected via result payload rather than hardcoded tool names so
+            // that new anchor-creating tools are automatically covered.
+            if did_create_anchor(&results_json) {
                 user_turns_since_anchor = 0;
                 session_length_warned = false;
             }
@@ -2157,7 +2173,8 @@ mod tests {
 
     use super::{
         ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
-        resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
+        did_create_anchor, resolve_soul_prompt, should_remind_tape_anchor,
+        should_remind_tape_search,
     };
 
     #[test]
@@ -2260,5 +2277,23 @@ mod tests {
         assert!(prompt.contains("user switches to a clearly different topic"));
         // Verify "switching subtasks" is no longer in the SHOULD section
         assert!(!prompt.contains("switching subtasks"));
+    }
+
+    #[test]
+    fn did_create_anchor_detects_tape_anchor() {
+        let results = vec![json!({"anchor_name": "topic/foo", "entries_after_anchor": 5})];
+        assert!(did_create_anchor(&results));
+    }
+
+    #[test]
+    fn did_create_anchor_detects_tape_handoff() {
+        let results = vec![json!({"output": "handoff created: my-handoff"})];
+        assert!(did_create_anchor(&results));
+    }
+
+    #[test]
+    fn did_create_anchor_ignores_unrelated_tools() {
+        let results = vec![json!({"output": "search results: 3 found"})];
+        assert!(!did_create_anchor(&results));
     }
 }
