@@ -400,14 +400,16 @@ impl LinearIssueTracker {
 
     /// Build the GraphQL query and variables for fetching active issues.
     ///
-    /// Linear treats `null` in filter fields as "no filter", so passing
-    /// `project_slug: null` when no project is configured works correctly.
+    /// The `project` filter is only included when `project_slug` is configured,
+    /// because Linear's API rejects `slugId: { eq: null }` with a server-side
+    /// error since a recent API update.
     fn build_active_issues_query(
         &self,
         after: &Option<String>,
     ) -> (&'static str, serde_json::Value) {
-        let query = r#"
-            query($teamKey: String!, $projectSlug: String, $states: [String!]!, $first: Int!, $after: String) {
+        let query = if self.project_slug.is_some() {
+            r#"
+            query($teamKey: String!, $projectSlug: String!, $states: [String!]!, $first: Int!, $after: String) {
                 issues(
                     filter: {
                         team: { key: { eq: $teamKey } }
@@ -426,15 +428,39 @@ impl LinearIssueTracker {
                     pageInfo { hasNextPage endCursor }
                 }
             }
-        "#;
+            "#
+        } else {
+            r#"
+            query($teamKey: String!, $states: [String!]!, $first: Int!, $after: String) {
+                issues(
+                    filter: {
+                        team: { key: { eq: $teamKey } }
+                        state: { name: { in: $states } }
+                    }
+                    first: $first
+                    after: $after
+                    orderBy: createdAt
+                ) {
+                    nodes {
+                        id identifier title description priority createdAt
+                        state { name }
+                        labels { nodes { name } }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+            "#
+        };
 
-        let variables = serde_json::json!({
+        let mut variables = serde_json::json!({
             "teamKey": self.team_key,
-            "projectSlug": self.project_slug,
             "states": self.active_states,
             "first": 50,
             "after": after,
         });
+        if let Some(slug) = &self.project_slug {
+            variables["projectSlug"] = serde_json::Value::String(slug.clone());
+        }
 
         (query, variables)
     }
