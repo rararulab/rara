@@ -194,7 +194,7 @@ impl IssueRuntime {
         let issues = match tracker.fetch_active_issues().await {
             Ok(issues) => issues,
             Err(err) => {
-                warn!(error = %err, "failed to fetch active issues");
+                warn!(error = ?err, "failed to fetch active issues");
                 return;
             }
         };
