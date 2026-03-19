@@ -126,7 +126,8 @@ git push -u origin feat/{name}
 ### Step 3.1: Diff Review
 
 ```bash
-git diff origin/<base> -- # full diff against base branch
+git fetch origin {base}
+git diff origin/{base}...HEAD
 ```
 
 Two-pass review:
