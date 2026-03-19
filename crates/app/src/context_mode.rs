@@ -185,6 +185,18 @@ impl OutputInterceptor for ContextModeInterceptor {
             }
         }
     }
+
+    fn system_prompt_fragment(&self) -> Option<String> {
+        Some(
+            "[Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
+             indexed. When you see a tool result containing `[INDEXED]`, the full output has been \
+             stored in a searchable index. To retrieve specific content:\n- Call: context-mode \
+             search(query=\"keyword or phrase\")\n- The search returns matching excerpts from the \
+             indexed output.\nDo NOT assume the indexed output is empty or unavailable — always \
+             search when you need the details."
+                .to_owned(),
+        )
+    }
 }
 
 /// Extract top-level JSON keys with type/size hints for a compact preview.
