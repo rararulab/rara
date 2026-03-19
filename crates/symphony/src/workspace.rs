@@ -151,6 +151,118 @@ impl WorkspaceManager {
         })
     }
 
+    /// Ensure the issue branch is checked out in a dedicated worktree, creating
+    /// it from a specific remote branch ref if it does not already exist.
+    ///
+    /// This is used by the verify pipeline to recover a worktree when the
+    /// branch already exists on the remote but the local worktree was cleaned
+    /// up between the coding and verify phases.
+    pub fn ensure_worktree_from_ref(
+        &self,
+        repo: &RepoConfig,
+        issue_number: u64,
+        issue_title: &str,
+        remote_ref: &str,
+    ) -> Result<WorkspaceInfo> {
+        if repo.repo_path.is_none() {
+            return crate::error::WorkspaceSnafu {
+                message: format!("repo {} is missing repo_path", repo.name),
+            }
+            .fail();
+        }
+        let Some(workspace_root) = repo.effective_workspace_root() else {
+            return crate::error::WorkspaceSnafu {
+                message: format!("repo {} is missing workspace_root", repo.name),
+            }
+            .fail();
+        };
+        let branch = branch_name(issue_number, issue_title);
+        let path = workspace_root.join(&branch);
+        let (checkout, _) = self.ensure_repo_checkout(repo)?;
+
+        if path.exists() {
+            if Self::invalid_existing_worktree(&path) {
+                warn!(
+                    path = %path.display(),
+                    branch = %branch,
+                    "removing invalid existing symphony worktree before recreation from ref"
+                );
+                fs::remove_dir_all(&path).context(WorkspaceIoSnafu {
+                    message: format!(
+                        "failed to remove invalid worktree {} for repo {} branch {}",
+                        path.display(),
+                        repo.name,
+                        branch
+                    ),
+                })?;
+                if let Ok(wt) = checkout.find_worktree(&branch) {
+                    let _ = wt.prune(Some(
+                        git2::WorktreePruneOptions::new().valid(false).locked(false),
+                    ));
+                }
+            } else {
+                return Ok(WorkspaceInfo {
+                    path,
+                    branch,
+                    created_now: false,
+                });
+            }
+        }
+
+        // Fetch the remote ref so we have the latest commit.
+        Self::fetch_remote_ref(&checkout, remote_ref)?;
+
+        fs::create_dir_all(&workspace_root).context(IoSnafu)?;
+
+        // Resolve the fetched remote ref to a commit.
+        let remote_commit = checkout
+            .revparse_single(remote_ref)
+            .and_then(|obj| obj.peel_to_commit().map(|c| c.id()))
+            .context(GitSnafu)?;
+        let commit = checkout.find_commit(remote_commit).context(GitSnafu)?;
+
+        let branch_ref = match checkout.branch(&branch, &commit, false) {
+            Ok(branch_ref) => branch_ref,
+            Err(err) if err.code() == git2::ErrorCode::Exists => {
+                // Reset existing branch to the remote ref.
+                let mut existing = checkout
+                    .find_branch(&branch, git2::BranchType::Local)
+                    .context(GitSnafu)?;
+                existing
+                    .get_mut()
+                    .set_target(remote_commit, "symphony: reset to remote ref")
+                    .context(GitSnafu)?;
+                existing
+            }
+            Err(err) => {
+                return Err(err).context(GitSnafu);
+            }
+        };
+
+        let reference = branch_ref.into_reference();
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        checkout
+            .worktree(&branch, &path, Some(&options))
+            .context(GitSnafu)?;
+
+        Ok(WorkspaceInfo {
+            path,
+            branch,
+            created_now: true,
+        })
+    }
+
+    /// Fetch a single remote ref (e.g. `origin/issue-42-fix`) so that the
+    /// local repository knows about the latest remote commit.
+    fn fetch_remote_ref(repo: &git2::Repository, refspec: &str) -> Result<()> {
+        let mut remote = repo.find_remote("origin").context(GitSnafu)?;
+        // Extract the branch name from "origin/branch" format.
+        let branch_part = refspec.strip_prefix("origin/").unwrap_or(refspec);
+        remote.fetch(&[branch_part], None, None).context(GitSnafu)?;
+        Ok(())
+    }
+
     /// Remove the issue worktree and prune the matching git worktree/branch.
     pub fn cleanup_worktree(&self, repo: &RepoConfig, workspace: &WorkspaceInfo) -> Result<()> {
         if repo.repo_path.is_none() {
