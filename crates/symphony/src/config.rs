@@ -311,7 +311,7 @@ pub(crate) fn default_repo_checkout_root(repo_name: &str) -> PathBuf {
 
 fn default_workspace_root(repo_name: &str) -> PathBuf {
     rara_paths::config_dir()
-        .join("ralpha/worktress")
+        .join("ralpha/worktrees")
         .join(repo_name)
         .join("worktrees")
 }

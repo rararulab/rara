@@ -28,7 +28,7 @@ fn repo_config_defaults_workspace_root_under_rara_config_dir() {
     assert_eq!(
         workspace_root,
         rara_paths::config_dir()
-            .join("ralpha/worktress")
+            .join("ralpha/worktrees")
             .join("rararulab/rara")
             .join("worktrees")
     );
