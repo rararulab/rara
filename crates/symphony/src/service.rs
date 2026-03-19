@@ -40,13 +40,33 @@ use crate::{
     workspace::{WorkspaceInfo, WorkspaceManager, workflow_file},
 };
 
+/// Tracks the state of a running ralph instance based on RPC events.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RunState {
+    /// Current iteration number.
+    pub(crate) iteration:       u32,
+    /// Currently active hat name.
+    pub(crate) current_hat:     String,
+    /// Accumulated cost across all iterations.
+    pub(crate) total_cost_usd:  f64,
+    /// Whether the loop has terminated.
+    pub(crate) terminated:      bool,
+    /// Termination reason if terminated.
+    pub(crate) term_reason:     Option<String>,
+    /// Total RPC events received (replaces stdout_line_count for RPC mode).
+    pub(crate) rpc_event_count: u64,
+}
+
 struct RunningIssue {
     issue:      TrackedIssue,
     workspace:  WorkspaceInfo,
     child:      Child,
+    stdin:      Option<tokio::process::ChildStdin>,
     started_at: Instant,
     log_path:   PathBuf,
     output:     ProcessOutputSummaryHandle,
+    rpc_rx:     mpsc::Receiver<crate::rpc::RpcEvent>,
+    run_state:  RunState,
 }
 
 struct FinishedIssue {
@@ -151,6 +171,7 @@ struct IssueRuntime {
     workspace_manager: WorkspaceManager,
     agent:             RalphAgent,
     running:           HashMap<String, RunningIssue>,
+    reviewing:         HashMap<String, RunningIssue>,
     failed:            HashMap<String, FinishedIssue>,
 }
 
@@ -161,6 +182,7 @@ impl IssueRuntime {
             workspace_manager: WorkspaceManager,
             agent,
             running: HashMap::new(),
+            reviewing: HashMap::new(),
             failed: HashMap::new(),
         }
     }
@@ -185,7 +207,10 @@ impl IssueRuntime {
             let repo_name = issue.repo.clone();
             let issue_number = issue.number;
 
-            if self.running.contains_key(&issue.id) || self.failed.contains_key(&issue.id) {
+            if self.running.contains_key(&issue.id)
+                || self.reviewing.contains_key(&issue.id)
+                || self.failed.contains_key(&issue.id)
+            {
                 continue;
             }
 
@@ -227,9 +252,35 @@ impl IssueRuntime {
             let _ = run.child.kill().await;
         }
         self.running.clear();
+        for (issue_id, run) in &mut self.reviewing {
+            warn!(issue_id = %issue_id, "stopping active review");
+            let _ = run.child.kill().await;
+        }
+        self.reviewing.clear();
     }
 
     async fn reap_finished(&mut self, tracker: &dyn IssueTracker) {
+        // Drain available RPC events for all running issues.
+        for run in self.running.values_mut() {
+            while let Ok(event) = run.rpc_rx.try_recv() {
+                run.run_state.rpc_event_count += 1;
+                match &event {
+                    crate::rpc::RpcEvent::IterationStart { iteration, hat, .. } => {
+                        run.run_state.iteration = *iteration;
+                        run.run_state.current_hat = hat.clone();
+                    }
+                    crate::rpc::RpcEvent::IterationEnd { cost_usd, .. } => {
+                        run.run_state.total_cost_usd += cost_usd;
+                    }
+                    crate::rpc::RpcEvent::LoopTerminated { reason, .. } => {
+                        run.run_state.terminated = true;
+                        run.run_state.term_reason = Some(reason.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let issue_ids: Vec<String> = self.running.keys().cloned().collect();
         let mut completed = Vec::new();
         let mut stalled = Vec::new();
@@ -263,10 +314,33 @@ impl IssueRuntime {
                     issue_id = %issue_id,
                     elapsed_secs = run.started_at.elapsed().as_secs(),
                     log_path = %run.log_path.display(),
-                    stdout_lines = output.stdout_line_count,
+                    rpc_events = run.run_state.rpc_event_count,
                     stderr_lines = output.stderr_line_count,
-                    "ralph task runner completed"
+                    "ralph coding run completed"
                 );
+
+                // If review is enabled and no review is already running, spawn
+                // a reviewer before transitioning the issue to completed.
+                if self.config.review.enabled && !self.reviewing.contains_key(&issue_id) {
+                    match self
+                        .start_review_for_issue(&run.issue, &run.workspace)
+                        .await
+                    {
+                        Ok(()) => {
+                            info!(issue_id = %issue_id, "started review phase");
+                            continue;
+                        }
+                        Err(err) => {
+                            warn!(
+                                issue_id = %issue_id,
+                                error = %err,
+                                "failed to start review; falling through to completed"
+                            );
+                        }
+                    }
+                }
+
+                // No review configured, or review failed to start — transition directly.
                 let completed_state = self.completed_issue_state();
                 if let Err(err) = tracker.transition_issue(&run.issue, completed_state).await {
                     warn!(issue_id = %issue_id, state = completed_state, error = %err, "failed to transition issue after successful ralph run");
@@ -288,7 +362,7 @@ impl IssueRuntime {
                     status = ?status.code(),
                     elapsed_secs = run.started_at.elapsed().as_secs(),
                     log_path = %run.log_path.display(),
-                    stdout_lines = output.stdout_line_count,
+                    rpc_events = run.run_state.rpc_event_count,
                     stderr_lines = output.stderr_line_count,
                     stderr_tail = %output.render_stderr_tail(),
                     "ralph task runner failed"
@@ -329,6 +403,47 @@ impl IssueRuntime {
                 },
             );
         }
+
+        // Reap completed reviews.
+        let review_ids: Vec<String> = self.reviewing.keys().cloned().collect();
+        for issue_id in &review_ids {
+            // Drain RPC events from the reviewer.
+            if let Some(run) = self.reviewing.get_mut(issue_id) {
+                while let Ok(event) = run.rpc_rx.try_recv() {
+                    if let crate::rpc::RpcEvent::LoopTerminated { reason, .. } = &event {
+                        run.run_state.terminated = true;
+                        run.run_state.term_reason = Some(reason.clone());
+                    }
+                }
+            }
+
+            let should_reap = self
+                .reviewing
+                .get_mut(issue_id)
+                .and_then(|run| run.child.try_wait().ok())
+                .flatten();
+
+            if let Some(status) = should_reap {
+                let run = self.reviewing.remove(issue_id).expect("key just checked");
+                if status.success() {
+                    info!(issue_id = %issue_id, "review completed successfully");
+                } else {
+                    warn!(issue_id = %issue_id, status = ?status.code(), "review failed");
+                }
+                let completed_state = self.completed_issue_state();
+                if let Err(err) = tracker.transition_issue(&run.issue, completed_state).await {
+                    warn!(issue_id = %issue_id, error = %err, "failed to transition issue after review");
+                }
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            } else if let Some(run) = self.reviewing.get(issue_id) {
+                if run.started_at.elapsed() > self.config.stall_timeout {
+                    let mut run = self.reviewing.remove(issue_id).expect("key just checked");
+                    warn!(issue_id = %issue_id, "killing stalled reviewer");
+                    let _ = run.child.kill().await;
+                    self.cleanup_workspace(&run.issue.repo, &run.workspace);
+                }
+            }
+        }
     }
 
     async fn cleanup_terminal_issues(
@@ -339,6 +454,7 @@ impl IssueRuntime {
         let known_ids: Vec<String> = self
             .running
             .keys()
+            .chain(self.reviewing.keys())
             .chain(self.failed.keys())
             .cloned()
             .collect();
@@ -352,6 +468,7 @@ impl IssueRuntime {
                 .running
                 .get(&issue_id)
                 .map(|run| run.issue.clone())
+                .or_else(|| self.reviewing.get(&issue_id).map(|run| run.issue.clone()))
                 .or_else(|| self.failed.get(&issue_id).map(|run| run.issue.clone()));
             let Some(issue) = issue else {
                 continue;
@@ -370,6 +487,10 @@ impl IssueRuntime {
             }
 
             if let Some(mut run) = self.running.remove(&issue_id) {
+                let _ = run.child.kill().await;
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            }
+            if let Some(mut run) = self.reviewing.remove(&issue_id) {
                 let _ = run.child.kill().await;
                 self.cleanup_workspace(&run.issue.repo, &run.workspace);
             }
@@ -439,6 +560,61 @@ impl IssueRuntime {
                 );
             }
         }
+    }
+
+    /// Spawn a ralph reviewer for the given issue, reusing the existing
+    /// workspace.
+    async fn start_review_for_issue(
+        &mut self,
+        issue: &TrackedIssue,
+        workspace: &WorkspaceInfo,
+    ) -> Result<()> {
+        let mut handle = self
+            .agent
+            .start_review(issue, &workspace.path, &self.config.review)
+            .await?;
+
+        let log_path = issue_log_path(&issue.repo, &format!("{}-review", issue.identifier));
+        let log_writer = spawn_issue_log_writer(&log_path, issue, workspace).await?;
+        let output = ProcessOutputSummaryHandle::default();
+        let (rpc_tx, rpc_rx) = mpsc::channel(256);
+
+        if let Some(stdout) = handle.child.stdout.take() {
+            let lw = log_writer.clone();
+            let (raw_tx, mut raw_rx) = mpsc::channel::<String>(256);
+            tokio::spawn(async move {
+                while let Some(line) = raw_rx.recv().await {
+                    let _ = lw.record("stdout", &line).await;
+                }
+            });
+            let _rpc_reader = crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
+        }
+        if let Some(stderr) = handle.child.stderr.take() {
+            spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
+        }
+
+        info!(
+            issue_id = %issue.id,
+            issue_identifier = %issue.identifier,
+            log_path = %log_path.display(),
+            "spawned ralph reviewer"
+        );
+
+        self.reviewing.insert(
+            issue.id.clone(),
+            RunningIssue {
+                issue: issue.clone(),
+                workspace: workspace.clone(),
+                child: handle.child,
+                stdin: handle.stdin,
+                started_at: handle.started_at,
+                log_path,
+                output,
+                rpc_rx,
+                run_state: RunState::default(),
+            },
+        );
+        Ok(())
     }
 
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
@@ -532,8 +708,18 @@ impl IssueRuntime {
             "spawned ralph task runner"
         );
 
+        let (rpc_tx, rpc_rx) = mpsc::channel::<crate::rpc::RpcEvent>(256);
+
         if let Some(stdout) = handle.child.stdout.take() {
-            spawn_stream_logger(output.clone(), log_writer.clone(), "stdout", stdout);
+            // Forward unparseable lines to the log file as fallback.
+            let lw = log_writer.clone();
+            let (raw_tx, mut raw_rx) = mpsc::channel::<String>(256);
+            tokio::spawn(async move {
+                while let Some(line) = raw_rx.recv().await {
+                    let _ = lw.record("stdout", &line).await;
+                }
+            });
+            let _rpc_reader = crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
         }
         if let Some(stderr) = handle.child.stderr.take() {
             spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
@@ -555,9 +741,12 @@ impl IssueRuntime {
                 issue,
                 workspace,
                 child: handle.child,
+                stdin: handle.stdin,
                 started_at: handle.started_at,
                 log_path,
                 output,
+                rpc_rx,
+                run_state: RunState::default(),
             },
         );
         Ok(())
@@ -623,6 +812,70 @@ impl IssueRuntime {
             .tracker
             .as_ref()
             .map_or("ToVerify", TrackerConfig::completed_issue_state)
+    }
+
+    /// Send an RPC command to the ralph process for the given issue.
+    async fn send_command(&mut self, issue_id: &str, cmd: crate::rpc::RpcCommand) -> Result<()> {
+        let run = self.running.get_mut(issue_id).ok_or_else(|| {
+            crate::error::RpcSnafu {
+                message: format!("no running agent for issue {issue_id}"),
+            }
+            .build()
+        })?;
+
+        let stdin = run.stdin.as_mut().ok_or_else(|| {
+            crate::error::RpcSnafu {
+                message: format!("stdin not available for issue {issue_id}"),
+            }
+            .build()
+        })?;
+
+        let mut line = serde_json::to_string(&cmd).map_err(|e| {
+            crate::error::RpcSnafu {
+                message: format!("failed to serialize RPC command: {e}"),
+            }
+            .build()
+        })?;
+        line.push('\n');
+
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .context(crate::error::RpcIoSnafu {
+                message: format!("failed to write RPC command to ralph for issue {issue_id}"),
+            })?;
+
+        info!(issue_id, command = ?cmd, "sent RPC command to ralph");
+        Ok(())
+    }
+
+    /// Send guidance to ralph for the next iteration.
+    pub(crate) async fn send_guidance(&mut self, issue_id: &str, message: String) -> Result<()> {
+        self.send_command(
+            issue_id,
+            crate::rpc::RpcCommand::Guidance { id: None, message },
+        )
+        .await
+    }
+
+    /// Steer ralph immediately in the current iteration.
+    pub(crate) async fn steer(&mut self, issue_id: &str, message: String) -> Result<()> {
+        self.send_command(
+            issue_id,
+            crate::rpc::RpcCommand::Steer { id: None, message },
+        )
+        .await
+    }
+
+    /// Gracefully abort ralph for the given issue.
+    pub(crate) async fn abort(&mut self, issue_id: &str, reason: Option<String>) -> Result<()> {
+        self.send_command(issue_id, crate::rpc::RpcCommand::Abort { id: None, reason })
+            .await
+    }
+
+    /// Query the current run state of a running ralph instance.
+    pub(crate) fn run_state(&self, issue_id: &str) -> Option<&RunState> {
+        self.running.get(issue_id).map(|run| &run.run_state)
     }
 }
 
@@ -818,7 +1071,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{IssueRuntime, ProcessOutputSummary, SymphonyService, issue_log_path, lnav_hint};
-    use crate::config::{AgentConfig, RepoConfig, SymphonyConfig};
+    use crate::config::{AgentConfig, RepoConfig, ReviewConfig, SymphonyConfig};
 
     #[test]
     fn process_output_summary_keeps_only_recent_stderr_lines() {
@@ -865,6 +1118,7 @@ mod tests {
                 .max_retry_backoff(Duration::from_secs(60 * 60))
                 .workflow_file("WORKFLOW.md".to_owned())
                 .agent(AgentConfig::default())
+                .review(ReviewConfig::default())
                 .repos(vec![])
                 .build(),
             CancellationToken::new(),
@@ -906,6 +1160,7 @@ mod tests {
                 .max_retry_backoff(Duration::from_secs(60 * 60))
                 .workflow_file("WORKFLOW.md".to_owned())
                 .agent(AgentConfig::default())
+                .review(ReviewConfig::default())
                 .repos(vec![configured])
                 .build(),
             crate::agent::RalphAgent::new(AgentConfig::default()),
@@ -929,6 +1184,7 @@ mod tests {
                 .max_retry_backoff(Duration::from_secs(600))
                 .workflow_file("WORKFLOW.md".to_owned())
                 .agent(AgentConfig::default())
+                .review(ReviewConfig::default())
                 .repos(vec![])
                 .build(),
             crate::agent::RalphAgent::new(AgentConfig::default()),

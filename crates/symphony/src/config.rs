@@ -187,6 +187,10 @@ pub struct SymphonyConfig {
     #[serde(default)]
     pub agent: AgentConfig,
 
+    /// Review pipeline configuration.
+    #[serde(default)]
+    pub review: ReviewConfig,
+
     /// Repository configurations.
     pub repos: Vec<RepoConfig>,
 }
@@ -217,6 +221,35 @@ pub struct AgentConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub run_timeout: Option<Duration>,
+}
+
+/// Configuration for the post-coding review pipeline.
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
+pub struct ReviewConfig {
+    /// Whether to auto-review PRs after successful coding runs.
+    #[serde(default = "default_review_enabled")]
+    pub enabled: bool,
+
+    /// Hat collection file for review mode (e.g. `ralph.reviewer.yml`).
+    #[serde(default = "default_review_hats")]
+    pub hats_file: String,
+
+    /// Backend override for the review agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+}
+
+fn default_review_enabled() -> bool { true }
+fn default_review_hats() -> String { "ralph.reviewer.yml".to_owned() }
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled:   default_review_enabled(),
+            hats_file: default_review_hats(),
+            backend:   None,
+        }
+    }
 }
 
 impl Default for AgentConfig {
@@ -250,9 +283,9 @@ impl AgentConfig {
         let explicit_mode = self
             .extra_args
             .iter()
-            .any(|arg| matches!(arg.as_str(), "--autonomous" | "--no-tui"));
+            .any(|arg| matches!(arg.as_str(), "--autonomous" | "--no-tui" | "--rpc"));
         if !explicit_mode {
-            args.push("--autonomous".to_owned());
+            args.push("--rpc".to_owned());
         }
         args.extend(self.extra_args.iter().cloned());
         args
@@ -314,4 +347,28 @@ fn default_workspace_root(repo_name: &str) -> PathBuf {
         .join("ralpha/worktrees")
         .join(repo_name)
         .join("worktrees")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_args_defaults_to_rpc_mode() {
+        let config = AgentConfig::default();
+        let args = config.command_args();
+        assert!(args.contains(&"--rpc".to_owned()));
+        assert!(!args.contains(&"--autonomous".to_owned()));
+    }
+
+    #[test]
+    fn command_args_respects_explicit_autonomous() {
+        let config = AgentConfig {
+            extra_args: vec!["--autonomous".to_owned()],
+            ..AgentConfig::default()
+        };
+        let args = config.command_args();
+        assert!(args.contains(&"--autonomous".to_owned()));
+        assert!(!args.iter().any(|a| a == "--rpc"));
+    }
 }
