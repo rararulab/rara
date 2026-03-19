@@ -129,6 +129,21 @@ pub struct PermissionBridge {
     pub reply_tx:     oneshot::Sender<RequestPermissionOutcome>,
 }
 
+/// Kind of permission option, mirroring the upstream ACP protocol types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionOptionKind {
+    /// Allow this specific invocation only.
+    AllowOnce,
+    /// Allow all future invocations of this tool.
+    AllowAlways,
+    /// Deny this specific invocation.
+    DenyOnce,
+    /// Deny all future invocations.
+    DenyAlways,
+    /// An unknown/unrecognized option kind from the protocol.
+    Unknown(String),
+}
+
 /// Simplified permission option for UI display.
 #[derive(Debug, Clone)]
 pub struct PermissionOptionInfo {
@@ -136,7 +151,6 @@ pub struct PermissionOptionInfo {
     pub id:    String,
     /// Human-readable label.
     pub label: String,
-    /// Option kind: `"allow_once"`, `"allow_always"`, `"reject_once"`,
-    /// `"reject_always"`.
-    pub kind:  String,
+    /// Option kind.
+    pub kind:  PermissionOptionKind,
 }

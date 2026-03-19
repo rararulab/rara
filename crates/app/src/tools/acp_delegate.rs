@@ -24,8 +24,9 @@ use std::{future::Future, path::PathBuf, pin::Pin};
 use async_trait::async_trait;
 use rara_acp::{
     AcpThread, PermissionRequestInfo, RequestPermissionOutcome, SelectedPermissionOutcome,
-    events::{AcpEvent, StopReason, ToolCallStatus},
+    events::{AcpEvent, PermissionOptionKind, StopReason, ToolCallStatus},
     registry::AcpRegistryRef,
+    thread::PermissionPolicy,
 };
 use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
@@ -164,9 +165,14 @@ impl ToolExecute for AcpDelegateTool {
 
         // Spawn the AcpThread — handles subprocess, handshake, and session
         // creation internally.
-        let mut thread = AcpThread::spawn(&params.agent, command, cwd)
-            .await
-            .map_err(|e| anyhow::anyhow!("ACP spawn failed (cmd: `{cmd_display}`): {e}"))?;
+        // Use AutoApprove policy: the delegate auto-approves directly,
+        // eliminating the double auto-approve overhead through the bridge.
+        // When ToolContext gains ApprovalManager support, switch to
+        // PermissionPolicy::Interactive for user-facing confirmation.
+        let mut thread =
+            AcpThread::spawn(&params.agent, command, cwd, PermissionPolicy::AutoApprove)
+                .await
+                .map_err(|e| anyhow::anyhow!("ACP spawn failed (cmd: `{cmd_display}`): {e}"))?;
 
         // Collect streaming events into structured output.
         let mut text_chunks: Vec<String> = Vec::new();
@@ -225,8 +231,12 @@ fn auto_approve_resolver(
         let selected = info
             .options
             .iter()
-            .find(|o| o.kind == "AllowAlways")
-            .or_else(|| info.options.iter().find(|o| o.kind == "AllowOnce"));
+            .find(|o| o.kind == PermissionOptionKind::AllowAlways)
+            .or_else(|| {
+                info.options
+                    .iter()
+                    .find(|o| o.kind == PermissionOptionKind::AllowOnce)
+            });
 
         let option_id = match selected {
             Some(opt) => opt.id.clone(),

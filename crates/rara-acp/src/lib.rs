@@ -16,7 +16,11 @@ pub use agent_client_protocol::{RequestPermissionOutcome, SelectedPermissionOutc
 pub use connection::{AcpConnection, AgentCommand};
 pub use error::AcpError;
 pub use events::{
-    AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus,
+    AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, PermissionOptionKind,
+    StopReason, ToolCallStatus,
 };
 pub use registry::{AcpAgentConfig, AcpRegistry, AcpRegistryRef, FSAcpRegistry};
-pub use thread::{AcpThread, AcpThreadEntry, AcpThreadStatus, AcpToolCall, PermissionRequestInfo};
+pub use thread::{
+    AcpThread, AcpThreadEntry, AcpThreadStatus, AcpToolCall, PermissionPolicy,
+    PermissionRequestInfo,
+};

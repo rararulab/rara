@@ -201,6 +201,8 @@ impl AcpRegistry for FSAcpRegistry {
 }
 
 /// Configuration for a single ACP agent.
+// Note: `Default` is required by `#[serde(default)]` for deserialization.
+// This is an exception to the project convention against deriving Default on config structs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, bon::Builder)]
 #[serde(default)]
 #[builder(on(String, into))]

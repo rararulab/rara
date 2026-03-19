@@ -21,6 +21,16 @@ use crate::{
     events::{AcpEvent, PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus},
 };
 
+/// Policy for handling permission requests from the external agent.
+#[derive(Debug, Clone, Default)]
+pub enum PermissionPolicy {
+    /// Auto-approve all requests at the delegate level (no bridge channel).
+    #[default]
+    AutoApprove,
+    /// Forward requests to the caller for interactive resolution.
+    Interactive,
+}
+
 /// Commands sent from AcpThread (Send) to the connection actor (!Send).
 pub(crate) enum AcpCommand {
     /// Send a user prompt to the agent.
@@ -87,6 +97,7 @@ pub enum AcpThreadEntry {
 }
 
 /// A tool call tracked by the AcpThread.
+#[derive(Debug)]
 pub struct AcpToolCall {
     /// Tool call identifier.
     pub id:     String,
@@ -117,6 +128,22 @@ pub enum AcpToolCallStatus {
     Failed,
     /// User rejected the permission request.
     Rejected,
+}
+
+impl std::fmt::Debug for AcpToolCallStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "Pending"),
+            Self::WaitingForConfirmation { options, .. } => f
+                .debug_struct("WaitingForConfirmation")
+                .field("options", options)
+                .finish(),
+            Self::Running => write!(f, "Running"),
+            Self::Completed => write!(f, "Completed"),
+            Self::Failed => write!(f, "Failed"),
+            Self::Rejected => write!(f, "Rejected"),
+        }
+    }
 }
 
 /// Information about a permission request, passed to the resolver callback.
@@ -161,14 +188,29 @@ impl AcpThread {
         agent_name: impl Into<String>,
         command: AgentCommand,
         cwd: PathBuf,
+        permission_policy: PermissionPolicy,
     ) -> Result<Self, AcpError> {
         let agent_name = agent_name.into();
 
         // Channels: command (thread -> actor), event (actor -> thread),
-        // permission (delegate -> thread).
+        // permission (delegate -> thread, only for Interactive mode).
         let (cmd_tx, cmd_rx) = mpsc::channel::<AcpCommand>(8);
         let (event_tx, event_rx) = mpsc::channel::<AcpEvent>(256);
-        let (perm_tx, perm_rx) = mpsc::channel::<PermissionBridge>(8);
+
+        // Only create the permission bridge channel when Interactive mode is
+        // requested. In AutoApprove mode the delegate handles permissions
+        // directly, so no bridge is needed.
+        let (perm_tx, perm_rx) = match &permission_policy {
+            PermissionPolicy::AutoApprove => {
+                // Create a dummy receiver that will never receive anything.
+                let (_tx, rx) = mpsc::channel::<PermissionBridge>(1);
+                (None, rx)
+            }
+            PermissionPolicy::Interactive => {
+                let (tx, rx) = mpsc::channel::<PermissionBridge>(8);
+                (Some(tx), rx)
+            }
+        };
 
         // Session ID delivered after handshake via a oneshot.
         let (session_id_tx, session_id_rx) = oneshot::channel();
@@ -406,6 +448,16 @@ impl AcpThread {
                             message: "prompt reply channel closed".into(),
                         })??;
 
+                    // Prune terminal tool calls to prevent unbounded growth.
+                    self.tool_calls.retain(|_, tc| {
+                        !matches!(
+                            tc.status,
+                            AcpToolCallStatus::Completed
+                                | AcpToolCallStatus::Failed
+                                | AcpToolCallStatus::Rejected
+                        )
+                    });
+
                     self.status = AcpThreadStatus::TurnComplete {
                         stop_reason: stop_reason.clone(),
                     };
@@ -536,12 +588,12 @@ async fn run_connection_actor(
     cwd: PathBuf,
     mut cmd_rx: mpsc::Receiver<AcpCommand>,
     event_fwd_tx: mpsc::Sender<AcpEvent>,
-    perm_tx: mpsc::Sender<PermissionBridge>,
+    perm_tx: Option<mpsc::Sender<PermissionBridge>>,
     session_id_tx: oneshot::Sender<Result<agent_client_protocol::SessionId, AcpError>>,
 ) {
     // Connect and handshake.
     let (mut conn, mut event_rx) =
-        match crate::AcpConnection::connect(&command, &cwd, Some(perm_tx)).await {
+        match crate::AcpConnection::connect(&command, &cwd, perm_tx).await {
             Ok(pair) => pair,
             Err(e) => {
                 let _ = session_id_tx.send(Err(e));
@@ -585,6 +637,12 @@ async fn run_connection_actor(
             }
         }
     }
+
+    // Fallback: ensure ProcessExited is always emitted even if stderr
+    // monitoring didn't fire (e.g. agent kept stderr open).
+    let _ = event_fwd_tx
+        .send(AcpEvent::ProcessExited { code: None })
+        .await;
 }
 
 impl Drop for AcpThread {

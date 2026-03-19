@@ -8,18 +8,19 @@ use std::path::PathBuf;
 
 use agent_client_protocol::{
     Client, ContentBlock, CreateTerminalRequest, CreateTerminalResponse, KillTerminalRequest,
-    KillTerminalResponse, PermissionOptionKind, ReadTextFileRequest, ReadTextFileResponse,
-    ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, Result, SelectedPermissionOutcome,
-    SessionNotification, SessionUpdate, TerminalOutputRequest, TerminalOutputResponse,
-    ToolCallStatus as AcpToolCallStatus, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
-    WriteTextFileRequest, WriteTextFileResponse,
+    KillTerminalResponse, PermissionOptionKind as AcpPermOptionKind, ReadTextFileRequest,
+    ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, Result,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, TerminalOutputRequest,
+    TerminalOutputResponse, ToolCallStatus as AcpToolCallStatus, WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::events::{
-    AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, ToolCallStatus,
+    AcpEvent, FileOperation, PermissionBridge, PermissionOptionInfo, PermissionOptionKind,
+    ToolCallStatus,
 };
 
 /// Permission handling mode for the delegate.
@@ -104,11 +105,11 @@ impl RaraDelegate {
         let selected = args
             .options
             .iter()
-            .find(|o| o.kind == PermissionOptionKind::AllowAlways)
+            .find(|o| o.kind == AcpPermOptionKind::AllowAlways)
             .or_else(|| {
                 args.options
                     .iter()
-                    .find(|o| o.kind == PermissionOptionKind::AllowOnce)
+                    .find(|o| o.kind == AcpPermOptionKind::AllowOnce)
             });
 
         let option_id = match selected {
@@ -158,7 +159,13 @@ impl RaraDelegate {
             .map(|o| PermissionOptionInfo {
                 id:    o.option_id.to_string(),
                 label: o.name.clone(),
-                kind:  format!("{:?}", o.kind),
+                kind:  match o.kind {
+                    AcpPermOptionKind::AllowOnce => PermissionOptionKind::AllowOnce,
+                    AcpPermOptionKind::AllowAlways => PermissionOptionKind::AllowAlways,
+                    AcpPermOptionKind::RejectOnce => PermissionOptionKind::DenyOnce,
+                    AcpPermOptionKind::RejectAlways => PermissionOptionKind::DenyAlways,
+                    other => PermissionOptionKind::Unknown(format!("{other:?}")),
+                },
             })
             .collect();
 
@@ -331,6 +338,7 @@ impl Client for RaraDelegate {
         &self,
         _args: CreateTerminalRequest,
     ) -> Result<CreateTerminalResponse> {
+        warn!("agent requested terminal creation, which is not supported");
         Err(agent_client_protocol::Error::method_not_found())
     }
 
@@ -338,6 +346,7 @@ impl Client for RaraDelegate {
         &self,
         _args: TerminalOutputRequest,
     ) -> Result<TerminalOutputResponse> {
+        warn!("agent requested terminal output, which is not supported");
         Err(agent_client_protocol::Error::method_not_found())
     }
 
@@ -345,6 +354,7 @@ impl Client for RaraDelegate {
         &self,
         _args: ReleaseTerminalRequest,
     ) -> Result<ReleaseTerminalResponse> {
+        warn!("agent requested terminal release, which is not supported");
         Err(agent_client_protocol::Error::method_not_found())
     }
 
@@ -352,10 +362,12 @@ impl Client for RaraDelegate {
         &self,
         _args: WaitForTerminalExitRequest,
     ) -> Result<WaitForTerminalExitResponse> {
+        warn!("agent requested wait for terminal exit, which is not supported");
         Err(agent_client_protocol::Error::method_not_found())
     }
 
     async fn kill_terminal(&self, _args: KillTerminalRequest) -> Result<KillTerminalResponse> {
+        warn!("agent requested terminal kill, which is not supported");
         Err(agent_client_protocol::Error::method_not_found())
     }
 }
