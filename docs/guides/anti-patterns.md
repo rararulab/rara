@@ -6,7 +6,7 @@
 - Do NOT use mock repositories in tests — use `testcontainers`
 - Do NOT use noop/hollow trait implementations — trait methods with real implementations must not have default empty bodies (silently return `Ok(())` / `Ok(None)` / `vec![]`). Optional UX hooks (`typing_indicator`, lifecycle hooks) are the only exception
 - Do NOT construct hollow identity objects — `Principal` must be built via `SecuritySubsystem::resolve_principal()` or `Principal::from_user()` with full role + permissions from the database. Never store placeholder values in Session
-- Do NOT write manual `fn new()` constructors for structs with 3+ fields — use `#[derive(bon::Builder)]` and construct via `Foo::builder().field(val).build()`
+- Do NOT write manual `fn new()` constructors for structs with 3+ fields — use `#[derive(bon::Builder)]` and construct via `Foo::builder().field(val).build()`. Config structs must also derive `Deserialize` and never `#[derive(Default)]`
 - Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file
 - Do NOT modify already-applied migration files — create a new migration instead
 - Do NOT write code comments in any language other than English

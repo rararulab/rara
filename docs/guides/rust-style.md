@@ -16,18 +16,20 @@
 
 ## Struct Construction — Use `bon::Builder`
 
-Structs with 3+ fields MUST use `#[derive(bon::Builder)]` — do NOT write manual `fn new()` constructors or hand-assemble struct literals with long field lists.
+Structs with 3+ fields MUST use `#[derive(bon::Builder)]` — do NOT write manual `fn new()` constructors.
 
 **Rules:**
 - `#[derive(bon::Builder)]` on any struct with 3+ fields (config, domain objects, options, etc.)
+- Config structs: always pair with `Deserialize`, never `#[derive(Default)]` — defaults come from YAML
 - Do NOT write `impl Foo { pub fn new(a, b, c, d, ...) -> Self }` — use the generated builder instead
-- Do NOT hand-assemble struct literals when the struct has a builder — use `Foo::builder().field(val).build()`
+- Cross-module construction: use `Foo::builder().field(val).build()`, not struct literals
+- Within the defining module, struct literals are fine when all fields are straightforward
 - `Option<T>` fields automatically default to `None` in bon — no need for `#[builder(default)]`
 - For non-Option defaults, use `#[builder(default = value)]`
 - Simple 1-2 field structs can use direct construction (no builder needed)
 
 ```rust
-// Good: derive builder
+// Good: derive builder + Deserialize for config
 #[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
@@ -36,7 +38,7 @@ pub struct ServerConfig {
     pub tls_enabled: bool,
 }
 
-// Good: construct via builder
+// Good: construct via builder (especially from outside the module)
 let config = ServerConfig::builder()
     .host("0.0.0.0".into())
     .port(8080)
@@ -44,20 +46,12 @@ let config = ServerConfig::builder()
     .tls_enabled(true)
     .build();
 
-// Bad: manual constructor
+// Bad: manual constructor — use the generated builder
 impl ServerConfig {
     pub fn new(host: String, port: u16, max_connections: usize, tls_enabled: bool) -> Self {
         Self { host, port, max_connections, tls_enabled }
     }
 }
-
-// Bad: hand-assembled struct literal (fragile, hard to read)
-let config = ServerConfig {
-    host: "0.0.0.0".into(),
-    port: 8080,
-    max_connections: 100,
-    tls_enabled: true,
-};
 ```
 
 ## Async
