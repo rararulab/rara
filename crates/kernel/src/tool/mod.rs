@@ -119,6 +119,13 @@ pub trait OutputInterceptor: Send + Sync {
     /// Optionally transform a tool's output. Receives the tool name and the
     /// original output; returns the (possibly replaced) output.
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput;
+
+    /// Optional system prompt fragment injected when this interceptor is
+    /// active.
+    ///
+    /// Returns guidance text that teaches the LLM how to interact with
+    /// intercepted (indexed) tool outputs.
+    fn system_prompt_fragment(&self) -> Option<String> { None }
 }
 
 /// Shared reference to an output interceptor.
