@@ -36,7 +36,7 @@ use crate::{
     handle::KernelHandle,
     io::{PlanStepStatus, StreamEvent, StreamHandle},
     llm,
-    memory::{TapEntryKind, TapeService},
+    memory::{HandoffState, TapEntryKind, TapeService},
     notification::NotificationBusRef,
     session::SessionKey,
     tool::{AgentTool, create_plan::CreatePlanTool},
@@ -319,6 +319,12 @@ pub(crate) async fn run_plan_loop(
             step_status:  PlanStepStatus::Running,
             status_text:  format!("正在执行第{}步：{}…", step.index + 1, step.task),
         });
+
+        // Create a context fence anchor for inline steps after step 0
+        // to prevent context accumulation across steps.
+        if step.mode == ExecutionMode::Inline && step_idx > 0 {
+            create_step_fence_anchor(&tape, tape_name, &plan.goal, &past_steps, &step).await?;
+        }
 
         let (outcome, summary) = match step.mode {
             ExecutionMode::Inline => {
@@ -1078,6 +1084,63 @@ fn classify_step_result(
     }
 }
 
+/// Create an anchor before an inline step to fence its context.
+///
+/// Injects a summary of completed steps so the agent has continuity
+/// without carrying the full tape history.  Step 0 is skipped because
+/// it naturally inherits the conversation context.
+async fn create_step_fence_anchor(
+    tape: &TapeService,
+    tape_name: &str,
+    plan_goal: &str,
+    past_steps: &[PastStep],
+    current_step: &PlanStep,
+) -> Result<()> {
+    let summary = if past_steps.is_empty() {
+        format!("Plan goal: {plan_goal}")
+    } else {
+        let steps_desc = past_steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "- Step {}: {} [{}] — {}",
+                    s.index + 1,
+                    s.task,
+                    s.outcome.label(),
+                    s.summary
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Plan goal: {plan_goal}\n\nCompleted steps:\n{steps_desc}")
+    };
+
+    let next_steps = format!(
+        "Current step {}: {}\nAcceptance criteria: {}",
+        current_step.index + 1,
+        current_step.task,
+        current_step.acceptance,
+    );
+
+    let state = HandoffState {
+        phase:      Some(format!("plan-step-{}", current_step.index)),
+        summary:    Some(summary),
+        next_steps: Some(next_steps),
+        source_ids: Vec::new(),
+        owner:      Some("system".into()),
+        extra:      None,
+    };
+
+    let anchor_name = format!("plan/step-{}", current_step.index);
+    tape.handoff(tape_name, &anchor_name, state)
+        .await
+        .map_err(|e| KernelError::AgentExecution {
+            message: format!("failed to create step fence anchor: {e}"),
+        })?;
+
+    Ok(())
+}
+
 /// Execute a single plan step inline using `run_agent_loop`.
 ///
 /// Returns `(StepOutcome, summary_text)`.
@@ -1101,11 +1164,13 @@ async fn execute_inline_step(
     last_model: &mut String,
     final_texts: &mut Vec<String>,
 ) -> (StepOutcome, String) {
-    // Delegate to run_agent_loop with the step's task as the user text.
+    // Delegate to run_agent_loop with the step's task + acceptance criteria
+    // so the agent knows the completion bar for this step.
+    let user_text = format!("{}\n\nAcceptance criteria: {}", step.task, step.acceptance);
     let result = crate::agent::run_agent_loop(
         handle,
         session_key,
-        step.task.clone(),
+        user_text,
         stream_handle,
         turn_cancel,
         tape,
