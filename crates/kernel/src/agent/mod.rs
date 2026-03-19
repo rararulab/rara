@@ -62,6 +62,10 @@ const CHARS_PER_TOKEN: usize = 4;
 const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
 /// Context usage threshold (fraction) at which a MUST-handoff hint is injected.
 const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
+/// User-turn count since last anchor at which a session-length reminder is
+/// injected.  Unlike the pressure-based thresholds this is a pure turn count
+/// and does not depend on token estimates.
+const TURN_REMINDER_THRESHOLD: usize = 8;
 /// Large tool outputs that should trigger an explicit anchor reminder.
 const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
 /// Multiple medium tool outputs in one phase should also trigger a reminder.
@@ -770,14 +774,15 @@ fn build_runtime_contract_prompt(
          list all checkpoints.\n- `checkout`: fork a new session from a past anchor (original \
          unchanged).\n\n## MUST anchor when:\n- Context is getting long or a [Context Usage \
          Warning] appears\n- A tool result exceeds ~2000 chars\n- Iterative tasks accumulate \
-         large outputs (screenshots, scraping, listings)\n\n## SHOULD anchor when:\n- Completing \
-         a logical work phase or switching subtasks\n- Processing multiple tool results in \
-         sequence\n\n## MUST search before answering when:\n- The question refers to anything \
-         before an anchor or outside current window\n- You need exact tokens, IDs, codes, names, \
-         or quoted details from earlier context\n\n## Anchor best practices\n- Always include a \
-         detailed `summary` and concrete `next_steps`\n- A missing summary = lost context\n- Use \
-         `checkout` to retry from a past checkpoint or when the user asks to go \
-         back\n\n</context_contract>"
+         large outputs (screenshots, scraping, listings)\n- The user switches to a clearly \
+         different topic or task (e.g. debugging → feature discussion, Q&A → hands-on \
+         coding)\n\n## SHOULD anchor when:\n- Completing a logical work phase\n- Processing \
+         multiple tool results in sequence\n\n## MUST search before answering when:\n- The \
+         question refers to anything before an anchor or outside current window\n- You need exact \
+         tokens, IDs, codes, names, or quoted details from earlier context\n\n## Anchor best \
+         practices\n- Always include a detailed `summary` and concrete `next_steps`\n- A missing \
+         summary = lost context\n- Use `checkout` to retry from a past checkpoint or when the \
+         user asks to go back\n\n</context_contract>"
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
@@ -932,6 +937,7 @@ pub(crate) async fn run_agent_loop(
     let mut consecutive_silent_iters: usize = 0;
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
+    let mut turn_reminder_injected = false;
     let mut llm_error_recovery_message: Option<String> = None;
     // ── Tool call limit circuit breaker ──────────────────────────────────
     // Prevents runaway tool loops by pausing execution every N tool calls
@@ -2007,6 +2013,35 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
+        // ── Session length reminder ──────────────────────────────────
+        // Inject a warning when the session has many user turns without an
+        // anchor, independent of token-based context pressure.
+        if !turn_reminder_injected && context_pressure_warning.is_none() {
+            if let Ok(entries) = tape.from_last_anchor(tape_name, None).await {
+                let user_turns = entries
+                    .iter()
+                    .filter(|e| {
+                        e.kind == crate::memory::TapEntryKind::Message
+                            && e.payload.get("role").and_then(|v| v.as_str()) == Some("user")
+                            && !e
+                                .payload
+                                .get("content")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .starts_with('[')
+                    })
+                    .count();
+                if user_turns >= TURN_REMINDER_THRESHOLD {
+                    context_pressure_warning = Some(format!(
+                        "[Session Length Warning] This session has had {user_turns} user turns \
+                         since the last anchor. If the topic has shifted, you MUST create a tape \
+                         anchor now with summary and next_steps.",
+                    ));
+                    turn_reminder_injected = true;
+                }
+            }
+        }
+
         // Track consecutive silent (tool-only, no text) iterations and emit
         // a Progress event so the user knows we're still working.
         if accumulated_text.len() == last_accumulated_text.len() {
@@ -2100,8 +2135,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
-        resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
+        ContextPressure, TURN_REMINDER_THRESHOLD, build_runtime_contract_prompt,
+        classify_context_pressure, resolve_soul_prompt, should_remind_tape_anchor,
+        should_remind_tape_search,
     };
 
     #[test]
@@ -2196,5 +2232,27 @@ mod tests {
         let result = resolve_soul_prompt("rara");
         assert!(result.is_some());
         assert!(result.unwrap().contains("Identity: rara"));
+    }
+
+    #[test]
+    fn turn_reminder_threshold_is_reasonable() {
+        const {
+            assert!(
+                TURN_REMINDER_THRESHOLD >= 4,
+                "threshold too low — would fire too often"
+            );
+            assert!(
+                TURN_REMINDER_THRESHOLD <= 20,
+                "threshold too high — would never fire"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_contract_includes_topic_switch_in_must_anchor() {
+        let prompt = build_runtime_contract_prompt("base", false, None);
+        assert!(prompt.contains("user switches to a clearly different topic"));
+        // Verify "switching subtasks" is no longer in the SHOULD section
+        assert!(!prompt.contains("switching subtasks"));
     }
 }
