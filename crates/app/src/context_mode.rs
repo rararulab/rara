@@ -40,6 +40,15 @@ const TOOL_PREFIX: &str = "context-mode__";
 /// Default output size threshold in bytes (8 KB).
 const DEFAULT_THRESHOLD: usize = 8 * 1024;
 
+/// Static system prompt fragment injected when context-mode is active.
+const CONTEXT_MODE_PROMPT_FRAGMENT: &str =
+    "[Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
+     indexed. When you see a tool result containing `[INDEXED]`, the full output has been stored \
+     in a searchable index. To retrieve specific content:\n- Call: context-mode \
+     search(query=\"keyword or phrase\")\n- The search returns matching excerpts from the indexed \
+     output.\nDo NOT assume the indexed output is empty or unavailable — always search when you \
+     need the details.";
+
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -107,7 +116,12 @@ impl ContextModeInterceptor {
         self
     }
 
-    /// Set the tool names whose output should bypass interception.
+    /// Set the tool names that should bypass interception.
+    ///
+    /// Built from `AgentTool::bypass_output_interceptor()` at startup. Note:
+    /// dynamically registered MCP tools are not included — they are always
+    /// eligible for interception, which is the correct default for most MCP
+    /// tools.
     pub fn with_bypass_set(mut self, set: HashSet<String>) -> Self {
         self.bypass_set = set;
         self
@@ -186,21 +200,13 @@ impl OutputInterceptor for ContextModeInterceptor {
         }
     }
 
-    fn system_prompt_fragment(&self) -> Option<String> {
-        Some(
-            "[Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
-             indexed. When you see a tool result containing `[INDEXED]`, the full output has been \
-             stored in a searchable index. To retrieve specific content:\n- Call: context-mode \
-             search(query=\"keyword or phrase\")\n- The search returns matching excerpts from the \
-             indexed output.\nDo NOT assume the indexed output is empty or unavailable — always \
-             search when you need the details."
-                .to_owned(),
-        )
-    }
+    fn system_prompt_fragment(&self) -> Option<&str> { Some(CONTEXT_MODE_PROMPT_FRAGMENT) }
 }
 
 /// Extract top-level JSON keys with type/size hints for a compact preview.
 fn extract_structure_preview(json_str: &str) -> String {
+    /// Soft limit on structure preview length. The actual output may slightly
+    /// exceed this due to the final key being added before the check triggers.
     const MAX_PREVIEW_LEN: usize = 200;
 
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {

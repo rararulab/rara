@@ -125,7 +125,7 @@ pub trait OutputInterceptor: Send + Sync {
     ///
     /// Returns guidance text that teaches the LLM how to interact with
     /// intercepted (indexed) tool outputs.
-    fn system_prompt_fragment(&self) -> Option<String> { None }
+    fn system_prompt_fragment(&self) -> Option<&str> { None }
 }
 
 /// Shared reference to an output interceptor.
