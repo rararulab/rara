@@ -1057,6 +1057,18 @@ mod tests {
     }
 
     #[test]
+    fn turn_rationale_is_forwarded_to_web_clients() {
+        let event = StreamEvent::TurnRationale {
+            text: "checking logs".to_owned(),
+        };
+
+        assert!(matches!(
+            stream_event_to_web_event(event),
+            Some(WebEvent::TurnRationale { text }) if text == "checking logs"
+        ));
+    }
+
+    #[test]
     fn deserializes_legacy_post_body_with_plain_string_content() {
         let request: SendMessageRequest = serde_json::from_value(serde_json::json!({
             "session_key": "session-123",

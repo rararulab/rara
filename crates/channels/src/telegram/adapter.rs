@@ -3604,3 +3604,54 @@ mod strip_tool_call_xml_tests {
         assert!(result.contains("after"));
     }
 }
+
+#[cfg(test)]
+mod render_progress_tests {
+    use super::*;
+
+    /// Helper: build a minimal `ProgressMessage` for rendering tests.
+    fn test_progress(turn_rationale: Option<&str>) -> ProgressMessage {
+        let mut pm = ProgressMessage::new("test-msg-id".into());
+        pm.turn_rationale = turn_rationale.map(String::from);
+        pm
+    }
+
+    /// Helper: build a finished `ToolProgress` entry so the renderer has
+    /// something to display.
+    fn finished_tool(name: &str) -> ToolProgress {
+        ToolProgress {
+            id:         "tool-1".into(),
+            name:       name.into(),
+            activity:   name.into(),
+            summary:    String::new(),
+            started_at: Instant::now(),
+            finished:   true,
+            success:    true,
+            duration:   Some(std::time::Duration::from_millis(100)),
+            error:      None,
+        }
+    }
+
+    #[test]
+    fn render_progress_includes_rationale_when_present() {
+        let pm = test_progress(Some("Reading config files"));
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        assert!(
+            output.contains("Reading config files"),
+            "expected rationale in output, got: {output}"
+        );
+    }
+
+    #[test]
+    fn render_progress_omits_rationale_when_none() {
+        let pm = test_progress(None);
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        // The thought-bubble emoji prefix used for rationale should be absent.
+        assert!(
+            !output.contains("\u{1f4ad}"),
+            "expected no rationale line, got: {output}"
+        );
+    }
+}
