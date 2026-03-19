@@ -414,12 +414,17 @@ impl MarketplaceService {
     /// Adds the repo as a marketplace source, downloads it, scans for skills,
     /// and enables all discovered skills.
     pub async fn install_repo(&self, repo: &str) -> Result<PluginInstallResult> {
+        // Normalize source to "owner/repo" format so manifest lookups match
+        // the normalized key that install_skill() stores internally.
+        let (owner, repo_name_parsed) = crate::install::parse_source(repo)?;
+        let normalized = format!("{owner}/{repo_name_parsed}");
+
         // Install first; only register the source after a successful download
         // so a failed install does not leave a stale source entry.
         let install_dir = crate::install::default_install_dir()?;
-        crate::install::install_skill(repo, &install_dir).await?;
+        crate::install::install_skill(&normalized, &install_dir).await?;
 
-        self.add_source(repo)?;
+        self.add_source(&normalized)?;
 
         // Load manifest, enable all skills from this repo, and save.
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
@@ -427,7 +432,7 @@ impl MarketplaceService {
         let mut manifest = store.load()?;
 
         let mut enabled_skills = Vec::new();
-        if let Some(repo_entry) = manifest.find_repo_mut(repo) {
+        if let Some(repo_entry) = manifest.find_repo_mut(&normalized) {
             for skill in &mut repo_entry.skills {
                 skill.enabled = true;
                 skill.trusted = true;
@@ -438,11 +443,11 @@ impl MarketplaceService {
 
         // Update in-memory registry so the agent prompt reflects new skills
         // immediately.
-        self.sync_repo_to_registry(&manifest, repo);
+        self.sync_repo_to_registry(&manifest, &normalized);
 
-        let repo_name = repo.split('/').next_back().unwrap_or(repo);
+        let display_name = repo.split('/').next_back().unwrap_or(repo);
         Ok(PluginInstallResult {
-            plugin:       repo_name.to_string(),
+            plugin:       display_name.to_string(),
             skills_count: enabled_skills.len(),
             skills:       enabled_skills,
         })
