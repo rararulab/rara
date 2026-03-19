@@ -49,7 +49,7 @@ fn agent_config_builds_ralph_run_command() {
         args,
         vec![
             "run".to_owned(),
-            "--autonomous".to_owned(),
+            "--rpc".to_owned(),
             "--max-iterations".to_owned(),
             "5".to_owned(),
         ]
@@ -95,14 +95,15 @@ fn agent_config_builds_ralph_doctor_command() {
 }
 
 #[test]
-fn default_agent_command_uses_autonomous_mode() {
+fn default_agent_command_uses_rpc_mode() {
     let agent = AgentConfig::default();
     let args = agent.command_args();
 
     assert_eq!(agent.backend, "codex");
     assert_eq!(agent.core_config_file, PathBuf::from("ralph.core.yml"));
     assert_eq!(args.first().map(String::as_str), Some("run"));
-    assert!(args.iter().any(|arg| arg == "--autonomous"));
+    assert!(args.iter().any(|arg| arg == "--rpc"));
+    assert!(!args.iter().any(|arg| arg == "--autonomous"));
     assert!(!args.iter().any(|arg| arg == "--no-tui"));
     assert!(!args.iter().any(|arg| arg == "-c"));
 }

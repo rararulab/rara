@@ -250,9 +250,9 @@ impl AgentConfig {
         let explicit_mode = self
             .extra_args
             .iter()
-            .any(|arg| matches!(arg.as_str(), "--autonomous" | "--no-tui"));
+            .any(|arg| matches!(arg.as_str(), "--autonomous" | "--no-tui" | "--rpc"));
         if !explicit_mode {
-            args.push("--autonomous".to_owned());
+            args.push("--rpc".to_owned());
         }
         args.extend(self.extra_args.iter().cloned());
         args

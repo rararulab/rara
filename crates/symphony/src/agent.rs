@@ -34,7 +34,11 @@ pub struct AgentTask {
 
 #[derive(Debug)]
 pub struct AgentHandle {
+    /// The spawned ralph subprocess.
     pub child:      Child,
+    /// Piped stdin handle for sending RPC messages to the agent.
+    pub stdin:      Option<tokio::process::ChildStdin>,
+    /// When the agent was spawned.
     pub started_at: Instant,
 }
 
@@ -311,19 +315,21 @@ Issue #{number}: {title}
         }
 
         cmd.current_dir(workspace.as_ref());
-        cmd.stdin(std::process::Stdio::null());
+        cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn().context(WorkspaceIoSnafu {
+        let mut child = cmd.spawn().context(WorkspaceIoSnafu {
             message: format!(
                 "failed to spawn `{command}` in {}",
                 workspace.as_ref().display()
             ),
         })?;
+        let stdin = child.stdin.take();
 
         Ok(AgentHandle {
             child,
+            stdin,
             started_at: Instant::now(),
         })
     }
