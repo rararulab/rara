@@ -939,8 +939,8 @@ pub(crate) async fn run_agent_loop(
     let mut last_accumulated_text = String::new();
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
-    let mut cascade_builder = crate::cascade::CascadeBuilder::new(rara_message_id.to_string());
-    cascade_builder.push_user(0, &input_text, jiff::Timestamp::now(), None);
+    let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_message_id.to_string());
+    cascade_asm.push_user(0, &input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
     let mut consecutive_silent_iters: usize = 0;
@@ -1474,7 +1474,7 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await;
 
-            cascade_builder.push_assistant(
+            cascade_asm.push_assistant(
                 0,
                 &accumulated_text,
                 if accumulated_reasoning.is_empty() {
@@ -1518,7 +1518,7 @@ pub(crate) async fn run_agent_loop(
                 }
             }
 
-            let cascade = cascade_builder.finish();
+            let cascade = cascade_asm.finish();
             let _ = tape
                 .append_event(
                     tape_name,
@@ -1654,7 +1654,7 @@ pub(crate) async fn run_agent_loop(
                 .await;
         }
 
-        cascade_builder.push_assistant(
+        cascade_asm.push_assistant(
             0,
             &accumulated_text,
             if accumulated_reasoning.is_empty() {
@@ -1701,7 +1701,7 @@ pub(crate) async fn run_agent_loop(
                 .iter()
                 .map(|tc| (tc.name.as_str(), tc.arguments.as_str()))
                 .collect();
-            cascade_builder.push_tool_calls(0, &calls_for_cascade, jiff::Timestamp::now(), None);
+            cascade_asm.push_tool_calls(0, &calls_for_cascade, jiff::Timestamp::now(), None);
         }
 
         iter_span.record("tool_count", valid_tool_calls.len());
@@ -1954,7 +1954,7 @@ pub(crate) async fn run_agent_loop(
                     })
                     .collect();
                 let results_refs: Vec<&str> = results_strs.iter().map(|s| s.as_str()).collect();
-                cascade_builder.push_tool_results(0, &results_refs, jiff::Timestamp::now(), None);
+                cascade_asm.push_tool_results(0, &results_refs, jiff::Timestamp::now(), None);
             }
             if should_remind_tape_anchor(&tool_names, &results_json) {
                 needs_anchor_reminder = true;
@@ -2207,7 +2207,7 @@ pub(crate) async fn run_agent_loop(
         }
     }
 
-    let cascade = cascade_builder.finish();
+    let cascade = cascade_asm.finish();
     let _ = tape
         .append_event(
             tape_name,

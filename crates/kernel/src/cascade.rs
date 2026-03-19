@@ -106,15 +106,19 @@ pub struct CascadeSummary {
 }
 
 // ---------------------------------------------------------------------------
-// Incremental Builder
+// Incremental Assembler
 // ---------------------------------------------------------------------------
 
-/// Incremental cascade trace builder.
+/// Incremental cascade trace assembler.
 ///
-/// Mirrors the state machine of [`build_cascade`] but accepts entries one at a
+/// A state machine that mirrors [`build_cascade`] but accepts entries one at a
 /// time via typed `push_*` methods.  This allows the agent loop to construct
 /// the trace as entries are created instead of doing a post-hoc scan.
-pub struct CascadeBuilder {
+///
+/// Unlike a simple field-by-field builder, this struct tracks internal state
+/// (`seen_assistant`, `last_was_tool_result`) to detect tick boundaries
+/// dynamically as entries arrive.
+pub struct CascadeAssembler {
     message_id:           String,
     ticks:                Vec<CascadeTick>,
     current_entries:      Vec<CascadeEntry>,
@@ -125,7 +129,7 @@ pub struct CascadeBuilder {
     last_was_tool_result: bool,
 }
 
-impl CascadeBuilder {
+impl CascadeAssembler {
     /// Create a new builder for the given message/trace identifier.
     pub fn new(message_id: String) -> Self {
         Self {
@@ -1270,7 +1274,7 @@ mod tests {
     #[test]
     fn cascade_builder_matches_build_cascade() {
         // Reproduce the same scenario as multi_iteration_creates_multiple_ticks
-        // using CascadeBuilder, then assert parity with build_cascade output.
+        // using CascadeAssembler, then assert parity with build_cascade output.
         let ts = Timestamp::now();
         let msg_id = "builder-parity";
 
@@ -1311,8 +1315,8 @@ mod tests {
         ];
         let expected = build_cascade(&entries, msg_id);
 
-        // -- CascadeBuilder path --
-        let mut builder = CascadeBuilder::new(msg_id.to_owned());
+        // -- CascadeAssembler path --
+        let mut builder = CascadeAssembler::new(msg_id.to_owned());
         builder.push_user(1, "do two things", ts, None);
         builder.push_assistant(2, "first I'll search", None, ts, None);
         builder.push_tool_calls(3, &[("search", "{}")], ts, None);
