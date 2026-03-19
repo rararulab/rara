@@ -106,7 +106,199 @@ pub struct CascadeSummary {
 }
 
 // ---------------------------------------------------------------------------
-// Builder
+// Incremental Builder
+// ---------------------------------------------------------------------------
+
+/// Incremental cascade trace builder.
+///
+/// Mirrors the state machine of [`build_cascade`] but accepts entries one at a
+/// time via typed `push_*` methods.  This allows the agent loop to construct
+/// the trace as entries are created instead of doing a post-hoc scan.
+pub struct CascadeBuilder {
+    message_id:           String,
+    ticks:                Vec<CascadeTick>,
+    current_entries:      Vec<CascadeEntry>,
+    tick_index:           usize,
+    global_seq:           usize,
+    tool_call_count:      usize,
+    seen_assistant:       bool,
+    last_was_tool_result: bool,
+}
+
+impl CascadeBuilder {
+    /// Create a new builder for the given message/trace identifier.
+    pub fn new(message_id: String) -> Self {
+        Self {
+            message_id,
+            ticks: Vec::new(),
+            current_entries: Vec::new(),
+            tick_index: 0,
+            global_seq: 0,
+            tool_call_count: 0,
+            seen_assistant: false,
+            last_was_tool_result: false,
+        }
+    }
+
+    /// Append a user-input entry.
+    pub fn push_user(
+        &mut self,
+        entry_id: u64,
+        content: &str,
+        timestamp: Timestamp,
+        metadata: Option<Value>,
+    ) {
+        self.global_seq += 1;
+        self.current_entries.push(CascadeEntry {
+            id: format_entry_id(
+                CascadeEntryKind::UserInput,
+                self.tick_index,
+                entry_id,
+                self.global_seq,
+            ),
+            kind: CascadeEntryKind::UserInput,
+            content: content.to_owned(),
+            timestamp,
+            metadata,
+        });
+    }
+
+    /// Append an assistant (thought) entry.
+    ///
+    /// Detects tick boundaries using the same logic as [`build_cascade`]: a new
+    /// tick starts when an assistant message arrives after tool results and at
+    /// least one entry already exists in the current tick.
+    pub fn push_assistant(
+        &mut self,
+        entry_id: u64,
+        text: &str,
+        reasoning: Option<&str>,
+        timestamp: Timestamp,
+        metadata: Option<Value>,
+    ) {
+        // Tick boundary detection — identical to build_cascade.
+        if self.seen_assistant && self.last_was_tool_result && !self.current_entries.is_empty() {
+            self.ticks.push(CascadeTick {
+                index:   self.tick_index,
+                entries: std::mem::take(&mut self.current_entries),
+            });
+            self.tick_index += 1;
+        }
+        self.seen_assistant = true;
+        self.last_was_tool_result = false;
+
+        let reasoning = reasoning.unwrap_or("");
+        let content = if !reasoning.is_empty() && !text.is_empty() {
+            format!("[reasoning]\n{reasoning}\n\n[response]\n{text}")
+        } else if !reasoning.is_empty() {
+            reasoning.to_owned()
+        } else {
+            text.to_owned()
+        };
+
+        if !content.is_empty() {
+            self.global_seq += 1;
+            self.current_entries.push(CascadeEntry {
+                id: format_entry_id(
+                    CascadeEntryKind::Thought,
+                    self.tick_index,
+                    entry_id,
+                    self.global_seq,
+                ),
+                kind: CascadeEntryKind::Thought,
+                content,
+                timestamp,
+                metadata,
+            });
+        }
+    }
+
+    /// Append tool-call (action) entries.
+    ///
+    /// Each `(name, arguments)` pair produces one [`CascadeEntryKind::Action`]
+    /// entry, matching the per-call expansion in [`build_cascade`].
+    pub fn push_tool_calls(
+        &mut self,
+        entry_id: u64,
+        calls: &[(&str, &str)],
+        timestamp: Timestamp,
+        metadata: Option<Value>,
+    ) {
+        self.last_was_tool_result = false;
+        for (name, args) in calls {
+            self.global_seq += 1;
+            self.tool_call_count += 1;
+            self.current_entries.push(CascadeEntry {
+                id: format_entry_id(
+                    CascadeEntryKind::Action,
+                    self.tick_index,
+                    entry_id,
+                    self.global_seq,
+                ),
+                kind: CascadeEntryKind::Action,
+                content: format!("{name}({args})"),
+                timestamp,
+                metadata: metadata.clone(),
+            });
+        }
+    }
+
+    /// Append tool-result (observation) entries.
+    ///
+    /// Each result string produces one [`CascadeEntryKind::Observation`] entry.
+    pub fn push_tool_results(
+        &mut self,
+        entry_id: u64,
+        results: &[&str],
+        timestamp: Timestamp,
+        metadata: Option<Value>,
+    ) {
+        self.last_was_tool_result = true;
+        for result in results {
+            self.global_seq += 1;
+            self.current_entries.push(CascadeEntry {
+                id: format_entry_id(
+                    CascadeEntryKind::Observation,
+                    self.tick_index,
+                    entry_id,
+                    self.global_seq,
+                ),
+                kind: CascadeEntryKind::Observation,
+                content: (*result).to_owned(),
+                timestamp,
+                metadata: metadata.clone(),
+            });
+        }
+    }
+
+    /// Consume the builder and produce the final [`CascadeTrace`].
+    ///
+    /// Flushes any remaining entries into the last tick and computes summary
+    /// statistics using the same formula as [`build_cascade`].
+    pub fn finish(mut self) -> CascadeTrace {
+        if !self.current_entries.is_empty() {
+            self.ticks.push(CascadeTick {
+                index:   self.tick_index,
+                entries: self.current_entries,
+            });
+        }
+
+        let total_entries: usize = self.ticks.iter().map(|t| t.entries.len()).sum();
+
+        CascadeTrace {
+            message_id: self.message_id,
+            ticks:      self.ticks,
+            summary:    CascadeSummary {
+                tick_count: self.tick_index + usize::from(total_entries > 0),
+                tool_call_count: self.tool_call_count,
+                total_entries,
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch Builder
 // ---------------------------------------------------------------------------
 
 /// Build a structured cascade trace from a slice of tape entries.
@@ -1051,5 +1243,82 @@ mod tests {
         assert_eq!(CascadeEntryKind::Thought.prefix(), "thk");
         assert_eq!(CascadeEntryKind::Action.prefix(), "act");
         assert_eq!(CascadeEntryKind::Observation.prefix(), "obs");
+    }
+
+    #[test]
+    fn cascade_builder_matches_build_cascade() {
+        // Reproduce the same scenario as multi_iteration_creates_multiple_ticks
+        // using CascadeBuilder, then assert parity with build_cascade output.
+        let ts = Timestamp::now();
+        let msg_id = "builder-parity";
+
+        // -- build_cascade path (from TapEntry slice) --
+        let entries = vec![
+            make_entry(
+                1,
+                TapEntryKind::Message,
+                json!({"role": "user", "content": "do two things"}),
+            ),
+            make_entry(
+                2,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "first I'll search"}),
+            ),
+            make_entry(
+                3,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c1", "function": {"name": "search", "arguments": "{}"}}]}),
+            ),
+            make_entry(4, TapEntryKind::ToolResult, json!({"results": ["result1"]})),
+            make_entry(
+                5,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "now I'll read"}),
+            ),
+            make_entry(
+                6,
+                TapEntryKind::ToolCall,
+                json!({"calls": [{"id": "c2", "function": {"name": "read", "arguments": "{}"}}]}),
+            ),
+            make_entry(7, TapEntryKind::ToolResult, json!({"results": ["result2"]})),
+            make_entry(
+                8,
+                TapEntryKind::Message,
+                json!({"role": "assistant", "content": "done"}),
+            ),
+        ];
+        let expected = build_cascade(&entries, msg_id);
+
+        // -- CascadeBuilder path --
+        let mut builder = CascadeBuilder::new(msg_id.to_owned());
+        builder.push_user(1, "do two things", ts, None);
+        builder.push_assistant(2, "first I'll search", None, ts, None);
+        builder.push_tool_calls(3, &[("search", "{}")], ts, None);
+        builder.push_tool_results(4, &["result1"], ts, None);
+        builder.push_assistant(5, "now I'll read", None, ts, None);
+        builder.push_tool_calls(6, &[("read", "{}")], ts, None);
+        builder.push_tool_results(7, &["result2"], ts, None);
+        builder.push_assistant(8, "done", None, ts, None);
+        let actual = builder.finish();
+
+        // Structural parity checks.
+        assert_eq!(actual.message_id, expected.message_id);
+        assert_eq!(actual.ticks.len(), expected.ticks.len());
+        assert_eq!(actual.summary.tick_count, expected.summary.tick_count);
+        assert_eq!(
+            actual.summary.tool_call_count,
+            expected.summary.tool_call_count
+        );
+        assert_eq!(actual.summary.total_entries, expected.summary.total_entries);
+
+        for (a_tick, e_tick) in actual.ticks.iter().zip(expected.ticks.iter()) {
+            assert_eq!(a_tick.index, e_tick.index);
+            assert_eq!(a_tick.entries.len(), e_tick.entries.len());
+            for (a_entry, e_entry) in a_tick.entries.iter().zip(e_tick.entries.iter()) {
+                assert_eq!(a_entry.kind, e_entry.kind);
+                assert_eq!(a_entry.content, e_entry.content);
+                assert_eq!(a_entry.id, e_entry.id);
+            }
+        }
     }
 }
