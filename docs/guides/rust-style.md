@@ -3,7 +3,7 @@
 ## Error Handling
 
 - Use `snafu` exclusively — never `thiserror` or manual `impl Error`
-- `anyhow` only allowed in `ToolExecute::run()` return types
+- `anyhow` allowed at application boundaries (tool implementations, integrations, app bootstrap) but NOT in domain/kernel core logic — use `snafu` there
 - Every error enum: `#[derive(Debug, Snafu)]` + `#[snafu(visibility(pub))]`
 - Name: `{CrateName}Error`, variants use `#[snafu(display("..."))]`
 - Propagate with `.context(XxxSnafu)?` or `.whatever_context("msg")?`

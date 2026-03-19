@@ -15,7 +15,7 @@ When a feature is too large for a single PR (> ~400 lines of change, or spans mu
 
 ## Step 1: Create Epic Issue
 
-Use the appropriate issue template (see `@docs/workflow.md` for template list):
+Use the appropriate issue template (see [workflow](workflow.md) for template list):
 ```bash
 gh issue create --template feature_request.yml \
   --title "feat(scope): large feature description" \
