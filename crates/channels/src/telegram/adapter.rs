@@ -1548,11 +1548,15 @@ async fn handle_guard_callback(
             (_, Ok(_)) => "Done".to_string(),
         };
 
-        // Preserve original message content and append the decision status.
+        // Preserve original message content, append the decision status,
+        // and remove the inline keyboard so buttons cannot be clicked again.
         let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
         let _ = bot
             .edit_message_text(chat_id, msg_id, new_text)
             .parse_mode(ParseMode::Html)
+            .reply_markup(InlineKeyboardMarkup::new(
+                Vec::<Vec<InlineKeyboardButton>>::new(),
+            ))
             .await;
     }
 
