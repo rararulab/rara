@@ -14,9 +14,22 @@ When a feature is too large for a single PR (> ~400 lines of change, or spans mu
 ```
 
 ## Step 1: Create Epic Issue
+
+Use the appropriate issue template (see `@docs/workflow.md` for template list):
 ```bash
-gh issue create --title "feat(scope): large feature description" \
-  --label "created-by:claude" --label "enhancement" --label "core"
+gh issue create --template feature_request.yml \
+  --title "feat(scope): large feature description" \
+  --body "$(cat <<'EOF'
+### Description
+Overall feature description and motivation.
+
+### Component
+kernel (core runtime, heartbeat, event bus)
+
+### Alternatives considered
+N/A
+EOF
+)" --label "created-by:claude" --label "core"
 ```
 This is the tracking issue (e.g., #100). All sub-issues reference it.
 
@@ -30,9 +43,19 @@ git push -u origin feat/{name}
 ## Step 3: Decompose into Sub-Issues
 Create one issue per incremental step, referencing the epic:
 ```bash
-gh issue create --title "feat(scope): step 1 — add data model (#100)" \
-  --body "Part of #100" \
-  --label "created-by:claude" --label "enhancement" --label "core"
+gh issue create --template feature_request.yml \
+  --title "feat(scope): step 1 — add data model (#100)" \
+  --body "$(cat <<'EOF'
+### Description
+Part of #100. Add the data model layer.
+
+### Component
+kernel (core runtime, heartbeat, event bus)
+
+### Alternatives considered
+N/A
+EOF
+)" --label "created-by:claude" --label "core"
 ```
 
 ## Step 4: Stack Branches and Work
@@ -46,15 +69,55 @@ git worktree add .worktrees/issue-102-step2 -b issue-102-step2 issue-101-step1
 ```
 
 ## Step 5: Incremental PRs
-Each sub-PR targets the previous branch in the stack:
+Each sub-PR targets the previous branch in the stack. Use the PR template (`.github/pull_request_template.md`):
 ```bash
 # Step 1 PR: targets feat/{name}
 gh pr create --base feat/{name} --title "feat(scope): step 1 — add data model (#101)" \
-  --body "Part of #100. Closes #101" --label "enhancement" --label "core"
+  --body "$(cat <<'EOF'
+## Summary
+Part of #100. Add data model for the new feature.
+
+## Type of change
+| Type | Label |
+|------|-------|
+| New feature | `enhancement` |
+
+## Component
+`core`
+
+## Closes
+Closes #101
+
+## Test plan
+- [x] `just test` passes
+- [x] `just lint` passes
+- [x] Tested locally
+EOF
+)" --label "enhancement" --label "core"
 
 # Step 2 PR: targets step 1 branch
 gh pr create --base issue-101-step1 --title "feat(scope): step 2 — add service layer (#102)" \
-  --body "Part of #100. Closes #102" --label "enhancement" --label "core"
+  --body "$(cat <<'EOF'
+## Summary
+Part of #100. Add service layer on top of the data model.
+
+## Type of change
+| Type | Label |
+|------|-------|
+| New feature | `enhancement` |
+
+## Component
+`core`
+
+## Closes
+Closes #102
+
+## Test plan
+- [x] `just test` passes
+- [x] `just lint` passes
+- [x] Tested locally
+EOF
+)" --label "enhancement" --label "core"
 ```
 - Merge sub-PRs in order (step 1 first, then step 2, etc.)
 - After merging a sub-PR, update the next PR's base if needed: `gh pr edit {N} --base feat/{name}`
@@ -64,7 +127,29 @@ After all sub-PRs are merged into `feat/{name}`, create the summary PR:
 ```bash
 gh pr create --base main --head feat/{name} \
   --title "feat(scope): large feature description (#100)" \
-  --body "Closes #100\n\n## Summary\n- Step 1: ...\n- Step 2: ...\n- Step 3: ..." \
-  --label "enhancement" --label "core"
+  --body "$(cat <<'EOF'
+## Summary
+Complete implementation of the feature.
+- Step 1: Added data model (#101)
+- Step 2: Added service layer (#102)
+- Step 3: Added API endpoints (#103)
+
+## Type of change
+| Type | Label |
+|------|-------|
+| New feature | `enhancement` |
+
+## Component
+`core`
+
+## Closes
+Closes #100
+
+## Test plan
+- [x] `just test` passes
+- [x] `just lint` passes
+- [x] Tested locally
+EOF
+)" --label "enhancement" --label "core"
 ```
 This is the **only PR the reviewer needs to look at** — a single, complete view of the entire feature.

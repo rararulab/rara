@@ -12,14 +12,59 @@
 ```
 
 ## Step 1: Create Issue
+
+Issues MUST use the GitHub issue templates defined in `.github/ISSUE_TEMPLATE/`. Pick the template matching the change type:
+
+| Template | Use when |
+|----------|----------|
+| `feature_request.yml` | New feature or enhancement |
+| `bug_report.yml` | Bug fix |
+| `refactor.yml` | Code refactor or technical improvement |
+| `chore.yml` | CI, dependencies, tooling, maintenance |
+
 ```bash
-gh issue create --title "feat(kernel): event queue sharding" \
-  --label "created-by:claude" --label "enhancement" --label "core"
+# Example: feature request
+gh issue create --template feature_request.yml \
+  --title "feat(kernel): event queue sharding" \
+  --body "$(cat <<'EOF'
+### Description
+Event queue sharding to improve throughput.
+
+### Component
+kernel (core runtime, heartbeat, event bus)
+
+### Alternatives considered
+None.
+EOF
+)" --label "created-by:claude" --label "core"
+
+# Example: bug report
+gh issue create --template bug_report.yml \
+  --title "fix(web): session token not refreshed" \
+  --body "$(cat <<'EOF'
+### Description
+Session token expires but is not refreshed automatically.
+
+### Component
+web (frontend, UI)
+
+### Steps to reproduce
+1. Login and wait 30 minutes
+2. Attempt any action
+3. 401 error
+
+### Logs / Error output
+401 Unauthorized
+
+### Version
+rara 0.0.1
+EOF
+)" --label "created-by:claude" --label "ui"
 ```
 
 **Issue Labels** (all issues MUST have proper labels):
 - `created-by:claude` — required for all agent-created issues
-- **Type** (pick one): `bug`, `enhancement`, `refactor`, `chore`, `documentation`
+- **Type**: auto-applied by the template (`enhancement`, `bug`, `refactor`, `chore`)
 - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
 
 ## Step 2: Create Worktree
@@ -67,10 +112,37 @@ just pre-commit                # Alternative: fmt + clippy + check + test
 If pre-commit hook blocks a commit during development, fix issues before the final commit. Do NOT use `--no-verify` to skip hooks.
 
 ## Step 5: Push & Create PR
+
+PRs use the template at `.github/pull_request_template.md`. Fill in all sections.
+
 ```bash
 git push -u origin issue-{N}-{short-name}
-gh pr create --title "fix(scope): description" --body "Closes #{N}" \
-  --label "bug" --label "core"
+gh pr create --title "fix(scope): description (#N)" --body "$(cat <<'EOF'
+## Summary
+
+Brief description of the changes.
+
+## Type of change
+
+| Type | Label |
+|------|-------|
+| Bug fix | `bug` |
+
+## Component
+
+`core`
+
+## Closes
+
+Closes #N
+
+## Test plan
+
+- [x] `just test` passes
+- [x] `just lint` passes
+- [x] Tested locally
+EOF
+)" --label "bug" --label "core"
 ```
 - Commit message must include `Closes #N` so the issue is auto-closed when PR merges
 - Never merge locally — all merges happen through GitHub PR
