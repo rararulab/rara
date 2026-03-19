@@ -127,6 +127,9 @@ const MAX_REPLAN_ATTEMPTS: usize = 3;
 /// Max LLM iterations per worker step — keeps impossible tasks from burning
 /// time.
 const WORKER_MAX_ITERATIONS: usize = 12;
+/// Timeout (seconds) for a worker step to complete before being treated as
+/// failed. Prevents stuck workers from blocking the plan loop indefinitely.
+const WORKER_TIMEOUT_SECS: u64 = 300;
 
 /// System prompt for the planning LLM call.
 const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planner. Analyze the user's request and decompose it into a structured execution plan.
@@ -343,7 +346,14 @@ pub(crate) async fn run_plan_loop(
                 )
                 .await
             }
-            ExecutionMode::Worker => execute_worker_step(handle, session_key, &step).await,
+            ExecutionMode::Worker => {
+                let worker_result =
+                    execute_worker_step(handle, session_key, &step, turn_cancel).await;
+                // Accumulate worker metrics into the plan-level totals.
+                total_iterations += worker_result.iterations;
+                total_tool_calls += worker_result.tool_calls;
+                (worker_result.outcome, worker_result.summary)
+            }
         };
 
         let (step_status, end_status) = match &outcome {
@@ -856,16 +866,34 @@ async fn replan_via_llm(
 // Worker execution
 // ---------------------------------------------------------------------------
 
+/// Result of executing a worker step, including metrics for the caller.
+struct WorkerStepResult {
+    outcome:    StepOutcome,
+    summary:    String,
+    iterations: usize,
+    tool_calls: usize,
+}
+
 /// Execute a plan step by spawning an independent worker child session.
 ///
 /// Uses `KernelHandle::spawn_child` to create a child agent that runs
-/// the step's task independently. Waits for completion and returns the
-/// outcome.
+/// the step's task independently. Waits for completion (with timeout and
+/// cancellation support) and returns the outcome plus metrics.
 async fn execute_worker_step(
     handle: &KernelHandle,
     session_key: SessionKey,
     step: &PlanStep,
-) -> (StepOutcome, String) {
+    turn_cancel: &CancellationToken,
+) -> WorkerStepResult {
+    let failed = |reason: String| WorkerStepResult {
+        outcome:    StepOutcome::Failed {
+            reason: reason.clone(),
+        },
+        summary:    reason,
+        iterations: 0,
+        tool_calls: 0,
+    };
+
     // Look up the principal from the parent session.
     let principal = match handle
         .process_table()
@@ -874,12 +902,7 @@ async fn execute_worker_step(
         Some(p) => p,
         None => {
             let reason = format!("session {} not found for worker spawn", session_key);
-            return (
-                StepOutcome::Failed {
-                    reason: reason.clone(),
-                },
-                reason,
-            );
+            return failed(reason);
         }
     };
 
@@ -928,63 +951,117 @@ async fn execute_worker_step(
         Err(e) => {
             let reason = format!("failed to spawn worker: {e}");
             warn!(session_key = %session_key, step = step.index, error = %e, "worker spawn failed");
-            return (
-                StepOutcome::Failed {
-                    reason: reason.clone(),
-                },
-                reason,
-            );
+            return failed(reason);
         }
     };
 
-    // Wait for the child to complete, collecting milestones.
+    let child_key = agent_handle.session_key.clone();
+
+    // Wait for the child to complete, with timeout and cancellation.
     let mut rx = agent_handle.result_rx;
     let mut milestones = Vec::new();
+    let timeout = tokio::time::Duration::from_secs(WORKER_TIMEOUT_SECS);
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            crate::io::AgentEvent::Milestone { stage, detail } => {
-                milestones.push(format!("{}: {}", stage, detail.unwrap_or_default()));
-            }
-            crate::io::AgentEvent::Done(result) => {
-                let summary = if result.output.is_empty() {
-                    format!(
-                        "Worker completed ({} iterations, {} tool calls)",
-                        result.iterations, result.tool_calls
-                    )
-                } else {
-                    crate::agent::truncate_preview(
-                        &result.output,
-                        crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES,
-                    )
-                };
-
-                info!(
-                    session_key = %session_key,
-                    step = step.index,
-                    iterations = result.iterations,
-                    tool_calls = result.tool_calls,
-                    milestones = milestones.len(),
-                    "plan executor: worker completed"
-                );
-
-                return (StepOutcome::Success, summary);
+    let recv_result = tokio::time::timeout(timeout, async {
+        loop {
+            tokio::select! {
+                event = rx.recv() => {
+                    match event {
+                        Some(crate::io::AgentEvent::Milestone { stage, detail }) => {
+                            milestones.push(format!("{}: {}", stage, detail.unwrap_or_default()));
+                        }
+                        Some(crate::io::AgentEvent::Done(result)) => return Some(result),
+                        // Channel closed without Done — worker dropped.
+                        None => return None,
+                    }
+                }
+                _ = turn_cancel.cancelled() => return None,
             }
         }
-    }
+    })
+    .await;
 
-    // Channel closed without a Done event — worker was dropped.
-    let reason = format!(
-        "worker for step {} was dropped without producing a result",
-        step.index
-    );
-    warn!(session_key = %session_key, step = step.index, "worker dropped without result");
-    (
-        StepOutcome::Failed {
-            reason: reason.clone(),
-        },
-        reason,
-    )
+    match recv_result {
+        Ok(Some(result)) => {
+            let summary = if result.output.is_empty() {
+                format!(
+                    "Worker completed ({} iterations, {} tool calls)",
+                    result.iterations, result.tool_calls
+                )
+            } else {
+                crate::agent::truncate_preview(
+                    &result.output,
+                    crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES,
+                )
+            };
+
+            info!(
+                session_key = %session_key,
+                step = step.index,
+                success = result.success,
+                iterations = result.iterations,
+                tool_calls = result.tool_calls,
+                milestones = milestones.len(),
+                "plan executor: worker completed"
+            );
+
+            // Mirror classify_step_result logic: treat unsuccessful
+            // completion (e.g. max iterations exhausted) as replan trigger.
+            let outcome = if result.success {
+                StepOutcome::Success
+            } else {
+                let reason = format!(
+                    "worker did not complete successfully ({} iterations, {} tool calls)",
+                    result.iterations, result.tool_calls
+                );
+                warn!(
+                    session_key = %session_key,
+                    step = step.index,
+                    "plan executor: worker finished with success=false, requesting replan"
+                );
+                StepOutcome::NeedsReplan { reason }
+            };
+
+            WorkerStepResult {
+                outcome,
+                summary,
+                iterations: result.iterations,
+                tool_calls: result.tool_calls,
+            }
+        }
+        Ok(None) if turn_cancel.is_cancelled() => {
+            // Parent was cancelled — propagate without extra noise.
+            let reason = format!("worker for step {} cancelled", step.index);
+            warn!(session_key = %session_key, step = step.index, "worker cancelled by user");
+            failed(reason)
+        }
+        Ok(None) => {
+            // Channel closed without Done — worker dropped.
+            let reason = format!(
+                "worker for step {} was dropped without producing a result",
+                step.index
+            );
+            warn!(session_key = %session_key, step = step.index, "worker dropped without result");
+            failed(reason)
+        }
+        Err(_) => {
+            // Timeout — terminate the child to release resources.
+            if let Err(e) = handle.send_signal(child_key, crate::session::Signal::Terminate) {
+                warn!(
+                    session_key = %session_key,
+                    step = step.index,
+                    error = %e,
+                    "plan executor: failed to terminate timed-out worker"
+                );
+            }
+            let reason = format!(
+                "worker for step {} timed out after {}s",
+                step.index, WORKER_TIMEOUT_SECS
+            );
+            warn!(session_key = %session_key, step = step.index, "worker timed out");
+            failed(reason)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

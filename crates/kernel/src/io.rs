@@ -1862,6 +1862,7 @@ mod agent_event_tests {
             output:     "done".to_string(),
             iterations: 3,
             tool_calls: 5,
+            success:    true,
         };
         let event = AgentEvent::Done(result);
         match event {
