@@ -229,6 +229,8 @@ struct ProgressMessage {
     /// Index of the currently executing step (0-based), `None` before first
     /// step starts.
     plan_current_step: Option<usize>,
+    /// High-level rationale for the current turn, shown above tool lines.
+    turn_rationale:    Option<String>,
 }
 
 impl ProgressMessage {
@@ -252,6 +254,7 @@ impl ProgressMessage {
             plan_steps: None,
             plan_goal: None,
             plan_current_step: None,
+            turn_rationale: None,
         }
     }
 
@@ -408,6 +411,10 @@ fn render_progress(
     let phases = aggregate_phases(tools);
     let mut lines = Vec::new();
 
+    if let Some(ref rationale) = progress.turn_rationale {
+        lines.push(format!("\u{1f4ad} {rationale}"));
+    }
+
     // Count in-progress phases.
     let active = phases.iter().filter(|p| !p.all_finished).count();
     if active > 1 {
@@ -489,6 +496,10 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
     )];
     lines.push(String::new());
+
+    if let Some(ref rationale) = progress.turn_rationale {
+        lines.push(format!("\u{1f4ad} {rationale}"));
+    }
 
     for (i, step) in steps.iter().enumerate() {
         let (icon, suffix) = match &step.status {
@@ -2613,6 +2624,10 @@ fn spawn_stream_forwarder(
                                     }
                                 }
                             }
+                        }
+                        Ok(StreamEvent::TurnRationale { text }) => {
+                            progress.turn_rationale = Some(text);
+                            progress_dirty = true;
                         }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
                             let (display, summary) = tool_display_info(&name, &arguments);
