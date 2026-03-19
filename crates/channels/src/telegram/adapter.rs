@@ -1538,7 +1538,9 @@ async fn handle_guard_callback(
             (ApprovalDecision::Approved, Ok(_)) => format!("✅ <b>Approved</b> by @{decided_by}"),
             (ApprovalDecision::Denied, Ok(_)) => format!("❌ <b>Denied</b> by @{decided_by}"),
             (_, Err(ResolveError::Expired)) => "⏰ <b>Expired</b> — request timed out".to_string(),
-            (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(&e.to_string())),
+            (_, Err(ResolveError::NotFound(_))) => {
+                "⏰ <b>Expired</b> — request already resolved or timed out".to_string()
+            }
             _ => "Done".to_string(),
         };
 
