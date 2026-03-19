@@ -23,7 +23,10 @@ Issue tracker to coding agent synchronization bridge — polls issue trackers (G
 4. Spawns `ralph init` then `ralph run` as a child process in the worktree directory.
 5. stdout/stderr are captured to per-issue log files under `~/.config/rara/ralpha/logs/<repo>/`.
 6. On child exit, transitions issue state (success → `ToVerify`, failure → stays in `In Progress`).
-7. Cleans up worktree on successful completion or when issue reaches terminal state externally.
+7. If review is enabled, spawns a reviewer on the same workspace (review phase).
+8. If verify is enabled, issues in `completed_issue_state` (e.g. "ToVerify") are picked up by the verify pipeline on a subsequent poll cycle. The verifier reuses the existing workspace or recovers it from the remote branch ref.
+9. On verify success, transitions to `verify.completed_state` (e.g. "WaitingApprove") and cleans up. On verify failure, adds `AutoVerifyFailed` label and moves to failed for retry.
+10. Cleans up worktree on successful completion or when issue reaches terminal state externally.
 
 ### Public API
 
@@ -32,7 +35,8 @@ Issue tracker to coding agent synchronization bridge — polls issue trackers (G
 
 ## Critical Invariants
 
-- `max_concurrent_agents` is enforced globally and per-repo — never bypass the slot check.
+- `max_concurrent_agents` is enforced globally and per-repo for coding agents — never bypass the slot check.
+- `verify.max_concurrent` is enforced separately for verify agents.
 - Worktree cleanup must happen after child process termination — killing a child without cleanup leaks git worktrees.
 - `TrackerConfig` API keys support `$ENV_VAR` syntax — resolved at runtime via `resolve_env_var()`.
 - Log files are truncated on each new run for the same issue — not appended.
