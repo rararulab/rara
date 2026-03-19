@@ -1500,16 +1500,17 @@ async fn handle_guard_callback(
         .unwrap_or("unknown")
         .to_string();
 
+    // Cancel the auto-expiry task before resolving so it cannot race with the
+    // message edit below.
+    if let Some((_, abort_handle)) = GUARD_EXPIRY_HANDLES.remove(&request_id) {
+        abort_handle.abort();
+    }
+
     let result =
         handle
             .security()
             .approval()
             .resolve(request_id, decision, Some(decided_by.clone()));
-
-    // Cancel the auto-expiry task since the user has already resolved this request.
-    if let Some((_, abort_handle)) = GUARD_EXPIRY_HANDLES.remove(&request_id) {
-        abort_handle.abort();
-    }
 
     // Answer the callback query (removes the loading spinner on the button).
     let answer_text = match decision {
@@ -1541,7 +1542,10 @@ async fn handle_guard_callback(
             (_, Err(ResolveError::NotFound(_))) => {
                 "⏰ <b>Expired</b> — request already resolved or timed out".to_string()
             }
-            _ => "Done".to_string(),
+            // Future-proof: catch any new ResolveError variants.
+            #[allow(unreachable_patterns)]
+            (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(&e.to_string())),
+            (_, Ok(_)) => "Done".to_string(),
         };
 
         // Preserve original message content and append the decision status.
@@ -2006,8 +2010,7 @@ async fn approval_listener(
                     "<b>Reason:</b> {summary}\n\
                      <b>Risk:</b> {risk:?}\n\n\
                      ⏱ <b>Requested:</b> {requested}\n\
-                     ⏳ <b>Expires:</b> {timeout}s (at {expires})\n\n\
-                     Approve or deny this action:",
+                     ⏳ <b>Expires:</b> {timeout}s (at {expires})",
                     summary = guard_html_escape(&req.summary),
                     risk = req.risk_level,
                     requested = requested_str,
@@ -2015,13 +2018,17 @@ async fn approval_listener(
                     expires = expires_str,
                 ));
 
+                // Keep the info block separate from the action prompt so the
+                // expiry task can reuse `text` without the prompt line.
+                let display_text = format!("{text}\n\nApprove or deny this action:");
+
                 let keyboard = InlineKeyboardMarkup::new(vec![vec![
                     InlineKeyboardButton::callback("✅ Approve", format!("guard:approve:{}", req.id)),
                     InlineKeyboardButton::callback("❌ Deny", format!("guard:deny:{}", req.id)),
                 ]]);
 
                 let result = bot
-                    .send_message(ChatId(chat_id), &text)
+                    .send_message(ChatId(chat_id), &display_text)
                     .parse_mode(ParseMode::Html)
                     .reply_markup(keyboard)
                     .await;
@@ -2038,7 +2045,7 @@ async fn approval_listener(
                         let timeout_secs = req.timeout_secs;
                         let request_id = req.id;
                         let expires_display = expires_str.to_string();
-                        let original_text = text.clone();
+                        let info_text = text.clone();
 
                         let handle = tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
@@ -2049,7 +2056,7 @@ async fn approval_listener(
                             // Edit message: remove keyboard and show expiry status.
                             let expired_text = format!(
                                 "{}\n\n⏰ <b>Expired</b> — timed out at {}",
-                                original_text, expires_display,
+                                info_text, expires_display,
                             );
                             let _ = expiry_bot
                                 .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
