@@ -42,7 +42,7 @@ A single slash command `/dev "requirement"` that runs the full development pipel
 
 - Analyze the requirement, propose 2-3 approaches with trade-offs
 - Autonomously select the recommended approach (do not ask the user)
-- Generate design doc → `docs/plans/YYYY-MM-DD-{topic}-design.md`
+- Draft design doc in conversation context (physically written to `docs/plans/YYYY-MM-DD-{topic}-design.md` inside the worktree created in Phase 2)
 
 ### Step 1.3: Plan Review (autonomous loop)
 
@@ -75,8 +75,9 @@ A single slash command `/dev "requirement"` that runs the full development pipel
 ### Step 2.2a: Small Task Path
 
 ```bash
-# Create issue with template + labels
-gh issue create --template {template} --title "{title}" --label "created-by:claude" --label "{component}"
+# Create issue (--template cannot be used with --body, so body must follow template structure)
+# Body fields: ### Description, ### Component, ### Alternatives considered
+gh issue create --title "{title}" --body "..." --label "created-by:claude" --label "{component}"
 
 # Create worktree
 git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
@@ -93,8 +94,8 @@ cargo test -p {crate}
 ### Step 2.2b: Large Task Path (Stacked PRs)
 
 ```bash
-# Create epic issue
-gh issue create --template feature_request.yml --title "feat(scope): {description}"
+# Create epic issue (body follows feature_request template structure)
+gh issue create --title "feat(scope): {description}" --body "..."
 
 # Create feature branch from origin/main (no checkout needed)
 git fetch origin main
@@ -106,7 +107,8 @@ git push -u origin feat/{name}
 #   - Create worktree branching from feat/{name}
 #   - Dispatch subagent (parallel execution)
 #
-# After all complete → merge into feat/{name}
+# After all complete → each sub-branch creates a PR targeting feat/{name}
+# Merge via GitHub PR (never local merge) per stacked-prs.md
 ```
 
 ### Step 2.3: Build Verification
@@ -195,21 +197,22 @@ Output:
 
 ---
 
-## Key Differences from gstack
+## Design Rationale
 
-| Aspect | gstack `/ship` | rara `/dev` |
-|--------|---------------|-------------|
+Inspired by [gstack](https://github.com/garrytan/gstack) (Garry Tan's Claude Code skill collection with a `/ship` pipeline), but built natively on rara's existing infrastructure:
+
+| Aspect | Typical skill pipelines | rara `/dev` |
+|--------|------------------------|-------------|
 | Scope | Review + ship only | Full pipeline: design → implement → review → ship |
-| Review issues | ASK items → ask user | Autonomous research + fix; escalate only if stuck |
+| Review issues | Ask user for each issue | Autonomous research + fix; escalate only if stuck |
 | Isolation | Direct branch work | Worktree isolation (per CLAUDE.md) |
 | Scale handling | Single branch | Auto-judge: single vs stacked PRs |
-| Chaining | File artifacts + inline | Single skill, phased execution |
 | User interaction | Multiple touchpoints | Only 2: plan confirm + final report |
 
 ## Implementation Notes
 
 - This skill will be a Claude Code slash command (SKILL.md format)
-- It orchestrates existing infrastructure via Agent tool subagents (general-purpose type)
+- It orchestrates existing infrastructure via Agent tool subagents (code-reviewer, general-purpose types)
 - CLAUDE.md constraints (snafu, bon, functional style, commit style) are already global — not duplicated in the skill
 - The skill itself is a Markdown prompt, not a code pipeline
 - Design doc is drafted in conversation context during Phase 1, physically written to worktree in Phase 2

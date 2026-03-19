@@ -51,7 +51,7 @@ The design doc MUST include:
 
 ### Step 1.3: Plan Review (autonomous loop)
 
-Dispatch a **general-purpose subagent** (via the Agent tool) to review the design doc. The subagent prompt must instruct it to act as a code reviewer.
+Dispatch a **code-reviewer subagent** (via the Agent tool with `subagent_type: "superpowers:code-reviewer"`) to review the design doc. Provide the design doc content and the review dimensions in the prompt.
 
 Review dimensions:
 - Architectural soundness — does it fit the existing codebase?
@@ -117,7 +117,18 @@ gh issue create --title "{type}({scope}): {description}" \
   --label "created-by:claude" --label "{type-label}" --label "{component-label}"
 ```
 
-Note: `--template` flag cannot be used with `--body`. Ensure the body follows the template's field structure (Description, Component, Alternatives considered).
+Note: `--template` flag cannot be used with `--body`. The body MUST follow the template's field structure:
+
+```
+### Description
+{what and why}
+
+### Component
+{crate or area} ({description})
+
+### Alternatives considered
+{alternatives or "N/A"}
+```
 
 ```bash
 git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
@@ -153,7 +164,8 @@ For each independent sub-task:
 
 After all subagents complete:
 - Verify each worktree's changes compile
-- Merge sub-branches into `feat/{name}`
+- Each sub-branch creates a PR targeting `feat/{name}` (never merge locally — use GitHub PR per stacked-prs.md)
+- Merge sub-PRs in order via GitHub
 
 **Partial failure handling:** If some subagents succeed and others fail:
 - Keep successful worktrees and their commits
@@ -190,7 +202,8 @@ Determine the correct base branch for the diff:
 - Large task (stacked PRs): `origin/feat/{name}`
 
 ```bash
-git diff origin/{base} --
+git fetch origin {base}
+git diff origin/{base}...HEAD
 ```
 
 Two-pass review:
@@ -352,7 +365,18 @@ gh pr checks {PR-number} --watch
 - **CI failure:** analyze the logs, fix in worktree, push again (max 3 attempts)
 - **3 failures:** escalate to user with CI logs
 
-### Step 4.5: Report
+### Step 4.5: Cleanup Reminder
+
+After reporting, remind the user to clean up worktrees after PR is merged:
+
+```bash
+git worktree remove .worktrees/issue-{N}-{name}
+git branch -d issue-{N}-{name}
+```
+
+The pipeline does NOT auto-cleanup because the PR hasn't merged yet. Cleanup happens after merge (per workflow.md Step 6).
+
+### Step 4.6: Report
 
 Output the final result:
 
