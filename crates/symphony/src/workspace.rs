@@ -291,8 +291,8 @@ impl WorkspaceManager {
     }
 }
 
-/// Generate a stable per-issue branch name from the issue number and title.
-fn branch_name(issue_number: u64, issue_title: &str) -> String {
+/// Convert an issue title into a URL-safe slug for branch names.
+pub fn branch_slug(issue_title: &str) -> String {
     let slug = issue_title
         .to_lowercase()
         .chars()
@@ -302,11 +302,16 @@ fn branch_name(issue_number: u64, issue_title: &str) -> String {
         .filter(|piece| !piece.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    let slug = if slug.is_empty() {
+    if slug.is_empty() {
         "task".to_owned()
     } else {
         slug
-    };
+    }
+}
+
+/// Generate a stable per-issue branch name from the issue number and title.
+fn branch_name(issue_number: u64, issue_title: &str) -> String {
+    let slug = branch_slug(issue_title);
     format!("issue-{issue_number}-{slug}")
 }
 

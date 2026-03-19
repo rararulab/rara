@@ -173,6 +173,7 @@ struct IssueRuntime {
     agent:             RalphAgent,
     running:           HashMap<String, RunningIssue>,
     reviewing:         HashMap<String, RunningIssue>,
+    verifying:         HashMap<String, RunningIssue>,
     failed:            HashMap<String, FinishedIssue>,
 }
 
@@ -184,6 +185,7 @@ impl IssueRuntime {
             agent,
             running: HashMap::new(),
             reviewing: HashMap::new(),
+            verifying: HashMap::new(),
             failed: HashMap::new(),
         }
     }
@@ -202,6 +204,11 @@ impl IssueRuntime {
         let active_ids: HashSet<String> = issues.iter().map(|issue| issue.id.clone()).collect();
         self.cleanup_terminal_issues(tracker, &active_ids).await;
 
+        // Partition issues into coding candidates and verify candidates based
+        // on their tracker workflow state.
+        let completed_state = self.completed_issue_state().to_owned();
+        let verify_enabled = self.config.verify.enabled;
+
         for issue in issues {
             let issue_id = issue.id.clone();
             let issue_identifier = issue.identifier.clone();
@@ -210,36 +217,59 @@ impl IssueRuntime {
 
             if self.running.contains_key(&issue.id)
                 || self.reviewing.contains_key(&issue.id)
+                || self.verifying.contains_key(&issue.id)
                 || self.failed.contains_key(&issue.id)
             {
                 continue;
             }
 
-            if self.running.len() >= self.config.max_concurrent_agents {
-                info!(issue_id = %issue.id, "no global slot available");
-                break;
-            }
+            // Issues in the completed_issue_state (e.g. "ToVerify") are
+            // candidates for the verify pipeline rather than coding.
+            let is_verify_candidate =
+                verify_enabled && issue.state_name.eq_ignore_ascii_case(&completed_state);
 
-            if self
-                .running
-                .values()
-                .filter(|run| run.issue.repo == issue.repo)
-                .count()
-                >= self.max_concurrent_for_repo(&issue.repo)
-            {
-                info!(issue_id = %issue.id, repo = %issue.repo, "no repo slot available");
-                continue;
-            }
+            if is_verify_candidate {
+                if self.verifying.len() >= self.config.verify.max_concurrent {
+                    info!(issue_id = %issue.id, "no verify slot available");
+                    continue;
+                }
+                if let Err(err) = self.start_verify_issue(tracker, &issue).await {
+                    error!(
+                        issue_id = %issue_id,
+                        issue_identifier = %issue_identifier,
+                        repo = %repo_name,
+                        issue_number,
+                        error = %err,
+                        "failed to start verify run"
+                    );
+                }
+            } else {
+                if self.running.len() >= self.config.max_concurrent_agents {
+                    info!(issue_id = %issue.id, "no global slot available");
+                    break;
+                }
 
-            if let Err(err) = self.start_issue(tracker, issue, None).await {
-                error!(
-                    issue_id = %issue_id,
-                    issue_identifier = %issue_identifier,
-                    repo = %repo_name,
-                    issue_number,
-                    error = %err,
-                    "failed to start issue run"
-                );
+                if self
+                    .running
+                    .values()
+                    .filter(|run| run.issue.repo == issue.repo)
+                    .count()
+                    >= self.max_concurrent_for_repo(&issue.repo)
+                {
+                    info!(issue_id = %issue.id, repo = %issue.repo, "no repo slot available");
+                    continue;
+                }
+
+                if let Err(err) = self.start_issue(tracker, issue, None).await {
+                    error!(
+                        issue_id = %issue_id,
+                        issue_identifier = %issue_identifier,
+                        repo = %repo_name,
+                        issue_number,
+                        error = %err,
+                        "failed to start issue run"
+                    );
+                }
             }
         }
 
@@ -258,6 +288,11 @@ impl IssueRuntime {
             let _ = run.child.kill().await;
         }
         self.reviewing.clear();
+        for (issue_id, run) in &mut self.verifying {
+            warn!(issue_id = %issue_id, "stopping active verify");
+            let _ = run.child.kill().await;
+        }
+        self.verifying.clear();
     }
 
     async fn reap_finished(&mut self, tracker: &dyn IssueTracker) {
@@ -431,15 +466,98 @@ impl IssueRuntime {
                 } else {
                     warn!(issue_id = %issue_id, status = ?status.code(), "review failed");
                 }
+
+                // After review, transition to completed state. The verify
+                // pipeline will pick the issue up on a subsequent poll cycle
+                // if verify is enabled and the tracker query includes the
+                // completed state (e.g. "ToVerify").
                 let completed_state = self.completed_issue_state();
                 if let Err(err) = tracker.transition_issue(&run.issue, completed_state).await {
                     warn!(issue_id = %issue_id, error = %err, "failed to transition issue after review");
                 }
-                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+
+                // Only cleanup workspace if verify is disabled; the verify
+                // pipeline will reuse the workspace.
+                if !self.config.verify.enabled {
+                    self.cleanup_workspace(&run.issue.repo, &run.workspace);
+                }
             } else if let Some(run) = self.reviewing.get(issue_id) {
                 if run.started_at.elapsed() > self.config.stall_timeout {
                     let mut run = self.reviewing.remove(issue_id).expect("key just checked");
                     warn!(issue_id = %issue_id, "killing stalled reviewer");
+                    let _ = run.child.kill().await;
+                    self.cleanup_workspace(&run.issue.repo, &run.workspace);
+                }
+            }
+        }
+
+        // Reap completed verify runs.
+        self.reap_verify(tracker).await;
+    }
+
+    /// Reap completed verify agent processes.
+    async fn reap_verify(&mut self, tracker: &dyn IssueTracker) {
+        let verify_ids: Vec<String> = self.verifying.keys().cloned().collect();
+        for issue_id in &verify_ids {
+            // Drain RPC events from the verifier.
+            if let Some(run) = self.verifying.get_mut(issue_id) {
+                while let Ok(event) = run.rpc_rx.try_recv() {
+                    if let crate::rpc::RpcEvent::LoopTerminated { reason, .. } = &event {
+                        run.run_state.terminated = true;
+                        run.run_state.term_reason = Some(reason.clone());
+                    }
+                }
+            }
+
+            let should_reap = self
+                .verifying
+                .get_mut(issue_id)
+                .and_then(|run| run.child.try_wait().ok())
+                .flatten();
+
+            if let Some(status) = should_reap {
+                let run = self.verifying.remove(issue_id).expect("key just checked");
+                if status.success() {
+                    info!(issue_id = %issue_id, "verify completed successfully");
+                    let target = &self.config.verify.completed_state;
+                    if let Err(err) = tracker.transition_issue(&run.issue, target).await {
+                        warn!(
+                            issue_id = %issue_id,
+                            state = target,
+                            error = %err,
+                            "failed to transition issue after verify"
+                        );
+                    }
+                    self.cleanup_workspace(&run.issue.repo, &run.workspace);
+                } else {
+                    warn!(
+                        issue_id = %issue_id,
+                        status = ?status.code(),
+                        "verify failed — rolling back to coding completed state"
+                    );
+                    // Tag the issue with AutoVerifyFailed so it can be
+                    // manually triaged.
+                    if let Err(err) = tracker.add_label(&run.issue, "AutoVerifyFailed").await {
+                        warn!(
+                            issue_id = %issue_id,
+                            error = %err,
+                            "failed to add AutoVerifyFailed label"
+                        );
+                    }
+                    self.failed.insert(
+                        issue_id.clone(),
+                        FinishedIssue {
+                            issue:     run.issue,
+                            workspace: run.workspace,
+                            attempt:   run.attempt,
+                            failed_at: Instant::now(),
+                        },
+                    );
+                }
+            } else if let Some(run) = self.verifying.get(issue_id) {
+                if run.started_at.elapsed() > self.config.stall_timeout {
+                    let mut run = self.verifying.remove(issue_id).expect("key just checked");
+                    warn!(issue_id = %issue_id, "killing stalled verifier");
                     let _ = run.child.kill().await;
                     self.cleanup_workspace(&run.issue.repo, &run.workspace);
                 }
@@ -456,6 +574,7 @@ impl IssueRuntime {
             .running
             .keys()
             .chain(self.reviewing.keys())
+            .chain(self.verifying.keys())
             .chain(self.failed.keys())
             .cloned()
             .collect();
@@ -470,6 +589,7 @@ impl IssueRuntime {
                 .get(&issue_id)
                 .map(|run| run.issue.clone())
                 .or_else(|| self.reviewing.get(&issue_id).map(|run| run.issue.clone()))
+                .or_else(|| self.verifying.get(&issue_id).map(|run| run.issue.clone()))
                 .or_else(|| self.failed.get(&issue_id).map(|run| run.issue.clone()));
             let Some(issue) = issue else {
                 continue;
@@ -492,6 +612,10 @@ impl IssueRuntime {
                 self.cleanup_workspace(&run.issue.repo, &run.workspace);
             }
             if let Some(mut run) = self.reviewing.remove(&issue_id) {
+                let _ = run.child.kill().await;
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            }
+            if let Some(mut run) = self.verifying.remove(&issue_id) {
                 let _ = run.child.kill().await;
                 self.cleanup_workspace(&run.issue.repo, &run.workspace);
             }
@@ -606,6 +730,120 @@ impl IssueRuntime {
         );
 
         self.reviewing.insert(
+            issue.id.clone(),
+            RunningIssue {
+                issue: issue.clone(),
+                workspace: workspace.clone(),
+                child: handle.child,
+                stdin: handle.stdin,
+                started_at: handle.started_at,
+                log_path,
+                output,
+                rpc_rx,
+                run_state: RunState::default(),
+                attempt: 0,
+            },
+        );
+        Ok(())
+    }
+
+    /// Provision (or reuse) a worktree and spawn a verify agent for the given
+    /// issue. Transitions the issue to the verify started state.
+    async fn start_verify_issue(
+        &mut self,
+        tracker: &dyn IssueTracker,
+        issue: &TrackedIssue,
+    ) -> Result<()> {
+        let repo = self.repo_config(&issue.repo).with_context(|_| {
+            crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to resolve repo config for verify issue {} in repo {}",
+                    issue.identifier, issue.repo
+                ),
+            }
+        })?;
+
+        // Try to reuse an existing worktree; fall back to creating one from the
+        // remote branch ref.
+        let branch_name = format!(
+            "issue-{}-{}",
+            issue.number,
+            crate::workspace::branch_slug(&issue.title)
+        );
+        let remote_ref = format!("origin/{branch_name}");
+
+        let workspace = self
+            .workspace_manager
+            .ensure_worktree(&repo, issue.number, &issue.title)
+            .or_else(|_| {
+                self.workspace_manager.ensure_worktree_from_ref(
+                    &repo,
+                    issue.number,
+                    &issue.title,
+                    &remote_ref,
+                )
+            })
+            .with_context(|_| crate::error::WorkspaceContextSnafu {
+                message: format!(
+                    "failed to ensure worktree for verify issue {} in repo {}",
+                    issue.identifier, issue.repo
+                ),
+            })?;
+
+        self.start_verify_for_issue(issue, &workspace).await?;
+
+        let started_state = &self.config.verify.started_state;
+        if let Err(err) = tracker.transition_issue(issue, started_state).await {
+            warn!(
+                issue_id = %issue.id,
+                state = started_state,
+                error = %err,
+                "failed to transition issue to verify started state"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Spawn a ralph verifier for the given issue, reusing the existing
+    /// workspace.
+    async fn start_verify_for_issue(
+        &mut self,
+        issue: &TrackedIssue,
+        workspace: &WorkspaceInfo,
+    ) -> Result<()> {
+        let mut handle = self
+            .agent
+            .start_verify(issue, &workspace.path, &self.config.verify)
+            .await?;
+
+        let log_path = issue_log_path(&issue.repo, &format!("{}-verify", issue.identifier));
+        let log_writer = spawn_issue_log_writer(&log_path, issue, workspace).await?;
+        let output = ProcessOutputSummaryHandle::default();
+        let (rpc_tx, rpc_rx) = mpsc::channel(256);
+
+        if let Some(stdout) = handle.child.stdout.take() {
+            let lw = log_writer.clone();
+            let (raw_tx, mut raw_rx) = mpsc::channel::<String>(256);
+            tokio::spawn(async move {
+                while let Some(line) = raw_rx.recv().await {
+                    let _ = lw.record("stdout", &line).await;
+                }
+            });
+            let _rpc_reader = crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
+        }
+        if let Some(stderr) = handle.child.stderr.take() {
+            spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
+        }
+
+        info!(
+            issue_id = %issue.id,
+            issue_identifier = %issue.identifier,
+            log_path = %log_path.display(),
+            "spawned ralph verifier"
+        );
+
+        self.verifying.insert(
             issue.id.clone(),
             RunningIssue {
                 issue: issue.clone(),
