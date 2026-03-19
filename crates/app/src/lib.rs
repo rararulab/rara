@@ -409,7 +409,15 @@ pub async fn start_with_options(
     {
         let mcp_mgr = rara.mcp_manager.clone();
         let interceptor_slot = rara.output_interceptor.clone();
+        let tools = rara.tool_registry.clone();
         tokio::spawn(async move {
+            // Pre-compute the bypass set once — tool registrations are static.
+            let bypass_set: std::collections::HashSet<String> = tools
+                .iter()
+                .filter(|(_, tool)| tool.bypass_output_interceptor())
+                .map(|(name, _)| name.to_owned())
+                .collect();
+
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
             ticker.tick().await; // skip immediate first tick
             loop {
@@ -420,7 +428,8 @@ pub async fn start_with_options(
                     if guard.is_none() {
                         tracing::info!("context-mode reconnected, enabling output interceptor");
                         *guard = Some(std::sync::Arc::new(
-                            crate::context_mode::ContextModeInterceptor::new(mcp_mgr.clone()),
+                            crate::context_mode::ContextModeInterceptor::new(mcp_mgr.clone())
+                                .with_bypass_set(bypass_set.clone()),
                         ));
                     }
                 }

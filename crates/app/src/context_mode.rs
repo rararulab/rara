@@ -17,9 +17,12 @@
 //! Indexes large tool outputs into the context-mode MCP server and replaces
 //! them with compact references.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -33,40 +36,6 @@ const SERVER_NAME: &str = "context-mode";
 
 /// Tool name prefix used by context-mode MCP server.
 const TOOL_PREFIX: &str = "context-mode__";
-
-/// Tools excluded from interception (their output is binary, always small,
-/// or must be returned verbatim to the agent).
-///
-/// Everything else is intercepted by default — any tool that can produce
-/// large textual output will be indexed into context-mode when it exceeds
-/// the size threshold.
-const NON_INTERCEPTABLE_TOOLS: &[&str] = &[
-    // Binary / image tools
-    "send_image",
-    "screenshot",
-    "set_avatar",
-    // Scheduler tools (tiny confirmation output)
-    "schedule_once",
-    "schedule_interval",
-    "schedule_cron",
-    "schedule_remove",
-    "schedule_list",
-    // Small metadata tools
-    "settings",
-    "session_info",
-    "tape_info",
-    "tape_handoff",
-    // MCP server admin (small output)
-    "install_mcp_server",
-    "remove_mcp_server",
-    "list_mcp_servers",
-    // Write-only / confirmation-only tools
-    "send_email",
-    "update_soul_state",
-    "evolve_soul",
-    "write_user_note",
-    "distill_user_notes",
-];
 
 /// Default output size threshold in bytes (8 KB).
 const DEFAULT_THRESHOLD: usize = 8 * 1024;
@@ -117,9 +86,10 @@ pub struct InterceptorStatsSnapshot {
 }
 
 pub struct ContextModeInterceptor {
-    manager:   McpManager,
-    threshold: usize,
-    stats:     Arc<InterceptorStats>,
+    manager:    McpManager,
+    threshold:  usize,
+    stats:      Arc<InterceptorStats>,
+    bypass_set: HashSet<String>,
 }
 
 impl ContextModeInterceptor {
@@ -128,11 +98,18 @@ impl ContextModeInterceptor {
             manager,
             threshold: DEFAULT_THRESHOLD,
             stats: Arc::new(InterceptorStats::new()),
+            bypass_set: HashSet::new(),
         }
     }
 
     pub fn with_threshold(mut self, threshold: usize) -> Self {
         self.threshold = threshold;
+        self
+    }
+
+    /// Set the tool names whose output should bypass interception.
+    pub fn with_bypass_set(mut self, set: HashSet<String>) -> Self {
+        self.bypass_set = set;
         self
     }
 
@@ -145,7 +122,7 @@ impl OutputInterceptor for ContextModeInterceptor {
     async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput {
         // Intercept everything by default — skip only tools whose output is
         // binary, always small, or must be returned verbatim.
-        if NON_INTERCEPTABLE_TOOLS.contains(&tool_name) {
+        if self.bypass_set.contains(tool_name) {
             return output;
         }
 
