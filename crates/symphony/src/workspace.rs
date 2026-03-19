@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::{ResultExt, ensure};
+use snafu::ResultExt;
 use tracing::{info, warn};
 
 use crate::{
@@ -37,13 +37,13 @@ pub struct WorkspaceManager;
 
 impl WorkspaceManager {
     fn ensure_repo_checkout(&self, repo: &RepoConfig) -> Result<(git2::Repository, PathBuf)> {
-        ensure!(
-            repo.repo_path.is_some(),
-            crate::error::WorkspaceSnafu {
+        let Some(repo_path) = &repo.repo_path else {
+            return crate::error::WorkspaceSnafu {
                 message: format!("repo {} is missing repo_path", repo.name),
             }
-        );
-        let repo_path = repo.repo_path.clone().expect("checked repo_path above");
+            .fail();
+        };
+        let repo_path = repo_path.clone();
 
         if repo_path.exists() {
             let checkout = git2::Repository::open(&repo_path).context(GitSnafu)?;
@@ -78,21 +78,18 @@ impl WorkspaceManager {
         issue_number: u64,
         issue_title: &str,
     ) -> Result<WorkspaceInfo> {
-        ensure!(
-            repo.repo_path.is_some(),
-            crate::error::WorkspaceSnafu {
+        if repo.repo_path.is_none() {
+            return crate::error::WorkspaceSnafu {
                 message: format!("repo {} is missing repo_path", repo.name),
             }
-        );
-        ensure!(
-            repo.effective_workspace_root().is_some(),
-            crate::error::WorkspaceSnafu {
+            .fail();
+        }
+        let Some(workspace_root) = repo.effective_workspace_root() else {
+            return crate::error::WorkspaceSnafu {
                 message: format!("repo {} is missing workspace_root", repo.name),
             }
-        );
-        let workspace_root = repo
-            .effective_workspace_root()
-            .expect("checked workspace_root above");
+            .fail();
+        };
         let branch = branch_name(issue_number, issue_title);
         let path = workspace_root.join(&branch);
         let (checkout, _) = self.ensure_repo_checkout(repo)?;
@@ -156,12 +153,12 @@ impl WorkspaceManager {
 
     /// Remove the issue worktree and prune the matching git worktree/branch.
     pub fn cleanup_worktree(&self, repo: &RepoConfig, workspace: &WorkspaceInfo) -> Result<()> {
-        ensure!(
-            repo.repo_path.is_some(),
-            crate::error::WorkspaceSnafu {
+        if repo.repo_path.is_none() {
+            return crate::error::WorkspaceSnafu {
                 message: format!("repo {} is missing repo_path", repo.name),
             }
-        );
+            .fail();
+        }
         let (repo, _) = self.ensure_repo_checkout(repo)?;
 
         if workspace.path.exists() {
