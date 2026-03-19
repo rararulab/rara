@@ -48,7 +48,8 @@ pub struct ScreenshotResult {
 #[tool(
     name = "screenshot",
     description = "Take a screenshot of a web page using Playwright. Useful for previewing \
-                   frontend work, checking UI changes, or sharing visual results."
+                   frontend work, checking UI changes, or sharing visual results.",
+    bypass_interceptor
 )]
 pub struct ScreenshotTool {
     project_root: PathBuf,

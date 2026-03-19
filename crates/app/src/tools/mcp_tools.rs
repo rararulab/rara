@@ -53,7 +53,8 @@ pub struct InstallMcpServerParams {
 #[tool(
     name = "install-mcp-server",
     description = "Install and start an MCP server. The server's tools become available \
-                   immediately for subsequent agent runs without restart."
+                   immediately for subsequent agent runs without restart.",
+    bypass_interceptor
 )]
 pub struct InstallMcpServerTool {
     manager: McpManager,
@@ -116,7 +117,8 @@ pub struct ListMcpServersParams {}
 #[tool(
     name = "list-mcp-servers",
     description = "List all registered MCP servers with their status (enabled, connected) and \
-                   available tools."
+                   available tools.",
+    bypass_interceptor
 )]
 pub struct ListMcpServersTool {
     manager: McpManager,
@@ -211,7 +213,8 @@ pub struct RemoveMcpServerParams {
 #[tool(
     name = "remove-mcp-server",
     description = "Remove an MCP server from the registry and stop it. Its tools will no longer \
-                   be available."
+                   be available.",
+    bypass_interceptor
 )]
 pub struct RemoveMcpServerTool {
     manager: McpManager,

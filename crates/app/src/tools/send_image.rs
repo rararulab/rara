@@ -52,7 +52,8 @@ pub struct SendImageResult {
 #[tool(
     name = "send-image",
     description = "Send an image file to the user in the current conversation. Supports PNG, \
-                   JPEG, WebP, and GIF formats. Maximum file size is 10 MB."
+                   JPEG, WebP, and GIF formats. Maximum file size is 10 MB.",
+    bypass_interceptor
 )]
 pub struct SendImageTool;
 impl SendImageTool {

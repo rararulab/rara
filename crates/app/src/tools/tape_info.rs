@@ -36,7 +36,8 @@ pub struct TapeInfoResult {
 #[tool(
     name = "tape-info",
     description = "Return metadata about the current session tape: entry count, anchors, entries \
-                   since last anchor, and last known token usage."
+                   since last anchor, and last known token usage.",
+    bypass_interceptor
 )]
 pub struct TapeInfoTool {
     tape_service: TapeService,

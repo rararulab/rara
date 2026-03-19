@@ -45,7 +45,8 @@ pub struct TapeHandoffResult {
     description = "Create a handoff anchor to checkpoint progress and truncate context history. \
                    This is a core workflow tool \u{2014} use it proactively to manage context, \
                    not just when failures occur. You MUST provide a summary to preserve context \
-                   across the handoff boundary."
+                   across the handoff boundary.",
+    bypass_interceptor
 )]
 pub struct TapeHandoffTool {
     tape_service: TapeService,
