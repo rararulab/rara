@@ -42,17 +42,17 @@ use crate::{
 
 /// Tracks the state of a running ralph instance based on RPC events.
 #[derive(Debug, Clone, Default)]
-struct RunState {
+pub(crate) struct RunState {
     /// Current iteration number.
-    iteration:      u32,
+    pub(crate) iteration:      u32,
     /// Currently active hat name.
-    current_hat:    String,
+    pub(crate) current_hat:    String,
     /// Accumulated cost across all iterations.
-    total_cost_usd: f64,
+    pub(crate) total_cost_usd: f64,
     /// Whether the loop has terminated.
-    terminated:     bool,
+    pub(crate) terminated:     bool,
     /// Termination reason if terminated.
-    term_reason:    Option<String>,
+    pub(crate) term_reason:    Option<String>,
 }
 
 struct RunningIssue {
@@ -674,6 +674,71 @@ impl IssueRuntime {
             .tracker
             .as_ref()
             .map_or("ToVerify", TrackerConfig::completed_issue_state)
+    }
+
+    /// Send an RPC command to the ralph process for the given issue.
+    async fn send_command(&mut self, issue_id: &str, cmd: crate::rpc::RpcCommand) -> Result<()> {
+        let run = self.running.get_mut(issue_id).ok_or_else(|| {
+            crate::error::WorkspaceSnafu {
+                message: format!("no running agent for issue {issue_id}"),
+            }
+            .build()
+        })?;
+
+        let stdin = run.stdin.as_mut().ok_or_else(|| {
+            crate::error::WorkspaceSnafu {
+                message: format!("stdin not available for issue {issue_id}"),
+            }
+            .build()
+        })?;
+
+        let mut line = serde_json::to_string(&cmd).map_err(|e| {
+            crate::error::WorkspaceSnafu {
+                message: format!("failed to serialize RPC command: {e}"),
+            }
+            .build()
+        })?;
+        line.push('\n');
+
+        use tokio::io::AsyncWriteExt;
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .context(crate::error::WorkspaceIoSnafu {
+                message: format!("failed to write RPC command to ralph for issue {issue_id}"),
+            })?;
+
+        info!(issue_id, command_type = ?std::mem::discriminant(&cmd), "sent RPC command to ralph");
+        Ok(())
+    }
+
+    /// Send guidance to ralph for the next iteration.
+    pub async fn send_guidance(&mut self, issue_id: &str, message: String) -> Result<()> {
+        self.send_command(
+            issue_id,
+            crate::rpc::RpcCommand::Guidance { id: None, message },
+        )
+        .await
+    }
+
+    /// Steer ralph immediately in the current iteration.
+    pub async fn steer(&mut self, issue_id: &str, message: String) -> Result<()> {
+        self.send_command(
+            issue_id,
+            crate::rpc::RpcCommand::Steer { id: None, message },
+        )
+        .await
+    }
+
+    /// Gracefully abort ralph for the given issue.
+    pub async fn abort(&mut self, issue_id: &str, reason: Option<String>) -> Result<()> {
+        self.send_command(issue_id, crate::rpc::RpcCommand::Abort { id: None, reason })
+            .await
+    }
+
+    /// Query the current run state of a running ralph instance.
+    pub fn run_state(&self, issue_id: &str) -> Option<&RunState> {
+        self.running.get(issue_id).map(|run| &run.run_state)
     }
 }
 
