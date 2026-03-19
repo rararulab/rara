@@ -291,6 +291,66 @@ Issue #{number}: {title}
         )
     }
 
+    /// Spawn a `ralph run --rpc` review session for an issue's branch.
+    pub async fn start_review<P: AsRef<Path>>(
+        &self,
+        issue: &TrackedIssue,
+        workspace: P,
+        review_config: &crate::config::ReviewConfig,
+    ) -> Result<AgentHandle> {
+        let branch = format!("issue-{}-{}", issue.number, slug(&issue.title));
+        let prompt = format!(
+            "Review the changes on branch `{branch}` for issue #{number} ({title}).\nCheck \
+             correctness, test coverage, and code quality.\nIf a GitHub PR exists, use `gh pr \
+             diff` to get the diff.",
+            number = issue.number,
+            title = issue.title,
+        );
+
+        let prompt_path = workspace.as_ref().join("PROMPT.md");
+        tokio::fs::write(&prompt_path, &prompt)
+            .await
+            .context(WorkspaceIoSnafu {
+                message: format!("failed to write review prompt {}", prompt_path.display()),
+            })?;
+
+        let mut args = vec![
+            "run".to_owned(),
+            "--rpc".to_owned(),
+            "-H".to_owned(),
+            review_config.hats_file.clone(),
+        ];
+        if let Some(backend) = &review_config.backend {
+            args.push("-b".to_owned());
+            args.push(backend.clone());
+        }
+
+        let command = self.format_command(&args);
+        let mut cmd = Command::new(&self.config.command);
+        for arg in &args {
+            cmd.arg(arg);
+        }
+
+        cmd.current_dir(workspace.as_ref());
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().context(WorkspaceIoSnafu {
+            message: format!(
+                "failed to spawn `{command}` in {}",
+                workspace.as_ref().display()
+            ),
+        })?;
+        let stdin = child.stdin.take();
+
+        Ok(AgentHandle {
+            child,
+            stdin,
+            started_at: Instant::now(),
+        })
+    }
+
     /// Write `PROMPT.md` into the issue worktree and spawn a non-interactive
     /// `ralph run` subprocess whose output is consumed by symphony.
     pub async fn start<P: AsRef<Path>>(
@@ -333,6 +393,23 @@ Issue #{number}: {title}
             started_at: Instant::now(),
         })
     }
+}
+
+/// Convert a title string into a URL-safe slug for branch names.
+fn slug(title: &str) -> String {
+    title
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() {
+                Some(c.to_ascii_lowercase())
+            } else if c == ' ' || c == '-' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .take(40)
+        .collect()
 }
 
 #[cfg(test)]

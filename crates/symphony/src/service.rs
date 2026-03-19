@@ -169,6 +169,7 @@ struct IssueRuntime {
     workspace_manager: WorkspaceManager,
     agent:             RalphAgent,
     running:           HashMap<String, RunningIssue>,
+    reviewing:         HashMap<String, RunningIssue>,
     failed:            HashMap<String, FinishedIssue>,
 }
 
@@ -179,6 +180,7 @@ impl IssueRuntime {
             workspace_manager: WorkspaceManager,
             agent,
             running: HashMap::new(),
+            reviewing: HashMap::new(),
             failed: HashMap::new(),
         }
     }
@@ -203,7 +205,10 @@ impl IssueRuntime {
             let repo_name = issue.repo.clone();
             let issue_number = issue.number;
 
-            if self.running.contains_key(&issue.id) || self.failed.contains_key(&issue.id) {
+            if self.running.contains_key(&issue.id)
+                || self.reviewing.contains_key(&issue.id)
+                || self.failed.contains_key(&issue.id)
+            {
                 continue;
             }
 
@@ -245,6 +250,11 @@ impl IssueRuntime {
             let _ = run.child.kill().await;
         }
         self.running.clear();
+        for (issue_id, run) in &mut self.reviewing {
+            warn!(issue_id = %issue_id, "stopping active review");
+            let _ = run.child.kill().await;
+        }
+        self.reviewing.clear();
     }
 
     async fn reap_finished(&mut self, tracker: &dyn IssueTracker) {
@@ -303,8 +313,31 @@ impl IssueRuntime {
                     log_path = %run.log_path.display(),
                     stdout_lines = output.stdout_line_count,
                     stderr_lines = output.stderr_line_count,
-                    "ralph task runner completed"
+                    "ralph coding run completed"
                 );
+
+                // If review is enabled and no review is already running, spawn
+                // a reviewer before transitioning the issue to completed.
+                if self.config.review.enabled && !self.reviewing.contains_key(&issue_id) {
+                    match self
+                        .start_review_for_issue(&run.issue, &run.workspace)
+                        .await
+                    {
+                        Ok(()) => {
+                            info!(issue_id = %issue_id, "started review phase");
+                            continue;
+                        }
+                        Err(err) => {
+                            warn!(
+                                issue_id = %issue_id,
+                                error = %err,
+                                "failed to start review; falling through to completed"
+                            );
+                        }
+                    }
+                }
+
+                // No review configured, or review failed to start — transition directly.
                 let completed_state = self.completed_issue_state();
                 if let Err(err) = tracker.transition_issue(&run.issue, completed_state).await {
                     warn!(issue_id = %issue_id, state = completed_state, error = %err, "failed to transition issue after successful ralph run");
@@ -367,6 +400,47 @@ impl IssueRuntime {
                 },
             );
         }
+
+        // Reap completed reviews.
+        let review_ids: Vec<String> = self.reviewing.keys().cloned().collect();
+        for issue_id in &review_ids {
+            // Drain RPC events from the reviewer.
+            if let Some(run) = self.reviewing.get_mut(issue_id) {
+                while let Ok(event) = run.rpc_rx.try_recv() {
+                    if let crate::rpc::RpcEvent::LoopTerminated { reason, .. } = &event {
+                        run.run_state.terminated = true;
+                        run.run_state.term_reason = Some(reason.clone());
+                    }
+                }
+            }
+
+            let should_reap = self
+                .reviewing
+                .get_mut(issue_id)
+                .and_then(|run| run.child.try_wait().ok())
+                .flatten();
+
+            if let Some(status) = should_reap {
+                let run = self.reviewing.remove(issue_id).expect("key just checked");
+                if status.success() {
+                    info!(issue_id = %issue_id, "review completed successfully");
+                } else {
+                    warn!(issue_id = %issue_id, status = ?status.code(), "review failed");
+                }
+                let completed_state = self.completed_issue_state();
+                if let Err(err) = tracker.transition_issue(&run.issue, completed_state).await {
+                    warn!(issue_id = %issue_id, error = %err, "failed to transition issue after review");
+                }
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            } else if let Some(run) = self.reviewing.get(issue_id) {
+                if run.started_at.elapsed() > self.config.stall_timeout {
+                    let mut run = self.reviewing.remove(issue_id).expect("key just checked");
+                    warn!(issue_id = %issue_id, "killing stalled reviewer");
+                    let _ = run.child.kill().await;
+                    self.cleanup_workspace(&run.issue.repo, &run.workspace);
+                }
+            }
+        }
     }
 
     async fn cleanup_terminal_issues(
@@ -377,6 +451,7 @@ impl IssueRuntime {
         let known_ids: Vec<String> = self
             .running
             .keys()
+            .chain(self.reviewing.keys())
             .chain(self.failed.keys())
             .cloned()
             .collect();
@@ -390,6 +465,7 @@ impl IssueRuntime {
                 .running
                 .get(&issue_id)
                 .map(|run| run.issue.clone())
+                .or_else(|| self.reviewing.get(&issue_id).map(|run| run.issue.clone()))
                 .or_else(|| self.failed.get(&issue_id).map(|run| run.issue.clone()));
             let Some(issue) = issue else {
                 continue;
@@ -408,6 +484,10 @@ impl IssueRuntime {
             }
 
             if let Some(mut run) = self.running.remove(&issue_id) {
+                let _ = run.child.kill().await;
+                self.cleanup_workspace(&run.issue.repo, &run.workspace);
+            }
+            if let Some(mut run) = self.reviewing.remove(&issue_id) {
                 let _ = run.child.kill().await;
                 self.cleanup_workspace(&run.issue.repo, &run.workspace);
             }
@@ -477,6 +557,61 @@ impl IssueRuntime {
                 );
             }
         }
+    }
+
+    /// Spawn a ralph reviewer for the given issue, reusing the existing
+    /// workspace.
+    async fn start_review_for_issue(
+        &mut self,
+        issue: &TrackedIssue,
+        workspace: &WorkspaceInfo,
+    ) -> Result<()> {
+        let mut handle = self
+            .agent
+            .start_review(issue, &workspace.path, &self.config.review)
+            .await?;
+
+        let log_path = issue_log_path(&issue.repo, &format!("{}-review", issue.identifier));
+        let log_writer = spawn_issue_log_writer(&log_path, issue, workspace).await?;
+        let output = ProcessOutputSummaryHandle::default();
+        let (rpc_tx, rpc_rx) = mpsc::channel(256);
+
+        if let Some(stdout) = handle.child.stdout.take() {
+            let lw = log_writer.clone();
+            let (raw_tx, mut raw_rx) = mpsc::channel::<String>(256);
+            tokio::spawn(async move {
+                while let Some(line) = raw_rx.recv().await {
+                    let _ = lw.record("stdout", &line).await;
+                }
+            });
+            crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
+        }
+        if let Some(stderr) = handle.child.stderr.take() {
+            spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
+        }
+
+        info!(
+            issue_id = %issue.id,
+            issue_identifier = %issue.identifier,
+            log_path = %log_path.display(),
+            "spawned ralph reviewer"
+        );
+
+        self.reviewing.insert(
+            issue.id.clone(),
+            RunningIssue {
+                issue: issue.clone(),
+                workspace: workspace.clone(),
+                child: handle.child,
+                stdin: handle.stdin,
+                started_at: handle.started_at,
+                log_path,
+                output,
+                rpc_rx,
+                run_state: RunState::default(),
+            },
+        );
+        Ok(())
     }
 
     /// Provision a worktree, start `ralph run`, attach raw output logging, and
@@ -934,7 +1069,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{IssueRuntime, ProcessOutputSummary, SymphonyService, issue_log_path, lnav_hint};
-    use crate::config::{AgentConfig, RepoConfig, SymphonyConfig};
+    use crate::config::{AgentConfig, RepoConfig, ReviewConfig, SymphonyConfig};
 
     #[test]
     fn process_output_summary_keeps_only_recent_stderr_lines() {
@@ -981,6 +1116,7 @@ mod tests {
                 .max_retry_backoff(Duration::from_secs(60 * 60))
                 .workflow_file("WORKFLOW.md".to_owned())
                 .agent(AgentConfig::default())
+                .review(ReviewConfig::default())
                 .repos(vec![])
                 .build(),
             CancellationToken::new(),
@@ -1022,6 +1158,7 @@ mod tests {
                 .max_retry_backoff(Duration::from_secs(60 * 60))
                 .workflow_file("WORKFLOW.md".to_owned())
                 .agent(AgentConfig::default())
+                .review(ReviewConfig::default())
                 .repos(vec![configured])
                 .build(),
             crate::agent::RalphAgent::new(AgentConfig::default()),
@@ -1045,6 +1182,7 @@ mod tests {
                 .max_retry_backoff(Duration::from_secs(600))
                 .workflow_file("WORKFLOW.md".to_owned())
                 .agent(AgentConfig::default())
+                .review(ReviewConfig::default())
                 .repos(vec![])
                 .build(),
             crate::agent::RalphAgent::new(AgentConfig::default()),
