@@ -86,7 +86,7 @@ git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
 
 # Verify in worktree
 cargo check -p {crate}
-cargo clippy -p {crate} -- -D warnings
+cargo clippy -p {crate} --all-targets --all-features --no-deps -- -D warnings
 cargo test -p {crate}
 ```
 
@@ -96,9 +96,9 @@ cargo test -p {crate}
 # Create epic issue
 gh issue create --template feature_request.yml --title "feat(scope): {description}"
 
-# Create feature branch
-git checkout main && git pull
-git branch feat/{name} main
+# Create feature branch from origin/main (no checkout needed)
+git fetch origin main
+git branch feat/{name} origin/main
 git push -u origin feat/{name}
 
 # For each independent sub-task:
