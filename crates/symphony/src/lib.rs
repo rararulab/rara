@@ -15,6 +15,7 @@
 pub mod agent;
 pub mod config;
 pub mod error;
+pub mod rpc;
 pub mod service;
 pub mod tracker;
 pub mod workspace;
