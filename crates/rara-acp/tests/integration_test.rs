@@ -6,7 +6,7 @@
 use agent_client_protocol::{RequestPermissionOutcome, SelectedPermissionOutcome};
 use rara_acp::{
     AcpAgentConfig, AcpEvent, AcpRegistry, AcpThreadStatus, FSAcpRegistry, FileOperation,
-    PermissionBridge, PermissionOptionInfo, StopReason, ToolCallStatus,
+    PermissionBridge, PermissionOptionInfo, PermissionOptionKind, StopReason, ToolCallStatus,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -259,7 +259,7 @@ fn event_types_are_clone_and_debug() {
             options:      vec![PermissionOptionInfo {
                 id:    "allow".into(),
                 label: "Allow".into(),
-                kind:  "allow_once".into(),
+                kind:  PermissionOptionKind::AllowOnce,
             }],
         },
         AcpEvent::FileAccess {
@@ -310,12 +310,12 @@ async fn permission_bridge_roundtrip() {
                 PermissionOptionInfo {
                     id:    "allow".into(),
                     label: "Allow".into(),
-                    kind:  "allow_once".into(),
+                    kind:  PermissionOptionKind::AllowOnce,
                 },
                 PermissionOptionInfo {
                     id:    "deny".into(),
                     label: "Deny".into(),
-                    kind:  "reject_once".into(),
+                    kind:  PermissionOptionKind::DenyOnce,
                 },
             ],
             reply_tx,
@@ -393,7 +393,7 @@ fn permission_option_info_is_clone_and_debug() {
     let opt = PermissionOptionInfo {
         id:    "allow-once".into(),
         label: "Allow Once".into(),
-        kind:  "allow_once".into(),
+        kind:  PermissionOptionKind::AllowOnce,
     };
     let cloned = opt.clone();
     assert_eq!(cloned.id, "allow-once");
