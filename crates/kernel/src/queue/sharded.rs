@@ -72,10 +72,13 @@ impl ShardQueue {
 
     /// Wait until events are available.
     pub async fn wait(&self) {
+        // Register the notification future BEFORE checking emptiness to avoid
+        // a race where push() + notify_one() lands between the check and .await.
+        let notified = self.notify.notified();
         if !self.queue.is_empty() {
             return;
         }
-        self.notify.notified().await;
+        notified.await;
     }
 
     pub fn pending_count(&self) -> usize { self.queue.len() }
@@ -193,5 +196,50 @@ impl EventQueue for ShardedEventQueue {
             ShardTarget::Global => self.global.push(event),
             ShardTarget::Shard(idx) => self.shards[idx].push(event),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::event::KernelEventEnvelope;
+
+    #[tokio::test]
+    async fn wait_returns_after_push() {
+        let shared = Arc::new(ShardQueue::new(16));
+        let shared2 = Arc::clone(&shared);
+
+        let pusher = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            shared2
+                .push(KernelEventEnvelope::shutdown())
+                .expect("push should succeed");
+        });
+
+        // wait() should return once the push + notify lands — not hang forever.
+        tokio::time::timeout(Duration::from_secs(2), shared.wait())
+            .await
+            .expect("wait() should not hang — notification must not be lost");
+
+        pusher.await.expect("pusher task should complete");
+
+        // Verify the event can be drained.
+        let events: Vec<_> = shared.drain(10).collect();
+        assert_eq!(events.len(), 1, "expected exactly one event after push");
+    }
+
+    #[tokio::test]
+    async fn wait_returns_immediately_when_non_empty() {
+        let queue = Arc::new(ShardQueue::new(16));
+        queue
+            .push(KernelEventEnvelope::shutdown())
+            .expect("push should succeed");
+
+        // wait() should return immediately since queue is non-empty.
+        tokio::time::timeout(Duration::from_millis(100), queue.wait())
+            .await
+            .expect("wait() should return immediately for non-empty queue");
     }
 }
