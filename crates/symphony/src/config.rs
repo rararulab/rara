@@ -348,3 +348,27 @@ fn default_workspace_root(repo_name: &str) -> PathBuf {
         .join(repo_name)
         .join("worktrees")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_args_defaults_to_rpc_mode() {
+        let config = AgentConfig::default();
+        let args = config.command_args();
+        assert!(args.contains(&"--rpc".to_owned()));
+        assert!(!args.contains(&"--autonomous".to_owned()));
+    }
+
+    #[test]
+    fn command_args_respects_explicit_autonomous() {
+        let config = AgentConfig {
+            extra_args: vec!["--autonomous".to_owned()],
+            ..AgentConfig::default()
+        };
+        let args = config.command_args();
+        assert!(args.contains(&"--autonomous".to_owned()));
+        assert!(!args.iter().any(|a| a == "--rpc"));
+    }
+}
