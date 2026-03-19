@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "ayu";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-b9fd8a06.js";
+            window.path_to_searchindex_js = "searchindex-936e1b05.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-04e93f4b.js"></script>
+        <script src="toc-15f3e962.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -215,19 +215,6 @@ Layer 6 (entry)       → rara-cli
 scripts/bin/devtool check-deps
 </code></pre>
 <p><strong>Runs in:</strong> PR lint CI (blocking).</p>
-<h3 id="devtool-quality-matrix"><a class="header" href="#devtool-quality-matrix"><code>devtool quality-matrix</code></a></h3>
-<p>Scans all crates and generates a health dashboard covering:</p>
-<ul>
-<li><strong>AGENT.md</strong> — does the crate have agent guidelines?</li>
-<li><strong>Tests</strong> — does the crate have <code>#[cfg(test)]</code> or a <code>tests/</code> directory?</li>
-<li><strong>Doc coverage</strong> — what percentage of <code>pub</code> items have <code>///</code> doc comments?</li>
-<li><strong>Total lines</strong> — crate size as a proxy for risk</li>
-</ul>
-<pre><code class="language-bash">just quality-matrix           # Generate and write to docs/src/quality-matrix.md
-scripts/bin/devtool quality-matrix              # Print to stdout
-scripts/bin/devtool quality-matrix --output f   # Write to file
-</code></pre>
-<p><strong>Runs in:</strong> push to <code>main</code> (non-blocking, auto-commits updated report).</p>
 <h2 id="ci-integration"><a class="header" href="#ci-integration">CI Integration</a></h2>
 <div class="table-wrapper">
 <table>
@@ -237,7 +224,6 @@ scripts/bin/devtool quality-matrix --output f   # Write to file
 <tbody>
 <tr><td><code>check-agent-md</code></td><td>PR lint</td><td>Yes</td><td>Prevent crates without agent guidelines</td></tr>
 <tr><td><code>check-deps</code></td><td>PR lint</td><td>Yes</td><td>Prevent architecture layer violations</td></tr>
-<tr><td><code>quality-matrix</code></td><td>Push to main</td><td>No</td><td>Track quality trends over time</td></tr>
 <tr><td><code>cargo clippy -D warnings</code></td><td>PR lint</td><td>Yes</td><td>Code quality</td></tr>
 <tr><td><code>cargo +nightly fmt --check</code></td><td>PR lint</td><td>Yes</td><td>Formatting consistency</td></tr>
 <tr><td><code>buf lint</code></td><td>PR lint</td><td>Yes</td><td>Protobuf schema quality</td></tr>
@@ -264,7 +250,7 @@ scripts/bin/devtool quality-matrix --output f   # Write to file
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="quality-matrix.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="diary/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -278,7 +264,7 @@ scripts/bin/devtool quality-matrix --output f   # Write to file
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="quality-matrix.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="diary/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
