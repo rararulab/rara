@@ -44,15 +44,17 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RunState {
     /// Current iteration number.
-    pub(crate) iteration:      u32,
+    pub(crate) iteration:       u32,
     /// Currently active hat name.
-    pub(crate) current_hat:    String,
+    pub(crate) current_hat:     String,
     /// Accumulated cost across all iterations.
-    pub(crate) total_cost_usd: f64,
+    pub(crate) total_cost_usd:  f64,
     /// Whether the loop has terminated.
-    pub(crate) terminated:     bool,
+    pub(crate) terminated:      bool,
     /// Termination reason if terminated.
-    pub(crate) term_reason:    Option<String>,
+    pub(crate) term_reason:     Option<String>,
+    /// Total RPC events received (replaces stdout_line_count for RPC mode).
+    pub(crate) rpc_event_count: u64,
 }
 
 struct RunningIssue {
@@ -261,6 +263,7 @@ impl IssueRuntime {
         // Drain available RPC events for all running issues.
         for run in self.running.values_mut() {
             while let Ok(event) = run.rpc_rx.try_recv() {
+                run.run_state.rpc_event_count += 1;
                 match &event {
                     crate::rpc::RpcEvent::IterationStart { iteration, hat, .. } => {
                         run.run_state.iteration = *iteration;
@@ -311,7 +314,7 @@ impl IssueRuntime {
                     issue_id = %issue_id,
                     elapsed_secs = run.started_at.elapsed().as_secs(),
                     log_path = %run.log_path.display(),
-                    stdout_lines = output.stdout_line_count,
+                    rpc_events = run.run_state.rpc_event_count,
                     stderr_lines = output.stderr_line_count,
                     "ralph coding run completed"
                 );
@@ -359,7 +362,7 @@ impl IssueRuntime {
                     status = ?status.code(),
                     elapsed_secs = run.started_at.elapsed().as_secs(),
                     log_path = %run.log_path.display(),
-                    stdout_lines = output.stdout_line_count,
+                    rpc_events = run.run_state.rpc_event_count,
                     stderr_lines = output.stderr_line_count,
                     stderr_tail = %output.render_stderr_tail(),
                     "ralph task runner failed"
@@ -584,7 +587,7 @@ impl IssueRuntime {
                     let _ = lw.record("stdout", &line).await;
                 }
             });
-            crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
+            let _rpc_reader = crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
         }
         if let Some(stderr) = handle.child.stderr.take() {
             spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
@@ -716,7 +719,7 @@ impl IssueRuntime {
                     let _ = lw.record("stdout", &line).await;
                 }
             });
-            crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
+            let _rpc_reader = crate::rpc_reader::spawn_rpc_reader(rpc_tx, raw_tx, stdout);
         }
         if let Some(stderr) = handle.child.stderr.take() {
             spawn_stream_logger(output.clone(), log_writer, "stderr", stderr);
@@ -814,32 +817,31 @@ impl IssueRuntime {
     /// Send an RPC command to the ralph process for the given issue.
     async fn send_command(&mut self, issue_id: &str, cmd: crate::rpc::RpcCommand) -> Result<()> {
         let run = self.running.get_mut(issue_id).ok_or_else(|| {
-            crate::error::WorkspaceSnafu {
+            crate::error::RpcSnafu {
                 message: format!("no running agent for issue {issue_id}"),
             }
             .build()
         })?;
 
         let stdin = run.stdin.as_mut().ok_or_else(|| {
-            crate::error::WorkspaceSnafu {
+            crate::error::RpcSnafu {
                 message: format!("stdin not available for issue {issue_id}"),
             }
             .build()
         })?;
 
         let mut line = serde_json::to_string(&cmd).map_err(|e| {
-            crate::error::WorkspaceSnafu {
+            crate::error::RpcSnafu {
                 message: format!("failed to serialize RPC command: {e}"),
             }
             .build()
         })?;
         line.push('\n');
 
-        use tokio::io::AsyncWriteExt;
         stdin
             .write_all(line.as_bytes())
             .await
-            .context(crate::error::WorkspaceIoSnafu {
+            .context(crate::error::RpcIoSnafu {
                 message: format!("failed to write RPC command to ralph for issue {issue_id}"),
             })?;
 
@@ -848,7 +850,7 @@ impl IssueRuntime {
     }
 
     /// Send guidance to ralph for the next iteration.
-    pub async fn send_guidance(&mut self, issue_id: &str, message: String) -> Result<()> {
+    pub(crate) async fn send_guidance(&mut self, issue_id: &str, message: String) -> Result<()> {
         self.send_command(
             issue_id,
             crate::rpc::RpcCommand::Guidance { id: None, message },
@@ -857,7 +859,7 @@ impl IssueRuntime {
     }
 
     /// Steer ralph immediately in the current iteration.
-    pub async fn steer(&mut self, issue_id: &str, message: String) -> Result<()> {
+    pub(crate) async fn steer(&mut self, issue_id: &str, message: String) -> Result<()> {
         self.send_command(
             issue_id,
             crate::rpc::RpcCommand::Steer { id: None, message },
@@ -866,13 +868,13 @@ impl IssueRuntime {
     }
 
     /// Gracefully abort ralph for the given issue.
-    pub async fn abort(&mut self, issue_id: &str, reason: Option<String>) -> Result<()> {
+    pub(crate) async fn abort(&mut self, issue_id: &str, reason: Option<String>) -> Result<()> {
         self.send_command(issue_id, crate::rpc::RpcCommand::Abort { id: None, reason })
             .await
     }
 
     /// Query the current run state of a running ralph instance.
-    pub fn run_state(&self, issue_id: &str) -> Option<&RunState> {
+    pub(crate) fn run_state(&self, issue_id: &str) -> Option<&RunState> {
         self.running.get(issue_id).map(|run| &run.run_state)
     }
 }

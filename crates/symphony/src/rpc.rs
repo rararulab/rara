@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Each variant is serialized as a JSON object with a `"type"` tag
 /// using snake_case naming.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RpcCommand {
     /// Inject guidance that Ralph will consider on its next iteration.
@@ -60,7 +60,7 @@ pub enum RpcCommand {
 ///
 /// Each variant is deserialized from a JSON object with a `"type"` tag
 /// using snake_case naming.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RpcEvent {
     /// Ralph's agentic loop has started.

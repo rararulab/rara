@@ -17,18 +17,20 @@
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
     sync::mpsc,
+    task::JoinHandle,
 };
 
 use crate::rpc::RpcEvent;
 
 /// Spawn a task that reads JSON-lines from `reader` and sends parsed
 /// [`RpcEvent`]s to `tx`. Unparseable lines are forwarded to `raw_tx` for
-/// fallback logging.
+/// fallback logging. Returns the [`JoinHandle`] so callers can detect
+/// panics or await completion.
 pub fn spawn_rpc_reader<R: AsyncRead + Unpin + Send + 'static>(
     tx: mpsc::Sender<RpcEvent>,
     raw_tx: mpsc::Sender<String>,
     reader: R,
-) {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -44,5 +46,6 @@ pub fn spawn_rpc_reader<R: AsyncRead + Unpin + Send + 'static>(
                 }
             }
         }
-    });
+        tracing::debug!("RPC reader task exiting");
+    })
 }

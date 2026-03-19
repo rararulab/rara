@@ -101,6 +101,21 @@ pub enum SymphonyError {
         #[snafu(implicit)]
         location: snafu::Location,
     },
+
+    #[snafu(display("RPC error: {message}"))]
+    Rpc {
+        message:  String,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    #[snafu(display("RPC IO error: {message}: {source}"))]
+    RpcIo {
+        message:  String,
+        source:   std::io::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
 }
 
 pub type Result<T, E = SymphonyError> = std::result::Result<T, E>;

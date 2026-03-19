@@ -15,8 +15,8 @@
 pub mod agent;
 pub mod config;
 pub mod error;
-pub mod rpc;
-pub mod rpc_reader;
+pub(crate) mod rpc;
+pub(crate) mod rpc_reader;
 pub mod service;
 pub mod tracker;
 pub mod workspace;
