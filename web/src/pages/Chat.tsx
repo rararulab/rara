@@ -109,6 +109,7 @@ type WebEvent =
   | { type: "tool_call_end"; id: string; result_preview: string; success: boolean; error: string | null }
   | { type: "progress"; stage: string }
   | { type: "done" }
+  | { type: "turn_rationale"; text: string }
   | { type: "turn_metrics"; duration_ms: number; iterations: number; tool_calls: number; model: string };
 
 interface TurnMetrics {
@@ -139,6 +140,7 @@ interface StreamState {
   isThinking: boolean;
   activeTools: ActiveToolCall[];
   completedTools: CompletedTool[];
+  turnRationale: string;
   error: string | null;
 }
 
@@ -1075,6 +1077,11 @@ function ActivityTree({ stream }: { stream: StreamState }) {
           </div>
         </div>
       )}
+      {stream.turnRationale && (
+        <div className="text-muted-foreground/70 text-[11px] leading-4" aria-label="LLM reasoning">
+          💭 {stream.turnRationale}
+        </div>
+      )}
       {stream.completedTools.map((t) => (
         <div key={t.id}>
           <div className="flex items-start gap-1.5">
@@ -1175,6 +1182,7 @@ const INITIAL_STREAM_STATE: StreamState = {
   isThinking: false,
   activeTools: [],
   completedTools: [],
+  turnRationale: "",
   error: null,
 };
 
@@ -1313,6 +1321,12 @@ function ChatThread({
               break;
             case "typing":
               setStream((s) => ({ ...s, isThinking: true }));
+              break;
+            case "turn_rationale":
+              setStream((s) => ({
+                ...s,
+                turnRationale: event.text,
+              }));
               break;
             case "tool_call_start":
               setStream((s) => ({

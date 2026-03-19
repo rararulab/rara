@@ -40,6 +40,8 @@ pub enum CliEvent {
     TextDelta { text: String },
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
+    /// LLM's rationale for the current tool call batch.
+    TurnRationale { text: String },
     /// A tool call has started.
     ToolCallStart { name: String, summary: String },
     /// A tool call has finished.

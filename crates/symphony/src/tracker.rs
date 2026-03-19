@@ -288,6 +288,47 @@ struct GitHubLabel {
     name: String,
 }
 
+// ── Linear GraphQL response types ────────────────────────────────────
+
+/// A single issue node from the Linear GraphQL `issues` connection.
+#[derive(Debug, Deserialize)]
+struct LinearIssueNode {
+    id:          String,
+    identifier:  String,
+    title:       String,
+    description: Option<String>,
+    #[serde(default)]
+    priority:    u32,
+    #[serde(rename = "createdAt")]
+    created_at:  DateTime<Utc>,
+    state:       LinearState,
+    labels:      LinearLabels,
+}
+
+/// Wrapper for the `state { name }` field in Linear responses.
+#[derive(Debug, Deserialize)]
+struct LinearState {
+    name: String,
+}
+
+/// Wrapper for the `labels { nodes { name } }` connection in Linear responses.
+#[derive(Debug, Deserialize)]
+struct LinearLabels {
+    nodes: Vec<LinearLabel>,
+}
+
+/// A single label node from a Linear labels connection.
+#[derive(Debug, Deserialize)]
+struct LinearLabel {
+    name: String,
+}
+
+/// Response type for fetching a single issue's state.
+#[derive(Debug, Deserialize)]
+struct LinearIssueStateResponse {
+    state: LinearState,
+}
+
 // ── Linear-backed issue tracker ──────────────────────────────────────
 
 /// Linear-backed issue tracker using the GraphQL API.
@@ -356,6 +397,47 @@ impl LinearIssueTracker {
             n => n,
         }
     }
+
+    /// Build the GraphQL query and variables for fetching active issues.
+    ///
+    /// Linear treats `null` in filter fields as "no filter", so passing
+    /// `project_slug: null` when no project is configured works correctly.
+    fn build_active_issues_query(
+        &self,
+        after: &Option<String>,
+    ) -> (&'static str, serde_json::Value) {
+        let query = r#"
+            query($teamKey: String!, $projectSlug: String, $states: [String!]!, $first: Int!, $after: String) {
+                issues(
+                    filter: {
+                        team: { key: { eq: $teamKey } }
+                        project: { slugId: { eq: $projectSlug } }
+                        state: { name: { in: $states } }
+                    }
+                    first: $first
+                    after: $after
+                    orderBy: createdAt
+                ) {
+                    nodes {
+                        id identifier title description priority createdAt
+                        state { name }
+                        labels { nodes { name } }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "teamKey": self.team_key,
+            "projectSlug": self.project_slug,
+            "states": self.active_states,
+            "first": 50,
+            "after": after,
+        });
+
+        (query, variables)
+    }
 }
 
 #[async_trait]
@@ -372,71 +454,11 @@ impl IssueTracker for LinearIssueTracker {
         let mut after: Option<String> = None;
 
         loop {
-            let (query, variables) = if let Some(ref slug) = self.project_slug {
-                // Filter by team + project
-                let q = r#"
-                    query($teamKey: String!, $projectSlug: String!, $states: [String!]!, $first: Int!, $after: String) {
-                        issues(
-                            filter: {
-                                team: { key: { eq: $teamKey } }
-                                project: { slugId: { eq: $projectSlug } }
-                                state: { name: { in: $states } }
-                            }
-                            first: $first
-                            after: $after
-                            orderBy: createdAt
-                        ) {
-                            nodes {
-                                id identifier title description priority createdAt
-                                state { name }
-                                labels { nodes { name } }
-                            }
-                            pageInfo { hasNextPage endCursor }
-                        }
-                    }
-                "#;
-                let v = serde_json::json!({
-                    "teamKey": self.team_key,
-                    "projectSlug": slug,
-                    "states": self.active_states,
-                    "first": 50,
-                    "after": after,
-                });
-                (q, v)
-            } else {
-                // Filter by team only
-                let q = r#"
-                    query($teamKey: String!, $states: [String!]!, $first: Int!, $after: String) {
-                        issues(
-                            filter: {
-                                team: { key: { eq: $teamKey } }
-                                state: { name: { in: $states } }
-                            }
-                            first: $first
-                            after: $after
-                            orderBy: createdAt
-                        ) {
-                            nodes {
-                                id identifier title description priority createdAt
-                                state { name }
-                                labels { nodes { name } }
-                            }
-                            pageInfo { hasNextPage endCursor }
-                        }
-                    }
-                "#;
-                let v = serde_json::json!({
-                    "teamKey": self.team_key,
-                    "states": self.active_states,
-                    "first": 50,
-                    "after": after,
-                });
-                (q, v)
-            };
+            let (query, variables) = self.build_active_issues_query(&after);
 
             let conn = self
                 .client
-                .execute_connection::<serde_json::Value>(query, variables, "issues")
+                .execute_connection::<LinearIssueNode>(query, variables, "issues")
                 .await
                 .context(LinearSnafu {
                     message: "failed to fetch issues",
@@ -449,28 +471,18 @@ impl IssueTracker for LinearIssueTracker {
             );
 
             for node in &conn.nodes {
-                // Extract label names.
                 let labels: Vec<String> = node
-                    .get("labels")
-                    .and_then(|l| l.get("nodes"))
-                    .and_then(|n| n.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
-                            .map(|s| s.to_lowercase())
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                    .labels
+                    .nodes
+                    .iter()
+                    .map(|l| l.name.to_lowercase())
+                    .collect();
 
                 let repo = match self.extract_repo(&labels) {
                     Some(r) => r,
                     None => {
-                        let ident = node
-                            .get("identifier")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
                         tracing::warn!(
-                            identifier = ident,
+                            identifier = %node.identifier,
                             labels = ?labels,
                             prefix = %self.repo_label_prefix,
                             "linear: no matching repo label, skipping issue"
@@ -479,52 +491,29 @@ impl IssueTracker for LinearIssueTracker {
                     }
                 };
 
-                let identifier = node
-                    .get("identifier")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned();
-                let number = Self::parse_number(&identifier);
-                let linear_priority =
-                    node.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let priority = Self::map_priority(linear_priority);
-                let created_at: DateTime<Utc> = node
-                    .get("createdAt")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or_default();
+                let number = Self::parse_number(&node.identifier);
+                let priority = Self::map_priority(node.priority);
 
                 tracing::debug!(
-                    identifier = %identifier,
-                    title = %node.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                    identifier = %node.identifier,
+                    title = %node.title,
                     repo = %repo,
-                    priority = linear_priority,
+                    priority = node.priority,
                     labels = ?labels,
                     "linear: matched issue to repo"
                 );
 
                 all_issues.push(TrackedIssue {
-                    id: node
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_owned(),
-                    identifier,
+                    id: node.id.clone(),
+                    identifier: node.identifier.clone(),
                     repo,
                     number,
-                    title: node
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_owned(),
-                    body: node
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_owned()),
+                    title: node.title.clone(),
+                    body: node.description.clone(),
                     labels,
                     priority,
                     state: IssueState::Active,
-                    created_at,
+                    created_at: node.created_at,
                 });
             }
 
@@ -556,33 +545,26 @@ impl IssueTracker for LinearIssueTracker {
             }
         "#;
 
-        let original_issue_id = &issue.id;
-        let variables = serde_json::json!({ "id": original_issue_id });
+        let variables = serde_json::json!({ "id": issue.id });
 
-        let issue: serde_json::Value = self
+        let resp: LinearIssueStateResponse = self
             .client
             .execute(QUERY, variables, "issue")
             .await
             .context(LinearSnafu {
-                message: "failed to fetch issue state",
-            })?;
-
-        let state_name = issue
-            .get("state")
-            .and_then(|s| s.get("name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("");
+            message: "failed to fetch issue state",
+        })?;
 
         tracing::debug!(
-            issue_id = %original_issue_id,
-            state = state_name,
+            issue_id = %issue.id,
+            state = %resp.state.name,
             "linear: issue state resolved"
         );
 
         let is_terminal = self
             .terminal_states
             .iter()
-            .any(|ts| ts.eq_ignore_ascii_case(state_name));
+            .any(|ts| ts.eq_ignore_ascii_case(&resp.state.name));
 
         if is_terminal {
             Ok(IssueState::Terminal)

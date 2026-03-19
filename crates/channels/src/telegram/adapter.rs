@@ -229,6 +229,8 @@ struct ProgressMessage {
     /// Index of the currently executing step (0-based), `None` before first
     /// step starts.
     plan_current_step: Option<usize>,
+    /// High-level rationale for the current turn, shown above tool lines.
+    turn_rationale:    Option<String>,
 }
 
 impl ProgressMessage {
@@ -252,6 +254,7 @@ impl ProgressMessage {
             plan_steps: None,
             plan_goal: None,
             plan_current_step: None,
+            turn_rationale: None,
         }
     }
 
@@ -408,6 +411,10 @@ fn render_progress(
     let phases = aggregate_phases(tools);
     let mut lines = Vec::new();
 
+    if let Some(ref rationale) = progress.turn_rationale {
+        lines.push(format!("\u{1f4ad} {rationale}"));
+    }
+
     // Count in-progress phases.
     let active = phases.iter().filter(|p| !p.all_finished).count();
     if active > 1 {
@@ -489,6 +496,10 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
     )];
     lines.push(String::new());
+
+    if let Some(ref rationale) = progress.turn_rationale {
+        lines.push(format!("\u{1f4ad} {rationale}"));
+    }
 
     for (i, step) in steps.iter().enumerate() {
         let (icon, suffix) = match &step.status {
@@ -2614,6 +2625,10 @@ fn spawn_stream_forwarder(
                                 }
                             }
                         }
+                        Ok(StreamEvent::TurnRationale { text }) => {
+                            progress.turn_rationale = Some(text);
+                            progress_dirty = true;
+                        }
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
                             let (display, summary) = tool_display_info(&name, &arguments);
                             let activity = tool_activity_label(&name).to_owned();
@@ -3587,5 +3602,56 @@ mod strip_tool_call_xml_tests {
         assert!(!result.contains("tool_call"));
         assert!(result.contains("Before"));
         assert!(result.contains("after"));
+    }
+}
+
+#[cfg(test)]
+mod render_progress_tests {
+    use super::*;
+
+    /// Helper: build a minimal `ProgressMessage` for rendering tests.
+    fn test_progress(turn_rationale: Option<&str>) -> ProgressMessage {
+        let mut pm = ProgressMessage::new("test-msg-id".into());
+        pm.turn_rationale = turn_rationale.map(String::from);
+        pm
+    }
+
+    /// Helper: build a finished `ToolProgress` entry so the renderer has
+    /// something to display.
+    fn finished_tool(name: &str) -> ToolProgress {
+        ToolProgress {
+            id:         "tool-1".into(),
+            name:       name.into(),
+            activity:   name.into(),
+            summary:    String::new(),
+            started_at: Instant::now(),
+            finished:   true,
+            success:    true,
+            duration:   Some(std::time::Duration::from_millis(100)),
+            error:      None,
+        }
+    }
+
+    #[test]
+    fn render_progress_includes_rationale_when_present() {
+        let pm = test_progress(Some("Reading config files"));
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        assert!(
+            output.contains("Reading config files"),
+            "expected rationale in output, got: {output}"
+        );
+    }
+
+    #[test]
+    fn render_progress_omits_rationale_when_none() {
+        let pm = test_progress(None);
+        let tools = vec![finished_tool("read_file")];
+        let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
+        // The thought-bubble emoji prefix used for rationale should be absent.
+        assert!(
+            !output.contains("\u{1f4ad}"),
+            "expected no rationale line, got: {output}"
+        );
     }
 }

@@ -10,15 +10,15 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 
 | Crate | Layer | AGENT.md | Tests | Docs | LOC | Notes |
 |-------|-------|----------|-------|------|----:|-------|
-| `rara-kernel` | kernel | ✅ | ✅ | ✅ 524/618 (84%) | 31,411 | — |
+| `rara-kernel` | kernel | ✅ | ✅ | ✅ 533/627 (85%) | 31,979 | — |
 | `rara-app` | app | ✅ | ✅ | ⚠️ 100/209 (47%) | 11,324 | — |
-| `rara-channels` | app | ✅ | ✅ | ✅ 69/75 (92%) | 8,385 | Excellent docs |
-| `rara-skills` | app | ✅ | ✅ | ✅ 84/103 (81%) | 4,487 | — |
-| `rara-cli` | cmd | ✅ | ✅ | ⚠️ 3/48 (6%) | 3,918 | — |
+| `rara-channels` | app | ✅ | ✅ | ✅ 69/75 (92%) | 8,473 | Excellent docs |
+| `rara-skills` | app | ✅ | ✅ | ✅ 85/104 (81%) | 4,492 | — |
+| `rara-cli` | cmd | ✅ | ✅ | ⚠️ 3/48 (6%) | 3,922 | — |
 | `common-worker` | common | ✅ | ❌ | ✅ 70/80 (87%) | 3,857 | No tests |
 | `rara-mcp` | integrations | ✅ | ❌ | ✅ 18/24 (75%) | 3,519 | No tests |
-| `rara-backend-admin` | extensions | ✅ | ❌ | ✅ 24/41 (58%) | 3,284 | No tests |
-| `rara-symphony` | app | ✅ | ✅ | ⚠️ 12/33 (36%) | 2,951 | — |
+| `rara-backend-admin` | extensions | ✅ | ❌ | ✅ 24/41 (58%) | 3,292 | No tests |
+| `rara-symphony` | app | ✅ | ✅ | ⚠️ 13/33 (39%) | 3,059 | — |
 | `rara-dock` | app | ✅ | ✅ | ✅ 64/72 (88%) | 2,394 | — |
 | `rara-acp` | app | ✅ | ✅ | ✅ 29/29 (100%) | 2,183 | Fully documented |
 | `rara-soul` | app | ✅ | ✅ | ✅ 34/34 (100%) | 1,223 | Fully documented |
@@ -50,7 +50,7 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 | **With AGENT.md** | 31 | 100% |
 | **With tests** | 11 | 35% |
 | **Doc coverage > 50%** | 23 | 74% |
-| **Total Rust LOC** | 88,092 | — |
+| **Total Rust LOC** | 88,873 | — |
 
 ### By Layer
 
@@ -58,8 +58,8 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 |-------|-------:|-----------------:|--------------:|-----------:|
 | common | 8 | 68% | 8 | 0 |
 | domain | 1 | 12% | 1 | 0 |
-| kernel | 1 | 84% | 1 | 1 |
-| app | 12 | 85% | 12 | 9 |
+| kernel | 1 | 85% | 1 | 1 |
+| app | 12 | 86% | 12 | 9 |
 | server | 1 | 82% | 1 | 0 |
 | cmd | 1 | 6% | 1 | 1 |
 | extensions | 2 | 74% | 2 | 0 |
@@ -67,6 +67,6 @@ A living dashboard that tracks the health of every crate in the Rara workspace. 
 
 ## Priority Actions
 
-1. **Test gap**: 20 crates have zero tests. Critical gaps: `common-worker` (3,857 LOC), `rara-mcp` (3,519 LOC), `rara-backend-admin` (3,284 LOC), `common-telemetry` (1,141 LOC).
+1. **Test gap**: 20 crates have zero tests. Critical gaps: `common-worker` (3,857 LOC), `rara-mcp` (3,519 LOC), `rara-backend-admin` (3,292 LOC), `common-telemetry` (1,141 LOC).
 2. **Doc coverage**: Only 24 crates exceed 50% doc coverage. The highest-impact target: `rara-app` (11,324 LOC, 47%).
 3. **Common layer**: The foundational `common/` crates have gaps — 8 of 8 lack tests. Since every other layer depends on them, improving common/ has outsized impact.
