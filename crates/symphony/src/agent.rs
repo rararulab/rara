@@ -43,10 +43,13 @@ pub struct RalphAgent {
     config: AgentConfig,
 }
 
-// `ralph init -c <core>` uses the extra config while generating defaults, but
-// does not write those overrides back into the resulting `ralph.yml`. We merge
-// the repo-maintained core config into the generated file so later `ralph run`
-// can rely on the worktree-local config alone.
+/// Merge repository-maintained core config into the `ralph init`-generated
+/// config.
+///
+/// This is a **shallow merge**: top-level keys from `core` overwrite the
+/// corresponding keys in `generated` entirely. Nested mappings (e.g. `agent:`)
+/// are replaced, not deep-merged. This is intentional — the core config is
+/// authoritative for any key it defines.
 pub fn merge_core_config(generated: &str, core: &str) -> Result<String> {
     let generated_value: Value = serde_yaml::from_str(generated).context(ConfigYamlSnafu {
         message: String::from("failed to parse generated ralph.yml"),
