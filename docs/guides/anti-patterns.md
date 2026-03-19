@@ -15,7 +15,7 @@
 - Do NOT work directly on `main` — ALL changes (code, docs, config) require a worktree + PR, no exceptions
 - Do NOT merge locally on `main` — all merges go through GitHub PRs; never `git merge` or `git commit` on main
 - Do NOT edit files in the main checkout for 'quick fixes' — even one-line changes must go through the full issue → worktree → PR flow
-- Do NOT create issues without `created-by:claude` label
+- Do NOT create issues without the appropriate agent label (`agent:claude`, `agent:codex`, etc.)
 - Do NOT create PRs or issues without type + component labels — every PR and issue must have a type label (`bug`, `enhancement`, `refactor`, `chore`, `documentation`) and a component label (`core`, `backend`, `ui`, `extension`, `ci`)
 - Do NOT leave stale worktrees — clean up after PR is merged
 - Do NOT report PR as complete before CI is green — use `gh pr checks --watch` and fix failures before reporting

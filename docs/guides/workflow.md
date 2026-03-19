@@ -36,7 +36,7 @@ kernel (core runtime, heartbeat, event bus)
 ### Alternatives considered
 None.
 EOF
-)" --label "created-by:claude" --label "core"
+)" --label "agent:claude" --label "core"
 
 # Example: bug report
 gh issue create --template bug_report.yml \
@@ -59,11 +59,11 @@ web (frontend, UI)
 ### Version
 rara 0.0.1
 EOF
-)" --label "created-by:claude" --label "ui"
+)" --label "agent:claude" --label "ui"
 ```
 
 **Issue Labels** (all issues MUST have proper labels):
-- `created-by:claude` — required for all agent-created issues
+- **Agent** (required for agent-created issues): `agent:claude`, `agent:codex` — use the label matching the agent performing the operation
 - **Type**: auto-applied by the template (`enhancement`, `bug`, `refactor`, `chore`)
 - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
 

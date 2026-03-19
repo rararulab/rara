@@ -77,7 +77,7 @@ A single slash command `/dev "requirement"` that runs the full development pipel
 ```bash
 # Create issue (--template cannot be used with --body, so body must follow template structure)
 # Body fields: ### Description, ### Component, ### Alternatives considered
-gh issue create --title "{title}" --body "..." --label "created-by:claude" --label "{component}"
+gh issue create --title "{title}" --body "..." --label "agent:claude" --label "{component}"
 
 # Create worktree
 git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
