@@ -132,6 +132,35 @@ impl PathScopeGuard {
             }
         }
 
+        // For directory-scanning tools, also allow paths that are *ancestors* of the
+        // workspace or a whitelist entry. Example: `grep path:"/Users/foo/.config"`
+        // when workspace is `/Users/foo/.config/rara/workspace`. The tool will
+        // naturally traverse into the workspace subtree.
+        //
+        // Excluded: root path `/` (1 component) — would trivially match everything.
+        // Excluded: file-targeting tools (read-file, write-file, edit-file) — they
+        // operate on specific files, not directory trees.
+        if PATH_TOOLS.contains(&tool_name) && resolved.components().count() > 1 {
+            if path_starts_with(&self.workspace, &resolved) {
+                tracing::debug!(
+                    path = %resolved.display(),
+                    workspace = %self.workspace.display(),
+                    "path-scope guard: path is ancestor of workspace, allowing"
+                );
+                return None;
+            }
+            for allowed in &self.whitelist {
+                if path_starts_with(allowed, &resolved) {
+                    tracing::debug!(
+                        path = %resolved.display(),
+                        whitelist_entry = %allowed.display(),
+                        "path-scope guard: path is ancestor of whitelist entry, allowing"
+                    );
+                    return None;
+                }
+            }
+        }
+
         // Check user-approved paths from earlier approvals in this session.
         // Fail-closed: if the lock is poisoned we skip dynamic approvals and
         // fall through to the "blocked" path, which is the safe default.
@@ -571,5 +600,61 @@ mod tests {
         let g = PathScopeGuard::new(PathBuf::from("/home/user/project/../project"), vec![]);
         let args = json!({"file_path": "/home/user/project/src/lib.rs"});
         assert_eq!(g.check("read-file", &args), None);
+    }
+
+    // ── ancestor path access ────────────────────────────────────────
+
+    #[test]
+    fn ancestor_of_workspace_passes_for_path_tools() {
+        let g = guard(); // workspace = /home/user/project
+        // /home/user is a parent of /home/user/project
+        let args = json!({"path": "/home/user"});
+        assert_eq!(g.check("grep", &args), None);
+        assert_eq!(g.check("list-directory", &args), None);
+        assert_eq!(g.check("find-files", &args), None);
+    }
+
+    #[test]
+    fn ancestor_of_workspace_blocked_for_file_tools() {
+        let g = guard();
+        // Same ancestor path, but file tools should NOT get the ancestor exception
+        let args = json!({"file_path": "/home/user"});
+        assert!(g.check("read-file", &args).is_some());
+    }
+
+    #[test]
+    fn grandparent_of_workspace_passes() {
+        let g = guard();
+        let args = json!({"path": "/home"});
+        assert_eq!(g.check("grep", &args), None);
+    }
+
+    #[test]
+    fn root_path_blocked_despite_being_ancestor() {
+        let g = guard();
+        let args = json!({"path": "/"});
+        assert!(g.check("grep", &args).is_some());
+    }
+
+    #[test]
+    fn ancestor_of_whitelist_entry_passes() {
+        let g = guard_with_whitelist(); // whitelist = /tmp/scratch
+        let args = json!({"path": "/tmp"});
+        assert_eq!(g.check("list-directory", &args), None);
+    }
+
+    #[test]
+    fn unrelated_sibling_of_workspace_parent_blocked() {
+        let g = guard(); // workspace = /home/user/project
+        let args = json!({"path": "/home/other"});
+        assert!(g.check("grep", &args).is_some());
+    }
+
+    #[test]
+    fn common_prefix_not_ancestor_blocked() {
+        let g = guard(); // workspace = /home/user/project
+        // /home/us is NOT an ancestor of /home/user/project (component boundary)
+        let args = json!({"path": "/home/us"});
+        assert!(g.check("grep", &args).is_some());
     }
 }
