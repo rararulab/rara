@@ -50,9 +50,11 @@ pub struct MarketplaceParams {
 #[derive(ToolDef)]
 #[tool(
     name = "marketplace",
-    description = "Browse, search, install, enable/disable plugins from Claude Code marketplace \
-                   repos and ClawHub (clawhub.ai). Actions: browse, search, install, enable, \
-                   disable, add_source, refresh, clawhub_search, clawhub_browse, clawhub_install."
+    description = "Browse, search, and install skills and plugins. Use install_repo to install a \
+                   skill repo from GitHub (owner/repo or full URL). Use install to install a \
+                   single plugin from a marketplace. Actions: browse, search, install, \
+                   install_repo, enable, disable, add_source, remove_source, refresh, \
+                   clawhub_search, clawhub_browse, clawhub_install."
 )]
 pub struct MarketplaceTool {
     service: Arc<MarketplaceService>,
