@@ -63,6 +63,14 @@ const CHARS_PER_TOKEN: usize = 4;
 const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
 /// Context usage threshold (fraction) at which a MUST-handoff hint is injected.
 const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
+/// User-turn count since last anchor at which a session-length reminder is
+/// injected.  Unlike the pressure-based thresholds this is a pure turn count
+/// and does not depend on token estimates.
+const TURN_REMINDER_THRESHOLD: usize = 8;
+const _: () = {
+    assert!(TURN_REMINDER_THRESHOLD >= 4, "threshold too low");
+    assert!(TURN_REMINDER_THRESHOLD <= 20, "threshold too high");
+};
 /// Large tool outputs that should trigger an explicit anchor reminder.
 const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
 /// Multiple medium tool outputs in one phase should also trigger a reminder.
@@ -643,6 +651,23 @@ fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::
     medium_results >= 2
 }
 
+/// Returns `true` if any tool result JSON indicates a tape anchor was created.
+///
+/// Checks result payloads for known anchor-creation signatures rather than
+/// hardcoding tool names, so new anchor-creating tools are automatically
+/// covered.
+fn did_create_anchor(results_json: &[serde_json::Value]) -> bool {
+    results_json.iter().any(|json| {
+        // `tape` tool anchor action returns {"anchor_name": ...}
+        json.get("anchor_name").is_some()
+            // `tape-handoff` tool returns {"output": "handoff created: ..."}
+            || json
+                .get("output")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.starts_with("handoff created"))
+    })
+}
+
 /// Resolve the soul prompt for an agent at runtime.
 ///
 /// Loads the soul file and runtime state via `rara_soul::load_and_render`,
@@ -771,14 +796,15 @@ fn build_runtime_contract_prompt(
          list all checkpoints.\n- `checkout`: fork a new session from a past anchor (original \
          unchanged).\n\n## MUST anchor when:\n- Context is getting long or a [Context Usage \
          Warning] appears\n- A tool result exceeds ~2000 chars\n- Iterative tasks accumulate \
-         large outputs (screenshots, scraping, listings)\n\n## SHOULD anchor when:\n- Completing \
-         a logical work phase or switching subtasks\n- Processing multiple tool results in \
-         sequence\n\n## MUST search before answering when:\n- The question refers to anything \
-         before an anchor or outside current window\n- You need exact tokens, IDs, codes, names, \
-         or quoted details from earlier context\n\n## Anchor best practices\n- Always include a \
-         detailed `summary` and concrete `next_steps`\n- A missing summary = lost context\n- Use \
-         `checkout` to retry from a past checkpoint or when the user asks to go \
-         back\n\n</context_contract>"
+         large outputs (screenshots, scraping, listings)\n- The user switches to a clearly \
+         different topic or task (e.g. debugging → feature discussion, Q&A → hands-on \
+         coding)\n\n## SHOULD anchor when:\n- Completing a logical work phase\n- Processing \
+         multiple tool results in sequence\n\n## MUST search before answering when:\n- The \
+         question refers to anything before an anchor or outside current window\n- You need exact \
+         tokens, IDs, codes, names, or quoted details from earlier context\n\n## Anchor best \
+         practices\n- Always include a detailed `summary` and concrete `next_steps`\n- A missing \
+         summary = lost context\n- Use `checkout` to retry from a past checkpoint or when the \
+         user asks to go back\n\n</context_contract>"
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
@@ -934,6 +960,29 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+
+    // ── Session length reminder state ─────────────────────────────────
+    // Count user turns since the last anchor to detect long sessions that
+    // may benefit from a handoff.  Queried once from the tape at turn
+    // start; incremented by 1 for the current user message; reset when
+    // the agent creates an anchor (detected via tool names).
+    let user_turns_since_anchor: usize = {
+        tape.from_last_anchor(tape_name, None)
+            .await
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|e| {
+                        e.kind == crate::memory::TapEntryKind::Message
+                            && e.payload.get("role").and_then(|v| v.as_str()) == Some("user")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    // +1 for the current user message that triggered this turn.
+    let mut user_turns_since_anchor = user_turns_since_anchor + 1;
+    let mut session_length_warned = false;
     // ── Tool call limit circuit breaker ──────────────────────────────────
     // Prevents runaway tool loops by pausing execution every N tool calls
     // and asking the user whether to continue. 0 = disabled (default).
@@ -1926,6 +1975,13 @@ pub(crate) async fn run_agent_loop(
             if should_remind_tape_anchor(&tool_names, &results_json) {
                 needs_anchor_reminder = true;
             }
+            // Reset session-length counter when the agent creates an anchor.
+            // Detected via result payload rather than hardcoded tool names so
+            // that new anchor-creating tools are automatically covered.
+            if did_create_anchor(&results_json) {
+                user_turns_since_anchor = 0;
+                session_length_warned = false;
+            }
         }
 
         // Build tool call traces from results
@@ -2095,6 +2151,22 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
+        // ── Session length reminder ──────────────────────────────────
+        // Inject a warning when the session has many user turns without an
+        // anchor, independent of token-based context pressure.  Uses an
+        // in-memory counter instead of querying tape each iteration.
+        if !session_length_warned
+            && context_pressure_warning.is_none()
+            && user_turns_since_anchor >= TURN_REMINDER_THRESHOLD
+        {
+            context_pressure_warning = Some(format!(
+                "[Session Length Warning] This session has had {user_turns_since_anchor} user \
+                 turns since the last anchor. If the topic has shifted, you MUST create a tape \
+                 anchor now with summary and next_steps.",
+            ));
+            session_length_warned = true;
+        }
+
         // Track consecutive silent (tool-only, no text) iterations and emit
         // a Progress event so the user knows we're still working.
         if accumulated_text.len() == last_accumulated_text.len() {
@@ -2189,7 +2261,8 @@ mod tests {
 
     use super::{
         ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
-        resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
+        did_create_anchor, resolve_soul_prompt, should_remind_tape_anchor,
+        should_remind_tape_search,
     };
 
     #[test]
@@ -2284,5 +2357,31 @@ mod tests {
         let result = resolve_soul_prompt("rara");
         assert!(result.is_some());
         assert!(result.unwrap().contains("Identity: rara"));
+    }
+
+    #[test]
+    fn runtime_contract_includes_topic_switch_in_must_anchor() {
+        let prompt = build_runtime_contract_prompt("base", false, None);
+        assert!(prompt.contains("user switches to a clearly different topic"));
+        // Verify "switching subtasks" is no longer in the SHOULD section
+        assert!(!prompt.contains("switching subtasks"));
+    }
+
+    #[test]
+    fn did_create_anchor_detects_tape_anchor() {
+        let results = vec![json!({"anchor_name": "topic/foo", "entries_after_anchor": 5})];
+        assert!(did_create_anchor(&results));
+    }
+
+    #[test]
+    fn did_create_anchor_detects_tape_handoff() {
+        let results = vec![json!({"output": "handoff created: my-handoff"})];
+        assert!(did_create_anchor(&results));
+    }
+
+    #[test]
+    fn did_create_anchor_ignores_unrelated_tools() {
+        let results = vec![json!({"output": "search results: 3 found"})];
+        assert!(!did_create_anchor(&results));
     }
 }
