@@ -7,11 +7,38 @@ description: "Autonomous development pipeline: requirement → design → implem
 
 One command, full cycle: requirement → design → implement → review → ship.
 
+**Iron Law:** Every analysis step, decision, and review finding MUST be recorded on GitHub (issue comments + PR comments). The pipeline's work process must be fully traceable — never let conclusions exist only in conversation context.
+
 **User intervenes only twice:**
 1. After Phase 1: confirm the plan
 2. After Phase 4: see the final result
 
 **Announce at start:** "Running /dev pipeline for: {requirement}"
+
+---
+
+## Phase 0: ISSUE CREATION
+
+Create the tracking issue **before any analysis begins**. This issue is the work log for the entire pipeline.
+
+```bash
+gh issue create --title "{type}({scope}): {description}" \
+  --body "$(cat <<'EOF'
+### Description
+{requirement description and initial context}
+
+### Component
+{crate or area} ({description})
+
+### Alternatives considered
+TBD — will be analyzed in design phase.
+EOF
+)" --label "agent:claude" --label "{type-label}" --label "{component-label}"
+```
+
+Note: `--template` flag cannot be used with `--body`. The body MUST follow the template's field structure (### Description, ### Component, ### Alternatives considered).
+
+Save the issue number as `{ISSUE}` — all subsequent comments reference it.
 
 ---
 
@@ -29,6 +56,22 @@ Gather project context silently (no output to user):
    ```
 4. Read relevant source code in the affected crates/modules
 
+**Post findings to issue:**
+```bash
+gh issue comment {ISSUE} --body "$(cat <<'EOF'
+## Context Investigation
+
+**Related code:**
+- `{file}`: {what it does and how it relates}
+- ...
+
+**Related issues/PRs:** {list or "none found"}
+**Existing design docs:** {list or "none found"}
+**Key observations:** {what the codebase already has, gaps identified}
+EOF
+)"
+```
+
 ### Step 1.2: Brainstorm & Design Doc
 
 Based on the gathered context:
@@ -37,9 +80,8 @@ Based on the gathered context:
 2. Propose 2-3 implementation approaches with trade-offs
 3. **Autonomously select** the recommended approach — do NOT ask the user
 4. Consider: architectural fit, complexity, existing patterns in the codebase, CLAUDE.md constraints
-5. Write the design doc to a temporary location (do NOT write to main checkout):
 
-The design doc is drafted in memory during Phase 1 and physically written to `docs/plans/YYYY-MM-DD-{topic}-design.md` inside the worktree created in Phase 2. During Phase 1, the doc content is kept in the conversation context.
+The design doc is drafted in memory during Phase 1 and physically written to `docs/plans/YYYY-MM-DD-{topic}-design.md` inside the worktree created in Phase 2.
 
 The design doc MUST include:
 - **Goal:** one sentence
@@ -48,6 +90,31 @@ The design doc MUST include:
 - **Key decisions:** any non-obvious choices made
 - **Edge cases:** identified risks and how they're handled
 - **Implementation steps:** numbered list of discrete tasks
+
+**Post analysis to issue:**
+```bash
+gh issue comment {ISSUE} --body "$(cat <<'EOF'
+## Design Analysis
+
+**Approaches considered:**
+1. {approach 1} — {trade-off}
+2. {approach 2} — {trade-off}
+3. {approach 3} — {trade-off}
+
+**Selected:** Approach {N}
+**Reasoning:** {why this approach wins}
+
+**Key decisions:**
+- {decision 1}: {rationale}
+- {decision 2}: {rationale}
+
+**Implementation steps:**
+1. {step}
+2. {step}
+...
+EOF
+)"
+```
 
 ### Step 1.3: Plan Review (autonomous loop)
 
@@ -66,6 +133,19 @@ Review dimensions:
 3. Revise the design doc
 4. Re-review (max 2 rounds total)
 
+**Post review result to issue:**
+```bash
+gh issue comment {ISSUE} --body "$(cat <<'EOF'
+## Plan Review
+
+**Round {N} result:** {clean / issues found}
+{if issues: list each issue and how it was resolved}
+
+**Final plan status:** Approved — proceeding to user confirmation.
+EOF
+)"
+```
+
 **If clean:** proceed to Step 1.4
 
 ### Step 1.4: Present to User
@@ -75,6 +155,7 @@ Output a concise plan summary to the user:
 ```
 ## /dev Plan Summary
 
+**Issue:** #{ISSUE}
 **Goal:** {one sentence}
 **Approach:** {2-3 sentences}
 **Key decisions:**
@@ -107,31 +188,22 @@ Parse the plan and count independent sub-tasks:
 
 Independence criteria: tasks that don't modify the same files and don't depend on each other's output.
 
+**Post to issue:**
+```bash
+gh issue comment {ISSUE} --body "$(cat <<'EOF'
+## Implementation Start
+
+**Scale:** {small / large} task
+**Path:** {single worktree / stacked PRs with N sub-tasks}
+**Branch:** `issue-{ISSUE}-{name}`
+EOF
+)"
+```
+
 ### Step 2.2a: Small Task — Single Worktree
 
-Create the implementation issue using the appropriate GitHub issue template (see workflow.md for template list):
-
 ```bash
-gh issue create --title "{type}({scope}): {description}" \
-  --body "{description with context}" \
-  --label "created-by:claude" --label "{type-label}" --label "{component-label}"
-```
-
-Note: `--template` flag cannot be used with `--body`. The body MUST follow the template's field structure:
-
-```
-### Description
-{what and why}
-
-### Component
-{crate or area} ({description})
-
-### Alternatives considered
-{alternatives or "N/A"}
-```
-
-```bash
-git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
+git worktree add .worktrees/issue-{ISSUE}-{name} -b issue-{ISSUE}-{name}
 ```
 
 Dispatch a **subagent** (via the Agent tool) to the worktree with the full plan.
@@ -139,6 +211,10 @@ Dispatch a **subagent** (via the Agent tool) to the worktree with the full plan.
 The subagent prompt MUST include:
 - The full implementation plan from the design doc
 - The worktree path to work in
+- The issue number `{ISSUE}` and instruction to post progress comments:
+  ```bash
+  gh issue comment {ISSUE} --body "Progress: {what was just completed}"
+  ```
 - Instruction to follow CLAUDE.md conventions
 - Instruction to run `cargo check -p {crate}` after each significant change
 - Instruction to commit after each logical step with conventional commit messages
@@ -146,11 +222,6 @@ The subagent prompt MUST include:
 ### Step 2.2b: Large Task — Multi-Worktree Parallel (Stacked PRs)
 
 ```bash
-# Create epic issue (with template-compatible body)
-gh issue create --title "{type}({scope}): {description}" \
-  --body "{description following template structure}" \
-  --label "created-by:claude" --label "{type-label}" --label "{component-label}"
-
 # Create feature branch from origin/main (no checkout needed)
 git fetch origin main
 git branch feat/{name} origin/main
@@ -158,9 +229,10 @@ git push -u origin feat/{name}
 ```
 
 For each independent sub-task:
-1. Create a sub-issue referencing the epic
+1. Create a sub-issue referencing `{ISSUE}`
 2. Create a worktree branching from `feat/{name}`
 3. Dispatch a subagent (via the Agent tool, with `run_in_background: true` for parallel execution)
+   - Each subagent posts progress comments on its own sub-issue
 
 After all subagents complete:
 - Verify each worktree's changes compile
@@ -187,6 +259,21 @@ If frontend was touched:
 cd web && npm run build
 ```
 
+**Post verification result to issue:**
+```bash
+gh issue comment {ISSUE} --body "$(cat <<'EOF'
+## Build Verification
+
+- cargo check: {pass/fail}
+- cargo clippy: {pass/fail}
+- cargo test: {pass/fail}
+{- npm run build: {pass/fail}  # if frontend touched}
+
+**Status:** {Ready for review / Fixing issues...}
+EOF
+)"
+```
+
 **If verification fails:**
 - The implementing subagent self-fixes and retries (max 3 times)
 - After 3 failures: escalate to user with error details
@@ -194,6 +281,52 @@ cd web && npm run build
 ---
 
 ## Phase 3: REVIEW & FIX
+
+### Step 3.0: Create Draft PR
+
+Create a draft PR **before** starting review, so review findings can be posted as PR comments.
+
+```bash
+git push -u origin {branch}
+gh pr create --draft --title "{type}({scope}): {description} (#{ISSUE})" --body "$(cat <<'EOF'
+## Summary
+
+{what was done, 2-3 sentences}
+
+## Type of change
+
+| Type | Label |
+|------|-------|
+| {type} | `{label}` |
+
+## Component
+
+`{component}`
+
+## Closes
+
+Closes #{ISSUE}
+
+## Test plan
+
+- [ ] `cargo check` passes
+- [ ] `cargo clippy` passes
+- [ ] `cargo test` passes
+- [ ] Code review clean
+
+## Review Log
+
+_Review in progress..._
+EOF
+)" --label "{type-label}" --label "{component-label}"
+```
+
+Save the PR number as `{PR}`.
+
+**Post to issue:**
+```bash
+gh issue comment {ISSUE} --body "Draft PR created: #{PR} — starting code review."
+```
 
 ### Step 3.1: Diff Review
 
@@ -221,15 +354,28 @@ Two-pass review:
 - Test coverage gaps for new functionality
 - Code organization (logic in wrong module, missing re-exports)
 
+**Post review findings to PR:**
+```bash
+gh pr comment {PR} --body "$(cat <<'EOF'
+## Code Review — Round {N}
+
+### Critical Issues
+{list each issue with file:line and description, or "None found"}
+
+### Quality Issues
+{list each issue with file:line and description, or "None found"}
+
+**Verdict:** {Clean — ready to ship / {M} issues to fix}
+EOF
+)"
+```
+
 ### Step 3.2: Autonomous Fix Loop
 
 For each issue found, the agent MUST:
 
 1. **Analyze** the root cause — don't just pattern-match the symptom
-2. **Search the project** for similar patterns:
-   ```bash
-   # How does the rest of the codebase handle this?
-   ```
+2. **Search the project** for similar patterns
 3. **Research best practices** if the pattern is unfamiliar — use web search
 4. **Check constraints** in AGENT.md and CLAUDE.md for the affected area
 5. **Implement the fix** — following existing conventions
@@ -240,11 +386,24 @@ For each issue found, the agent MUST:
 
 **Do NOT ask the user about any issue that can be resolved through research.**
 
+**Post fix summary to PR:**
+```bash
+gh pr comment {PR} --body "$(cat <<'EOF'
+## Fixes Applied — Round {N}
+
+{for each fix:}
+- **{file}:{line}**: {what was wrong} → {what was done}
+
+Pushed fix commit: {short hash}
+EOF
+)"
+```
+
 ### Step 3.3: Re-Review
 
 After all fixes are applied:
 
-1. Run a full review pass again (both passes)
+1. Push fixes and run a full review pass again (both passes)
 2. If new issues found → back to Step 3.2
 3. **Max 3 rounds** — if still not clean after 3 rounds, escalate to user
 4. Clean → proceed to Phase 4
@@ -275,27 +434,23 @@ B) {option with trade-off}
 
 ## Phase 4: SHIP
 
-### Step 4.1: Commit
+### Step 4.1: Final Commit
 
 Ensure all changes are committed with conventional commit format:
 
 ```bash
 git add {specific files}
 git commit -m "$(cat <<'EOF'
-{type}({scope}): {description} (#{issue-number})
+{type}({scope}): {description} (#{ISSUE})
 
 {body if needed}
 
-Closes #{issue-number}
+Closes #{ISSUE}
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 EOF
 )"
 ```
-
-- Use the conventional commit types: feat, fix, refactor, docs, test, chore
-- Include `Closes #N` in the body
-- Include `Co-Authored-By` trailer
 
 ### Step 4.2: Pre-commit Checks
 
@@ -310,16 +465,17 @@ If checks fail:
 - Re-commit
 - Retry (max 3 times)
 
-### Step 4.3: Push & PR
+### Step 4.3: Mark PR Ready
+
+Push final changes and update the PR:
 
 ```bash
-git push -u origin {branch}
+git push
 ```
 
-Create PR using the project template:
-
+Update PR body with the final review log:
 ```bash
-gh pr create --title "{type}({scope}): {description} (#{issue})" --body "$(cat <<'EOF'
+gh pr edit {PR} --body "$(cat <<'EOF'
 ## Summary
 
 {what was done, 2-3 sentences}
@@ -336,7 +492,7 @@ gh pr create --title "{type}({scope}): {description} (#{issue})" --body "$(cat <
 
 ## Closes
 
-Closes #{issue}
+Closes #{ISSUE}
 
 ## Test plan
 
@@ -349,7 +505,9 @@ Closes #{issue}
 
 {summary of review findings and how they were resolved}
 EOF
-)" --label "{type-label}" --label "{component-label}"
+)"
+
+gh pr ready {PR}
 ```
 
 For large tasks (stacked PRs):
@@ -359,10 +517,14 @@ For large tasks (stacked PRs):
 ### Step 4.4: Wait for CI Green
 
 ```bash
-gh pr checks {PR-number} --watch
+gh pr checks {PR} --watch
 ```
 
 - **CI failure:** analyze the logs, fix in worktree, push again (max 3 attempts)
+- Post CI failure analysis as PR comment:
+  ```bash
+  gh pr comment {PR} --body "CI failure: {analysis and fix applied}"
+  ```
 - **3 failures:** escalate to user with CI logs
 
 ### Step 4.5: Cleanup Reminder
@@ -370,11 +532,11 @@ gh pr checks {PR-number} --watch
 After reporting, remind the user to clean up worktrees after PR is merged:
 
 ```bash
-git worktree remove .worktrees/issue-{N}-{name}
-git branch -d issue-{N}-{name}
+git worktree remove .worktrees/issue-{ISSUE}-{name}
+git branch -d issue-{ISSUE}-{name}
 ```
 
-The pipeline does NOT auto-cleanup because the PR hasn't merged yet. Cleanup happens after merge (per workflow.md Step 6).
+The pipeline does NOT auto-cleanup because the PR hasn't merged yet.
 
 ### Step 4.6: Report
 
@@ -383,20 +545,30 @@ Output the final result:
 ```
 ## /dev Complete
 
+**Issue:** #{ISSUE}
 **PR:** {url}
 **Changes:** {summary — crates touched, lines added/removed}
 **Review:** {N} rounds, {M} issues found and fixed
-**CI:** ✓ All checks passed
+**CI:** All checks passed
 
 {one-line summary of what was built}
 ```
 
 ---
 
+## Anti-Patterns
+
+- **Silent analysis** — Do NOT keep investigation conclusions only in conversation context. Every finding goes to GitHub.
+- **Bulk dumps** — Do NOT post raw tool output as issue comments. Summarize with context and conclusions.
+- **Comment spam** — Do NOT post a comment for every single file read. Group related findings into one comment per logical step.
+- **Skipping the trail** — Do NOT skip issue/PR comments "to save time". The audit trail is the point.
+
 ## Important Rules
 
+- **GitHub is the work log** — issue comments track investigation and decisions; PR comments track review findings and fixes
 - **Never skip the worktree** — all implementation happens in `.worktrees/`, never in the main checkout
 - **Never skip review** — even if the change looks trivial, run at least one review pass
+- **Draft PR before review** — create the PR as draft before Phase 3 so review comments land on the PR
 - **Research before escalating** — the agent must demonstrate it tried to solve the problem
 - **Respect CLAUDE.md** — all code must follow project conventions (snafu, bon, functional style, etc.)
 - **Conventional commits** — every commit follows the format enforced by the commit-msg hook
