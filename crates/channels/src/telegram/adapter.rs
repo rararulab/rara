@@ -1855,26 +1855,25 @@ async fn handle_cascade_callback(
                 _ => String::new(),
             };
 
-            // Try pre-built trace first (sessions with real-time cascade).
-            let cascade = if let Some(trace) =
-                rara_kernel::cascade::load_persisted_cascade(&entries, &rara_message_id)
-            {
-                trace
+            // Locate the turn slice for this trace.
+            let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
+            let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
+                let ts_ms = ulid.timestamp_ms() as i64;
+                let target = jiff::Timestamp::from_millisecond(ts_ms)
+                    .unwrap_or_else(|_| jiff::Timestamp::now());
+                let turn =
+                    rara_kernel::cascade::find_turn_by_timestamp(&entries, &boundaries, target);
+                rara_kernel::cascade::turn_slice(&entries, &boundaries, turn)
             } else {
-                // Fallback: post-hoc build for legacy sessions.
-                let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
-                let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
-                    let ts_ms = ulid.timestamp_ms() as i64;
-                    let target = jiff::Timestamp::from_millisecond(ts_ms)
-                        .unwrap_or_else(|_| jiff::Timestamp::now());
-                    let turn =
-                        rara_kernel::cascade::find_turn_by_timestamp(&entries, &boundaries, target);
-                    rara_kernel::cascade::turn_slice(&entries, &boundaries, turn)
-                } else {
-                    &entries
-                };
-                rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id)
+                &entries
             };
+
+            // Try pre-built trace first; fall back to post-hoc build for
+            // legacy sessions.
+            let cascade = rara_kernel::cascade::load_persisted_cascade(turn_entries)
+                .unwrap_or_else(|| {
+                    rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id)
+                });
 
             tracing::debug!(
                 ticks = cascade.ticks.len(),

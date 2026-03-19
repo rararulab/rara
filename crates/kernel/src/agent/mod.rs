@@ -539,15 +539,7 @@ impl AgentTurnResult {
                 error:            None,
                 rara_message_id:  crate::io::MessageId::new(),
             },
-            cascade:    crate::cascade::CascadeTrace {
-                message_id: String::new(),
-                ticks:      Vec::new(),
-                summary:    crate::cascade::CascadeSummary {
-                    tick_count:      0,
-                    tool_call_count: 0,
-                    total_entries:   0,
-                },
-            },
+            cascade:    crate::cascade::CascadeTrace::empty(),
         }
     }
 }
@@ -940,7 +932,7 @@ pub(crate) async fn run_agent_loop(
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
     let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_message_id.to_string());
-    cascade_asm.push_user(0, &input_text, jiff::Timestamp::now(), None);
+    cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
     let mut consecutive_silent_iters: usize = 0;
@@ -1475,7 +1467,6 @@ pub(crate) async fn run_agent_loop(
                 .await;
 
             cascade_asm.push_assistant(
-                0,
                 &accumulated_text,
                 if accumulated_reasoning.is_empty() {
                     None
@@ -1523,7 +1514,10 @@ pub(crate) async fn run_agent_loop(
                 .append_event(
                     tape_name,
                     "cascade.trace",
-                    serde_json::to_value(&cascade).unwrap_or_default(),
+                    serde_json::to_value(&cascade).unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "failed to serialize cascade trace");
+                        serde_json::Value::Null
+                    }),
                 )
                 .await;
 
@@ -1655,7 +1649,6 @@ pub(crate) async fn run_agent_loop(
         }
 
         cascade_asm.push_assistant(
-            0,
             &accumulated_text,
             if accumulated_reasoning.is_empty() {
                 None
@@ -1701,7 +1694,7 @@ pub(crate) async fn run_agent_loop(
                 .iter()
                 .map(|tc| (tc.name.as_str(), tc.arguments.as_str()))
                 .collect();
-            cascade_asm.push_tool_calls(0, &calls_for_cascade, jiff::Timestamp::now(), None);
+            cascade_asm.push_tool_calls(&calls_for_cascade, jiff::Timestamp::now(), None);
         }
 
         iter_span.record("tool_count", valid_tool_calls.len());
@@ -1954,7 +1947,7 @@ pub(crate) async fn run_agent_loop(
                     })
                     .collect();
                 let results_refs: Vec<&str> = results_strs.iter().map(|s| s.as_str()).collect();
-                cascade_asm.push_tool_results(0, &results_refs, jiff::Timestamp::now(), None);
+                cascade_asm.push_tool_results(&results_refs, jiff::Timestamp::now(), None);
             }
             if should_remind_tape_anchor(&tool_names, &results_json) {
                 needs_anchor_reminder = true;
@@ -2212,7 +2205,10 @@ pub(crate) async fn run_agent_loop(
         .append_event(
             tape_name,
             "cascade.trace",
-            serde_json::to_value(&cascade).unwrap_or_default(),
+            serde_json::to_value(&cascade).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to serialize cascade trace");
+                serde_json::Value::Null
+            }),
         )
         .await;
 

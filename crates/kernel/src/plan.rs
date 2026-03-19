@@ -600,15 +600,7 @@ pub(crate) async fn run_plan_loop(
             },
             rara_message_id,
         },
-        cascade:    crate::cascade::CascadeTrace {
-            message_id: String::new(),
-            ticks:      Vec::new(),
-            summary:    crate::cascade::CascadeSummary {
-                tick_count:      0,
-                tool_call_count: 0,
-                total_entries:   0,
-            },
-        },
+        cascade:    crate::cascade::CascadeTrace::empty(),
     })
 }
 

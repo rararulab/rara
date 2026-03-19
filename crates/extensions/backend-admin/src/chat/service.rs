@@ -27,7 +27,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
 use rara_kernel::{
-    cascade::{CascadeTrace, build_cascade, find_turn_boundaries, turn_slice},
+    cascade::{
+        CascadeTrace, build_cascade, find_turn_boundaries, load_persisted_cascade, turn_slice,
+    },
     channel::types::{ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall},
     llm::{Message, Role},
     memory::{TapEntry, TapEntryKind, TapeService},
@@ -302,12 +304,6 @@ impl SessionService {
                     message: format!("failed to read tape: {e}"),
                 })?;
 
-        // Fast path: try pre-built cascade trace (sessions with real-time building).
-        let message_id = format!("{}-{}", key, message_seq);
-        if let Some(trace) = rara_kernel::cascade::load_persisted_cascade(&entries, &message_id) {
-            return Ok(trace);
-        }
-
         // Convert tape → chat messages so we can map the 1-based message_seq
         // back to the owning user-message turn.  The seq values in ChatMessage
         // can skip numbers (e.g. a ToolResult with N results increments seq
@@ -333,9 +329,16 @@ impl SessionService {
             .position(|m| m.seq == owner.seq)
             .unwrap_or(0);
 
-        // Use turn boundary helpers to extract the right slice of tape entries.
+        // Extract the turn slice, then try the pre-built trace before
+        // falling back to the post-hoc builder.
         let boundaries = find_turn_boundaries(&entries);
         let turn_entries = turn_slice(&entries, &boundaries, user_ordinal);
+
+        if let Some(trace) = load_persisted_cascade(turn_entries) {
+            return Ok(trace);
+        }
+
+        let message_id = format!("{}-{}", key, message_seq);
         let trace = build_cascade(turn_entries, &message_id);
         Ok(trace)
     }

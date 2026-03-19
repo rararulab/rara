@@ -40,6 +40,21 @@ pub struct CascadeTrace {
     pub summary:    CascadeSummary,
 }
 
+impl CascadeTrace {
+    /// An empty trace with no ticks or entries.
+    pub fn empty() -> Self {
+        Self {
+            message_id: String::new(),
+            ticks:      Vec::new(),
+            summary:    CascadeSummary {
+                tick_count:      0,
+                tool_call_count: 0,
+                total_entries:   0,
+            },
+        }
+    }
+}
+
 /// One reasoning-action cycle within a turn.
 ///
 /// A new tick starts when a new assistant `Message` entry appears after
@@ -145,19 +160,12 @@ impl CascadeAssembler {
     }
 
     /// Append a user-input entry.
-    pub fn push_user(
-        &mut self,
-        entry_id: u64,
-        content: &str,
-        timestamp: Timestamp,
-        metadata: Option<Value>,
-    ) {
+    pub fn push_user(&mut self, content: &str, timestamp: Timestamp, metadata: Option<Value>) {
         self.global_seq += 1;
         self.current_entries.push(CascadeEntry {
-            id: format_entry_id(
+            id: format_seq_id(
                 CascadeEntryKind::UserInput,
                 self.tick_index,
-                entry_id,
                 self.global_seq,
             ),
             kind: CascadeEntryKind::UserInput,
@@ -174,7 +182,6 @@ impl CascadeAssembler {
     /// least one entry already exists in the current tick.
     pub fn push_assistant(
         &mut self,
-        entry_id: u64,
         text: &str,
         reasoning: Option<&str>,
         timestamp: Timestamp,
@@ -203,12 +210,7 @@ impl CascadeAssembler {
         if !content.is_empty() {
             self.global_seq += 1;
             self.current_entries.push(CascadeEntry {
-                id: format_entry_id(
-                    CascadeEntryKind::Thought,
-                    self.tick_index,
-                    entry_id,
-                    self.global_seq,
-                ),
+                id: format_seq_id(CascadeEntryKind::Thought, self.tick_index, self.global_seq),
                 kind: CascadeEntryKind::Thought,
                 content,
                 timestamp,
@@ -223,7 +225,6 @@ impl CascadeAssembler {
     /// entry, matching the per-call expansion in [`build_cascade`].
     pub fn push_tool_calls(
         &mut self,
-        entry_id: u64,
         calls: &[(&str, &str)],
         timestamp: Timestamp,
         metadata: Option<Value>,
@@ -233,12 +234,7 @@ impl CascadeAssembler {
             self.global_seq += 1;
             self.tool_call_count += 1;
             self.current_entries.push(CascadeEntry {
-                id: format_entry_id(
-                    CascadeEntryKind::Action,
-                    self.tick_index,
-                    entry_id,
-                    self.global_seq,
-                ),
+                id: format_seq_id(CascadeEntryKind::Action, self.tick_index, self.global_seq),
                 kind: CascadeEntryKind::Action,
                 content: format!("{name}({args})"),
                 timestamp,
@@ -252,7 +248,6 @@ impl CascadeAssembler {
     /// Each result string produces one [`CascadeEntryKind::Observation`] entry.
     pub fn push_tool_results(
         &mut self,
-        entry_id: u64,
         results: &[&str],
         timestamp: Timestamp,
         metadata: Option<Value>,
@@ -261,10 +256,9 @@ impl CascadeAssembler {
         for result in results {
             self.global_seq += 1;
             self.current_entries.push(CascadeEntry {
-                id: format_entry_id(
+                id: format_seq_id(
                     CascadeEntryKind::Observation,
                     self.tick_index,
-                    entry_id,
                     self.global_seq,
                 ),
                 kind: CascadeEntryKind::Observation,
@@ -481,6 +475,14 @@ fn format_entry_id(kind: CascadeEntryKind, tick: usize, entry_id: u64, seq: usiz
     format!("{} \u{2022} {}-{}-{}", kind.prefix(), tick, short_id, seq)
 }
 
+/// Format a sequence-only entry ID for [`CascadeAssembler`].
+///
+/// Unlike [`format_entry_id`] which uses a tape entry ID, this uses only the
+/// global sequence counter — the assembler does not have access to tape IDs.
+fn format_seq_id(kind: CascadeEntryKind, tick: usize, seq: usize) -> String {
+    format!("{} \u{2022} {}-{}", kind.prefix(), tick, seq)
+}
+
 /// Find indices of user-message entries in a tape, defining turn boundaries.
 ///
 /// Each returned index marks the start of a new "turn" (user → assistant
@@ -530,25 +532,21 @@ pub fn find_turn_by_timestamp(
 }
 
 /// Try to load a pre-built cascade trace from a persisted `cascade.trace`
-/// event in the tape. Returns `None` if no matching entry exists (e.g.
+/// event within a turn slice. Returns `None` if no such event exists (e.g.
 /// legacy sessions that pre-date real-time cascade building).
-pub fn load_persisted_cascade(entries: &[TapEntry], message_id: &str) -> Option<CascadeTrace> {
-    entries
+///
+/// The caller should pass the turn's entry slice (from [`turn_slice`]) so
+/// the search is scoped to a single turn and does not need `message_id`
+/// matching.
+pub fn load_persisted_cascade(turn_entries: &[TapEntry]) -> Option<CascadeTrace> {
+    turn_entries
         .iter()
         .rev()
-        .filter(|e| {
+        .find(|e| {
             e.kind == TapEntryKind::Event
                 && e.payload.get("name").and_then(Value::as_str) == Some("cascade.trace")
         })
-        .find_map(|e| {
-            let trace: CascadeTrace =
-                serde_json::from_value(e.payload.get("data")?.clone()).ok()?;
-            if trace.message_id == message_id {
-                Some(trace)
-            } else {
-                None
-            }
-        })
+        .and_then(|e| serde_json::from_value(e.payload.get("data")?.clone()).ok())
 }
 
 /// Extract plain text content from a message payload.
@@ -1317,14 +1315,14 @@ mod tests {
 
         // -- CascadeAssembler path --
         let mut builder = CascadeAssembler::new(msg_id.to_owned());
-        builder.push_user(1, "do two things", ts, None);
-        builder.push_assistant(2, "first I'll search", None, ts, None);
-        builder.push_tool_calls(3, &[("search", "{}")], ts, None);
-        builder.push_tool_results(4, &["result1"], ts, None);
-        builder.push_assistant(5, "now I'll read", None, ts, None);
-        builder.push_tool_calls(6, &[("read", "{}")], ts, None);
-        builder.push_tool_results(7, &["result2"], ts, None);
-        builder.push_assistant(8, "done", None, ts, None);
+        builder.push_user("do two things", ts, None);
+        builder.push_assistant("first I'll search", None, ts, None);
+        builder.push_tool_calls(&[("search", "{}")], ts, None);
+        builder.push_tool_results(&["result1"], ts, None);
+        builder.push_assistant("now I'll read", None, ts, None);
+        builder.push_tool_calls(&[("read", "{}")], ts, None);
+        builder.push_tool_results(&["result2"], ts, None);
+        builder.push_assistant("done", None, ts, None);
         let actual = builder.finish();
 
         // Structural parity checks.
@@ -1343,7 +1341,8 @@ mod tests {
             for (a_entry, e_entry) in a_tick.entries.iter().zip(e_tick.entries.iter()) {
                 assert_eq!(a_entry.kind, e_entry.kind);
                 assert_eq!(a_entry.content, e_entry.content);
-                assert_eq!(a_entry.id, e_entry.id);
+                // Entry IDs use different formats (seq-only vs tape-entry-id),
+                // so we only verify kind + content parity here.
             }
         }
     }
