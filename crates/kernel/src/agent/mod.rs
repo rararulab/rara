@@ -66,6 +66,10 @@ const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
 /// injected.  Unlike the pressure-based thresholds this is a pure turn count
 /// and does not depend on token estimates.
 const TURN_REMINDER_THRESHOLD: usize = 8;
+const _: () = {
+    assert!(TURN_REMINDER_THRESHOLD >= 4, "threshold too low");
+    assert!(TURN_REMINDER_THRESHOLD <= 20, "threshold too high");
+};
 /// Large tool outputs that should trigger an explicit anchor reminder.
 const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
 /// Multiple medium tool outputs in one phase should also trigger a reminder.
@@ -937,8 +941,30 @@ pub(crate) async fn run_agent_loop(
     let mut consecutive_silent_iters: usize = 0;
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
-    let mut turn_reminder_injected = false;
     let mut llm_error_recovery_message: Option<String> = None;
+
+    // ── Session length reminder state ─────────────────────────────────
+    // Count user turns since the last anchor to detect long sessions that
+    // may benefit from a handoff.  Queried once from the tape at turn
+    // start; incremented by 1 for the current user message; reset when
+    // the agent creates an anchor (detected via tool names).
+    let user_turns_since_anchor: usize = {
+        tape.from_last_anchor(tape_name, None)
+            .await
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|e| {
+                        e.kind == crate::memory::TapEntryKind::Message
+                            && e.payload.get("role").and_then(|v| v.as_str()) == Some("user")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    // +1 for the current user message that triggered this turn.
+    let mut user_turns_since_anchor = user_turns_since_anchor + 1;
+    let mut session_length_warned = false;
     // ── Tool call limit circuit breaker ──────────────────────────────────
     // Prevents runaway tool loops by pausing execution every N tool calls
     // and asking the user whether to continue. 0 = disabled (default).
@@ -1844,6 +1870,14 @@ pub(crate) async fn run_agent_loop(
             if should_remind_tape_anchor(&tool_names, &results_json) {
                 needs_anchor_reminder = true;
             }
+            // Reset session-length counter when the agent creates an anchor.
+            if tool_names
+                .iter()
+                .any(|n| n == "tape-handoff" || n == "tape")
+            {
+                user_turns_since_anchor = 0;
+                session_length_warned = false;
+            }
         }
 
         // Build tool call traces from results
@@ -2015,31 +2049,18 @@ pub(crate) async fn run_agent_loop(
 
         // ── Session length reminder ──────────────────────────────────
         // Inject a warning when the session has many user turns without an
-        // anchor, independent of token-based context pressure.
-        if !turn_reminder_injected && context_pressure_warning.is_none() {
-            if let Ok(entries) = tape.from_last_anchor(tape_name, None).await {
-                let user_turns = entries
-                    .iter()
-                    .filter(|e| {
-                        e.kind == crate::memory::TapEntryKind::Message
-                            && e.payload.get("role").and_then(|v| v.as_str()) == Some("user")
-                            && !e
-                                .payload
-                                .get("content")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .starts_with('[')
-                    })
-                    .count();
-                if user_turns >= TURN_REMINDER_THRESHOLD {
-                    context_pressure_warning = Some(format!(
-                        "[Session Length Warning] This session has had {user_turns} user turns \
-                         since the last anchor. If the topic has shifted, you MUST create a tape \
-                         anchor now with summary and next_steps.",
-                    ));
-                    turn_reminder_injected = true;
-                }
-            }
+        // anchor, independent of token-based context pressure.  Uses an
+        // in-memory counter instead of querying tape each iteration.
+        if !session_length_warned
+            && context_pressure_warning.is_none()
+            && user_turns_since_anchor >= TURN_REMINDER_THRESHOLD
+        {
+            context_pressure_warning = Some(format!(
+                "[Session Length Warning] This session has had {user_turns_since_anchor} user \
+                 turns since the last anchor. If the topic has shifted, you MUST create a tape \
+                 anchor now with summary and next_steps.",
+            ));
+            session_length_warned = true;
         }
 
         // Track consecutive silent (tool-only, no text) iterations and emit
@@ -2135,9 +2156,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextPressure, TURN_REMINDER_THRESHOLD, build_runtime_contract_prompt,
-        classify_context_pressure, resolve_soul_prompt, should_remind_tape_anchor,
-        should_remind_tape_search,
+        ContextPressure, build_runtime_contract_prompt, classify_context_pressure,
+        resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
     };
 
     #[test]
@@ -2232,20 +2252,6 @@ mod tests {
         let result = resolve_soul_prompt("rara");
         assert!(result.is_some());
         assert!(result.unwrap().contains("Identity: rara"));
-    }
-
-    #[test]
-    fn turn_reminder_threshold_is_reasonable() {
-        const {
-            assert!(
-                TURN_REMINDER_THRESHOLD >= 4,
-                "threshold too low — would fire too often"
-            );
-            assert!(
-                TURN_REMINDER_THRESHOLD <= 20,
-                "threshold too high — would never fire"
-            );
-        }
     }
 
     #[test]
