@@ -525,6 +525,28 @@ pub fn find_turn_by_timestamp(
         .unwrap_or(0)
 }
 
+/// Try to load a pre-built cascade trace from a persisted `cascade.trace`
+/// event in the tape. Returns `None` if no matching entry exists (e.g.
+/// legacy sessions that pre-date real-time cascade building).
+pub fn load_persisted_cascade(entries: &[TapEntry], message_id: &str) -> Option<CascadeTrace> {
+    entries
+        .iter()
+        .rev()
+        .filter(|e| {
+            e.kind == TapEntryKind::Event
+                && e.payload.get("name").and_then(Value::as_str) == Some("cascade.trace")
+        })
+        .find_map(|e| {
+            let trace: CascadeTrace =
+                serde_json::from_value(e.payload.get("data")?.clone()).ok()?;
+            if trace.message_id == message_id {
+                Some(trace)
+            } else {
+                None
+            }
+        })
+}
+
 /// Extract plain text content from a message payload.
 fn extract_text_content(payload: &Value) -> String {
     match payload.get("content") {

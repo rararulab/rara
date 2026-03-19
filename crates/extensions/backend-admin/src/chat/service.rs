@@ -302,6 +302,12 @@ impl SessionService {
                     message: format!("failed to read tape: {e}"),
                 })?;
 
+        // Fast path: try pre-built cascade trace (sessions with real-time building).
+        let message_id = format!("{}-{}", key, message_seq);
+        if let Some(trace) = rara_kernel::cascade::load_persisted_cascade(&entries, &message_id) {
+            return Ok(trace);
+        }
+
         // Convert tape → chat messages so we can map the 1-based message_seq
         // back to the owning user-message turn.  The seq values in ChatMessage
         // can skip numbers (e.g. a ToolResult with N results increments seq
@@ -330,7 +336,6 @@ impl SessionService {
         // Use turn boundary helpers to extract the right slice of tape entries.
         let boundaries = find_turn_boundaries(&entries);
         let turn_entries = turn_slice(&entries, &boundaries, user_ordinal);
-        let message_id = format!("{}-{}", key, message_seq);
         let trace = build_cascade(turn_entries, &message_id);
         Ok(trace)
     }
