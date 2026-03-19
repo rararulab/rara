@@ -33,7 +33,7 @@ pub enum SymphonyError {
         location: snafu::Location,
     },
 
-    #[snafu(display("linear API error: {message}"))]
+    #[snafu(display("linear API error: {message}: {source}"))]
     Linear {
         message:  String,
         source:   lineark_sdk::LinearError,
