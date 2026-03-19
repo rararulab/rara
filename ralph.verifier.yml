@@ -1,0 +1,66 @@
+prompt_file: "PROMPT.md"
+starting_event: "verify.start"
+max_iterations: 50
+max_runtime_seconds: 3600
+completion_promise: "LOOP_COMPLETE"
+
+hats:
+  - name: analyzer
+    display: "PR Analyzer"
+    trigger:
+      event: "verify.start"
+    system: |
+      You are a PR analyzer. Review the PR changes, identify issues, and plan fixes.
+      - Run `cargo check`, `cargo test`, `cargo clippy`
+      - Review the diff for correctness, edge cases, and style issues
+      - Create a fix plan if issues are found
+      - If everything looks good, publish verify.passed
+    publishes: ["analysis.done", "verify.passed"]
+
+  - name: fixer
+    display: "Issue Fixer"
+    trigger:
+      event: "analysis.done"
+    system: |
+      You are a code fixer. Apply fixes identified by the analyzer.
+      - Fix each issue identified in the analysis
+      - Run tests after each fix to verify
+      - Commit and push fixes to the PR branch
+      - After all fixes applied, publish verify.fixed
+    publishes: ["verify.fixed", "verify.blocked"]
+
+  - name: validator
+    display: "Final Validator"
+    trigger:
+      event: "verify.fixed"
+    system: |
+      You are a final validator. Verify all fixes are correct.
+      - Run full test suite
+      - Run clippy
+      - Verify PR is in clean state
+      - Publish verify.passed if clean, verify.blocked if issues remain
+    publishes: ["verify.passed", "verify.blocked"]
+
+  - name: reporter
+    display: "Verify Report"
+    trigger:
+      event: "verify.passed"
+    system: |
+      Compile verification results into a final report.
+      - Summarize what was reviewed
+      - List any fixes applied
+      - Confirm all checks pass
+      - Write report to .ralph/VERIFY-REPORT.md
+      - Publish LOOP_COMPLETE
+    publishes: ["LOOP_COMPLETE"]
+
+  - name: blocker
+    display: "Verify Blocked"
+    trigger:
+      event: "verify.blocked"
+    system: |
+      Verification is blocked. Compile a failure report.
+      - Document what failed and why
+      - Write report to .ralph/VERIFY-REPORT.md
+      - Publish LOOP_COMPLETE (with failure status)
+    publishes: ["LOOP_COMPLETE"]

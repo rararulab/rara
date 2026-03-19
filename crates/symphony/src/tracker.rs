@@ -53,6 +53,10 @@ pub struct TrackedIssue {
     pub priority:   u32,
     /// Current lifecycle state.
     pub state:      IssueState,
+    /// Workflow state name from the tracker (e.g. "Todo", "In Progress").
+    /// For GitHub issues this is always "open"; for Linear it reflects the
+    /// actual workflow state.
+    pub state_name: String,
     /// When the issue was created.
     pub created_at: DateTime<Utc>,
 }
@@ -71,6 +75,11 @@ pub trait IssueTracker: Send + Sync {
     /// Implementations should be best-effort — a failure here should not
     /// block agent dispatch.
     async fn transition_issue(&self, issue: &TrackedIssue, state_name: &str) -> Result<()>;
+
+    /// Add a label to an issue (best-effort).
+    ///
+    /// Used by the verify pipeline to tag issues with failure markers.
+    async fn add_label(&self, issue: &TrackedIssue, label: &str) -> Result<()>;
 }
 
 /// GitHub-backed issue tracker using the REST API.
@@ -152,6 +161,7 @@ impl GitHubIssueTracker {
                     labels,
                     priority,
                     state: IssueState::Active,
+                    state_name: "open".to_owned(),
                     created_at: item.created_at,
                 }
             })
@@ -222,6 +232,37 @@ impl IssueTracker for GitHubIssueTracker {
             state = state_name,
             "github: state transitions not supported, skipping"
         );
+        Ok(())
+    }
+
+    async fn add_label(&self, issue: &TrackedIssue, label: &str) -> Result<()> {
+        let (owner, name) = parse_repo_slug(&issue.repo);
+        let number = issue.number;
+        let url = format!("https://api.github.com/repos/{owner}/{name}/issues/{number}/labels");
+
+        let mut req = self
+            .client
+            .post(&url)
+            .header(USER_AGENT, "rara-symphony")
+            .header(ACCEPT, "application/vnd.github+json")
+            .json(&serde_json::json!({ "labels": [label] }));
+
+        if let Some(token) = &self.token {
+            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+
+        let resp = req.send().await.context(GitHubRequestSnafu {
+            repo: issue.repo.clone(),
+        })?;
+
+        if !resp.status().is_success() {
+            tracing::warn!(
+                issue_id = %issue.id,
+                label,
+                status = %resp.status(),
+                "github: failed to add label"
+            );
+        }
         Ok(())
     }
 }
@@ -539,6 +580,7 @@ impl IssueTracker for LinearIssueTracker {
                     labels,
                     priority,
                     state: IssueState::Active,
+                    state_name: node.state.name.clone(),
                     created_at: node.created_at,
                 });
             }
@@ -651,9 +693,156 @@ impl IssueTracker for LinearIssueTracker {
 
         Ok(())
     }
+
+    async fn add_label(&self, issue: &TrackedIssue, label: &str) -> Result<()> {
+        self.add_label_impl(issue, label).await
+    }
 }
 
 impl LinearIssueTracker {
+    /// Add a label to an issue in Linear by resolving the label ID and
+    /// appending it to the existing set.
+    async fn add_label_impl(&self, issue: &TrackedIssue, label: &str) -> Result<()> {
+        // 1. Find the label ID by name within the team.
+        let label_id = self.resolve_label_id(label).await?;
+
+        // 2. Add the label to the issue.
+        const MUTATION: &str = r#"
+            mutation($id: String!, $labelIds: [String!]!) {
+                issueUpdate(id: $id, input: { labelIds: $labelIds }) {
+                    success
+                }
+            }
+        "#;
+
+        // Collect existing label IDs + new one to avoid overwriting.
+        // Linear's issueUpdate with labelIds replaces the full set, so we
+        // need to fetch current labels first.
+        let current_label_ids = self.fetch_issue_label_ids(&issue.id).await?;
+        let mut all_ids: Vec<String> = current_label_ids;
+        if !all_ids.contains(&label_id) {
+            all_ids.push(label_id);
+        }
+
+        let variables = serde_json::json!({
+            "id": issue.id,
+            "labelIds": all_ids,
+        });
+
+        let result: serde_json::Value = self
+            .client
+            .execute(MUTATION, variables, "issueUpdate")
+            .await
+            .context(LinearSnafu {
+                message: format!(
+                    "failed to add label '{}' to issue {}",
+                    label, issue.identifier
+                ),
+            })?;
+
+        let success = result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if success {
+            tracing::info!(
+                issue_id = %issue.id,
+                label,
+                "linear: added label to issue"
+            );
+        } else {
+            tracing::warn!(
+                issue_id = %issue.id,
+                label,
+                "linear: issueUpdate for label returned success=false"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Resolve a label name to its Linear label ID within the team.
+    async fn resolve_label_id(&self, label_name: &str) -> Result<String> {
+        const QUERY: &str = r#"
+            query($teamKey: String!, $labelName: String!) {
+                issueLabels(
+                    filter: {
+                        team: { key: { eq: $teamKey } }
+                        name: { eq: $labelName }
+                    }
+                    first: 1
+                ) {
+                    nodes { id name }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "teamKey": self.team_key,
+            "labelName": label_name,
+        });
+
+        let conn = self
+            .client
+            .execute_connection::<serde_json::Value>(QUERY, variables, "issueLabels")
+            .await
+            .context(LinearSnafu {
+                message: format!("failed to resolve label '{label_name}'"),
+            })?;
+
+        conn.nodes
+            .first()
+            .and_then(|n| n.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned())
+            .ok_or_else(|| {
+                crate::error::ConfigSnafu {
+                    message: format!(
+                        "label '{label_name}' not found for team '{}'",
+                        self.team_key
+                    ),
+                }
+                .build()
+            })
+    }
+
+    /// Fetch the current label IDs for an issue so we can append without
+    /// overwriting.
+    async fn fetch_issue_label_ids(&self, issue_id: &str) -> Result<Vec<String>> {
+        const QUERY: &str = r#"
+            query($id: String!) {
+                issue(id: $id) {
+                    labels { nodes { id } }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "id": issue_id });
+
+        let resp: serde_json::Value = self
+            .client
+            .execute(QUERY, variables, "issue")
+            .await
+            .context(LinearSnafu {
+                message: format!("failed to fetch labels for issue {issue_id}"),
+            })?;
+
+        let ids = resp
+            .get("labels")
+            .and_then(|l| l.get("nodes"))
+            .and_then(|n| n.as_array())
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(|s| s.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(ids)
+    }
+
     /// Resolve a workflow state name (e.g. "In Progress") to its Linear state
     /// ID.
     async fn resolve_state_id(&self, state_name: &str) -> Result<String> {
@@ -768,6 +957,7 @@ mod tests {
             labels: vec![],
             priority,
             state: IssueState::Active,
+            state_name: "open".to_owned(),
             created_at,
         }
     }

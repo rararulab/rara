@@ -191,6 +191,11 @@ pub struct SymphonyConfig {
     #[serde(default)]
     pub review: ReviewConfig,
 
+    /// Verify pipeline configuration.
+    #[serde(default)]
+    #[builder(default)]
+    pub verify: VerifyConfig,
+
     /// Repository configurations.
     pub repos: Vec<RepoConfig>,
 }
@@ -242,12 +247,59 @@ pub struct ReviewConfig {
 fn default_review_enabled() -> bool { true }
 fn default_review_hats() -> String { "ralph.reviewer.yml".to_owned() }
 
+fn default_verify_enabled() -> bool { false }
+fn default_verify_hats() -> String { "ralph.verifier.yml".to_owned() }
+fn default_verify_started_state() -> String { "Verifying".to_owned() }
+fn default_verify_completed_state() -> String { "WaitingApprove".to_owned() }
+fn default_verify_max_concurrent() -> usize { 1 }
+
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
             enabled:   default_review_enabled(),
             hats_file: default_review_hats(),
             backend:   None,
+        }
+    }
+}
+
+/// Configuration for the post-review verify pipeline.
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
+pub struct VerifyConfig {
+    /// Whether to auto-verify issues after coding completes.
+    #[serde(default = "default_verify_enabled")]
+    pub enabled: bool,
+
+    /// Hat collection file for verify mode (e.g. `ralph.verifier.yml`).
+    #[serde(default = "default_verify_hats")]
+    pub hats_file: String,
+
+    /// Backend override for the verify agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+
+    /// Issue state to transition to when verify starts.
+    #[serde(default = "default_verify_started_state")]
+    pub started_state: String,
+
+    /// Issue state to transition to when verify succeeds.
+    #[serde(default = "default_verify_completed_state")]
+    pub completed_state: String,
+
+    /// Maximum concurrent verify agents.
+    #[serde(default = "default_verify_max_concurrent")]
+    pub max_concurrent: usize,
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self {
+            enabled:         default_verify_enabled(),
+            hats_file:       default_verify_hats(),
+            backend:         None,
+            started_state:   default_verify_started_state(),
+            completed_state: default_verify_completed_state(),
+            max_concurrent:  default_verify_max_concurrent(),
         }
     }
 }
