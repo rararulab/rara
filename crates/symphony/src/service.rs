@@ -843,7 +843,7 @@ impl IssueRuntime {
                 message: format!("failed to write RPC command to ralph for issue {issue_id}"),
             })?;
 
-        info!(issue_id, command_type = ?std::mem::discriminant(&cmd), "sent RPC command to ralph");
+        info!(issue_id, command = ?cmd, "sent RPC command to ralph");
         Ok(())
     }
 

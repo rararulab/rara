@@ -38,7 +38,8 @@ pub fn spawn_rpc_reader<R: AsyncRead + Unpin + Send + 'static>(
                         break;
                     }
                 }
-                Err(_) => {
+                Err(err) => {
+                    tracing::debug!(line = %line, error = %err, "unparseable RPC line; forwarding to raw log");
                     let _ = raw_tx.send(line).await;
                 }
             }
