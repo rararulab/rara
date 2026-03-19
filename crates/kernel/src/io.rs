@@ -1044,11 +1044,34 @@ impl StreamHub {
         }
     }
 
+    /// Close all streams for a session, removing zombie entries.
+    ///
+    /// Called by [`open`](Self::open) to ensure only one active stream per
+    /// session. Any previously unclosed streams (e.g., from a hung agent
+    /// run) are cleaned up here.
+    #[tracing::instrument(skip(self))]
+    pub fn close_session(&self, session_key: &SessionKey) {
+        // Remove the session entry first, releasing the DashMap shard lock.
+        let ids = self
+            .session_streams
+            .remove(session_key)
+            .map(|(_, ids)| ids)
+            .unwrap_or_default();
+        if !ids.is_empty() {
+            tracing::debug!(count = ids.len(), "cleaning up zombie streams for session");
+        }
+        for id in &ids {
+            self.streams.remove(id);
+        }
+    }
+
     /// Open a new stream for an agent execution run.
     ///
     /// Returns a [`StreamHandle`] that the executor uses to emit events.
     #[tracing::instrument(skip(self), fields(stream_id = tracing::field::Empty))]
     pub fn open(&self, session_key: SessionKey) -> StreamHandle {
+        // Clean up any zombie streams from previous (hung) agent runs.
+        self.close_session(&session_key);
         let stream_id = StreamId::new();
         tracing::Span::current().record("stream_id", tracing::field::display(&stream_id.0));
         let (tx, _) = broadcast::channel(self.capacity);
@@ -1955,5 +1978,52 @@ mod ingress_rate_limiter_tests {
 
         assert!(limiter.buckets.contains_key("active"));
         assert!(!limiter.buckets.contains_key("stale"));
+    }
+}
+
+#[cfg(test)]
+mod stream_hub_tests {
+    use super::*;
+
+    #[test]
+    fn open_cleans_up_zombie_streams() {
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+
+        // First open — simulates a hung agent run that never called close().
+        let zombie_handle = hub.open(session);
+        let zombie_id = zombie_handle.stream_id.clone();
+
+        // Verify the zombie stream exists.
+        assert!(hub.streams.contains_key(&zombie_id));
+        assert_eq!(hub.subscribe_session(&session).len(), 1);
+
+        // Second open — should clean up the zombie and create a fresh stream.
+        let fresh_handle = hub.open(session);
+        let fresh_id = fresh_handle.stream_id.clone();
+
+        // Only the fresh stream should exist.
+        assert!(
+            !hub.streams.contains_key(&zombie_id),
+            "zombie stream should be removed"
+        );
+        assert!(
+            hub.streams.contains_key(&fresh_id),
+            "fresh stream should exist"
+        );
+
+        let subs = hub.subscribe_session(&session);
+        assert_eq!(subs.len(), 1, "subscriber should see exactly 1 stream");
+        assert_eq!(subs[0].0, fresh_id);
+    }
+
+    #[test]
+    fn close_session_is_idempotent_on_empty() {
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+
+        // Closing a session with no streams should not panic.
+        hub.close_session(&session);
+        assert!(hub.subscribe_session(&session).is_empty());
     }
 }
