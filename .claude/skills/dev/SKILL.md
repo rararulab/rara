@@ -1,9 +1,6 @@
 ---
 name: dev
-description: |
-  Autonomous development pipeline. Takes a requirement and runs the full cycle:
-  brainstorm → plan → review plan → implement → code review → fix → ship PR.
-  Use when asked to "/dev", "develop this feature", or given a requirement to implement end-to-end.
+description: "Autonomous development pipeline: requirement → design → implement → review → ship PR."
 ---
 
 # /dev — Autonomous Development Pipeline
@@ -25,10 +22,7 @@ One command, full cycle: requirement → design → implement → review → shi
 Gather project context silently (no output to user):
 
 1. Read the project's `CLAUDE.md` and relevant `AGENT.md` files for the affected area
-2. Search `docs/plans/` for existing related design documents:
-   ```bash
-   ls -t docs/plans/*.md 2>/dev/null
-   ```
+2. Use the Glob tool to search `docs/plans/*.md` for existing related design documents
 3. Search GitHub issues for related discussions:
    ```bash
    gh issue list --search "{keywords}" --limit 5
@@ -43,11 +37,9 @@ Based on the gathered context:
 2. Propose 2-3 implementation approaches with trade-offs
 3. **Autonomously select** the recommended approach — do NOT ask the user
 4. Consider: architectural fit, complexity, existing patterns in the codebase, CLAUDE.md constraints
-5. Write the design doc:
+5. Write the design doc to a temporary location (do NOT write to main checkout):
 
-```bash
-# Write to docs/plans/YYYY-MM-DD-{topic}-design.md
-```
+The design doc is drafted in memory during Phase 1 and physically written to `docs/plans/YYYY-MM-DD-{topic}-design.md` inside the worktree created in Phase 2. During Phase 1, the doc content is kept in the conversation context.
 
 The design doc MUST include:
 - **Goal:** one sentence
@@ -59,7 +51,7 @@ The design doc MUST include:
 
 ### Step 1.3: Plan Review (autonomous loop)
 
-Dispatch a **code-reviewer subagent** (via the Agent tool with `subagent_type: "superpowers:code-reviewer"`) to review the design doc.
+Dispatch a **general-purpose subagent** (via the Agent tool) to review the design doc. The subagent prompt must instruct it to act as a code reviewer.
 
 Review dimensions:
 - Architectural soundness — does it fit the existing codebase?
@@ -117,13 +109,17 @@ Independence criteria: tasks that don't modify the same files and don't depend o
 
 ### Step 2.2a: Small Task — Single Worktree
 
-```bash
-# Create issue
-gh issue create --title "{type}({scope}): {description}" \
-  --body "Part of #682 pipeline run. {brief description}\n\nCloses #{N}" \
-  --label "created-by:claude" --label "{type-label}" --label "{component-label}"
+Create the implementation issue using the appropriate GitHub issue template (see workflow.md for template list):
 
-# Create worktree
+```bash
+gh issue create --title "{type}({scope}): {description}" \
+  --body "{description with context}" \
+  --label "created-by:claude" --label "{type-label}" --label "{component-label}"
+```
+
+Note: `--template` flag cannot be used with `--body`. Ensure the body follows the template's field structure (Description, Component, Alternatives considered).
+
+```bash
 git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
 ```
 
@@ -139,12 +135,14 @@ The subagent prompt MUST include:
 ### Step 2.2b: Large Task — Multi-Worktree Parallel (Stacked PRs)
 
 ```bash
-# Create epic issue
+# Create epic issue (with template-compatible body)
 gh issue create --title "{type}({scope}): {description}" \
+  --body "{description following template structure}" \
   --label "created-by:claude" --label "{type-label}" --label "{component-label}"
 
-# Create feature branch
-git branch feat/{name} main
+# Create feature branch from origin/main (no checkout needed)
+git fetch origin main
+git branch feat/{name} origin/main
 git push -u origin feat/{name}
 ```
 
@@ -157,13 +155,18 @@ After all subagents complete:
 - Verify each worktree's changes compile
 - Merge sub-branches into `feat/{name}`
 
+**Partial failure handling:** If some subagents succeed and others fail:
+- Keep successful worktrees and their commits
+- Report which sub-tasks failed and why
+- Escalate to user with options: retry failed tasks, proceed with partial implementation, or abort
+
 ### Step 2.3: Build Verification
 
 After implementation completes, verify in the worktree:
 
 ```bash
 cargo check -p {crate}
-cargo clippy -p {crate} --all-targets --no-deps -- -D warnings
+cargo clippy -p {crate} --all-targets --all-features --no-deps -- -D warnings
 cargo test -p {crate}
 ```
 
@@ -182,8 +185,12 @@ cd web && npm run build
 
 ### Step 3.1: Diff Review
 
+Determine the correct base branch for the diff:
+- Small task (single worktree): `origin/main`
+- Large task (stacked PRs): `origin/feat/{name}`
+
 ```bash
-git diff origin/main -- # or the appropriate base branch
+git diff origin/{base} --
 ```
 
 Two-pass review:
@@ -267,12 +274,15 @@ git commit -m "$(cat <<'EOF'
 {body if needed}
 
 Closes #{issue-number}
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 EOF
 )"
 ```
 
 - Use the conventional commit types: feat, fix, refactor, docs, test, chore
 - Include `Closes #N` in the body
+- Include `Co-Authored-By` trailer
 
 ### Step 4.2: Pre-commit Checks
 

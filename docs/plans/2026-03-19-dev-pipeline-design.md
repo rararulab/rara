@@ -1,5 +1,7 @@
 # `/dev` Pipeline — Autonomous Development Skill
 
+> **Source of truth:** `.claude/skills/dev/SKILL.md` — this design doc captures the rationale; the skill file is the authoritative spec.
+
 ## Overview
 
 A single slash command `/dev "requirement"` that runs the full development pipeline autonomously: from brainstorming to shipped PR. The user intervenes only twice — confirming the plan, and seeing the final result.
@@ -110,7 +112,7 @@ git push -u origin feat/{name}
 ### Step 2.3: Build Verification
 
 - `cargo check -p {crate}`
-- `cargo clippy --workspace` (after final merge only)
+- `cargo clippy -p {crate} --all-targets --all-features --no-deps -- -D warnings`
 - `cargo test -p {crate}`
 - Frontend changes: `cd web && npm run build`
 - Failure → subagent self-fixes → retry (max 3 times)
@@ -207,6 +209,17 @@ Output:
 ## Implementation Notes
 
 - This skill will be a Claude Code slash command (SKILL.md format)
-- It orchestrates existing superpowers skills internally (brainstorming, writing-plans, code-review, etc.)
+- It orchestrates existing infrastructure via Agent tool subagents (general-purpose type)
 - CLAUDE.md constraints (snafu, bon, functional style, commit style) are already global — not duplicated in the skill
 - The skill itself is a Markdown prompt, not a code pipeline
+- Design doc is drafted in conversation context during Phase 1, physically written to worktree in Phase 2
+
+### Dependency Skills (referenced internally)
+
+| Skill / Tool | Used in | Purpose |
+|--------------|---------|---------|
+| Agent (general-purpose) | Phase 1.3, 2.2 | Dispatch review and implementation subagents |
+| Agent (Explore) | Phase 1.1 | Codebase context gathering |
+| Glob / Grep / Read | Phase 1.1, 3.2 | Search files and code patterns |
+| Bash | Phase 2-4 | git, gh, cargo commands |
+| WebSearch | Phase 3.2 | Research best practices for review fixes |
