@@ -350,6 +350,8 @@ pub(crate) async fn run_plan_loop(
                     handle,
                     session_key,
                     &step,
+                    &plan.goal,
+                    &past_steps,
                     stream_handle,
                     turn_cancel,
                     tape.clone(),
@@ -1208,7 +1210,47 @@ fn classify_step_result(
     }
 }
 
+/// Build an enriched user prompt that includes plan context for an inline step.
+///
+/// When a step runs in a forked tape, it has no prior conversation history.
+/// This function injects enough context (goal + completed step summaries)
+/// so the agent can continue coherently.
+fn build_step_prompt(plan_goal: &str, past_steps: &[PastStep], step: &PlanStep) -> String {
+    let mut parts = Vec::with_capacity(3);
+
+    parts.push(format!("Plan goal: {plan_goal}"));
+
+    if !past_steps.is_empty() {
+        let steps_desc: String = past_steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "- Step {}: {} [{}] — {}",
+                    s.index + 1,
+                    s.task,
+                    s.outcome.label(),
+                    s.summary,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("Completed steps:\n{steps_desc}"));
+    }
+
+    parts.push(format!(
+        "Current task: {}\nAcceptance criteria: {}",
+        step.task, step.acceptance,
+    ));
+
+    parts.join("\n\n")
+}
+
 /// Execute a single plan step inline using `run_agent_loop`.
+///
+/// For steps after step 0, the tape is partially forked so the agent loop
+/// runs in an isolated context containing only plan-level summaries —
+/// not the full history of previous steps. The fork is merged back after
+/// completion to preserve the audit trail.
 ///
 /// Returns `(StepOutcome, summary_text)`.
 #[allow(clippy::too_many_arguments)]
@@ -1216,6 +1258,8 @@ async fn execute_inline_step(
     handle: &KernelHandle,
     session_key: SessionKey,
     step: &PlanStep,
+    plan_goal: &str,
+    past_steps: &[PastStep],
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
     tape: TapeService,
@@ -1231,15 +1275,58 @@ async fn execute_inline_step(
     last_model: &mut String,
     final_texts: &mut Vec<String>,
 ) -> (StepOutcome, String) {
-    // Delegate to run_agent_loop with the step's task as the user text.
+    // For step 0, run directly against the parent tape so the original
+    // user message provides natural context. For subsequent steps, fork
+    // the tape at the current position to isolate each step's context.
+    let (effective_tape_name, fork_name) = if step.index == 0 {
+        (tape_name.to_owned(), None)
+    } else {
+        match tape.last_entry_id(tape_name).await {
+            Ok(last_id) => match tape.store().fork(tape_name, Some(last_id)).await {
+                Ok(name) => {
+                    info!(
+                        step = step.index,
+                        fork = %name,
+                        "plan executor: forked tape for inline step"
+                    );
+                    (name.clone(), Some(name))
+                }
+                Err(e) => {
+                    warn!(
+                        step = step.index,
+                        error = %e,
+                        "plan executor: fork failed, falling back to shared tape"
+                    );
+                    (tape_name.to_owned(), None)
+                }
+            },
+            Err(e) => {
+                warn!(
+                    step = step.index,
+                    error = %e,
+                    "plan executor: last_entry_id failed, falling back to shared tape"
+                );
+                (tape_name.to_owned(), None)
+            }
+        }
+    };
+
+    // When running in a fork, enrich the user prompt with plan context
+    // since the forked tape has no prior conversation.
+    let user_text = if fork_name.is_some() {
+        build_step_prompt(plan_goal, past_steps, step)
+    } else {
+        step.task.clone()
+    };
+
     let result = crate::agent::run_agent_loop(
         handle,
         session_key,
-        step.task.clone(),
+        user_text,
         stream_handle,
         turn_cancel,
-        tape,
-        tape_name,
+        tape.clone(),
+        &effective_tape_name,
         tool_context,
         milestone_tx,
         output_interceptor,
@@ -1248,6 +1335,19 @@ async fn execute_inline_step(
         rara_message_id,
     )
     .await;
+
+    // Merge the fork back into the parent tape to preserve audit history.
+    // Always merge regardless of step outcome — failed steps are still
+    // valuable for tracing.
+    if let Some(ref fork) = fork_name {
+        if let Err(e) = tape.store().merge(fork, tape_name).await {
+            warn!(
+                step = step.index,
+                error = %e,
+                "plan executor: failed to merge fork back to parent tape"
+            );
+        }
+    }
 
     let (outcome, summary, text_to_keep) = classify_step_result(result, step.index);
     *total_iterations += outcome.iterations_consumed;
