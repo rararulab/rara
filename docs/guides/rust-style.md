@@ -12,8 +12,53 @@
 ## Type Patterns
 
 - Trait objects: always create `pub type XRef = Arc<dyn X>` alias
-- Config structs: `bon::Builder` + `Deserialize`, no `#[derive(Default)]`
 - No hardcoded config defaults in Rust — all via YAML
+
+## Struct Construction — Use `bon::Builder`
+
+Structs with 3+ fields MUST use `#[derive(bon::Builder)]` — do NOT write manual `fn new()` constructors or hand-assemble struct literals with long field lists.
+
+**Rules:**
+- `#[derive(bon::Builder)]` on any struct with 3+ fields (config, domain objects, options, etc.)
+- Do NOT write `impl Foo { pub fn new(a, b, c, d, ...) -> Self }` — use the generated builder instead
+- Do NOT hand-assemble struct literals when the struct has a builder — use `Foo::builder().field(val).build()`
+- `Option<T>` fields automatically default to `None` in bon — no need for `#[builder(default)]`
+- For non-Option defaults, use `#[builder(default = value)]`
+- Simple 1-2 field structs can use direct construction (no builder needed)
+
+```rust
+// Good: derive builder
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: usize,
+    pub tls_enabled: bool,
+}
+
+// Good: construct via builder
+let config = ServerConfig::builder()
+    .host("0.0.0.0".into())
+    .port(8080)
+    .max_connections(100)
+    .tls_enabled(true)
+    .build();
+
+// Bad: manual constructor
+impl ServerConfig {
+    pub fn new(host: String, port: u16, max_connections: usize, tls_enabled: bool) -> Self {
+        Self { host, port, max_connections, tls_enabled }
+    }
+}
+
+// Bad: hand-assembled struct literal (fragile, hard to read)
+let config = ServerConfig {
+    host: "0.0.0.0".into(),
+    port: 8080,
+    max_connections: 100,
+    tls_enabled: true,
+};
+```
 
 ## Async
 
