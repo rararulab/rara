@@ -29,7 +29,7 @@ kernel (core runtime, heartbeat, event bus)
 ### Alternatives considered
 N/A
 EOF
-)" --label "created-by:claude" --label "core"
+)" --label "agent:claude" --label "core"
 ```
 This is the tracking issue (e.g., #100). All sub-issues reference it.
 
@@ -55,7 +55,7 @@ kernel (core runtime, heartbeat, event bus)
 ### Alternatives considered
 N/A
 EOF
-)" --label "created-by:claude" --label "core"
+)" --label "agent:claude" --label "core"
 ```
 
 ## Step 4: Stack Branches and Work

@@ -508,7 +508,7 @@ for item in items {
 
 * 禁止直接在 `main` 上开发或合并。
 * 所有变更必须通过 GitHub PR 合并，流程如下：
-  1. 创建 issue（`gh issue create`，必须带 `created-by:claude` label）；
+  1. 创建 issue（`gh issue create`，必须带 `agent:claude` label）；
   2. 创建 worktree + 分支（`git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}`）；
   3. 在 worktree 中完成开发、验证并 commit；
   4. push 分支到 remote（`git push -u origin issue-{N}-{name}`）；
