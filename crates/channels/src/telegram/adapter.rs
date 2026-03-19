@@ -1855,7 +1855,7 @@ async fn handle_cascade_callback(
                 _ => String::new(),
             };
 
-            // Extract only the turn that corresponds to this trace.
+            // Locate the turn slice for this trace.
             let boundaries = rara_kernel::cascade::find_turn_boundaries(&entries);
             let turn_entries = if let Ok(ulid) = ulid::Ulid::from_string(trace_id) {
                 let ts_ms = ulid.timestamp_ms() as i64;
@@ -1868,7 +1868,12 @@ async fn handle_cascade_callback(
                 &entries
             };
 
-            let cascade = rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id);
+            // Try pre-built trace first; fall back to post-hoc build for
+            // legacy sessions.
+            let cascade = rara_kernel::cascade::load_persisted_cascade(turn_entries)
+                .unwrap_or_else(|| {
+                    rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id)
+                });
 
             tracing::debug!(
                 ticks = cascade.ticks.len(),
