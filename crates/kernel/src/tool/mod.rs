@@ -183,6 +183,11 @@ pub trait AgentTool: Send + Sync {
         params: serde_json::Value,
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput>;
+
+    /// Whether this tool's output should bypass the output interceptor
+    /// (e.g. context-mode indexing). Tools with binary, always-small, or
+    /// write-only output should override this to return `true`.
+    fn bypass_output_interceptor(&self) -> bool { false }
 }
 
 /// Registry of available tools for an agent run.
