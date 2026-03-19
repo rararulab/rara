@@ -1,23 +1,45 @@
 ---
 name: dev
-description: "Autonomous development pipeline: requirement → design → implement → review → ship PR."
+description: "Autonomous development pipeline for implementing features, fixes, and refactors end-to-end. Triggers: /dev, develop, build feature, implement task, ship PR, new feature, fix bug, add functionality, code change. One command: requirement → design → implement → review → ship."
 ---
 
 # /dev — Autonomous Development Pipeline
 
 One command, full cycle: requirement → design → implement → review → ship.
 
-**Iron Law:** Every analysis step, decision, and review finding MUST be recorded on GitHub (issue comments + PR comments). The pipeline's work process must be fully traceable — never let conclusions exist only in conversation context.
+**Iron Law:** Every decision and finding MUST be posted to GitHub (issue/PR comments) — nothing lives only in conversation context.
 
 **User intervenes only twice:**
 1. After Phase 1: confirm the plan
 2. After Phase 4: see the final result
 
-**Announce at start:** "Running /dev pipeline for: {requirement}"
+Print to user: "Running /dev pipeline for: {requirement}"
+
+## Progress Checklist
+
+Copy and track progress:
+
+```
+- [ ] Phase 0: Issue created ⛔ BLOCKING
+- [ ] Phase 1.1: Context gathered
+- [ ] Phase 1.2: Design doc drafted
+- [ ] Phase 1.3: Plan reviewed
+- [ ] Phase 1.4: User confirmed ⛔ BLOCKING
+- [ ] Phase 2.1: Scale judged
+- [ ] Phase 2.2: Implementation complete
+- [ ] Phase 2.3: Build verified
+- [ ] Phase 3.0: Draft PR created
+- [ ] Phase 3.1: Code review complete
+- [ ] Phase 3.2–3.3: Fixes applied & re-reviewed (if needed)
+- [ ] Phase 4.1: Pre-commit passed
+- [ ] Phase 4.2: PR marked ready
+- [ ] Phase 4.3: CI green ⛔ BLOCKING
+- [ ] Phase 4.4: Reported to user
+```
 
 ---
 
-## Phase 0: ISSUE CREATION
+## Phase 0: ISSUE CREATION ⛔ BLOCKING
 
 Create the tracking issue **before any analysis begins**. This issue is the work log for the entire pipeline.
 
@@ -49,7 +71,7 @@ Gather project context silently (no output to user):
 3. **Autonomously select** the recommended approach — do NOT ask the user
 4. Consider: architectural fit, complexity, existing patterns, CLAUDE.md constraints
 
-The design doc is drafted in memory during Phase 1 and physically written to `docs/plans/YYYY-MM-DD-{topic}-design.md` inside the worktree created in Phase 2.
+Draft the design doc content in conversation context. It will be physically written to `docs/plans/YYYY-MM-DD-{topic}-design.md` inside the worktree created in Phase 2.
 
 The design doc MUST include:
 - **Goal:** one sentence
@@ -63,20 +85,18 @@ The design doc MUST include:
 
 ### Step 1.3: Plan Review (autonomous loop)
 
-Dispatch a **code-reviewer subagent** (via the Agent tool with `subagent_type: "superpowers:code-reviewer"`) to review the design doc.
+Dispatch a **general-purpose subagent** (via the Agent tool) to review the design. Pass the full design doc content in the subagent prompt and instruct it to invoke the `code-review-expert` skill for structured review.
 
-Review dimensions:
-- Architectural soundness — does it fit the existing codebase?
-- Compatibility — will it break existing functionality?
-- Edge cases — are failure modes handled?
-- Performance — any obvious bottlenecks?
-- CLAUDE.md compliance
+The subagent prompt MUST include:
+- The full design doc content (since the file doesn't exist yet)
+- Instruction: "Invoke the `code-review-expert` skill to review this design"
+- Review dimensions: architectural soundness, compatibility, edge cases, performance, CLAUDE.md compliance
 
 **If issues found:** analyze, revise, re-review (max 2 rounds total).
 **Post review result to issue** as a "Plan Review" comment.
 **If clean:** proceed to Step 1.4.
 
-### Step 1.4: Present to User
+### Step 1.4: Present to User ⛔ USER CONFIRMATION REQUIRED
 
 Output a concise plan summary:
 
@@ -106,12 +126,15 @@ Reply "ok" to proceed, or provide feedback.
 
 ### Step 2.1: Scale Judgment
 
-Parse the plan and count independent sub-tasks:
+Parse the plan and assess task scale:
 
-- **Small task** (< 3 independent steps): single worktree path (Step 2.2a)
-- **Large task** (3+ independent steps that can run in parallel): multi-worktree path (Step 2.2b)
+- **Small task**: single worktree path (Step 2.2a) — default for most tasks
+- **Large task**: multi-worktree path (Step 2.2b) — use ONLY when ALL of these apply:
+  - 3+ truly independent sub-tasks (don't modify the same files, don't depend on each other's output)
+  - Estimated >400 lines of change across 3+ crates
+  - Parallel execution provides clear benefit
 
-Independence criteria: tasks that don't modify the same files and don't depend on each other's output.
+When in doubt, use small task path. Stacked PRs add coordination overhead.
 
 **Post to issue** as an "Implementation Start" comment: scale, path, branch name.
 
@@ -121,7 +144,7 @@ Independence criteria: tasks that don't modify the same files and don't depend o
 git worktree add .worktrees/issue-{ISSUE}-{name} -b issue-{ISSUE}-{name}
 ```
 
-Dispatch a **subagent** (via the Agent tool) to the worktree with the full plan.
+Dispatch a **general-purpose subagent** (via the Agent tool) to the worktree with the full plan.
 
 The subagent prompt MUST include:
 - The full implementation plan from the design doc
@@ -144,7 +167,7 @@ git push -u origin feat/{name}
 For each independent sub-task:
 1. Create a sub-issue referencing `{ISSUE}`
 2. Create a worktree branching from `feat/{name}`
-3. Dispatch a subagent (via the Agent tool, with `run_in_background: true` for parallel execution)
+3. Dispatch a general-purpose subagent (via the Agent tool, with `run_in_background: true` for parallel execution)
 
 After all subagents complete:
 - Verify each worktree's changes compile
@@ -179,50 +202,55 @@ Create a draft PR **before** starting review, so review findings can be posted a
 
 Save the PR number as `{PR}`. Post to issue: "Draft PR created: #{PR} — starting code review."
 
-### Step 3.1: Subagent Review
+### Step 3.1: Code Review via `code-review-expert` (subagent)
 
-Dispatch a **code-reviewer subagent** (via the Agent tool with `subagent_type: "superpowers:code-reviewer"`) to review the diff. Subagents start with zero context from the implementation phase — no bias, no assumptions.
+Dispatch a **general-purpose subagent** (via the Agent tool) to review the diff. Subagents start with zero context from the implementation phase — no bias, no assumptions.
 
 Determine the correct base branch:
 - Small task: `origin/main`
 - Large task (stacked PRs): `origin/feat/{name}`
 
 The subagent prompt MUST include:
+- Instruction: "Invoke the `code-review-expert` skill to perform a structured code review"
 - The worktree path and instruction to run `git -C {worktree-path} diff origin/{base}...HEAD`
 - PR number `{PR}` and issue number `{ISSUE}`
-- Two-pass review instructions:
-  - **Pass 1 — Critical:** security vulnerabilities, data races, logic errors, CLAUDE.md constraint violations
-  - **Pass 2 — Quality:** dead code, naming inconsistency, missing doc comments, test coverage gaps, code organization
 - Instruction to post findings as a PR comment via `gh pr comment {PR} --body '<review>'`
-- Required format: `## Code Review`, `### Critical Issues`, `### Quality Issues`, `**Verdict:** Clean` or `N issues to fix`
+- Instruction to include a verdict: `**Verdict:** Clean` or `**Verdict:** N issues to fix`
+- Instruction to return the full structured review result to the parent agent
 
 **Parse the subagent result** to determine the verdict:
 - **Clean:** proceed to Phase 4
 - **Issues found:** proceed to Step 3.2
 
-### Step 3.2: Autonomous Fix Loop
+### Step 3.2: Parent Fixes ALL Issues (main agent, NOT subagent)
 
-For each issue found by the reviewer:
+The **parent agent** (you) MUST fix every issue returned by the reviewer. Do NOT delegate fixes to a subagent — you have full context of the implementation and the review.
+
+For each issue:
 
 1. **Analyze** the root cause — don't just pattern-match the symptom
 2. **Search the project** for similar patterns
 3. **Research best practices** if unfamiliar — use web search
 4. **Check constraints** in AGENT.md and CLAUDE.md
-5. **Implement the fix** — following existing conventions
+5. **Implement the fix** in the worktree — following existing conventions
 6. **Verify:** `cargo check -p {crate} && cargo test -p {crate}`
 
 **Do NOT ask the user about any issue that can be resolved through research.**
+**Do NOT skip any issue** — address every P0, P1, P2, and P3 finding.
 
 Post fix summary to PR as a "Fixes Applied" comment: each fix with file:line, what was wrong, what was done.
 
-### Step 3.3: Re-Review
+### Step 3.3: Re-Review (subagent again)
 
-After all fixes are applied:
+After the parent has fixed ALL issues:
 
-1. Push fixes and dispatch another code-reviewer subagent (same as Step 3.1)
-2. If new issues found → back to Step 3.2
-3. **Max 3 rounds** — if still not clean after 3 rounds, escalate to user
-4. Clean → proceed to Phase 4
+1. Push fixes
+2. Dispatch a **new** subagent with `code-review-expert` (same as Step 3.1) — fresh context, no bias
+3. Parent fixes all new issues (same as Step 3.2)
+4. **Max 3 rounds** — if still not clean after 3 rounds, escalate to user
+5. Clean → proceed to Phase 4
+
+**Key principle:** subagent reviews, parent fixes, subagent re-reviews. Never the same agent for both.
 
 ### Step 3.4: Escalation Conditions
 
@@ -259,7 +287,7 @@ just pre-commit  # or: prek run --all-files
 
 If checks fail: fix, re-commit, retry (max 3 times).
 
-### Step 4.2: Mark PR Ready
+### Step 4.2: Mark PR Ready ⛔ BLOCKING
 
 Push final changes and update the PR body: mark test plan items as checked, replace "Review Log" section with a summary of review findings and resolutions, then:
 
@@ -269,7 +297,7 @@ gh pr ready {PR}
 
 For large tasks (stacked PRs): push sub-PRs first, then summary PR targeting `main`.
 
-### Step 4.3: Wait for CI Green
+### Step 4.3: Wait for CI Green ⛔ BLOCKING
 
 ```bash
 gh pr checks {PR} --watch
@@ -302,20 +330,15 @@ git branch -d issue-{ISSUE}-{name}
 
 ---
 
-## Anti-Patterns
+## Anti-Patterns & Rules
 
 - **Silent analysis** — Do NOT keep investigation conclusions only in conversation context. Every finding goes to GitHub.
 - **Bulk dumps** — Do NOT post raw tool output as issue comments. Summarize with context and conclusions.
 - **Comment spam** — Do NOT post a comment for every single file read. Group related findings into one comment per logical step.
 - **Skipping the trail** — Do NOT skip issue/PR comments "to save time". The audit trail is the point.
-- **Self-reviewing** — Do NOT review your own implementation in the same context. Always use a fresh code-reviewer subagent.
-
-## Important Rules
-
-- **GitHub is the work log** — issue comments track investigation and decisions; PR comments track review findings and fixes
-- **Never skip the worktree** — all implementation happens in `.worktrees/`, never in the main checkout
-- **Never skip review** — even if the change looks trivial, run at least one CLI review pass
-- **Draft PR before review** — create the PR as draft before Phase 3 so review comments land on the PR
-- **Fresh context for review** — always use a code-reviewer subagent for review, never inline review in the implementing session
-- **Research before escalating** — the agent must demonstrate it tried to solve the problem
-- **Labels are mandatory** — every issue and PR must have type + component labels
+- **Self-reviewing** — Do NOT review your own implementation in the same context. Always dispatch a fresh subagent with `code-review-expert`.
+- **Delegating fixes** — Do NOT dispatch a subagent to fix review findings. The parent agent fixes ALL issues itself, then sends a fresh subagent to re-review.
+- **Skipping the worktree** — All implementation happens in `.worktrees/`, never in the main checkout.
+- **Skipping review** — Even trivial changes get at least one `code-review-expert` pass.
+- **Escalating without research** — Demonstrate you tried to solve the problem before asking the user.
+- **Missing labels** — Every issue and PR must have type + component labels.
