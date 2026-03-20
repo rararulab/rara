@@ -235,6 +235,7 @@ impl Kernel {
                 rara_paths::temp_dir().clone(),
                 rara_paths::logs_dir().clone(),
                 rara_paths::home_dir().join(".claude"),
+                std::path::PathBuf::from("/tmp"),
             ],
         ));
 
