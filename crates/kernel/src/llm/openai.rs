@@ -304,6 +304,12 @@ impl LlmDriver for OpenAiDriver {
         let mut acc = StreamAccumulator::new();
 
         loop {
+            // Break early if the receiver has been dropped (e.g. user cancelled)
+            if tx.is_closed() {
+                tracing::debug!("stream consumer disconnected, returning partial response");
+                break;
+            }
+
             let maybe_event = tokio::time::timeout(SSE_IDLE_TIMEOUT, event_stream.next()).await;
 
             match maybe_event {
@@ -315,6 +321,10 @@ impl LlmDriver for OpenAiDriver {
                         break;
                     }
                     let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
+                        tracing::debug!(
+                            data = &event.data[..event.data.len().min(200)],
+                            "skipping unparseable SSE chunk"
+                        );
                         continue;
                     };
                     acc.process_chunk(&chunk, &tx).await;
@@ -640,18 +650,14 @@ impl<'a> ChatRequest<'a> {
 
             let tool_choice = match &request.tool_choice {
                 ToolChoice::Auto => Some(serde_json::json!("auto")),
-                ToolChoice::None => Some(serde_json::json!("auto")),
+                ToolChoice::None => Some(serde_json::json!("none")),
                 ToolChoice::Required => Some(serde_json::json!("required")),
                 ToolChoice::Specific(name) => {
-                    Some(serde_json::json!({"type": "function", "name": name}))
+                    Some(serde_json::json!({"type": "function", "function": {"name": name}}))
                 }
             };
 
-            let parallel = if request.parallel_tool_calls {
-                Some(true)
-            } else {
-                None
-            };
+            let parallel = Some(request.parallel_tool_calls);
 
             (Some(tools), tool_choice, parallel)
         };
