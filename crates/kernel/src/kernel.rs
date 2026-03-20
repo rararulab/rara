@@ -221,12 +221,21 @@ impl Kernel {
         skill_prompt_provider: crate::handle::SkillPromptProvider,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
-        debug_assert!(
-            config.tool_execution_timeout > config.default_tool_timeout,
-            "tool_execution_timeout ({:?}) must exceed default_tool_timeout ({:?})",
-            config.tool_execution_timeout,
-            config.default_tool_timeout,
-        );
+        // Clamp default_tool_timeout so it never exceeds the global wave timeout.
+        let mut config = config;
+        if config.default_tool_timeout >= config.tool_execution_timeout {
+            warn!(
+                default_tool_timeout = ?config.default_tool_timeout,
+                tool_execution_timeout = ?config.tool_execution_timeout,
+                "default_tool_timeout must be less than tool_execution_timeout — clamping to {}s",
+                config.tool_execution_timeout.as_secs().saturating_sub(30),
+            );
+            let margin = Duration::from_secs(30.min(config.tool_execution_timeout.as_secs() / 2));
+            config.default_tool_timeout = config
+                .tool_execution_timeout
+                .checked_sub(margin)
+                .unwrap_or(Duration::from_secs(60));
+        }
         info!(
             max_concurrency = config.max_concurrency,
             default_child_limit = config.default_child_limit,

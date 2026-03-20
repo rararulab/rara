@@ -1881,7 +1881,8 @@ pub(crate) async fn run_agent_loop(
             .ok()
             .flatten();
 
-        // Execute all tool calls concurrently (with timing for traces)
+        // Execute all tool calls concurrently via JoinSet so we can
+        // harvest partial results if the global wave timeout fires.
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
             .map(|(_id, name, args)| {
@@ -2072,39 +2073,64 @@ pub(crate) async fn run_agent_loop(
             })
             .collect();
 
-        let results = tokio::select! {
-            results = tokio::time::timeout(tool_execution_timeout, futures::future::join_all(tool_futures)) => {
-                match results {
-                    Ok(results) => results,
-                    Err(_) => {
-                        warn!("global tool wave timeout exceeded after {}s", tool_execution_timeout.as_secs());
-                        // Return synthetic timeout error for each tool call
-                        // so the agent turn continues instead of aborting.
-                        valid_tool_calls
-                            .iter()
-                            .map(|(_id, _name, _args)| {
-                                let msg = format!(
-                                    "tool wave timed out after {}s",
-                                    tool_execution_timeout.as_secs()
-                                );
-                                (
-                                    false,
-                                    crate::tool::ToolOutput::from(serde_json::json!({
-                                        "status": "timeout",
-                                        "error": &msg,
-                                    })),
-                                    Some(msg),
-                                    tool_execution_timeout.as_millis() as u64,
-                                )
-                            })
-                            .collect()
+        // Use FuturesUnordered so we can harvest partial results if the
+        // global wave timeout fires (completed tools keep their real results).
+        use futures::stream::{FuturesUnordered, StreamExt};
+        let num_tools = tool_futures.len();
+        let mut futs: FuturesUnordered<_> = tool_futures
+            .into_iter()
+            .enumerate()
+            .map(|(idx, fut)| async move { (idx, fut.await) })
+            .collect();
+
+        let mut indexed_results: Vec<Option<(bool, crate::tool::ToolOutput, Option<String>, u64)>> =
+            (0..num_tools).map(|_| None).collect();
+        let deadline = tokio::time::sleep(tool_execution_timeout);
+        tokio::pin!(deadline);
+
+        let timed_out = loop {
+            tokio::select! {
+                item = futs.next() => {
+                    match item {
+                        Some((idx, result)) => { indexed_results[idx] = Some(result); }
+                        None => break false, // all futures completed
                     }
                 }
-            }
-            _ = turn_cancel.cancelled() => {
-                return Err(KernelError::Interrupted);
+                _ = &mut deadline => {
+                    warn!("global tool wave timeout exceeded after {}s", tool_execution_timeout.as_secs());
+                    break true;
+                }
+                _ = turn_cancel.cancelled() => {
+                    return Err(KernelError::Interrupted);
+                }
             }
         };
+
+        // Fill missing slots with synthetic timeout errors.
+        let results: Vec<_> = indexed_results
+            .into_iter()
+            .map(|slot| {
+                slot.unwrap_or_else(|| {
+                    let msg = if timed_out {
+                        format!(
+                            "tool wave timed out after {}s",
+                            tool_execution_timeout.as_secs()
+                        )
+                    } else {
+                        "tool task failed".to_string()
+                    };
+                    (
+                        false,
+                        crate::tool::ToolOutput::from(serde_json::json!({
+                            "status": "timeout",
+                            "error": &msg,
+                        })),
+                        Some(msg),
+                        tool_execution_timeout.as_millis() as u64,
+                    )
+                })
+            })
+            .collect();
 
         // Persist tool results to tape.
         if !results.is_empty() {

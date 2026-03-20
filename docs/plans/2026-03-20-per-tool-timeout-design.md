@@ -41,29 +41,34 @@ Generates: `fn execution_timeout(&self) -> Option<Duration> { Some(Duration::fro
 ### 4. Agent loop changes
 
 In the tool execution closure (agent/mod.rs ~line 2000), wrap each individual
-`tool.execute()` with `tokio::time::timeout`:
+`tool.execute()` with `tokio::time::timeout` inside `tokio::select!` (for
+cancellation support):
 
 ```rust
-let per_tool_timeout = tool.execution_timeout()
-    .unwrap_or(config.default_tool_timeout);
+let per_tool_timeout = tool.execution_timeout().unwrap_or(default_tool_timeout);
 let tool_result = tokio::select! {
     result = tokio::time::timeout(per_tool_timeout, tool.execute(args, &tc)) => {
         match result {
-            Ok(r) => r,
-            Err(_) => Err(anyhow::anyhow!("tool timed out after {}s", per_tool_timeout.as_secs())),
+            Ok(inner) => inner,
+            Err(_elapsed) => Err(anyhow::anyhow!(
+                "tool execution timed out after {}s", per_tool_timeout.as_secs()
+            )),
         }
     }
     _ = tool_cancel.cancelled() => { /* existing interrupt handling */ }
 };
 ```
 
+Tool futures are spawned into a `JoinSet` (not `join_all`) so that completed
+results are preserved if the global wave timeout fires.
+
 ### 5. Timeout behavior
 
-- Per-tool timeout: returns `{"status": "timeout", "error": "..."}` for that
-  tool only; other tools in the wave continue normally
-- Global wave timeout (180s): still the outer safety net; returns synthetic
-  timeout errors for ALL incomplete tools (no `Err(AgentExecution)` — changed
-  to graceful per-tool errors)
+- Per-tool timeout: returns `{"error": "tool execution timed out after Ns"}`
+  for that tool only; other tools in the wave continue normally
+- Global wave timeout (180s): safety net using `JoinSet` — completed tools
+  keep their real results, only incomplete tools get synthetic timeout errors
+  (no `Err(AgentExecution)` — the agent turn continues gracefully)
 
 ### 6. Tools with internal cleanup
 
