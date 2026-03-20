@@ -17,11 +17,15 @@
 //! Runs a command via `/bin/bash -c` with configurable timeout and working
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use base::process_group::{kill_process_group, terminate_process_group};
 use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::{io::AsyncReadExt, sync::Mutex};
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -75,6 +79,7 @@ impl ToolExecute for BashTool {
     type Output = BashResult;
     type Params = BashParams;
 
+    #[tracing::instrument(skip_all)]
     async fn run(&self, params: BashParams, _context: &ToolContext) -> anyhow::Result<BashResult> {
         let timeout_secs = params.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
         let effective_command = rtk_rewrite(&params.command).await;
@@ -84,40 +89,117 @@ impl ToolExecute for BashTool {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
+        // Place child in its own process group so we can signal the entire
+        // tree on timeout (PGID = child PID).
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         if let Some(ref dir) = params.cwd {
             cmd.current_dir(dir);
         } else {
             cmd.current_dir(rara_paths::workspace_dir());
         }
 
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return Ok(BashResult {
+                    exit_code: -1,
+                    stdout:    format!("failed to execute command: {e}"),
+                    timed_out: false,
+                    truncated: false,
+                });
+            }
+        };
+
+        let pgid = child.id();
+
+        // Shared buffer for incremental output collection from both pipes.
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // Spawn reader tasks for stdout and stderr that feed into the shared buffer.
+        let stdout_handle = child.stdout.take().map(|pipe| {
+            let buf = Arc::clone(&buffer);
+            tokio::spawn(read_pipe_into(pipe, buf))
+        });
+        let stderr_handle = child.stderr.take().map(|pipe| {
+            let buf = Arc::clone(&buffer);
+            tokio::spawn(read_pipe_into(pipe, buf))
+        });
+
         let timeout_dur = std::time::Duration::from_secs(timeout_secs);
 
-        match tokio::time::timeout(timeout_dur, cmd.output()).await {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined = format!("{stdout}{stderr}");
-                let (truncated_output, was_truncated) = truncate_output(&combined);
+        let (status, timed_out) = tokio::select! {
+            status = child.wait() => (Some(status), false),
+            () = tokio::time::sleep(timeout_dur) => {
+                // Graceful two-phase kill: SIGTERM → wait 2s → SIGKILL.
+                if let Some(pgid) = pgid {
+                    tracing::warn!(pgid, timeout_secs, "bash command timed out, killing process group");
+                    let _ = terminate_process_group(pgid);
 
-                Ok(BashResult {
-                    exit_code: output.status.code().unwrap_or(-1),
-                    stdout:    truncated_output,
-                    timed_out: false,
-                    truncated: was_truncated,
-                })
+                    let exited = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        child.wait(),
+                    ).await;
+
+                    if exited.is_err() {
+                        tracing::warn!(pgid, "process group did not exit after SIGTERM, sending SIGKILL");
+                        let _ = kill_process_group(pgid);
+                        let _ = child.wait().await;
+                    }
+                } else {
+                    // No pgid available — best-effort kill via tokio.
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                }
+                (None, true)
+            },
+        };
+
+        // Wait for reader tasks to drain remaining pipe data.
+        if let Some(h) = stdout_handle {
+            let _ = h.await;
+        }
+        if let Some(h) = stderr_handle {
+            let _ = h.await;
+        }
+
+        let raw = buffer.lock().await;
+        let combined = String::from_utf8_lossy(&raw);
+        let (truncated_output, was_truncated) = truncate_output(&combined);
+
+        let exit_code = match (timed_out, status) {
+            (true, _) => -1,
+            (false, Some(Ok(s))) => s.code().unwrap_or(-1),
+            _ => -1,
+        };
+
+        Ok(BashResult {
+            exit_code,
+            stdout: truncated_output,
+            timed_out,
+            truncated: was_truncated,
+        })
+    }
+}
+
+/// Read from an async pipe into a shared buffer, capping at
+/// [`MAX_OUTPUT_BYTES`] to prevent unbounded memory growth.
+async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, buffer: Arc<Mutex<Vec<u8>>>) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let mut buf = buffer.lock().await;
+                let remaining = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
+                if remaining == 0 {
+                    // Buffer full — keep reading to drain the pipe but discard data.
+                    continue;
+                }
+                let to_copy = n.min(remaining);
+                buf.extend_from_slice(&chunk[..to_copy]);
             }
-            Ok(Err(e)) => Ok(BashResult {
-                exit_code: -1,
-                stdout:    format!("failed to execute command: {e}"),
-                timed_out: false,
-                truncated: false,
-            }),
-            Err(_) => Ok(BashResult {
-                exit_code: -1,
-                stdout:    format!("command timed out after {timeout_secs}s"),
-                timed_out: true,
-                truncated: false,
-            }),
         }
     }
 }

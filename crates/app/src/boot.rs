@@ -23,7 +23,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
-use tracing::{info, warn};
+use tracing::info;
 
 // =========================================================================
 // Public types
