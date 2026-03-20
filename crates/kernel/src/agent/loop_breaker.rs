@@ -21,7 +21,7 @@
 //! - **Ping-pong**: alternating A-B-A-B tool calls
 //! - **Same-tool flooding**: one tool called far too many times overall
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -53,11 +53,16 @@ pub(crate) enum LoopIntervention {
     None,
     /// Warn the LLM to change strategy.
     Warn {
+        /// Detection pattern that triggered: `"flooding"`.
+        pattern: &'static str,
         /// Human-readable warning injected into the conversation.
         message: String,
     },
     /// Disable specific tools and inform the LLM.
     DisableTools {
+        /// Detection pattern: `"exact_duplicate"`, `"flooding"`, or
+        /// `"pingpong"`.
+        pattern: &'static str,
         /// Tool names to disable.
         tools:   Vec<String>,
         /// Human-readable explanation injected into the conversation.
@@ -72,8 +77,8 @@ pub(crate) enum LoopIntervention {
 /// [`check`](Self::check) to obtain any necessary intervention.
 #[derive(Debug)]
 pub(crate) struct ToolCallLoopBreaker {
-    /// Per-tool invocation counts.
-    tool_counts:         HashMap<String, usize>,
+    /// Per-tool invocation counts (BTreeMap for deterministic iteration order).
+    tool_counts:         BTreeMap<String, usize>,
     /// Fingerprint of the most recent tool call.
     last_fingerprint:    Option<u64>,
     /// How many consecutive calls had the exact same fingerprint.
@@ -96,7 +101,7 @@ impl ToolCallLoopBreaker {
     /// Create a new breaker with the given thresholds.
     pub(crate) fn new(config: LoopBreakerConfig) -> Self {
         Self {
-            tool_counts: HashMap::new(),
+            tool_counts: BTreeMap::new(),
             last_fingerprint: None,
             consecutive_exact: 0,
             recent_fingerprints: VecDeque::with_capacity(MAX_RECENT_FINGERPRINTS),
@@ -108,7 +113,12 @@ impl ToolCallLoopBreaker {
         }
     }
 
-    /// Record a tool invocation. Call this **before** [`check`](Self::check).
+    /// Record a tool invocation.
+    ///
+    /// **Calling convention**: call `record()` for each tool call in the
+    /// iteration, then call [`check`](Self::check) exactly once.  Do NOT
+    /// call `check` from within `record` — `check` reads state that
+    /// `record` mutates (e.g. `recent_fingerprints` for ping-pong).
     pub(crate) fn record(&mut self, tool_name: &str, args: &str) {
         // Increment per-tool counter
         *self.tool_counts.entry(tool_name.to_owned()).or_insert(0) += 1;
@@ -123,9 +133,14 @@ impl ToolCallLoopBreaker {
         }
         self.last_fingerprint = Some(fp);
 
-        // Maintain sliding window
+        // Maintain sliding window; evict stale fp_to_name entries to bound memory.
         if self.recent_fingerprints.len() >= MAX_RECENT_FINGERPRINTS {
-            self.recent_fingerprints.pop_front();
+            if let Some(evicted) = self.recent_fingerprints.pop_front() {
+                // Only remove if no other slot still references this fingerprint.
+                if !self.recent_fingerprints.contains(&evicted) {
+                    self.fp_to_name.remove(&evicted);
+                }
+            }
         }
         self.recent_fingerprints.push_back(fp);
 
@@ -144,6 +159,7 @@ impl ToolCallLoopBreaker {
                 if !self.disabled_tools.contains(name) {
                     self.disabled_tools.insert(name.clone());
                     return LoopIntervention::DisableTools {
+                        pattern: "exact_duplicate",
                         tools:   vec![name.clone()],
                         message: format!(
                             "Tool `{}` has been called {} times in a row with identical \
@@ -178,12 +194,14 @@ impl ToolCallLoopBreaker {
                 let name_a = self.fp_to_name.get(&a).cloned().unwrap_or_default();
                 let name_b = self.fp_to_name.get(&b).cloned().unwrap_or_default();
 
-                // Only fire if neither tool was already disabled by this detector
+                // Fire if at least one tool is not yet disabled.  Re-inserting an
+                // already-disabled tool into the set is a no-op (HashSet idempotent).
                 if !self.disabled_tools.contains(&name_a) || !self.disabled_tools.contains(&name_b)
                 {
                     self.disabled_tools.insert(name_a.clone());
                     self.disabled_tools.insert(name_b.clone());
                     return LoopIntervention::DisableTools {
+                        pattern: "pingpong",
                         tools:   vec![name_a.clone(), name_b.clone()],
                         message: format!(
                             "Ping-pong loop detected: `{}` and `{}` have been alternating for {} \
@@ -207,6 +225,7 @@ impl ToolCallLoopBreaker {
             if count >= self.config.disable_after {
                 self.disabled_tools.insert(name.clone());
                 return LoopIntervention::DisableTools {
+                    pattern: "flooding",
                     tools:   vec![name.clone()],
                     message: format!(
                         "Tool `{name}` has been called {count} times this turn. It is now \
@@ -218,6 +237,7 @@ impl ToolCallLoopBreaker {
             if count >= self.config.warn_after && !self.warned_tools.contains(name) {
                 self.warned_tools.insert(name.clone());
                 return LoopIntervention::Warn {
+                    pattern: "flooding",
                     message: format!(
                         "Tool `{name}` has been called {count} times. Consider whether you are \
                          making progress or stuck in a loop. Try a different approach if needed.",
@@ -398,7 +418,12 @@ mod tests {
         }
         let intervention = lb.check();
         match intervention {
-            LoopIntervention::DisableTools { tools, message } => {
+            LoopIntervention::DisableTools {
+                pattern,
+                tools,
+                message,
+            } => {
+                assert_eq!(pattern, "pingpong");
                 assert!(tools.contains(&"read".to_owned()) || tools.contains(&"write".to_owned()));
                 assert_eq!(tools.len(), 2);
                 assert!(

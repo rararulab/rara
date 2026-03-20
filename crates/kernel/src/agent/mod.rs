@@ -2121,36 +2121,41 @@ pub(crate) async fn run_agent_loop(
             }
 
             // Record tool calls for loop detection.
-            for (_id, name, _args) in &valid_tool_calls {
-                // Use the original arguments string from the tool call for fingerprinting
-                loop_breaker.record(name, &_args.to_string());
+            for (_id, name, args) in &valid_tool_calls {
+                loop_breaker.record(name, &args.to_string());
             }
             let intervention = loop_breaker.check();
             match intervention {
                 loop_breaker::LoopIntervention::None => {}
-                loop_breaker::LoopIntervention::Warn { message } => {
+                loop_breaker::LoopIntervention::Warn { pattern, message } => {
                     warn!(
                         tool_calls_made,
+                        pattern,
                         %message,
                         "loop breaker: injecting strategy-change warning"
                     );
                     stream_handle.emit(StreamEvent::LoopBreakerTriggered {
                         tools: vec![],
-                        pattern: "flooding".to_owned(),
+                        pattern: pattern.to_owned(),
                         tool_calls_made,
                     });
                     loop_breaker_warning = Some(message);
                 }
-                loop_breaker::LoopIntervention::DisableTools { tools, message } => {
+                loop_breaker::LoopIntervention::DisableTools {
+                    pattern,
+                    tools,
+                    message,
+                } => {
                     warn!(
                         tool_calls_made,
+                        pattern,
                         ?tools,
                         %message,
                         "loop breaker: disabling tools and injecting warning"
                     );
                     stream_handle.emit(StreamEvent::LoopBreakerTriggered {
                         tools: tools.clone(),
-                        pattern: "disable".to_owned(),
+                        pattern: pattern.to_owned(),
                         tool_calls_made,
                     });
                     tool_defs.retain(|td| !tools.contains(&td.name));
