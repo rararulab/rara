@@ -1723,8 +1723,14 @@ impl Kernel {
             .filter(|p| matches!(p.state, SessionState::Active | SessionState::Ready))
             .count();
         let mita_history = self.build_mita_history().await;
-        let context =
-            crate::proactive::build_heartbeat_context_pack(active_count, mita_history.as_ref());
+        let mita_tools: Option<Vec<String>> =
+            self.agent_registry.get("mita").map(|m| m.tools.clone());
+        let tools_ref = mita_tools.as_deref();
+        let context = crate::proactive::build_heartbeat_context_pack(
+            active_count,
+            mita_history.as_ref(),
+            tools_ref,
+        );
         let msg = InboundMessage::synthetic(
             context,
             crate::identity::UserId("system".to_string()),
@@ -1770,10 +1776,14 @@ impl Kernel {
         };
 
         let mita_history = self.build_mita_history().await;
+        let mita_tools: Option<Vec<String>> =
+            self.agent_registry.get("mita").map(|m| m.tools.clone());
+        let tools_ref = mita_tools.as_deref();
         let context = crate::proactive::build_context_pack(
             &signal,
             session_ctx.as_ref(),
             mita_history.as_ref(),
+            tools_ref,
         );
 
         // Lightweight LLM judgment: is this signal worth a full Mita turn?

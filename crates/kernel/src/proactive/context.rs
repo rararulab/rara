@@ -55,6 +55,7 @@ pub fn build_context_pack(
     signal: &ProactiveSignal,
     session_context: Option<&SessionContext>,
     mita_history: Option<&MitaHistory>,
+    available_tools: Option<&[String]>,
 ) -> String {
     let now = Timestamp::now();
     let mut sections = Vec::new();
@@ -121,8 +122,16 @@ pub fn build_context_pack(
         }
     }
 
-    // [Available Actions] section
-    sections.push(AVAILABLE_ACTIONS.to_string());
+    // [Available Actions] section — prefer dynamic tool list from agent manifest.
+    if let Some(tools) = available_tools {
+        let tool_lines: Vec<String> = tools.iter().map(|t| format!("- {t}")).collect();
+        sections.push(format!(
+            "[Available Actions]\n{}\n- (no action): decide this event doesn't need intervention",
+            tool_lines.join("\n")
+        ));
+    } else {
+        sections.push(AVAILABLE_ACTIONS.to_string());
+    }
 
     sections.join("\n\n")
 }
@@ -134,6 +143,7 @@ pub fn build_context_pack(
 pub fn build_heartbeat_context_pack(
     active_session_count: usize,
     mita_history: Option<&MitaHistory>,
+    available_tools: Option<&[String]>,
 ) -> String {
     let now = Timestamp::now();
     let mut sections = Vec::new();
@@ -159,7 +169,15 @@ pub fn build_heartbeat_context_pack(
         }
     }
 
-    sections.push(AVAILABLE_ACTIONS.to_string());
+    if let Some(tools) = available_tools {
+        let tool_lines: Vec<String> = tools.iter().map(|t| format!("- {t}")).collect();
+        sections.push(format!(
+            "[Available Actions]\n{}\n- (no action): decide this event doesn't need intervention",
+            tool_lines.join("\n")
+        ));
+    } else {
+        sections.push(AVAILABLE_ACTIONS.to_string());
+    }
 
     sections.join("\n\n")
 }
@@ -184,7 +202,7 @@ mod tests {
             idle_since:        Some("2h ago".to_string()),
             last_user_message: Some("check that PR".to_string()),
         };
-        let pack = build_context_pack(&signal, Some(&ctx), None);
+        let pack = build_context_pack(&signal, Some(&ctx), None, None);
         assert!(pack.contains("kind: session_idle"));
         assert!(pack.contains("idle_duration: 120m"));
         assert!(pack.contains("\"PR review\""));
@@ -194,7 +212,7 @@ mod tests {
     #[test]
     fn context_pack_morning_greeting() {
         let signal = ProactiveSignal::MorningGreeting;
-        let pack = build_context_pack(&signal, None, None);
+        let pack = build_context_pack(&signal, None, None, None);
         assert!(pack.contains("kind: morning_greeting"));
         assert!(pack.contains("[Available Actions]"));
         // No [Context] section when no session context.
@@ -203,7 +221,7 @@ mod tests {
 
     #[test]
     fn heartbeat_context_pack() {
-        let pack = build_heartbeat_context_pack(3, None);
+        let pack = build_heartbeat_context_pack(3, None, None);
         assert!(pack.contains("kind: heartbeat_patrol"));
         assert!(pack.contains("active_sessions: 3"));
     }
@@ -217,7 +235,7 @@ mod tests {
                 "2026-03-21T07:30:00Z: called notify".to_string(),
             ],
         };
-        let pack = build_context_pack(&signal, None, Some(&history));
+        let pack = build_context_pack(&signal, None, Some(&history), None);
         assert!(pack.contains("[Mita History]"));
         assert!(pack.contains("called dispatch_rara"));
         assert!(pack.contains("called notify"));
@@ -235,8 +253,35 @@ mod tests {
         let history = MitaHistory {
             recent_actions: vec![],
         };
-        let pack = build_context_pack(&signal, None, Some(&history));
+        let pack = build_context_pack(&signal, None, Some(&history), None);
         assert!(!pack.contains("[Mita History]"));
+    }
+
+    #[test]
+    fn context_pack_with_dynamic_tools() {
+        let signal = ProactiveSignal::MorningGreeting;
+        let tools = vec![
+            "dispatch_rara".to_string(),
+            "notify".to_string(),
+            "schedule_reminder".to_string(),
+        ];
+        let pack = build_context_pack(&signal, None, None, Some(&tools));
+        assert!(pack.contains("[Available Actions]"));
+        assert!(pack.contains("- dispatch_rara"));
+        assert!(pack.contains("- notify"));
+        assert!(pack.contains("- schedule_reminder"));
+        assert!(pack.contains("- (no action)"));
+        // Should NOT contain the hardcoded fallback wording.
+        assert!(!pack.contains("push notification to user"));
+    }
+
+    #[test]
+    fn heartbeat_context_pack_with_dynamic_tools() {
+        let tools = vec!["dispatch_rara".to_string(), "notify".to_string()];
+        let pack = build_heartbeat_context_pack(1, None, Some(&tools));
+        assert!(pack.contains("- dispatch_rara"));
+        assert!(pack.contains("- notify"));
+        assert!(pack.contains("- (no action)"));
     }
 
     #[test]
@@ -244,7 +289,7 @@ mod tests {
         let history = MitaHistory {
             recent_actions: vec!["2026-03-21T09:00:00Z: called notify".to_string()],
         };
-        let pack = build_heartbeat_context_pack(2, Some(&history));
+        let pack = build_heartbeat_context_pack(2, Some(&history), None);
         assert!(pack.contains("[Mita History]"));
         assert!(pack.contains("called notify"));
     }
