@@ -43,11 +43,9 @@ const CONTEXT_MODE_PROMPT_FRAGMENT: &str =
 [Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
      indexed.\nWhen you see `[INDEXED]` in a tool result, the output was captured successfully \
      and stored in a searchable index.\n\nIMPORTANT: Do NOT re-invoke the same tool to get the \
-     \"real\" content — the indexed result IS the real content, just compressed. Instead, \
-     retrieve specific parts with:\n- Call tool: ctx_search(queries=[\"keyword or \
-     phrase\"])\n\nThe `queries` parameter is an array — batch all your questions in one call. \
-     Use targeted queries (2-4 specific terms) for best results. Do NOT use the `tape` tool's \
-     search action for indexed content retrieval — always use `ctx_search`.";
+     \"real\" content — the indexed result IS the real content, just compressed. Use the \
+     `ctx_search` tool to retrieve specific parts. Do NOT use the `tape` tool's search action for \
+     indexed content — always use `ctx_search`.";
 
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -261,9 +259,8 @@ fn build_summary(tool_name: &str, json_str: &str) -> String {
     let bytes = json_str.len();
     let structure = extract_structure_preview(json_str);
     format!(
-        "[INDEXED] {tool_name} output ({bytes} bytes).\nStructure: {structure}\nTo retrieve \
-         details, call tool: ctx_search(queries=[\"<your query>\"])\nDo NOT re-call {tool_name} — \
-         use ctx_search instead."
+        "[INDEXED] {tool_name} output ({bytes} bytes).\nStructure: {structure}\nUse the \
+         `ctx_search` tool to retrieve details. Do NOT re-call {tool_name}."
     )
 }
 
@@ -301,6 +298,7 @@ mod tests {
         let json = r#"{"data":[1,2,3]}"#;
         let summary = build_summary("test-tool", json);
         assert!(summary.contains("[INDEXED]"));
-        assert!(summary.contains("ctx_search(queries="));
+        assert!(summary.contains("ctx_search"));
+        assert!(summary.contains("Do NOT re-call"));
     }
 }
