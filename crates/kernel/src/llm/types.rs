@@ -408,6 +408,47 @@ fn estimate_context_window(canonical: &str) -> usize {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ModelInfo / EmbeddingRequest / EmbeddingResponse
+// ---------------------------------------------------------------------------
+
+/// Metadata for a model available from the provider.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// Model identifier (e.g. "gpt-4o", "llama3:latest").
+    pub id:       String,
+    /// Organization that owns/provides the model.
+    pub owned_by: String,
+    /// Unix timestamp when the model was created.
+    pub created:  Option<u64>,
+}
+
+/// Request to generate text embeddings.
+#[derive(Debug, Clone, bon::Builder)]
+pub struct EmbeddingRequest {
+    /// The embedding model to use (e.g. "text-embedding-3-small").
+    pub model:      String,
+    /// Input texts to embed.
+    pub input:      Vec<String>,
+    /// Optional output dimensions (for models that support it).
+    pub dimensions: Option<usize>,
+}
+
+/// Response from an embedding request.
+#[derive(Debug, Clone, bon::Builder)]
+pub struct EmbeddingResponse {
+    /// One embedding vector per input text, in order.
+    pub embeddings: Vec<Vec<f32>>,
+    /// The model that generated the embeddings.
+    pub model:      String,
+    /// Token usage statistics.
+    pub usage:      Option<Usage>,
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions (migrated from model.rs)
+// ---------------------------------------------------------------------------
+
 fn canonical_model_name(model_name: &str) -> String {
     let trimmed = model_name.trim().to_ascii_lowercase();
     trimmed

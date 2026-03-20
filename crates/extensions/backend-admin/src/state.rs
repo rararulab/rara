@@ -41,6 +41,7 @@ impl BackendState {
         tape_service: rara_kernel::memory::TapeService,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
+        model_lister: rara_kernel::llm::LlmModelListerRef,
     ) -> Result<Self, Whatever> {
         // -- domain services -------------------------------------------------
 
@@ -50,6 +51,7 @@ impl BackendState {
             session_index,
             tape_service,
             settings_provider,
+            model_lister,
         );
         info!("Session service initialized");
 

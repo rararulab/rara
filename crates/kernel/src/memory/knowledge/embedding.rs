@@ -19,50 +19,28 @@
 
 use std::{path::PathBuf, sync::Mutex};
 
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 use super::config::KnowledgeConfig;
+use crate::llm::{EmbeddingRequest, LlmEmbedderRef};
 
-/// Manages embedding generation (OpenAI-compatible API) and vector search
+/// Manages embedding generation (via [`LlmEmbedderRef`]) and vector search
 /// (usearch).
 pub struct EmbeddingService {
-    client:          Client,
+    embedder:        LlmEmbedderRef,
     config:          KnowledgeConfig,
     index:           Mutex<Index>,
     index_path:      PathBuf,
-    api_key:         String,
     embedding_model: String,
-    /// Base URL of the OpenAI-compatible provider (e.g. `https://openrouter.ai/api/v1`).
-    base_url:        String,
-}
-
-#[derive(Serialize)]
-struct EmbeddingRequest {
-    model:      String,
-    input:      Vec<String>,
-    dimensions: usize,
-}
-
-#[derive(Deserialize)]
-struct EmbeddingResponse {
-    data: Vec<EmbeddingData>,
-}
-
-#[derive(Deserialize)]
-struct EmbeddingData {
-    embedding: Vec<f32>,
 }
 
 impl EmbeddingService {
     /// Create a new EmbeddingService, loading or creating the usearch index.
     pub fn new(
         config: KnowledgeConfig,
-        api_key: String,
+        embedder: LlmEmbedderRef,
         embedding_model: String,
-        base_url: String,
     ) -> anyhow::Result<Self> {
         let index_path = rara_paths::data_dir().join("knowledge/memory.usearch");
         if let Some(parent) = index_path.parent() {
@@ -96,55 +74,43 @@ impl EmbeddingService {
         }
 
         Ok(Self {
-            client: Client::new(),
+            embedder,
             config,
             index: Mutex::new(index),
             index_path,
-            api_key,
             embedding_model,
-            base_url,
         })
     }
 
-    /// Call the OpenAI embeddings API to generate embeddings for one or more
-    /// texts.
+    /// Generate embeddings for one or more texts via the configured
+    /// [`LlmEmbedderRef`].
     pub async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
-        let request = EmbeddingRequest {
-            model:      self.embedding_model.clone(),
-            input:      texts.to_vec(),
-            dimensions: self.config.embedding_dimensions,
-        };
+        let request = EmbeddingRequest::builder()
+            .model(self.embedding_model.clone())
+            .input(texts.to_vec())
+            .dimensions(self.config.embedding_dimensions)
+            .build();
 
-        let url = format!("{}/embeddings", self.base_url.trim_end_matches('/'));
         let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<EmbeddingResponse>()
-            .await?;
+            .embedder
+            .embed(request)
+            .await
+            .map_err(|e| anyhow::anyhow!("embedding request failed: {e}"))?;
 
-        let embeddings: Vec<Vec<f32>> = response.data.into_iter().map(|d| d.embedding).collect();
-
-        // Ensure ordering matches input ordering (OpenAI returns in order, but
-        // let's be explicit).
-        if embeddings.len() != texts.len() {
+        if response.embeddings.len() != texts.len() {
             anyhow::bail!(
                 "embedding response count mismatch: expected {}, got {}",
                 texts.len(),
-                embeddings.len()
+                response.embeddings.len()
             );
         }
 
-        debug!(count = embeddings.len(), "generated embeddings");
-        Ok(embeddings)
+        debug!(count = response.embeddings.len(), "generated embeddings");
+        Ok(response.embeddings)
     }
 
     /// Add a vector to the usearch index with the given key (memory_item id).

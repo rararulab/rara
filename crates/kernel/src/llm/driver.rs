@@ -21,7 +21,9 @@ use tokio::sync::mpsc;
 
 use super::{
     stream::StreamDelta,
-    types::{CompletionRequest, CompletionResponse},
+    types::{
+        CompletionRequest, CompletionResponse, EmbeddingRequest, EmbeddingResponse, ModelInfo,
+    },
 };
 use crate::error::Result;
 
@@ -47,3 +49,23 @@ pub trait LlmDriver: Send + Sync {
 
 /// Shared reference to an [`LlmDriver`].
 pub type LlmDriverRef = Arc<dyn LlmDriver>;
+
+/// Trait for listing models available from a provider.
+#[async_trait]
+pub trait LlmModelLister: Send + Sync {
+    /// List all models available from the provider.
+    async fn list_models(&self) -> Result<Vec<ModelInfo>>;
+}
+
+/// Trait for generating text embeddings.
+#[async_trait]
+pub trait LlmEmbedder: Send + Sync {
+    /// Generate embeddings for the given input texts.
+    async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingResponse>;
+}
+
+/// Reference-counted model lister.
+pub type LlmModelListerRef = Arc<dyn LlmModelLister>;
+
+/// Reference-counted embedder.
+pub type LlmEmbedderRef = Arc<dyn LlmEmbedder>;
