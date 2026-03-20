@@ -4,10 +4,12 @@ package worktree
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Status describes the state of a worktree entry.
@@ -36,13 +38,15 @@ func (s Status) String() string {
 
 // Entry holds parsed porcelain output for a single git worktree.
 type Entry struct {
-	Path      string
-	Branch    string // empty for detached HEAD
-	IsMain    bool
-	Prunable  bool
-	Locked    bool   // worktree has a lock file
-	IsCurrent bool   // worktree is the current working directory
-	Status    Status
+	Path       string
+	Branch     string // empty for detached HEAD
+	IsMain     bool
+	Prunable   bool
+	Locked     bool      // worktree has a lock file
+	IsCurrent  bool      // worktree is the current working directory
+	Status     Status
+	LastActive time.Time // last modification time of the worktree directory
+	DiskSize   int64     // total disk usage in bytes
 }
 
 // Protected returns true if the worktree cannot be deleted.
@@ -96,6 +100,12 @@ func List() ([]Entry, error) {
 			cur.IsCurrent = isSameOrChild(cwd, cur.Path)
 			cur.Status = classifyEntry(cur, merged)
 			if cur.Path != "" {
+				// Populate LastActive if the path exists (skip prunable/missing)
+				if !cur.Prunable {
+					if _, err := os.Stat(cur.Path); err == nil {
+						cur.LastActive = lastActiveTime(cur.Path)
+					}
+				}
 				entries = append(entries, cur)
 			}
 			cur = Entry{}
@@ -107,9 +117,42 @@ func List() ([]Entry, error) {
 		cur.Locked = locked
 		cur.IsCurrent = isSameOrChild(cwd, cur.Path)
 		cur.Status = classifyEntry(cur, merged)
+		if !cur.Prunable {
+			if _, err := os.Stat(cur.Path); err == nil {
+				cur.LastActive = lastActiveTime(cur.Path)
+			}
+		}
 		entries = append(entries, cur)
 	}
 	return entries, nil
+}
+
+// dirSize computes total disk usage of a directory tree in bytes.
+// Returns 0 on any error.
+func dirSize(path string) int64 {
+	var total int64
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if !d.IsDir() {
+			if info, err := d.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total
+}
+
+// lastActiveTime returns the modification time of the directory itself.
+// Returns zero time on error.
+func lastActiveTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 func classifyEntry(e Entry, merged map[string]bool) Status {

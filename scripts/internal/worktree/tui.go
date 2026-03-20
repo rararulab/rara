@@ -72,8 +72,14 @@ const toastDuration = 4 * time.Second
 
 // Messages returned by async commands.
 type deleteResultMsg struct {
-	removed int
-	errors  []string // per-worktree errors
+	removed    int
+	errors     []string // per-worktree errors
+	freedBytes int64    // total bytes freed by successful removals
+}
+
+// sizeResultMsg delivers asynchronously computed disk sizes.
+type sizeResultMsg struct {
+	sizes map[int]int64 // index → bytes
 }
 
 type pruneResultMsg struct{ err error }
@@ -104,6 +110,7 @@ type tuiModel struct {
 	quitting   bool
 	toasts     []toast // active toast notifications (errors)
 	toastSeq   int     // auto-incrementing toast ID
+	sizesLoaded bool  // true once async size computation has completed
 }
 
 // RunTUI launches the interactive worktree manager.
@@ -121,18 +128,60 @@ func RunTUI() error {
 	return nil
 }
 
+// humanSize formats a byte count into a human-readable string.
+func humanSize(bytes int64) string {
+	switch {
+	case bytes == 0:
+		return "-"
+	case bytes < 1024:
+		return fmt.Sprintf("%d B", bytes)
+	case bytes < 1024*1024:
+		return fmt.Sprintf("%d KB", bytes/1024)
+	case bytes < 1024*1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	default:
+		return fmt.Sprintf("%.1f GB", float64(bytes)/(1024*1024*1024))
+	}
+}
+
+// relativeTime formats a timestamp as a human-readable relative duration.
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		months := int(d.Hours() / 24 / 30)
+		if months < 1 {
+			months = 1
+		}
+		return fmt.Sprintf("%d mo ago", months)
+	}
+}
+
 func newTUIModel(entries []Entry) tuiModel {
 	// Wider columns to accommodate ANSI color codes in cell values
 	columns := []table.Column{
 		{Title: " ", Width: 4},
-		{Title: "Path", Width: 50},
-		{Title: "Branch", Width: 40},
+		{Title: "Path", Width: 36},
+		{Title: "Branch", Width: 28},
 		{Title: "Status", Width: 18},
+		{Title: "Last Active", Width: 12},
+		{Title: "Size", Width: 8},
 	}
 
 	rows := make([]table.Row, len(entries))
 	for i, e := range entries {
-		rows[i] = entryToRow(e, false)
+		rows[i] = entryToRow(e, false, false)
 	}
 
 	totalWidth := 0
@@ -168,7 +217,7 @@ func newTUIModel(entries []Entry) tuiModel {
 	}
 }
 
-func entryToRow(e Entry, selected bool) table.Row {
+func entryToRow(e Entry, selected bool, sizesLoaded bool) table.Row {
 	// Selection indicator column
 	check := " "
 	if selected {
@@ -209,7 +258,20 @@ func entryToRow(e Entry, selected bool) table.Row {
 	}
 	status := stStyle.Render(statusText)
 
-	return table.Row{check, path, branch, status}
+	// Last active column
+	lastActive := styleDimPath.Render(relativeTime(e.LastActive))
+
+	// Size column — show placeholder until async computation finishes
+	var size string
+	if !sizesLoaded {
+		size = styleDimPath.Render("...")
+	} else if e.DiskSize == 0 {
+		size = styleDimPath.Render("-")
+	} else {
+		size = styleDimPath.Render(humanSize(e.DiskSize))
+	}
+
+	return table.Row{check, path, branch, status, lastActive, size}
 }
 
 func shortenPath(p string) string {
@@ -245,7 +307,25 @@ func (m *tuiModel) pushToast(text string) tea.Cmd {
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return nil
+	return m.computeSizesCmd()
+}
+
+// computeSizesCmd returns a tea.Cmd that computes disk sizes for all entries in the background.
+func (m *tuiModel) computeSizesCmd() tea.Cmd {
+	entries := m.entries
+	return func() tea.Msg {
+		sizes := make(map[int]int64, len(entries))
+		for i, e := range entries {
+			if e.Prunable {
+				continue
+			}
+			if _, err := os.Stat(e.Path); err != nil {
+				continue
+			}
+			sizes[i] = dirSize(e.Path)
+		}
+		return sizeResultMsg{sizes: sizes}
+	}
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -266,11 +346,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case sizeResultMsg:
+		for i, sz := range msg.sizes {
+			if i < len(m.entries) {
+				m.entries[i].DiskSize = sz
+			}
+		}
+		m.sizesLoaded = true
+		m.refreshRows()
+		return m, nil
+
 	// Async result handlers
 	case deleteResultMsg:
 		m.busy = false
 		var cmds []tea.Cmd
-		cmds = append(cmds, m.setMessage(fmt.Sprintf("Removed %d worktree(s)", msg.removed)))
+		cmds = append(cmds, m.setMessage(fmt.Sprintf("Removed %d worktree(s), freed %s", msg.removed, humanSize(msg.freedBytes))))
 		for _, errText := range msg.errors {
 			cmds = append(cmds, m.pushToast(errText))
 		}
@@ -294,14 +384,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.entries = msg.entries
 		m.selected = make(map[int]bool)
+		m.sizesLoaded = false
 		m.refreshRows()
 		m.table.SetHeight(min(len(msg.entries)+1, 25))
+		// Re-trigger async size computation for the new entries
+		sizeCmd := m.computeSizesCmd()
 		// If no message was set by a prior handler (e.g. deleteResultMsg),
 		// show a brief "Refreshed" note
 		if m.message == "Refreshing..." {
-			return m, m.setMessage("Refreshed")
+			return m, tea.Batch(m.setMessage("Refreshed"), sizeCmd)
 		}
-		return m, nil
+		return m, sizeCmd
 
 	case tea.KeyPressMsg:
 		// Ignore keys while busy
@@ -317,9 +410,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle selection (skip protected worktrees)
 			idx := m.table.Cursor()
 			if idx < len(m.entries) && !m.entries[idx].Protected() {
-				m.selected[idx] = !m.selected[idx]
-				if !m.selected[idx] {
+				wasSelected := m.selected[idx]
+				m.selected[idx] = !wasSelected
+				if wasSelected {
 					delete(m.selected, idx)
+				} else {
+					// Auto-advance cursor when selecting
+					m.table.MoveDown(1)
 				}
 				m.refreshRows()
 			}
@@ -402,19 +499,23 @@ func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 
 	return func() tea.Msg {
 		removed := 0
+		var freedBytes int64
 		var errors []string
 		for _, t := range targets {
+			// Measure size before removal so we can report freed space
+			sz := dirSize(t.path)
 			if err := Remove(t.path, force); err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %s", shortenPath(t.path), err))
 				continue
 			}
+			freedBytes += sz
 			if t.branch != "" {
 				_ = DeleteBranch(t.branch, force)
 			}
 			removed++
 		}
 		_ = Prune()
-		return deleteResultMsg{removed: removed, errors: errors}
+		return deleteResultMsg{removed: removed, errors: errors, freedBytes: freedBytes}
 	}
 }
 
@@ -430,7 +531,7 @@ func (m *tuiModel) reloadCmd() tea.Cmd {
 func (m *tuiModel) refreshRows() {
 	rows := make([]table.Row, len(m.entries))
 	for i, e := range m.entries {
-		rows[i] = entryToRow(e, m.selected[i])
+		rows[i] = entryToRow(e, m.selected[i], m.sizesLoaded)
 	}
 	m.table.SetRows(rows)
 }
