@@ -546,6 +546,10 @@ async fn turn_handler(
                                 .unwrap()))
                             .await;
                     }
+                    // ToolOutput is a live preview of tool execution (e.g. bash
+                    // stdout). Dock SSE does not forward it yet — the canvas
+                    // only needs final results. Can be added as a follow-up.
+                    rara_kernel::io::StreamEvent::ToolOutput { .. } => {}
                     _ => {}
                 }
             }

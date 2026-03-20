@@ -3102,7 +3102,12 @@ fn spawn_stream_forwarder(
                         Ok(StreamEvent::ToolCallLimitResolved { .. }) => {
                             // Informational only — already handled by callback.
                         }
-                        Ok(_) => {} // Ignore: Progress (stage changes have no TG UX)
+                        // ToolOutput is a live preview (e.g. bash stdout) — Telegram
+                        // messages cannot be updated fast enough for streaming.
+                        Ok(StreamEvent::ToolOutput { .. }) => {}
+                        // Progress, DockTurnComplete, BackgroundTask*, LoopBreakerTriggered
+                        // — no Telegram UX for these.
+                        Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
                         }

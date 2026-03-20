@@ -17,11 +17,17 @@
 //! Runs a command via `/bin/bash -c` with configurable timeout and working
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use base::process_group::{kill_process_group, terminate_process_group};
-use rara_kernel::tool::{ToolContext, ToolExecute};
+use rara_kernel::{
+    io::{StreamEvent, StreamHandle},
+    tool::{ToolContext, ToolExecute},
+};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -81,7 +87,7 @@ impl ToolExecute for BashTool {
     type Params = BashParams;
 
     #[tracing::instrument(skip_all)]
-    async fn run(&self, params: BashParams, _context: &ToolContext) -> anyhow::Result<BashResult> {
+    async fn run(&self, params: BashParams, context: &ToolContext) -> anyhow::Result<BashResult> {
         let timeout_secs = params.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
         let effective_command = rtk_rewrite(&params.command).await;
 
@@ -118,14 +124,24 @@ impl ToolExecute for BashTool {
         // Shared buffer for incremental output collection from both pipes.
         let buffer: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
-        // Spawn reader tasks for stdout and stderr that feed into the shared buffer.
+        // Build optional streaming context for real-time output.
+        let stream_ctx: Option<(StreamHandle, String)> = context
+            .stream_handle
+            .as_ref()
+            .zip(context.tool_call_id.as_ref())
+            .map(|(h, id)| (h.clone(), id.clone()));
+
+        // Spawn reader tasks for stdout and stderr that feed into the shared
+        // buffer. Only stdout is streamed in real-time — stderr is typically
+        // small diagnostic output and interleaving it would produce confusing
+        // mixed output for the user.
         let stdout_handle = child.stdout.take().map(|pipe| {
             let buf = Arc::clone(&buffer);
-            tokio::spawn(read_pipe_into(pipe, buf))
+            tokio::spawn(read_pipe_into(pipe, buf, stream_ctx))
         });
         let stderr_handle = child.stderr.take().map(|pipe| {
             let buf = Arc::clone(&buffer);
-            tokio::spawn(read_pipe_into(pipe, buf))
+            tokio::spawn(read_pipe_into(pipe, buf, None))
         });
 
         let timeout_dur = std::time::Duration::from_secs(timeout_secs);
@@ -184,10 +200,32 @@ impl ToolExecute for BashTool {
     }
 }
 
+/// Minimum accumulated bytes before emitting a streaming chunk.
+const STREAM_CHUNK_MIN_BYTES: usize = 256;
+
+/// Maximum time between streaming chunk emissions.
+const STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
+
 /// Read from an async pipe into a shared buffer, capping at
 /// [`MAX_OUTPUT_BYTES`] to prevent unbounded memory growth.
-async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, buffer: Arc<Mutex<Vec<u8>>>) {
+///
+/// When `stream_ctx` is provided, decoded text chunks are emitted as
+/// [`StreamEvent::ToolOutput`] events for real-time display. Chunks are
+/// batched by size ([`STREAM_CHUNK_MIN_BYTES`]) or time
+/// ([`STREAM_FLUSH_INTERVAL`]) to avoid flooding the broadcast channel.
+async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
+    mut pipe: R,
+    buffer: Arc<Mutex<Vec<u8>>>,
+    stream_ctx: Option<(StreamHandle, String)>,
+) {
     let mut chunk = [0u8; 8192];
+    let mut pending_text = String::new();
+    let mut last_emit = Instant::now();
+
+    // Tail buffer for incomplete UTF-8 sequences at chunk boundaries.
+    let mut utf8_tail: Vec<u8> = Vec::new();
+    let mut truncation_notified = false;
+
     loop {
         match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
@@ -195,12 +233,79 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, buffer: Ar
                 let mut buf = buffer.lock().await;
                 let remaining = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
                 if remaining == 0 {
-                    // Buffer full — keep reading to drain the pipe but discard data.
+                    // Buffer full — drop lock before emitting to avoid holding
+                    // it during broadcast.
+                    drop(buf);
+                    // Notify the stream once so the user knows output continues
+                    // but is no longer displayed.
+                    if !truncation_notified {
+                        if let Some((ref handle, ref tool_call_id)) = stream_ctx {
+                            // Flush any pending text before the truncation notice.
+                            if !pending_text.is_empty() {
+                                handle.emit(StreamEvent::ToolOutput {
+                                    tool_call_id: tool_call_id.clone(),
+                                    chunk:        std::mem::take(&mut pending_text),
+                                });
+                            }
+                            handle.emit(StreamEvent::ToolOutput {
+                                tool_call_id: tool_call_id.clone(),
+                                chunk:        "\n[output truncated — 50 KB cap reached]\n"
+                                    .to_string(),
+                            });
+                        }
+                        truncation_notified = true;
+                    }
                     continue;
                 }
                 let to_copy = n.min(remaining);
                 buf.extend_from_slice(&chunk[..to_copy]);
+                // Drop the lock before streaming to avoid holding it during emit.
+                drop(buf);
+
+                // Emit streaming chunk — only stream bytes that were actually
+                // stored (to_copy) so streamed content matches the final result.
+                if let Some((ref handle, ref tool_call_id)) = stream_ctx {
+                    // Prepend any incomplete UTF-8 tail from the previous chunk.
+                    utf8_tail.extend_from_slice(&chunk[..to_copy]);
+                    // Find the last valid UTF-8 boundary in the accumulated bytes.
+                    let valid_up_to = match std::str::from_utf8(&utf8_tail) {
+                        Ok(_) => utf8_tail.len(),
+                        Err(e) => e.valid_up_to(),
+                    };
+                    if valid_up_to > 0 {
+                        // valid_up_to was determined by from_utf8, so this won't panic.
+                        let text = std::str::from_utf8(&utf8_tail[..valid_up_to])
+                            .expect("valid_up_to guarantees valid UTF-8");
+                        pending_text.push_str(text);
+                    }
+                    // Keep incomplete tail bytes for the next iteration.
+                    utf8_tail.drain(..valid_up_to);
+
+                    if !pending_text.is_empty()
+                        && (pending_text.len() >= STREAM_CHUNK_MIN_BYTES
+                            || last_emit.elapsed() >= STREAM_FLUSH_INTERVAL)
+                    {
+                        handle.emit(StreamEvent::ToolOutput {
+                            tool_call_id: tool_call_id.clone(),
+                            chunk:        std::mem::take(&mut pending_text),
+                        });
+                        last_emit = Instant::now();
+                    }
+                }
             }
+        }
+    }
+
+    // Flush any remaining pending text (including incomplete UTF-8 tail).
+    if let Some((ref handle, ref tool_call_id)) = stream_ctx {
+        if !utf8_tail.is_empty() {
+            pending_text.push_str(&String::from_utf8_lossy(&utf8_tail));
+        }
+        if !pending_text.is_empty() {
+            handle.emit(StreamEvent::ToolOutput {
+                tool_call_id: tool_call_id.clone(),
+                chunk:        pending_text,
+            });
         }
     }
 }

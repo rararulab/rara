@@ -185,6 +185,12 @@ pub struct ToolContext {
     /// Live tool registry for the current session (includes dynamic MCP tools).
     /// Used by `discover-tools` to query the deferred catalog at runtime.
     pub tool_registry:         Option<ToolRegistryRef>,
+    /// Stream handle for emitting real-time output during execution.
+    /// `None` when streaming is not available (e.g. background tasks).
+    pub stream_handle:         Option<crate::io::StreamHandle>,
+    /// The tool call ID assigned by the LLM for this invocation.
+    /// Used to correlate streaming output with the tool call.
+    pub tool_call_id:          Option<String>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -197,6 +203,8 @@ impl std::fmt::Debug for ToolContext {
             .field("rara_message_id", &self.rara_message_id)
             .field("context_window_tokens", &self.context_window_tokens)
             .field("tool_registry", &self.tool_registry.as_ref().map(|_| "..."))
+            .field("stream_handle", &self.stream_handle.as_ref().map(|_| "..."))
+            .field("tool_call_id", &self.tool_call_id)
             .finish()
     }
 }
