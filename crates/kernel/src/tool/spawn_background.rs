@@ -19,7 +19,7 @@ use serde::Deserialize;
 use tracing::info;
 
 use crate::{
-    agent::AgentManifest,
+    agent::{AgentManifest, AgentRole, Priority},
     handle::KernelHandle,
     io::{AgentEvent, StreamEvent},
     session::{BackgroundTaskEntry, SessionKey},
@@ -53,14 +53,29 @@ impl SpawnBackgroundTool {
 }
 
 /// Parameters for the `spawn-background` tool.
+///
+/// All manifest fields are flat top-level parameters so LLMs don't need to
+/// construct a nested JSON object.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SpawnBackgroundParams {
-    /// Agent manifest for the background agent (name, system_prompt, etc.).
-    manifest:    serde_json::Value,
     /// The task instruction to send to the background agent.
-    input:       String,
+    input:          String,
     /// Short human-readable description of the task (shown in status).
-    description: String,
+    description:    String,
+    /// System prompt defining the background agent's behavior.
+    system_prompt:  String,
+    /// Optional agent name (auto-generated from description if omitted).
+    #[serde(default)]
+    name:           Option<String>,
+    /// Tool names the agent can use (empty = inherit parent's tools).
+    #[serde(default)]
+    tools:          Vec<String>,
+    /// LLM model override (uses the system default if omitted).
+    #[serde(default)]
+    model:          Option<String>,
+    /// Maximum LLM iterations before forced completion (default: 15).
+    #[serde(default)]
+    max_iterations: Option<usize>,
 }
 
 #[async_trait]
@@ -73,8 +88,30 @@ impl ToolExecute for SpawnBackgroundTool {
         p: SpawnBackgroundParams,
         context: &ToolContext,
     ) -> anyhow::Result<serde_json::Value> {
-        let mut manifest: AgentManifest = serde_json::from_value(p.manifest)
-            .map_err(|e| anyhow::anyhow!("invalid manifest: {e}"))?;
+        let agent_name = p
+            .name
+            .unwrap_or_else(|| slug_from_description(&p.description));
+
+        // Build manifest from flat params + sensible defaults.
+        let mut manifest = AgentManifest {
+            name:                   agent_name,
+            role:                   AgentRole::Worker,
+            description:            p.description.clone(),
+            model:                  p.model,
+            system_prompt:          p.system_prompt,
+            soul_prompt:            None,
+            provider_hint:          None,
+            max_iterations:         Some(p.max_iterations.unwrap_or(15)),
+            tools:                  p.tools,
+            max_children:           Some(0),
+            max_context_tokens:     None,
+            priority:               Priority::default(),
+            metadata:               serde_json::Value::Null,
+            sandbox:                None,
+            default_execution_mode: None,
+            tool_call_limit:        None,
+            worker_timeout_secs:    None,
+        };
 
         // Append structured-output instructions so the background agent
         // self-summarizes before returning results to the parent.
@@ -143,5 +180,26 @@ impl ToolExecute for SpawnBackgroundTool {
             "status": "spawned",
             "message": "Background agent is now running. Results will be delivered when complete."
         }))
+    }
+}
+
+/// Derive a short kebab-case slug from a human description for use as agent
+/// name when the caller omits `name`.
+fn slug_from_description(desc: &str) -> String {
+    let slug: String = desc
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.len() > 40 {
+        trimmed[..40].trim_end_matches('-').to_string()
+    } else {
+        trimmed
     }
 }
