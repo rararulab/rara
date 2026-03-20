@@ -1883,11 +1883,13 @@ pub(crate) async fn run_agent_loop(
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
-            .map(|(_id, name, args)| {
+            .map(|(id, name, args)| {
                 let tool = tools.get(name);
                 let args = args.clone();
                 let name = name.clone();
-                let tc = tool_context.clone();
+                let mut tc = tool_context.clone();
+                tc.stream_handle = Some(stream_handle.clone());
+                tc.tool_call_id = Some(id.clone());
                 let user_ref = runtime_user.clone();
                 let tool_cancel = turn_cancel.clone();
                 let output_interceptor = output_interceptor.clone();

@@ -2279,6 +2279,8 @@ impl Kernel {
                     rara_message_id: msg_id.clone(),
                     context_window_tokens: 0,
                     tool_registry: None, // set later in agent loop with live registry
+                    stream_handle: None, // set per-tool-call in agent loop
+                    tool_call_id: None,  // set per-tool-call in agent loop
                 };
 
                 // Route to v1 (reactive) or v2 (plan-execute) based on the

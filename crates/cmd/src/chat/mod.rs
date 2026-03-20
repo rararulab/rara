@@ -551,6 +551,7 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::LoopBreakerTriggered { pattern, tools, .. } => CliEvent::Progress {
             text: format!("Loop detected ({pattern}): disabled {}", tools.join(", ")),
         },
+        StreamEvent::ToolOutput { chunk, .. } => CliEvent::TextDelta { text: chunk },
     }
 }
 

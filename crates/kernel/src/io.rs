@@ -879,6 +879,16 @@ pub enum StreamEvent {
         id:        String,
         arguments: serde_json::Value,
     },
+    /// Incremental output from a tool during execution (e.g. bash stdout).
+    ///
+    /// Streamed chunks are a live preview — the final `ToolCallEnd` result
+    /// may differ due to truncation (50 KB cap).
+    ToolOutput {
+        /// The tool call ID this output belongs to.
+        tool_call_id: String,
+        /// A chunk of text output from the tool.
+        chunk:        String,
+    },
     /// A tool call has finished.
     ToolCallEnd {
         id:             String,
@@ -1017,7 +1027,9 @@ struct StreamEntry {
 /// Handle held by the agent executor to emit stream events.
 ///
 /// Created by [`StreamHub::open`]. The agent emits events via
-/// [`emit`](Self::emit).
+/// [`emit`](Self::emit). Cloneable so it can be shared with tool
+/// implementations that need to emit real-time output.
+#[derive(Clone)]
 pub struct StreamHandle {
     stream_id: StreamId,
     tx:        broadcast::Sender<StreamEvent>,
