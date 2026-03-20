@@ -986,6 +986,18 @@ pub enum StreamEvent {
         /// `true` if the user chose to continue; `false` on stop or timeout.
         continued:   bool,
     },
+    /// The loop breaker detected a stuck tool-call pattern and intervened.
+    ///
+    /// Informational — adapters may log or display this to the user.
+    LoopBreakerTriggered {
+        /// Tools affected by the intervention.
+        tools:           Vec<String>,
+        /// Detection pattern: `"exact_duplicate"`, `"flooding"`, or
+        /// `"pingpong"`.
+        pattern:         String,
+        /// Cumulative tool calls made so far in this turn.
+        tool_calls_made: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------

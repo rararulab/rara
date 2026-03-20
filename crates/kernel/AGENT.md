@@ -203,6 +203,37 @@ Structured `TaskReport` publishing and tag-based `Subscription` routing so backg
 
 ### What NOT To Do
 
+---
+
+## Tool Call Loop Breaker in `agent/loop_breaker.rs`
+
+### What
+
+Detects when the agent is stuck calling the same tool repeatedly without progress and intervenes with escalating strategies. Works alongside `RepetitionGuard` (text-level) — this handles tool-call-level repetition.
+
+### Three Detection Patterns
+
+| Pattern | Trigger | Intervention |
+|---------|---------|--------------|
+| Exact duplicate | Same `(tool, args)` ≥3 times consecutively | Disable tool |
+| Same-tool flooding | Same tool ≥5 calls → warn; ≥8 calls → disable | Warn then disable |
+| Ping-pong | A-B-A-B alternation ≥4 cycles | Disable both tools |
+
+### Integration in Agent Loop
+
+1. Initialized alongside other turn state (near `consecutive_silent_iters`)
+2. Records tool calls after execution, checks for patterns
+3. Injects warning via `loop_breaker_warning` (same pattern as `context_pressure_warning`)
+4. Disables tools by removing from `tool_defs`
+
+### What NOT To Do
+
+- Do NOT weaken thresholds without understanding the failure mode — the defaults (warn=5, disable=8, exact_dup=3, pingpong=4) are based on real production incidents where agents burned 25 iterations on tape search loops
+- Do NOT remove the `DisableTools` intervention — warning alone is insufficient; small models ignore warnings and continue looping
+- Do NOT apply loop breaking to tool *results* — only track tool *calls* (name + args). Results are variable and should not trigger detection
+
+---
+
 - Do NOT publish TaskReport without going through the syscall — `exec_publish_report` enforces `source_session` and `tags` invariants
 - Do NOT use `UserId("system")` in synthetic messages for ProactiveTurn — always use the subscription owner's identity to prevent privilege escalation on session restore
 - Do NOT construct `TaskNotification` outside `handle_publish_task_report` — it builds the `TaskReportRef` and coordinates result persistence

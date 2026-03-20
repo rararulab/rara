@@ -548,6 +548,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
                 "Agent stopped".to_string()
             },
         },
+        StreamEvent::LoopBreakerTriggered { pattern, tools, .. } => CliEvent::Progress {
+            text: format!("Loop detected ({pattern}): disabled {}", tools.join(", ")),
+        },
     }
 }
 
