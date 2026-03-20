@@ -130,16 +130,17 @@ impl ToolExecute for BashTool {
             .zip(context.tool_call_id.as_ref())
             .map(|(h, id)| (h.clone(), id.clone()));
 
-        // Spawn reader tasks for stdout and stderr that feed into the shared buffer.
+        // Spawn reader tasks for stdout and stderr that feed into the shared
+        // buffer. Only stdout is streamed in real-time — stderr is typically
+        // small diagnostic output and interleaving it would produce confusing
+        // mixed output for the user.
         let stdout_handle = child.stdout.take().map(|pipe| {
             let buf = Arc::clone(&buffer);
-            let ctx = stream_ctx.clone();
-            tokio::spawn(read_pipe_into(pipe, buf, ctx))
+            tokio::spawn(read_pipe_into(pipe, buf, stream_ctx))
         });
         let stderr_handle = child.stderr.take().map(|pipe| {
             let buf = Arc::clone(&buffer);
-            let ctx = stream_ctx.clone();
-            tokio::spawn(read_pipe_into(pipe, buf, ctx))
+            tokio::spawn(read_pipe_into(pipe, buf, None))
         });
 
         let timeout_dur = std::time::Duration::from_secs(timeout_secs);
@@ -279,8 +280,9 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
                     // Keep incomplete tail bytes for the next iteration.
                     utf8_tail.drain(..valid_up_to);
 
-                    if pending_text.len() >= STREAM_CHUNK_MIN_BYTES
-                        || last_emit.elapsed() >= STREAM_FLUSH_INTERVAL
+                    if !pending_text.is_empty()
+                        && (pending_text.len() >= STREAM_CHUNK_MIN_BYTES
+                            || last_emit.elapsed() >= STREAM_FLUSH_INTERVAL)
                     {
                         handle.emit(StreamEvent::ToolOutput {
                             tool_call_id: tool_call_id.clone(),
