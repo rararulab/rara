@@ -32,7 +32,7 @@ Selected approach with reasoning. Reference alternatives considered (posted in i
 | {edge case} | {how it's handled} |
 
 ## Implementation Steps
-1. {step — one commit each}
+1. {step — one logical commit each}
 2. {step}
 3. {step}
 ```
@@ -73,6 +73,15 @@ Cleanup (after PR merged):
 ```bash
 git worktree remove .worktrees/issue-{ISSUE}-{name}
 git branch -d issue-{ISSUE}-{name}
+```
+
+---
+
+## Quick Mode Acknowledgment (printed to user when `--quick` is used)
+
+```markdown
+Running /dev --quick for: {requirement}
+Skipping design and code review phases. Issue: #{ISSUE}
 ```
 
 ---

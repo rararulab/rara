@@ -43,12 +43,12 @@ Run and confirm these pass:
 You are reviewing a PR for a Rust project. You have ZERO context from the implementation — review with fresh eyes.
 
 ## Setup
-1. Invoke the `code-review-expert` skill for structured review
+1. Invoke the `code-review-expert` skill for structured review. If unavailable, perform a manual structured review covering: SOLID, security, error handling, performance, boundary conditions.
 2. Get the diff: git -C {WORKTREE_PATH} diff origin/{BASE_BRANCH}...HEAD
 3. Read any AGENT.md files in affected crates for invariants
 
 ## Output
-- Post findings as a PR comment: gh pr comment {PR} --body '<review>'
+- Post findings as a PR comment using a HEREDOC: gh pr comment {PR} --body "$(cat <<'REVIEW' ... REVIEW)"
 - End with: **Verdict: Clean** or **Verdict: N issues to fix**
 - Return the full structured review to the parent agent (including all P0-P3 findings)
 

@@ -1,6 +1,6 @@
 ---
 name: dev
-description: "Autonomous development pipeline for implementing features, fixes, and refactors end-to-end. Triggers: /dev, develop, build feature, implement task, ship PR, new feature, fix bug, add functionality, code change, make this work, add support for, implement this, write the code, build this out, ship this, get this done. One command: requirement → design → implement → review → ship."
+description: "Autonomous development pipeline for implementing features, fixes, and refactors end-to-end. Triggers: /dev, develop, build feature, implement task, ship PR, fix bug, add functionality, code change, implement this, ship this. One command: requirement → design → implement → review → ship."
 ---
 
 # /dev — Autonomous Development Pipeline
@@ -18,11 +18,11 @@ One command, full cycle: requirement → design → implement → review → shi
 | Flag | Effect | When to use |
 |------|--------|-------------|
 | (default) | Full pipeline: design → implement → review → ship | Features, non-trivial fixes, refactors |
-| `--quick` | Skip Phase 1 (design) and Phase 3.1-3.3 (code review rounds). Still runs: issue → worktree → implement → pre-commit → PR → CI | One-line fixes, typo corrections, config tweaks, doc-only changes |
+| `--quick` | Skip Phase 1 (design) and Phase 3.1-3.3 (code review rounds). Still runs: issue → worktree → implement → pre-commit → PR → CI. Quality relies entirely on pre-commit hooks — use only when the change is genuinely trivial. | One-line fixes, typo corrections, config tweaks, doc-only changes |
 
 ## Progress Tracking
 
-Use TaskCreate to create one task per phase. Update status as you progress. Do NOT use a copy-paste markdown checklist.
+Use TaskCreate to create one task per phase. Update status as you progress. If TaskCreate is unavailable, track progress via issue comments (one comment per phase completion).
 
 Print to user: "Running /dev pipeline for: {requirement}"
 
@@ -60,7 +60,7 @@ Gather project context silently (no output to user). Answer these questions:
 3. **Autonomously select** the recommended approach — do NOT ask the user
 4. Does this fit with: existing architecture, CLAUDE.md constraints, complexity budget?
 
-Write the design doc to a temp file (`/tmp/dev-{ISSUE}-design.md`) using the template from `references/templates.md`. It will be moved to `docs/plans/` in the worktree during Phase 2.
+Draft the design doc content in the issue comment (posted below). It will be written to `docs/plans/YYYY-MM-DD-{topic}-design.md` in the worktree during Phase 2, using the template from `references/templates.md`.
 
 **Post analysis to issue** as a "Design Analysis" comment: approaches considered, selected approach with reasoning, key decisions, implementation steps.
 
@@ -102,10 +102,7 @@ When in doubt, use small task path. Stacked PRs add coordination overhead.
 git worktree add .worktrees/issue-{ISSUE}-{name} -b issue-{ISSUE}-{name}
 ```
 
-If design doc exists at `/tmp/dev-{ISSUE}-design.md`, move it into the worktree:
-```bash
-cp /tmp/dev-{ISSUE}-design.md {WORKTREE}/docs/plans/YYYY-MM-DD-{topic}-design.md
-```
+Write the design doc (from the "Design Analysis" issue comment) to `{WORKTREE}/docs/plans/YYYY-MM-DD-{topic}-design.md`.
 
 Dispatch a **general-purpose subagent** to the worktree. Load `references/subagent-prompts.md` and use the "Implementation Subagent" template.
 
@@ -123,8 +120,7 @@ Follow `stacked-prs.md` for the full stacked PR workflow. Key additions for `/de
 After implementation completes, the **parent agent** verifies in the worktree:
 
 ```bash
-just pre-commit                    # fmt + clippy + check + test
-cargo test -p {crate}              # crate-specific tests
+just pre-commit                    # fmt + clippy + check + test (workspace-wide)
 ```
 
 If frontend was touched: `cd web && npm run build`
@@ -170,8 +166,8 @@ For each issue:
 
 **Severity-based handling:**
 - **P0-P1:** Fix every one, no exceptions
-- **P2:** Fix unless it conflicts with existing patterns
-- **P3:** Apply if trivial (< 1 minute). Otherwise note as "acknowledged, deferred" in the fixes comment
+- **P2:** Fix unless the suggestion contradicts a pattern used in 3+ existing files in the project
+- **P3:** Apply if it requires ≤3 lines changed in a single file. Otherwise note as "acknowledged, deferred" in the fixes comment
 
 **Do NOT ask the user about any issue resolvable through research.**
 
@@ -238,7 +234,7 @@ gh pr checks {PR} --watch
 
 Load `references/templates.md` and use the "Completion Report" template.
 
-Ask user: "Clean up worktree now, or keep for post-merge review?" If yes, run cleanup commands from the template.
+Remind user to clean up worktrees after the PR is merged. Load cleanup commands from the template.
 
 ---
 
@@ -246,7 +242,7 @@ Ask user: "Clean up worktree now, or keep for post-merge review?" If yes, run cl
 
 - **Silent analysis** — Do NOT keep investigation conclusions only in conversation context. Every finding goes to GitHub.
 - **Bulk dumps** — Do NOT post raw tool output as issue comments. Summarize with context and conclusions.
-- **Comment spam** — Do NOT post a comment for every single file read. Group related findings into one comment per logical step. Aim for 3-5 issue comments total, not 10+.
+- **Comment spam** — Do NOT post a comment for every single file read. Group related findings into one comment per logical step. Aim for 3-5 issue comments for small tasks, scaling proportionally for stacked PRs.
 - **Skipping the trail** — Do NOT skip issue/PR comments "to save time". The audit trail is the point.
 - **Self-reviewing** — Do NOT review your own implementation in the same context. Always dispatch a fresh subagent.
 - **Delegating fixes** — Do NOT dispatch a subagent to fix review findings. The parent agent fixes ALL issues itself, then sends a fresh subagent to re-review.
