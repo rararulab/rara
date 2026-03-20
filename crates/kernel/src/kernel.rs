@@ -108,7 +108,11 @@ pub struct KernelConfig {
     #[default = 25]
     pub default_max_iterations:  usize,
     /// Hard cap for one tool execution wave inside a turn.
-    #[default(_code = "Duration::from_secs(120)")]
+    ///
+    /// Must be greater than any individual tool's own timeout (e.g. bash
+    /// defaults to 120 s) so per-tool timeouts fire first and only the
+    /// offending tool is killed rather than the entire wave.
+    #[default(_code = "Duration::from_secs(180)")]
     pub tool_execution_timeout:  Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
