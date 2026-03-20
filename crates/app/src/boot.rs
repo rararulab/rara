@@ -262,9 +262,12 @@ pub(crate) async fn boot(
             .await
             .unwrap_or_else(|| "openrouter".to_owned())
     };
-    let default_driver: Arc<rara_kernel::llm::OpenAiDriver> = Arc::new(
-        rara_kernel::llm::OpenAiDriver::from_settings(settings_provider.clone(), &default_provider),
-    );
+    let default_driver: Arc<rara_kernel::llm::OpenAiDriver> =
+        Arc::new(rara_kernel::llm::OpenAiDriver::from_settings(
+            settings_provider.clone(),
+            &default_provider,
+            rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+        ));
     let model_lister: rara_kernel::llm::LlmModelListerRef = default_driver.clone();
     let embedder: rara_kernel::llm::LlmEmbedderRef = default_driver;
 
@@ -336,7 +339,11 @@ async fn build_driver_registry(
     for &name in &provider_names {
         registry.register_driver(
             name,
-            Arc::new(OpenAiDriver::from_settings(settings.clone(), name)),
+            Arc::new(OpenAiDriver::from_settings(
+                settings.clone(),
+                name,
+                OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+            )),
         );
 
         // Read per-provider default_model and fallback_models

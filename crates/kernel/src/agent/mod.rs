@@ -952,7 +952,9 @@ pub(crate) async fn run_agent_loop(
         }
     };
 
-    let max_iterations = manifest.max_iterations.unwrap_or(25);
+    let max_iterations = manifest
+        .max_iterations
+        .unwrap_or(handle.config().default_max_iterations);
     let (effective_prompt, has_soul) = build_agent_system_prompt(handle, &manifest);
     let provider_hint = manifest.provider_hint.as_deref();
 
@@ -1004,7 +1006,8 @@ pub(crate) async fn run_agent_loop(
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
-    let mut consecutive_silent_iters: usize = 0;
+    let mut last_progress_at = Instant::now();
+
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
@@ -2379,18 +2382,16 @@ pub(crate) async fn run_agent_loop(
             session_length_warned = true;
         }
 
-        // Track consecutive silent (tool-only, no text) iterations and emit
-        // a Progress event so the user knows we're still working.
-        if accumulated_text.len() == last_accumulated_text.len() {
-            consecutive_silent_iters += 1;
-        } else {
-            consecutive_silent_iters = 0;
-        }
-        if consecutive_silent_iters >= 3 {
+        // Emit a progress event on silent (tool-only, no text) iterations so
+        // the user sees the agent is still working. Throttled to at most once
+        // every 5 seconds to avoid flooding the UI.
+        if accumulated_text.len() == last_accumulated_text.len()
+            && last_progress_at.elapsed() >= std::time::Duration::from_secs(5)
+        {
             stream_handle.emit(StreamEvent::Progress {
                 stage: format!("Processing... ({tool_calls_made} steps completed)"),
             });
-            consecutive_silent_iters = 0;
+            last_progress_at = Instant::now();
         }
     }
 

@@ -44,8 +44,15 @@ use crate::error::{KernelError, Result};
 /// Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 /// like `reasoning_content` that `async-openai` doesn't expose.
 pub struct OpenAiDriver {
-    client:        reqwest::Client,
-    config_source: OpenAiDriverConfigSource,
+    /// Client for non-streaming requests (with total timeout).
+    client:           reqwest::Client,
+    /// Client for streaming requests (no total timeout — SSE idle timeout
+    /// handles stall detection instead).
+    stream_client:    reqwest::Client,
+    config_source:    OpenAiDriverConfigSource,
+    /// Per-event idle timeout for SSE streaming. Defaults to
+    /// [`Self::DEFAULT_SSE_IDLE_TIMEOUT`].
+    sse_idle_timeout: Duration,
 }
 
 enum OpenAiDriverConfigSource {
@@ -65,9 +72,6 @@ struct ResolvedConfig {
     api_key:  String,
 }
 
-/// SSE idle timeout — if no event is received within this duration, abort.
-const SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
-
 /// Maximum number of retries for rate-limited (429) requests.
 const RATE_LIMIT_MAX_RETRIES: u32 = 4;
 /// Initial backoff delay for rate-limited retries.
@@ -76,7 +80,12 @@ const RATE_LIMIT_INITIAL_DELAY: Duration = Duration::from_secs(5);
 const RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
 
 impl OpenAiDriver {
-    /// Build a reqwest client with connect and overall read timeouts.
+    /// Default SSE idle timeout (45 s). If no SSE event arrives within this
+    /// duration the stream is aborted and a retryable error returned.
+    pub const DEFAULT_SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+    /// Build a reqwest client for non-streaming requests (5-minute total
+    /// timeout).
     fn build_http_client() -> reqwest::Client {
         reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -85,14 +94,37 @@ impl OpenAiDriver {
             .expect("failed to build HTTP client")
     }
 
+    /// Build a reqwest client for streaming requests.
+    ///
+    /// No total timeout — the per-event SSE idle timeout handles stall
+    /// detection. A global timeout would incorrectly kill long-running
+    /// streams with extended thinking or large context.
+    fn build_stream_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("failed to build streaming HTTP client")
+    }
+
     /// Create a new driver targeting the given API base URL.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_idle_timeout(base_url, api_key, Self::DEFAULT_SSE_IDLE_TIMEOUT)
+    }
+
+    /// Create a new driver with an explicit SSE idle timeout.
+    pub fn with_idle_timeout(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        sse_idle_timeout: Duration,
+    ) -> Self {
         Self {
-            client:        Self::build_http_client(),
+            client: Self::build_http_client(),
+            stream_client: Self::build_stream_client(),
             config_source: OpenAiDriverConfigSource::Static {
                 base_url: base_url.into(),
                 api_key:  api_key.into(),
             },
+            sse_idle_timeout,
         }
     }
 
@@ -104,13 +136,16 @@ impl OpenAiDriver {
     pub fn from_settings(
         settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         provider_name: impl Into<String>,
+        sse_idle_timeout: Duration,
     ) -> Self {
         Self {
-            client:        Self::build_http_client(),
+            client: Self::build_http_client(),
+            stream_client: Self::build_stream_client(),
             config_source: OpenAiDriverConfigSource::SettingsBacked {
                 settings,
                 provider_name: provider_name.into(),
             },
+            sse_idle_timeout,
         }
     }
 
@@ -212,10 +247,16 @@ impl OpenAiDriver {
         );
 
         let mut attempt = 0u32;
+        // Use stream_client for streaming (no total timeout; SSE idle timeout
+        // handles stalls) and client for non-streaming (5-min hard cap).
+        let http = if stream {
+            &self.stream_client
+        } else {
+            &self.client
+        };
 
         loop {
-            let response = self
-                .client
+            let response = http
                 .post(format!("{}/chat/completions", config.base_url))
                 .bearer_auth(&config.api_key)
                 .json(&body)
@@ -348,7 +389,8 @@ impl LlmDriver for OpenAiDriver {
                 break;
             }
 
-            let maybe_event = tokio::time::timeout(SSE_IDLE_TIMEOUT, event_stream.next()).await;
+            let maybe_event =
+                tokio::time::timeout(self.sse_idle_timeout, event_stream.next()).await;
 
             match maybe_event {
                 Ok(Some(event_result)) => {
@@ -368,7 +410,7 @@ impl LlmDriver for OpenAiDriver {
                 Ok(None) => break,
                 Err(_elapsed) => {
                     tracing::warn!(
-                        timeout_secs = SSE_IDLE_TIMEOUT.as_secs(),
+                        timeout_secs = self.sse_idle_timeout.as_secs(),
                         "SSE stream idle timeout — no event received, aborting stream"
                     );
                     return Err(KernelError::RetryableServer {
