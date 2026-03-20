@@ -20,6 +20,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// Configuration for the proactive signal filter.
 ///
@@ -55,17 +56,35 @@ pub struct ProactiveConfig {
 
     /// IANA timezone for time calculations (e.g. `"Asia/Shanghai"`).
     pub timezone: String,
+
+    /// Idle threshold in seconds — sessions idle beyond this duration
+    /// trigger a `SessionIdle` signal.
+    pub idle_threshold_secs: u64,
 }
 
 impl ProactiveConfig {
     /// Parse `work_hours_start` as a `jiff::civil::Time`.
     pub fn parsed_work_start(&self) -> Option<jiff::civil::Time> {
-        parse_time_str(&self.work_hours_start)
+        let result = parse_time_str(&self.work_hours_start);
+        if result.is_none() {
+            warn!(
+                value = self.work_hours_start.as_str(),
+                "proactive config: invalid work_hours_start, time events disabled"
+            );
+        }
+        result
     }
 
     /// Parse `work_hours_end` as a `jiff::civil::Time`.
     pub fn parsed_work_end(&self) -> Option<jiff::civil::Time> {
-        parse_time_str(&self.work_hours_end)
+        let result = parse_time_str(&self.work_hours_end);
+        if result.is_none() {
+            warn!(
+                value = self.work_hours_end.as_str(),
+                "proactive config: invalid work_hours_end, time events disabled"
+            );
+        }
+        result
     }
 
     /// Parse quiet hours start as a `jiff::civil::Time`.
@@ -84,7 +103,14 @@ impl ProactiveConfig {
 
     /// Parse the configured timezone as a `jiff::tz::TimeZone`.
     pub fn parsed_timezone(&self) -> Option<jiff::tz::TimeZone> {
-        jiff::tz::TimeZone::get(&self.timezone).ok()
+        let result = jiff::tz::TimeZone::get(&self.timezone).ok();
+        if result.is_none() {
+            warn!(
+                value = self.timezone.as_str(),
+                "proactive config: invalid timezone, proactive features disabled"
+            );
+        }
+        result
     }
 }
 
@@ -139,6 +165,7 @@ max_hourly: 5
 work_hours_start: "09:00"
 work_hours_end: "18:00"
 timezone: "Asia/Shanghai"
+idle_threshold_secs: 1800
 "#;
         let config: ProactiveConfig = serde_yaml::from_str(yaml).expect("should parse");
         assert_eq!(config.max_hourly, 5);

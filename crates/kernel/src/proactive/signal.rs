@@ -60,4 +60,17 @@ impl ProactiveSignal {
             Self::DailySummary => "daily_summary",
         }
     }
+
+    /// Returns a cooldown key that distinguishes per-session signals.
+    ///
+    /// For session-scoped signals like `SessionIdle`, the key includes
+    /// the session identifier so that cooldowns apply per-session rather
+    /// than globally blocking all sessions of the same kind.
+    pub fn cooldown_key(&self, session_key: Option<&str>) -> String {
+        match (self, session_key) {
+            (Self::SessionIdle { .. }, Some(sk)) => format!("session_idle:{sk}"),
+            (Self::SessionCompleted { .. }, Some(sk)) => format!("session_completed:{sk}"),
+            _ => self.kind_name().to_string(),
+        }
+    }
 }

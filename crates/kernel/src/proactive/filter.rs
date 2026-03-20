@@ -53,9 +53,10 @@ impl ProactiveFilter {
     /// Check whether a signal should pass through all filter rules.
     ///
     /// Returns `true` if the signal passes quiet hours, cooldown, and
-    /// rate limit checks. Does NOT update internal state — call
-    /// [`Self::record_fired`] after successfully emitting the signal.
-    pub fn should_pass(&mut self, signal: &ProactiveSignal) -> bool {
+    /// rate limit checks. Note: the hourly window may be reset as a
+    /// side effect. Call [`Self::record_fired`] after successfully
+    /// emitting the signal.
+    pub fn should_pass(&mut self, signal: &ProactiveSignal, session_key: Option<&str>) -> bool {
         let now = Timestamp::now();
 
         // 1. Quiet hours check.
@@ -67,10 +68,10 @@ impl ProactiveFilter {
             return false;
         }
 
-        // 2. Per-kind cooldown dedup.
-        let kind = signal.kind_name();
-        if let Some(cooldown) = self.config.cooldowns.get(kind) {
-            if let Some(last) = self.last_fired.get(kind) {
+        // 2. Per-kind cooldown dedup (session-scoped for session signals).
+        let cooldown_key = signal.cooldown_key(session_key);
+        if let Some(cooldown) = self.config.cooldowns.get(signal.kind_name()) {
+            if let Some(last) = self.last_fired.get(&cooldown_key) {
                 let elapsed_secs = now
                     .since(*last)
                     .ok()
@@ -78,7 +79,8 @@ impl ProactiveFilter {
                     .unwrap_or(0.0);
                 if Duration::from_secs_f64(elapsed_secs) < *cooldown {
                     debug!(
-                        kind,
+                        kind = signal.kind_name(),
+                        cooldown_key = cooldown_key.as_str(),
                         elapsed_secs = elapsed_secs as u64,
                         cooldown_secs = cooldown.as_secs(),
                         "proactive filter: suppressed by cooldown"
@@ -92,7 +94,7 @@ impl ProactiveFilter {
         self.maybe_reset_hourly_window(now);
         if self.hourly_count >= self.config.max_hourly {
             debug!(
-                kind,
+                kind = signal.kind_name(),
                 hourly_count = self.hourly_count,
                 max_hourly = self.config.max_hourly,
                 "proactive filter: suppressed by hourly rate limit"
@@ -106,9 +108,10 @@ impl ProactiveFilter {
     /// Record that a signal was successfully emitted.
     ///
     /// Updates the cooldown timestamp and hourly counter.
-    pub fn record_fired(&mut self, signal: &ProactiveSignal) {
+    pub fn record_fired(&mut self, signal: &ProactiveSignal, session_key: Option<&str>) {
         let now = Timestamp::now();
-        self.last_fired.insert(signal.kind_name().to_string(), now);
+        self.last_fired
+            .insert(signal.cooldown_key(session_key), now);
         self.maybe_reset_hourly_window(now);
         self.hourly_count += 1;
     }
@@ -170,6 +173,7 @@ mod tests {
             .work_hours_start("09:00".to_string())
             .work_hours_end("18:00".to_string())
             .timezone("UTC".to_string())
+            .idle_threshold_secs(1800)
             .build()
     }
 
@@ -177,7 +181,7 @@ mod tests {
     fn pass_when_no_cooldown_hit() {
         let mut filter = ProactiveFilter::new(test_config());
         let signal = ProactiveSignal::MorningGreeting;
-        assert!(filter.should_pass(&signal));
+        assert!(filter.should_pass(&signal, None));
     }
 
     #[test]
@@ -187,24 +191,27 @@ mod tests {
 
         // Exhaust the hourly limit.
         for _ in 0..3 {
-            assert!(filter.should_pass(&signal));
-            filter.record_fired(&signal);
+            assert!(filter.should_pass(&signal, None));
+            filter.record_fired(&signal, None);
         }
         // Fourth should be blocked.
-        assert!(!filter.should_pass(&signal));
+        assert!(!filter.should_pass(&signal, None));
     }
 
     #[test]
-    fn cooldown_blocks_same_kind() {
+    fn cooldown_blocks_same_session_only() {
         let mut filter = ProactiveFilter::new(test_config());
         let signal = ProactiveSignal::SessionIdle {
             idle_duration: Duration::from_secs(600),
         };
 
-        assert!(filter.should_pass(&signal));
-        filter.record_fired(&signal);
+        assert!(filter.should_pass(&signal, Some("session-a")));
+        filter.record_fired(&signal, Some("session-a"));
 
-        // Same kind within cooldown should be blocked.
-        assert!(!filter.should_pass(&signal));
+        // Same session within cooldown should be blocked.
+        assert!(!filter.should_pass(&signal, Some("session-a")));
+
+        // Different session should still pass.
+        assert!(filter.should_pass(&signal, Some("session-b")));
     }
 }

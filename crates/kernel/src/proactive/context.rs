@@ -58,19 +58,19 @@ pub fn build_context_pack(
             let mins = idle_duration.as_secs() / 60;
             sections
                 .last_mut()
-                .unwrap()
+                .expect("sections is non-empty")
                 .push_str(&format!("\nidle_duration: {}m", mins,));
         }
         ProactiveSignal::TaskFailed { error } => {
             sections
                 .last_mut()
-                .unwrap()
+                .expect("sections is non-empty")
                 .push_str(&format!("\nerror: {}", truncate(error, 200),));
         }
         ProactiveSignal::SessionCompleted { summary } => {
             sections
                 .last_mut()
-                .unwrap()
+                .expect("sections is non-empty")
                 .push_str(&format!("\nsummary: {}", truncate(summary, 200),));
         }
         ProactiveSignal::MorningGreeting | ProactiveSignal::DailySummary => {
