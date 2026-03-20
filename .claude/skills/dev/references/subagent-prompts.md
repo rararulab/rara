@@ -17,6 +17,9 @@ You are implementing a feature in a Rust project. Work ONLY inside the worktree 
 GitHub issue #{ISSUE} — post progress comments via:
 gh issue comment {ISSUE} --body '<summary of what you did>'
 
+## References
+- Design doc (if present): `docs/plans/YYYY-MM-DD-*-design.md` — read it for context and design decisions
+
 ## Rules
 - Follow CLAUDE.md conventions (snafu errors, bon builders, functional style)
 - Run `cargo check -p {CRATE}` after each significant change

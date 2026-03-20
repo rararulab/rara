@@ -72,8 +72,6 @@ Dispatch a **general-purpose subagent** to review the design. Load `references/s
 **Post review result to issue** as a "Plan Review" comment.
 **If clean:** proceed to Step 1.4.
 
-If `code-review-expert` skill is unavailable, perform review inline using the same 6 dimensions from the template.
-
 ### Step 1.4: Present to User ⛔ USER CONFIRMATION REQUIRED
 
 Load `references/templates.md` and use the "Plan Summary" template.
