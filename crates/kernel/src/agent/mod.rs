@@ -161,10 +161,11 @@ pub struct SandboxConfig {
 pub enum ExecutionMode {
     /// Standard reactive agent loop (v1). The agent processes each message
     /// through the normal LLM → tool → LLM cycle.
+    #[default]
     Reactive,
     /// Plan-execute mode (v2). The agent first generates a plan, then
-    /// executes each step with verification.
-    #[default]
+    /// executes each step with verification. Activated via `/plan` prefix
+    /// or `default_execution_mode: plan` in agent manifest.
     Plan,
 }
 
