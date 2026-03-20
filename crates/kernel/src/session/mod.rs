@@ -333,6 +333,10 @@ pub struct Session {
     /// Telegram chat). Used as a fallback for reply routing when the
     /// triggering message is synthetic (no platform origin).
     pub origin_endpoint: Option<Endpoint>,
+    /// Deferred tools activated via `discover-tools` during this session.
+    /// Persists across turns so the LLM does not need to re-discover tools
+    /// after each user message.
+    pub activated_deferred: std::collections::HashSet<String>,
     /// Per-session semaphore limiting concurrent child sessions.
     pub child_semaphore: Arc<Semaphore>,
     /// Permit from the *parent*'s `child_semaphore`.

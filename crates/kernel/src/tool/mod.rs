@@ -98,6 +98,26 @@ impl From<serde_json::Value> for ToolOutput {
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
+/// Typed result returned by the `discover-tools` tool.
+///
+/// Used by the agent loop to extract activated tool names without fragile
+/// JSON path traversal.
+#[derive(Debug, serde::Deserialize)]
+pub struct DiscoverToolsResult {
+    /// `"activated"` or `"no_matches"`.
+    pub status: String,
+    /// Tool entries that were discovered (empty on no_matches).
+    #[serde(default)]
+    pub tools:  Vec<DiscoveredToolEntry>,
+}
+
+/// A single tool entry in a [`DiscoverToolsResult`].
+#[derive(Debug, serde::Deserialize)]
+pub struct DiscoveredToolEntry {
+    /// The tool name used for activation.
+    pub name: String,
+}
+
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).
 /// Implementors are called on every `GetToolRegistry` syscall to inject
 /// dynamic tools into the registry.
@@ -673,5 +693,41 @@ mod tests {
         // Deferred catalog excludes activated tools
         let catalog = reg.deferred_catalog(&activated);
         assert!(catalog.is_empty());
+    }
+
+    #[test]
+    fn discover_tools_result_deserializes_activated() {
+        let json = serde_json::json!({
+            "status": "activated",
+            "tools": [
+                {"name": "send-email", "description": "Send email"},
+                {"name": "send-image", "description": "Send image"},
+            ],
+            "message": "Activated 2 tool(s)."
+        });
+        let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
+        assert_eq!(result.status, "activated");
+        assert_eq!(result.tools.len(), 2);
+        assert_eq!(result.tools[0].name, "send-email");
+        assert_eq!(result.tools[1].name, "send-image");
+    }
+
+    #[test]
+    fn discover_tools_result_deserializes_no_matches() {
+        let json = serde_json::json!({
+            "status": "no_matches",
+            "tools": [],
+            "message": "No deferred tools match 'xyz'."
+        });
+        let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
+        assert_eq!(result.status, "no_matches");
+        assert!(result.tools.is_empty());
+    }
+
+    #[test]
+    fn discover_tools_result_defaults_tools_when_missing() {
+        let json = serde_json::json!({"status": "no_matches", "message": "nothing"});
+        let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
+        assert!(result.tools.is_empty());
     }
 }

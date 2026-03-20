@@ -970,10 +970,12 @@ pub(crate) async fn run_agent_loop(
     let input_text = user_text.clone();
     let tool_execution_timeout = handle.config().tool_execution_timeout;
 
-    // Deferred tool activation state — tracks which deferred tools the LLM
-    // has discovered via `discover-tools` during this turn.
-    let mut activated_deferred: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    // Deferred tool activation state — persists across turns within the same
+    // session so the LLM does not need to re-discover tools after each message.
+    let mut activated_deferred: std::collections::HashSet<String> = handle
+        .process_table()
+        .with(&session_key, |s| s.activated_deferred.clone())
+        .unwrap_or_default();
 
     // Check model tool support
     let mut tool_defs = if tools.is_empty() {
@@ -2114,18 +2116,21 @@ pub(crate) async fn run_agent_loop(
             if tool_names.iter().any(|n| n == "discover-tools") {
                 for (name, result) in tool_names.iter().zip(results_json.iter()) {
                     if name == "discover-tools" {
-                        if let Some(tools_arr) = result.get("tools").and_then(|v| v.as_array()) {
-                            for tool_val in tools_arr {
-                                if let Some(tool_name) =
-                                    tool_val.get("name").and_then(|v| v.as_str())
-                                {
-                                    activated_deferred.insert(tool_name.to_string());
-                                }
+                        if let Ok(parsed) = serde_json::from_value::<crate::tool::DiscoverToolsResult>(
+                            result.clone(),
+                        ) {
+                            for entry in &parsed.tools {
+                                activated_deferred.insert(entry.name.clone());
                             }
                         }
                     }
                 }
                 tool_defs = tools.to_llm_tool_definitions_active(&activated_deferred);
+                // Persist to session so activations survive across turns.
+                let snapshot = activated_deferred.clone();
+                handle.process_table().with_mut(&session_key, |s| {
+                    s.activated_deferred = snapshot;
+                });
             }
             // Reset session-length counter when the agent creates an anchor.
             // Detected via result payload rather than hardcoded tool names so

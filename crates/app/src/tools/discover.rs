@@ -75,11 +75,20 @@ impl ToolExecute for DiscoverToolsTool {
             .collect();
 
         if matches.is_empty() {
+            // Build category hints dynamically from actual tool names.
+            let mut categories: Vec<&str> = catalog
+                .iter()
+                .filter_map(|(name, _)| name.split('-').next())
+                .collect();
+            categories.sort_unstable();
+            categories.dedup();
+            categories.truncate(10);
+            let hint = categories.join(", ");
             return Ok(serde_json::json!({
                 "status": "no_matches",
+                "tools": [],
                 "message": format!(
-                    "No deferred tools match '{query}'. Available categories: email, \
-                     skill, dock, acp, composio, settings"
+                    "No deferred tools match '{query}'. Try one of: {hint}"
                 ),
             }));
         }
