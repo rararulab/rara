@@ -231,9 +231,11 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
                 let mut buf = buffer.lock().await;
                 let remaining = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
                 if remaining == 0 {
-                    // Buffer full — keep reading to drain the pipe but discard
-                    // data. Notify the stream once so the user knows output
-                    // continues but is no longer displayed.
+                    // Buffer full — drop lock before emitting to avoid holding
+                    // it during broadcast.
+                    drop(buf);
+                    // Notify the stream once so the user knows output continues
+                    // but is no longer displayed.
                     if !truncation_notified {
                         if let Some((ref handle, ref tool_call_id)) = stream_ctx {
                             // Flush any pending text before the truncation notice.
@@ -275,7 +277,7 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
                         pending_text.push_str(text);
                     }
                     // Keep incomplete tail bytes for the next iteration.
-                    utf8_tail = utf8_tail[valid_up_to..].to_vec();
+                    utf8_tail.drain(..valid_up_to);
 
                     if pending_text.len() >= STREAM_CHUNK_MIN_BYTES
                         || last_emit.elapsed() >= STREAM_FLUSH_INTERVAL
