@@ -454,6 +454,10 @@ impl Kernel {
         let mita_interval = self.config.mita_heartbeat_interval;
         let mut next_mita = mita_interval.map(|d| tokio::time::Instant::now() + d);
 
+        // Proactive time events (morning greeting / daily summary).
+        let mut next_proactive_time: Option<(tokio::time::Instant, bool)> =
+            self.compute_next_proactive_time_event();
+
         loop {
             // Compute next wake time for the unified scheduler (processor 0 only).
             let scheduler_sleep = if id == 0 {
@@ -477,8 +481,10 @@ impl Kernel {
                         tokio::time::Instant::now() + clamped
                     });
 
-                // Find the earliest deadline among: mita heartbeat, next scheduled job.
-                let earliest = [next_mita, next_job_instant]
+                // Find the earliest deadline among: mita heartbeat, next scheduled
+                // job, and next proactive time event.
+                let next_proactive_instant = next_proactive_time.map(|(inst, _)| inst);
+                let earliest = [next_mita, next_job_instant, next_proactive_instant]
                     .into_iter()
                     .flatten()
                     .min()
@@ -520,6 +526,19 @@ impl Kernel {
                                 error!(%e, "failed to push MitaHeartbeat");
                             }
                             next_mita = mita_interval.map(|d| now + d);
+                        }
+                    }
+
+                    // Check if a proactive time event is due.
+                    if let Some((proactive_at, is_morning)) = next_proactive_time {
+                        if now >= proactive_at {
+                            let signal = if is_morning {
+                                crate::proactive::ProactiveSignal::MorningGreeting
+                            } else {
+                                crate::proactive::ProactiveSignal::DailySummary
+                            };
+                            self.try_emit_proactive_signal(signal);
+                            next_proactive_time = self.compute_next_proactive_time_event();
                         }
                     }
 
@@ -705,6 +724,9 @@ impl Kernel {
                 // Periodic idle check — handled by session table reaping.
                 self.process_table
                     .reap_terminal(std::time::Duration::from_secs(300));
+
+                // Emit SessionIdle signals for sessions idle beyond threshold.
+                self.emit_idle_signals();
             }
             KernelEvent::Shutdown => {
                 info!("shutdown event received");
@@ -1467,6 +1489,10 @@ impl Kernel {
                     error = %e,
                     "failed to spawn scheduled job agent"
                 );
+                // Emit TaskFailed proactive signal so Mita is aware.
+                self.try_emit_proactive_signal(crate::proactive::ProactiveSignal::TaskFailed {
+                    error: format!("job {job_id}: {e}"),
+                });
             }
         }
     }
@@ -1733,6 +1759,120 @@ impl Kernel {
         );
 
         self.deliver_to_session(session_key, msg).await;
+    }
+
+    /// Compute the next proactive time event (morning greeting or daily
+    /// summary) based on the configured work hours and timezone.
+    ///
+    /// Returns `Some((instant, is_morning))` where `is_morning` is `true`
+    /// for a morning greeting and `false` for a daily summary. Returns
+    /// `None` when proactive config is absent or work hours are invalid.
+    fn compute_next_proactive_time_event(&self) -> Option<(tokio::time::Instant, bool)> {
+        let config = self.config.proactive.as_ref()?;
+        let tz = config.parsed_timezone()?;
+        let work_start = config.parsed_work_start()?;
+        let work_end = config.parsed_work_end()?;
+
+        let now = jiff::Timestamp::now();
+        let local_now = now.to_zoned(tz.clone());
+        let today = local_now.date();
+        let current_time = local_now.time();
+
+        // Determine the next event: whichever of morning/daily is soonest.
+        let (target_time, is_morning) = if current_time < work_start {
+            // Before work hours — next event is morning greeting today.
+            (work_start, true)
+        } else if current_time < work_end {
+            // During work hours — next event is daily summary today.
+            (work_end, false)
+        } else {
+            // After work hours — next event is morning greeting tomorrow.
+            (work_start, true)
+        };
+
+        // Build the target zoned datetime.
+        let target_date = if !is_morning || current_time < work_start {
+            today
+        } else {
+            // Tomorrow for morning greeting when we're past work_end.
+            today.tomorrow().ok()?
+        };
+
+        let target_dt = target_date
+            .to_zoned(tz)
+            .ok()
+            .and_then(|zdt| zdt.with().time(target_time).build().ok())?;
+        let target_ts = target_dt.timestamp();
+        let delta = target_ts.since(now).ok()?;
+        let delta_secs = delta.total(jiff::Unit::Second).ok()?;
+        if delta_secs <= 0.0 {
+            return None;
+        }
+
+        let instant = tokio::time::Instant::now() + Duration::from_secs_f64(delta_secs);
+        Some((instant, is_morning))
+    }
+
+    /// Emit `SessionIdle` signals for sessions that have been idle beyond
+    /// a reasonable threshold (30 minutes).
+    fn emit_idle_signals(&self) {
+        let idle_threshold = Duration::from_secs(30 * 60);
+        let now = jiff::Timestamp::now();
+
+        for stats in self.process_table.list() {
+            // Only check Ready sessions (Active means currently running).
+            if stats.state != SessionState::Ready {
+                continue;
+            }
+            // Skip the Mita session itself.
+            if stats.session_key == crate::session::SessionKey::deterministic("mita") {
+                continue;
+            }
+
+            let idle_duration = stats
+                .last_activity
+                .and_then(|la| {
+                    now.since(la)
+                        .ok()
+                        .and_then(|s| s.total(jiff::Unit::Second).ok())
+                })
+                .map(|secs| Duration::from_secs_f64(secs))
+                .unwrap_or(Duration::ZERO);
+
+            if idle_duration >= idle_threshold {
+                let signal = crate::proactive::ProactiveSignal::SessionIdle { idle_duration };
+                self.try_emit_proactive_signal(signal);
+            }
+        }
+    }
+
+    /// Try to emit a proactive signal through the filter.
+    ///
+    /// Checks the proactive filter; if the signal passes, pushes a
+    /// `ProactiveSignal` event into the kernel event queue and records
+    /// the fire.
+    fn try_emit_proactive_signal(&self, signal: crate::proactive::ProactiveSignal) {
+        let mut guard = self
+            .proactive_filter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let filter = match guard.as_mut() {
+            Some(f) => f,
+            None => return, // Proactive disabled.
+        };
+
+        if !filter.should_pass(&signal) {
+            return;
+        }
+        filter.record_fired(&signal);
+
+        if let Err(e) = self
+            .event_queue
+            .try_push(KernelEventEnvelope::proactive_signal(signal))
+        {
+            error!(%e, "failed to push ProactiveSignal event");
+        }
     }
 
     /// Deliver a message to a live process: buffer if the process is paused
@@ -2683,6 +2823,21 @@ impl Kernel {
             .unwrap_or(false);
 
         if has_result_tx {
+            // Worker/child session completed — emit SessionCompleted signal.
+            if !_turn_failed {
+                let summary = self
+                    .process_table
+                    .with(&session_key, |p| {
+                        p.result
+                            .as_ref()
+                            .map(|r| r.output.chars().take(100).collect::<String>())
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                self.try_emit_proactive_signal(
+                    crate::proactive::ProactiveSignal::SessionCompleted { summary },
+                );
+            }
             self.cleanup_process(session_key).await;
             return;
         }

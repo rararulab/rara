@@ -113,6 +113,11 @@ pub struct MitaConfig {
         serialize_with = "humantime_serde::serialize"
     )]
     pub heartbeat_interval: Duration,
+
+    /// Proactive signal filter configuration. When absent, event-driven
+    /// proactive signals are disabled (heartbeat-only mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proactive: Option<rara_kernel::proactive::ProactiveConfig>,
 }
 
 /// Configuration for the gateway supervisor.
@@ -347,6 +352,7 @@ pub async fn start_with_options(
 
     let kernel_config = rara_kernel::kernel::KernelConfig {
         mita_heartbeat_interval: Some(config.mita.heartbeat_interval),
+        proactive: config.mita.proactive.clone(),
         context_folding: config.context_folding.clone(),
         ..Default::default()
     };
