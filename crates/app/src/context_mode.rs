@@ -44,8 +44,10 @@ const CONTEXT_MODE_PROMPT_FRAGMENT: &str =
      indexed.\nWhen you see `[INDEXED]` in a tool result, the output was captured successfully \
      and stored in a searchable index.\n\nIMPORTANT: Do NOT re-invoke the same tool to get the \
      \"real\" content — the indexed result IS the real content, just compressed. Instead, \
-     retrieve specific parts with:\n- Call tool: ctx_search(query=\"keyword or phrase\")\n\nUse \
-     targeted queries for best results. Multiple searches with different keywords are fine.";
+     retrieve specific parts with:\n- Call tool: ctx_search(queries=[\"keyword or \
+     phrase\"])\n\nThe `queries` parameter is an array — batch all your questions in one call. \
+     Use targeted queries (2-4 specific terms) for best results. Do NOT use the `tape` tool's \
+     search action for indexed content retrieval — always use `ctx_search`.";
 
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -260,8 +262,8 @@ fn build_summary(tool_name: &str, json_str: &str) -> String {
     let structure = extract_structure_preview(json_str);
     format!(
         "[INDEXED] {tool_name} output ({bytes} bytes).\nStructure: {structure}\nTo retrieve \
-         details, call tool: ctx_search(query=\"<your query>\")\nDo NOT re-call {tool_name} — use \
-         ctx_search instead."
+         details, call tool: ctx_search(queries=[\"<your query>\"])\nDo NOT re-call {tool_name} — \
+         use ctx_search instead."
     )
 }
 
@@ -299,6 +301,6 @@ mod tests {
         let json = r#"{"data":[1,2,3]}"#;
         let summary = build_summary("test-tool", json);
         assert!(summary.contains("[INDEXED]"));
-        assert!(summary.contains("ctx_search"));
+        assert!(summary.contains("ctx_search(queries="));
     }
 }
