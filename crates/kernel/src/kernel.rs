@@ -233,6 +233,8 @@ impl Kernel {
                 rara_paths::config_dir().clone(),
                 rara_paths::data_dir().clone(),
                 rara_paths::temp_dir().clone(),
+                rara_paths::logs_dir().clone(),
+                rara_paths::home_dir().join(".claude"),
             ],
         ));
 
