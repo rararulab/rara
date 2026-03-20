@@ -100,22 +100,27 @@ pub type AgentToolRef = Arc<dyn AgentTool>;
 
 /// Typed result returned by the `discover-tools` tool.
 ///
-/// Used by the agent loop to extract activated tool names without fragile
-/// JSON path traversal.
-#[derive(Debug, serde::Deserialize)]
+/// Shared between the tool implementation (serializes) and the agent loop
+/// (deserializes), so schema changes cause compile errors on both sides.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DiscoverToolsResult {
     /// `"activated"` or `"no_matches"`.
-    pub status: String,
+    pub status:  String,
     /// Tool entries that were discovered (empty on no_matches).
     #[serde(default)]
-    pub tools:  Vec<DiscoveredToolEntry>,
+    pub tools:   Vec<DiscoveredToolEntry>,
+    /// Human-readable message for the LLM.
+    pub message: String,
 }
 
 /// A single tool entry in a [`DiscoverToolsResult`].
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredToolEntry {
     /// The tool name used for activation.
-    pub name: String,
+    pub name:        String,
+    /// One-line description of the tool.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).

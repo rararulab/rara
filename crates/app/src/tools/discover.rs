@@ -18,7 +18,9 @@
 //! activation (adding names to the `activated_deferred` set) happens in the
 //! agent loop after this tool returns.
 
-use rara_kernel::tool::{ToolContext, ToolExecute, ToolRegistryRef};
+use rara_kernel::tool::{
+    DiscoverToolsResult, DiscoveredToolEntry, ToolContext, ToolExecute, ToolRegistryRef,
+};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -75,38 +77,36 @@ impl ToolExecute for DiscoverToolsTool {
             .collect();
 
         if matches.is_empty() {
-            // Build category hints dynamically from actual tool names.
+            // Extract category prefixes using any of `-`, `.`, `_` as separators.
             let mut categories: Vec<&str> = catalog
                 .iter()
-                .filter_map(|(name, _)| name.split('-').next())
+                .filter_map(|(name, _)| name.find(['-', '.', '_']).map(|pos| &name[..pos]))
                 .collect();
             categories.sort_unstable();
             categories.dedup();
             categories.truncate(10);
             let hint = categories.join(", ");
-            return Ok(serde_json::json!({
-                "status": "no_matches",
-                "tools": [],
-                "message": format!(
-                    "No deferred tools match '{query}'. Try one of: {hint}"
-                ),
-            }));
+            let result = DiscoverToolsResult {
+                status:  "no_matches".to_string(),
+                tools:   vec![],
+                message: format!("No deferred tools match '{query}'. Try one of: {hint}"),
+            };
+            return serde_json::to_value(&result).map_err(Into::into);
         }
 
-        let activated: Vec<serde_json::Value> = matches
+        let tools: Vec<DiscoveredToolEntry> = matches
             .iter()
-            .map(|(name, desc)| {
-                serde_json::json!({
-                    "name": name,
-                    "description": desc,
-                })
+            .map(|(name, desc)| DiscoveredToolEntry {
+                name:        name.to_string(),
+                description: desc.to_string(),
             })
             .collect();
-
-        Ok(serde_json::json!({
-            "status": "activated",
-            "tools": activated,
-            "message": format!("Activated {} tool(s). They are now available for use.", activated.len()),
-        }))
+        let count = tools.len();
+        let result = DiscoverToolsResult {
+            status: "activated".to_string(),
+            tools,
+            message: format!("Activated {count} tool(s). They are now available for use."),
+        };
+        serde_json::to_value(&result).map_err(Into::into)
     }
 }
