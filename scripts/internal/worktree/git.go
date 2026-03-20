@@ -4,10 +4,12 @@ package worktree
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Status describes the state of a worktree entry.
@@ -36,13 +38,15 @@ func (s Status) String() string {
 
 // Entry holds parsed porcelain output for a single git worktree.
 type Entry struct {
-	Path      string
-	Branch    string // empty for detached HEAD
-	IsMain    bool
-	Prunable  bool
-	Locked    bool   // worktree has a lock file
-	IsCurrent bool   // worktree is the current working directory
-	Status    Status
+	Path       string
+	Branch     string // empty for detached HEAD
+	IsMain     bool
+	Prunable   bool
+	Locked     bool      // worktree has a lock file
+	IsCurrent  bool      // worktree is the current working directory
+	Status     Status
+	LastActive time.Time // last modification time of the worktree directory
+	DiskSize   int64     // total disk usage in bytes
 }
 
 // Protected returns true if the worktree cannot be deleted.
@@ -75,6 +79,23 @@ func List() ([]Entry, error) {
 	var cur Entry
 	prunable := false
 	locked := false
+
+	// finalizeEntry fills computed fields and returns the entry ready for collection.
+	finalizeEntry := func(e Entry) Entry {
+		e.IsMain = e.Path == mainPath
+		e.Prunable = prunable
+		e.Locked = locked
+		e.IsCurrent = isSameOrChild(cwd, e.Path)
+		e.Status = classifyEntry(e, merged)
+		// Populate LastActive for non-prunable entries with existing paths
+		if !e.Prunable {
+			if _, err := os.Stat(e.Path); err == nil {
+				e.LastActive = lastActiveTime(e.Path)
+			}
+		}
+		return e
+	}
+
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -90,26 +111,94 @@ func List() ([]Entry, error) {
 		case line == "locked", strings.HasPrefix(line, "locked "):
 			locked = true
 		case line == "":
-			cur.IsMain = cur.Path == mainPath
-			cur.Prunable = prunable
-			cur.Locked = locked
-			cur.IsCurrent = isSameOrChild(cwd, cur.Path)
-			cur.Status = classifyEntry(cur, merged)
 			if cur.Path != "" {
-				entries = append(entries, cur)
+				entries = append(entries, finalizeEntry(cur))
 			}
 			cur = Entry{}
 		}
 	}
 	if cur.Path != "" {
-		cur.IsMain = cur.Path == mainPath
-		cur.Prunable = prunable
-		cur.Locked = locked
-		cur.IsCurrent = isSameOrChild(cwd, cur.Path)
-		cur.Status = classifyEntry(cur, merged)
-		entries = append(entries, cur)
+		entries = append(entries, finalizeEntry(cur))
 	}
 	return entries, nil
+}
+
+// dirSize computes total disk usage of a directory tree in bytes.
+// Returns 0 on any error.
+func dirSize(path string) int64 {
+	var total int64
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if !d.IsDir() {
+			if info, err := d.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total
+}
+
+// lastActiveTime returns the most recent modification time among key git files
+// in the worktree, providing a meaningful "last active" signal.
+// In linked worktrees, .git is a file containing "gitdir: <path>" — this function
+// resolves the actual git directory to find HEAD and index files.
+// Falls back to the directory mtime if no git files are found.
+func lastActiveTime(path string) time.Time {
+	var latest time.Time
+
+	// Resolve the actual git directory (handles both main checkout and linked worktrees)
+	gitDir := resolveGitDir(path)
+	candidates := []string{
+		filepath.Join(gitDir, "HEAD"),
+		filepath.Join(gitDir, "index"),
+		filepath.Join(path, ".git"), // mtime of .git itself (file or dir)
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil {
+			if info.ModTime().After(latest) {
+				latest = info.ModTime()
+			}
+		}
+	}
+	// Fall back to directory mtime
+	if latest.IsZero() {
+		if info, err := os.Stat(path); err == nil {
+			latest = info.ModTime()
+		}
+	}
+	return latest
+}
+
+// resolveGitDir returns the path to the actual git directory for a worktree.
+// For the main checkout, this is <path>/.git. For linked worktrees, .git is a
+// file containing "gitdir: <path>" pointing to the real git metadata.
+func resolveGitDir(worktreePath string) string {
+	dotGit := filepath.Join(worktreePath, ".git")
+	info, err := os.Stat(dotGit)
+	if err != nil {
+		return dotGit
+	}
+	// Main checkout: .git is a directory
+	if info.IsDir() {
+		return dotGit
+	}
+	// Linked worktree: .git is a file with "gitdir: <path>"
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return dotGit
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir: ") {
+		return dotGit
+	}
+	gitdir := strings.TrimPrefix(line, "gitdir: ")
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(worktreePath, gitdir)
+	}
+	return gitdir
 }
 
 func classifyEntry(e Entry, merged map[string]bool) Status {
