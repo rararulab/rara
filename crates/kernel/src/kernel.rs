@@ -1744,27 +1744,56 @@ impl Kernel {
             crate::proactive::ProactiveSignal::SessionIdle {
                 session_key,
                 idle_duration,
-            } => self
-                .process_table
-                .with(session_key, |p| crate::proactive::SessionContext {
-                    session_name:      Some(p.manifest.name.clone()),
-                    session_key:       session_key.to_string(),
-                    idle_since:        Some(format!("{}m ago", idle_duration.as_secs() / 60)),
-                    last_user_message: None,
-                }),
-            crate::proactive::ProactiveSignal::SessionCompleted { session_key, .. } => self
-                .process_table
-                .with(session_key, |p| crate::proactive::SessionContext {
-                    session_name:      Some(p.manifest.name.clone()),
-                    session_key:       session_key.to_string(),
-                    idle_since:        None,
-                    last_user_message: None,
-                }),
+            } => {
+                let last_msg = self.last_user_message_from_tape(session_key).await;
+                self.process_table
+                    .with(session_key, |p| crate::proactive::SessionContext {
+                        session_name:      Some(p.manifest.name.clone()),
+                        session_key:       session_key.to_string(),
+                        idle_since:        Some(format!("{}m ago", idle_duration.as_secs() / 60)),
+                        last_user_message: last_msg,
+                    })
+            }
+            crate::proactive::ProactiveSignal::SessionCompleted { session_key, .. } => {
+                let last_msg = self.last_user_message_from_tape(session_key).await;
+                self.process_table
+                    .with(session_key, |p| crate::proactive::SessionContext {
+                        session_name:      Some(p.manifest.name.clone()),
+                        session_key:       session_key.to_string(),
+                        idle_since:        None,
+                        last_user_message: last_msg,
+                    })
+            }
             _ => None,
         };
 
         let context = crate::proactive::build_context_pack(&signal, session_ctx.as_ref());
         self.deliver_proactive_to_mita(&context).await;
+    }
+
+    /// Read the last user message from a session's tape.
+    async fn last_user_message_from_tape(
+        &self,
+        session_key: &crate::session::SessionKey,
+    ) -> Option<String> {
+        let tape_name = session_key.to_string();
+        let entries = self
+            .tape_service
+            .from_last_anchor(&tape_name, Some(&[crate::memory::TapEntryKind::Message]))
+            .await
+            .ok()?;
+
+        // Walk backwards to find the last user message.
+        entries.iter().rev().find_map(|entry| {
+            let payload = entry.payload.as_object()?;
+            let role = payload.get("role")?.as_str()?;
+            if role == "user" {
+                let content = payload.get("content")?.as_str()?;
+                Some(content.chars().take(200).collect())
+            } else {
+                None
+            }
+        })
     }
 
     /// Deliver a proactive context pack to the Mita session.
