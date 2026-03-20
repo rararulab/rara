@@ -150,6 +150,9 @@ const MAX_REPLAN_ATTEMPTS: usize = 3;
 /// Max LLM iterations per worker step — keeps impossible tasks from burning
 /// time.
 const WORKER_MAX_ITERATIONS: usize = 12;
+/// Max cumulative LLM iterations across all plan steps. Prevents runaway
+/// execution when multiple steps each consume close to their per-step limit.
+const PLAN_MAX_TOTAL_ITERATIONS: usize = 50;
 /// Default timeout (seconds) for a worker step when not configured via
 /// `AgentManifest.worker_timeout_secs`. Prevents stuck workers from
 /// blocking the plan loop indefinitely.
@@ -340,6 +343,30 @@ pub(crate) async fn run_plan_loop(
     while step_idx < plan.steps.len() {
         if turn_cancel.is_cancelled() {
             warn!(session_key = %session_key, step = step_idx, "plan executor: cancelled");
+            break;
+        }
+
+        // Total iteration cap across all steps — prevents runaway execution.
+        if total_iterations >= PLAN_MAX_TOTAL_ITERATIONS {
+            warn!(
+                session_key = %session_key,
+                total_iterations,
+                step = step_idx,
+                "plan executor: total iteration cap reached, aborting"
+            );
+            stream_handle.emit(StreamEvent::PlanProgress {
+                current_step: step_idx,
+                total_steps:  plan.steps.len(),
+                step_status:  PlanStepStatus::Failed {
+                    reason: format!(
+                        "total iteration cap reached ({PLAN_MAX_TOTAL_ITERATIONS} iterations)"
+                    ),
+                },
+                status_text:  format!(
+                    "计划终止：累计迭代次数已达上限（{PLAN_MAX_TOTAL_ITERATIONS}）"
+                ),
+            });
+            plan.status = PlanStatus::Failed;
             break;
         }
 

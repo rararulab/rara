@@ -1733,7 +1733,7 @@ impl Kernel {
             return mode;
         }
 
-        // Default: plan-execute (v2), consistent with ExecutionMode::default().
+        // Default: reactive (v1), consistent with ExecutionMode::default().
         ExecutionMode::default()
     }
 
