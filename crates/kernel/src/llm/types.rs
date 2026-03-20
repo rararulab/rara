@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
+    Developer,
     User,
     Assistant,
     Tool,

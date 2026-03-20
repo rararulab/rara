@@ -405,7 +405,7 @@ fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
                 if let Ok(msg) = serde_json::from_value::<Message>(entry.payload.clone()) {
                     seq += 1;
                     let role = match msg.role {
-                        Role::System => MessageRole::System,
+                        Role::System | Role::Developer => MessageRole::System,
                         Role::User => MessageRole::User,
                         Role::Assistant => MessageRole::Assistant,
                         Role::Tool => MessageRole::Tool,

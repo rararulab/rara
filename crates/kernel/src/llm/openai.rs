@@ -538,9 +538,9 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 
 fn parse_stop_reason(reason: Option<&str>) -> StopReason {
     match reason {
-        Some("stop") => StopReason::Stop,
-        Some("tool_calls") => StopReason::ToolCalls,
-        Some("length") => StopReason::Length,
+        Some("stop" | "end_turn") => StopReason::Stop,
+        Some("tool_calls" | "function_call" | "tool_use") => StopReason::ToolCalls,
+        Some("length" | "max_tokens") => StopReason::Length,
         Some("content_filter") => StopReason::ContentFilter,
         _ => StopReason::Stop,
     }
@@ -552,25 +552,27 @@ fn parse_stop_reason(reason: Option<&str>) -> StopReason {
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
-    model:               &'a str,
-    messages:            Vec<WireMessage<'a>>,
-    stream:              bool,
+    model:                 &'a str,
+    messages:              Vec<WireMessage<'a>>,
+    stream:                bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature:         Option<f32>,
+    temperature:           Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens:          Option<u32>,
+    max_tokens:            Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools:               Option<Vec<WireTool<'a>>>,
+    max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice:         Option<serde_json::Value>,
+    tools:                 Option<Vec<WireTool<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parallel_tool_calls: Option<bool>,
+    tool_choice:           Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    thinking:            Option<serde_json::Value>,
+    parallel_tool_calls:   Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options:      Option<WireStreamOptions>,
+    thinking:              Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    frequency_penalty:   Option<f32>,
+    stream_options:        Option<WireStreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty:     Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -615,7 +617,9 @@ struct WireImageUrl<'a> {
 #[derive(Serialize)]
 struct WireMessage<'a> {
     role:         &'static str,
-    content:      WireContent<'a>,
+    /// Per OpenAI spec, assistant messages with tool_calls may have `content:
+    /// null`.
+    content:      Option<WireContent<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls:   Option<Vec<WireToolCallRef<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -699,6 +703,7 @@ impl<'a> ChatRequest<'a> {
             stream,
             temperature: request.temperature,
             max_tokens: request.max_tokens,
+            max_completion_tokens: request.max_tokens,
             tools,
             tool_choice,
             parallel_tool_calls,
@@ -713,12 +718,13 @@ impl<'a> WireMessage<'a> {
     fn from_message(msg: &'a Message) -> Self {
         let role = match msg.role {
             Role::System => "system",
+            Role::Developer => "developer",
             Role::User => "user",
             Role::Assistant => "assistant",
             Role::Tool => "tool",
         };
 
-        let content = match &msg.content {
+        let wire_content = match &msg.content {
             MessageContent::Text(text) => WireContent::Text(text),
             MessageContent::Multimodal(blocks) => {
                 let parts = blocks
@@ -760,6 +766,17 @@ impl<'a> WireMessage<'a> {
                     })
                     .collect(),
             )
+        };
+
+        // Per OpenAI spec, assistant messages with tool_calls should have
+        // content: null when there is no meaningful text content.
+        let content = if msg.role == Role::Assistant
+            && tool_calls.is_some()
+            && msg.content.as_text().is_empty()
+        {
+            None
+        } else {
+            Some(wire_content)
         };
 
         Self {
@@ -816,11 +833,11 @@ struct RawFunctionChunk {
 
 #[derive(Debug, Deserialize)]
 struct RawUsage {
-    #[serde(rename = "prompt_tokens")]
+    #[serde(alias = "prompt_tokens", alias = "input_tokens")]
     input:  Option<u32>,
-    #[serde(rename = "completion_tokens")]
+    #[serde(alias = "completion_tokens", alias = "output_tokens")]
     output: Option<u32>,
-    #[serde(rename = "total_tokens")]
+    #[serde(alias = "total_tokens")]
     total:  Option<u32>,
 }
 

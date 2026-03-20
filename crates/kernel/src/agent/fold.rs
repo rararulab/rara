@@ -169,6 +169,7 @@ pub(crate) fn format_messages_for_fold(messages: &[Message]) -> String {
     for msg in messages {
         let role = match msg.role {
             Role::System => "system",
+            Role::Developer => "developer",
             Role::User => "user",
             Role::Assistant => "assistant",
             Role::Tool => "tool",
