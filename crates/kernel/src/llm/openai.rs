@@ -26,11 +26,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::{
-    driver::LlmDriver,
+    driver::{LlmDriver, LlmEmbedder, LlmModelLister},
     stream::StreamDelta,
     types::{
-        CompletionRequest, CompletionResponse, ContentBlock, Message, MessageContent, Role,
-        StopReason, ToolCallRequest, ToolChoice, Usage,
+        CompletionRequest, CompletionResponse, ContentBlock, EmbeddingRequest, EmbeddingResponse,
+        Message, MessageContent, ModelInfo, Role, StopReason, ToolCallRequest, ToolChoice, Usage,
     },
 };
 use crate::error::{KernelError, Result};
@@ -151,6 +151,44 @@ impl OpenAiDriver {
                 Ok(ResolvedConfig { base_url, api_key })
             }
         }
+    }
+
+    /// Send an authenticated HTTP request to the provider and return the
+    /// successful response.
+    ///
+    /// Handles bearer auth and error classification. Used by models/embeddings
+    /// endpoints that don't need the chat-specific retry logic.
+    async fn send_authenticated_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<reqwest::Response> {
+        let config = self.resolve_config().await?;
+        let url = format!("{}{}", config.base_url, path);
+
+        let mut builder = self
+            .client
+            .request(method, &url)
+            .bearer_auth(&config.api_key);
+        if let Some(b) = body {
+            builder = builder.json(&b);
+        }
+
+        let response = builder.send().await.map_err(|e| KernelError::Provider {
+            message: format!("HTTP request to {path} failed: {e}").into(),
+        })?;
+
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        Err(crate::error::classify_provider_error(
+            &format!("HTTP {status}: {text}"),
+            Some(status.as_u16()),
+        ))
     }
 
     /// Send a request and return the successful HTTP response.
@@ -341,6 +379,80 @@ impl LlmDriver for OpenAiDriver {
         }
 
         Ok(acc.finalize(&tx, request.model.clone()).await)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LlmModelLister implementation
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl LlmModelLister for OpenAiDriver {
+    async fn list_models(&self) -> Result<Vec<ModelInfo>> {
+        let response = self
+            .send_authenticated_request(reqwest::Method::GET, "/models", None)
+            .await?;
+
+        let raw: RawModelsResponse = response.json().await.map_err(|e| KernelError::Provider {
+            message: format!("failed to parse models response: {e}").into(),
+        })?;
+
+        let models = raw
+            .data
+            .into_iter()
+            .map(|entry| ModelInfo {
+                id:       entry.id,
+                owned_by: entry.owned_by.unwrap_or_default(),
+                created:  entry.created,
+            })
+            .collect();
+
+        Ok(models)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LlmEmbedder implementation
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl LlmEmbedder for OpenAiDriver {
+    async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingResponse> {
+        let wire = WireEmbeddingRequest {
+            model:      &request.model,
+            input:      &request.input,
+            dimensions: request.dimensions,
+        };
+        let body = serde_json::to_value(&wire).map_err(|e| KernelError::Provider {
+            message: format!("failed to serialize embedding request: {e}").into(),
+        })?;
+
+        let response = self
+            .send_authenticated_request(reqwest::Method::POST, "/embeddings", Some(body))
+            .await?;
+
+        let raw: RawEmbeddingResponse =
+            response.json().await.map_err(|e| KernelError::Provider {
+                message: format!("failed to parse embeddings response: {e}").into(),
+            })?;
+
+        // Sort by index to ensure the output order matches input order.
+        let mut data = raw.data;
+        data.sort_by_key(|d| d.index);
+
+        let embeddings = data.into_iter().map(|d| d.embedding).collect();
+
+        let usage = raw.usage.map(|u| Usage {
+            prompt_tokens:     u.input.unwrap_or(0),
+            completion_tokens: u.output.unwrap_or(0),
+            total_tokens:      u.total.unwrap_or(0),
+        });
+
+        Ok(EmbeddingResponse {
+            embeddings,
+            model: raw.model,
+            usage,
+        })
     }
 }
 
@@ -881,4 +993,48 @@ struct RawResponseToolCall {
 struct RawResponseFunction {
     name:      String,
     arguments: String,
+}
+
+// ---------------------------------------------------------------------------
+// Wire types — /models endpoint
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct RawModelsResponse {
+    data: Vec<RawModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct RawModelEntry {
+    id:       String,
+    #[serde(default)]
+    owned_by: Option<String>,
+    #[serde(default)]
+    created:  Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Wire types — /embeddings endpoint
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct WireEmbeddingRequest<'a> {
+    model:      &'a str,
+    input:      &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct RawEmbeddingResponse {
+    data:  Vec<RawEmbeddingData>,
+    model: String,
+    #[serde(default)]
+    usage: Option<RawUsage>,
+}
+
+#[derive(Deserialize)]
+struct RawEmbeddingData {
+    embedding: Vec<f32>,
+    index:     u32,
 }
