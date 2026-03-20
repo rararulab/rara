@@ -199,6 +199,9 @@ pub struct Kernel {
     /// absent, which disables all proactive signals.
     /// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock
     /// is held only for brief, non-async filter checks — no `.await` inside.
+    ///
+    /// SAFETY: MUST NOT hold this lock across `.await` points. The only call
+    /// site is `try_emit_proactive_signal` which is a synchronous function.
     proactive_filter:      std::sync::Mutex<Option<crate::proactive::ProactiveFilter>>,
 }
 
