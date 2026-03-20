@@ -967,6 +967,9 @@ pub(crate) async fn run_agent_loop(
 
     let capabilities = ModelCapabilities::detect(provider_hint, &model);
     tool_context.context_window_tokens = capabilities.context_window_tokens;
+    // Provide the live registry (with dynamic MCP tools) so discover-tools
+    // can query the full catalog at runtime, not a boot-time snapshot.
+    tool_context.tool_registry = Some(tools.clone());
     let input_text = user_text.clone();
     let tool_execution_timeout = handle.config().tool_execution_timeout;
 

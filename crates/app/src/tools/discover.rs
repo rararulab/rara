@@ -18,9 +18,7 @@
 //! activation (adding names to the `activated_deferred` set) happens in the
 //! agent loop after this tool returns.
 
-use rara_kernel::tool::{
-    DiscoverToolsResult, DiscoveredToolEntry, ToolContext, ToolExecute, ToolRegistryRef,
-};
+use rara_kernel::tool::{DiscoverToolsResult, DiscoveredToolEntry, ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -34,6 +32,10 @@ pub struct DiscoverToolsParams {
 }
 
 /// Discovers and activates deferred tools by keyword search.
+///
+/// Reads the live tool registry from [`ToolContext`] at query time, so
+/// dynamically registered tools (e.g. MCP servers connected after boot) are
+/// always visible in the catalog.
 #[derive(ToolDef)]
 #[tool(
     name = "discover-tools",
@@ -42,13 +44,11 @@ pub struct DiscoverToolsParams {
                    skills management, dock canvas, MCP servers). Pass a keyword to search.",
     bypass_interceptor
 )]
-pub struct DiscoverToolsTool {
-    registry: ToolRegistryRef,
-}
+pub struct DiscoverToolsTool;
 
 impl DiscoverToolsTool {
-    /// Create a new discover-tools instance backed by the given registry.
-    pub fn new(registry: ToolRegistryRef) -> Self { Self { registry } }
+    /// Create a new discover-tools instance.
+    pub fn new() -> Self { Self }
 }
 
 #[async_trait::async_trait]
@@ -60,14 +60,19 @@ impl ToolExecute for DiscoverToolsTool {
     async fn run(
         &self,
         params: Self::Params,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<Self::Output> {
+        let registry = context
+            .tool_registry
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("tool registry not available in context"))?;
+
         let query = params.query.to_lowercase();
         // TODO: pass actual activation state so already-activated tools are excluded.
         // For now, always show the full catalog — harmless since re-activation is a
         // no-op.
         let empty = std::collections::HashSet::new();
-        let catalog = self.registry.deferred_catalog(&empty);
+        let catalog = registry.deferred_catalog(&empty);
 
         let matches: Vec<_> = catalog
             .iter()

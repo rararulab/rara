@@ -231,13 +231,9 @@ pub(crate) async fn boot(
         }
     };
 
-    // Register discover-tools with a snapshot of the current registry so it
-    // can enumerate deferred tools. The snapshot excludes discover-tools itself
-    // (which is Core), so the catalog is accurate.
-    let catalog_snapshot = Arc::new(tool_registry.clone());
-    tool_registry.register(Arc::new(crate::tools::DiscoverToolsTool::new(
-        catalog_snapshot,
-    )));
+    // Register discover-tools — it reads the live registry from ToolContext at
+    // query time, so dynamically registered tools (e.g. MCP) are always visible.
+    tool_registry.register(Arc::new(crate::tools::DiscoverToolsTool::new()));
 
     let tools = Arc::new(tool_registry);
 

@@ -182,6 +182,9 @@ pub struct ToolContext {
     pub rara_message_id:       crate::io::MessageId,
     /// Context window size in tokens for the current model.
     pub context_window_tokens: usize,
+    /// Live tool registry for the current session (includes dynamic MCP tools).
+    /// Used by `discover-tools` to query the deferred catalog at runtime.
+    pub tool_registry:         Option<ToolRegistryRef>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -193,6 +196,7 @@ impl std::fmt::Debug for ToolContext {
             .field("event_queue", &"...")
             .field("rara_message_id", &self.rara_message_id)
             .field("context_window_tokens", &self.context_window_tokens)
+            .field("tool_registry", &self.tool_registry.as_ref().map(|_| "..."))
             .finish()
     }
 }

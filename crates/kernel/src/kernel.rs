@@ -2275,6 +2275,7 @@ impl Kernel {
                     event_queue: event_queue.clone(),
                     rara_message_id: msg_id.clone(),
                     context_window_tokens: 0,
+                    tool_registry: None, // set later in agent loop with live registry
                 };
 
                 // Route to v1 (reactive) or v2 (plan-execute) based on the
