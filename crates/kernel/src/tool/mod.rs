@@ -245,20 +245,6 @@ impl ToolRegistry {
         self.tools.iter().map(|(name, tool)| (name.as_str(), tool))
     }
 
-    /// Convert all tools to `llm::ToolDefinition` format for the
-    /// `LlmDriver` path.
-    #[must_use]
-    pub fn to_llm_tool_definitions(&self) -> Vec<crate::llm::ToolDefinition> {
-        self.tools
-            .values()
-            .map(|tool| crate::llm::ToolDefinition {
-                name:        tool.name().to_string(),
-                description: tool.description().to_string(),
-                parameters:  tool.parameters_schema(),
-            })
-            .collect()
-    }
-
     /// Return tool definitions for only Core tools plus any tools in the
     /// `activated` set. This is the primary method used by the agent loop.
     #[must_use]

@@ -87,8 +87,6 @@ impl AgentTool for McpToolBridge {
 
     fn parameters_schema(&self) -> serde_json::Value { self.input_schema.clone() }
 
-    fn tier(&self) -> rara_kernel::tool::ToolTier { rara_kernel::tool::ToolTier::Deferred }
-
     async fn execute(
         &self,
         params: serde_json::Value,

@@ -191,7 +191,17 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         Some(lit) if lit.value() == "deferred" => quote! {
             fn tier(&self) -> crate::tool::ToolTier { crate::tool::ToolTier::Deferred }
         },
-        _ => quote! {},
+        Some(lit) if lit.value() == "core" => quote! {},
+        Some(lit) => {
+            return Err(syn::Error::new_spanned(
+                lit,
+                format!(
+                    "unknown tier value `{}`: expected \"core\" or \"deferred\"",
+                    lit.value()
+                ),
+            ));
+        }
+        None => quote! {},
     };
 
     let expanded = quote! {

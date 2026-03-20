@@ -54,14 +54,16 @@ impl ToolExecute for DiscoverToolsTool {
     type Output = serde_json::Value;
     type Params = DiscoverToolsParams;
 
+    #[tracing::instrument(skip_all)]
     async fn run(
         &self,
         params: Self::Params,
         _context: &ToolContext,
     ) -> anyhow::Result<Self::Output> {
         let query = params.query.to_lowercase();
-        // Use an empty activated set — show all deferred tools.
-        // The agent loop handles actual activation state.
+        // TODO: pass actual activation state so already-activated tools are excluded.
+        // For now, always show the full catalog — harmless since re-activation is a
+        // no-op.
         let empty = std::collections::HashSet::new();
         let catalog = self.registry.deferred_catalog(&empty);
 
@@ -76,8 +78,8 @@ impl ToolExecute for DiscoverToolsTool {
             return Ok(serde_json::json!({
                 "status": "no_matches",
                 "message": format!(
-                    "No deferred tools match '{query}'. Available categories: browser, email, \
-                     skill, dock, mcp, acp, composio, settings"
+                    "No deferred tools match '{query}'. Available categories: email, \
+                     skill, dock, acp, composio, settings"
                 ),
             }));
         }
