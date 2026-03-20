@@ -25,7 +25,7 @@ management (bash, http-fetch) return `None` and handle their own timeouts.
 
 ### 2. `KernelConfig` addition
 
-Add `default_tool_timeout: Duration` (default 60s) — the per-tool timeout
+Add `default_tool_timeout: Duration` (default 120s) — the per-tool timeout
 applied when `execution_timeout()` returns `None`.
 
 ### 3. `ToolDef` macro attribute
