@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Model catalog — dynamic OpenRouter model list with caching.
+//! Model catalog — dynamic model list with caching.
 //!
-//! [`ModelCatalog`] fetches available models from the OpenRouter API and
-//! caches them for a configurable TTL. When no API key is available (or on
-//! fetch failure) it falls back to a hand-picked `CURATED_MODELS` list.
+//! [`ModelCatalog`] fetches available models from the configured LLM provider
+//! via [`LlmModelListerRef`] and caches them for a configurable TTL. When the
+//! provider is unavailable it falls back to a hand-picked `CURATED_MODELS`
+//! list.
 
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use serde::{Deserialize, Serialize};
+use rara_kernel::llm::LlmModelListerRef;
+use serde::Serialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 /// Cache time-to-live — 5 minutes.
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-
-/// OpenRouter models API endpoint.
-const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -128,24 +127,6 @@ fn curated_fallback(favorite_ids: &[String]) -> Vec<ChatModel> {
 }
 
 // ---------------------------------------------------------------------------
-// OpenRouter API response types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterResponse {
-    data: Vec<OpenRouterModel>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterModel {
-    id:             String,
-    name:           String,
-    /// Context length can be fractional in the API response.
-    #[serde(default)]
-    context_length: f64,
-}
-
-// ---------------------------------------------------------------------------
 // Cache
 // ---------------------------------------------------------------------------
 
@@ -167,21 +148,21 @@ struct RawModel {
 // ModelCatalog
 // ---------------------------------------------------------------------------
 
-/// Fetches and caches the full OpenRouter model list.
+/// Fetches and caches the model list from the configured LLM provider.
 ///
 /// Thread-safe and cheaply cloneable.
 #[derive(Clone)]
 pub struct ModelCatalog {
-    http_client: reqwest::Client,
-    cache:       Arc<Mutex<Option<CacheEntry>>>,
+    model_lister: LlmModelListerRef,
+    cache:        Arc<Mutex<Option<CacheEntry>>>,
 }
 
 impl ModelCatalog {
-    /// Create a new catalog with a default HTTP client.
-    pub fn new() -> Self {
+    /// Create a new catalog backed by the given model lister.
+    pub fn new(model_lister: LlmModelListerRef) -> Self {
         Self {
-            http_client: reqwest::Client::new(),
-            cache:       Arc::new(Mutex::new(None)),
+            model_lister,
+            cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -196,21 +177,11 @@ impl ModelCatalog {
             .map(|m| m.context_length)
     }
 
-    /// Return available models, optionally fetching from OpenRouter.
+    /// Return available models, fetching from the provider via
+    /// [`LlmModelListerRef`].
     ///
-    /// - `api_key` — OpenRouter API key; if `None`, the curated fallback is
-    ///   used.
     /// - `favorite_ids` — model IDs the user has pinned.
-    pub async fn list_models(
-        &self,
-        api_key: Option<&str>,
-        favorite_ids: &[String],
-    ) -> Vec<ChatModel> {
-        let api_key = match api_key {
-            Some(k) if !k.is_empty() => k,
-            _ => return curated_fallback(favorite_ids),
-        };
-
+    pub async fn list_models(&self, favorite_ids: &[String]) -> Vec<ChatModel> {
         // Fast path: fresh cache
         {
             let guard = self.cache.lock().await;
@@ -221,8 +192,8 @@ impl ModelCatalog {
             }
         }
 
-        // Slow path: fetch from OpenRouter
-        match self.fetch_models(api_key).await {
+        // Slow path: fetch from provider
+        match self.fetch_models().await {
             Ok(raw_models) => {
                 let result = Self::materialize(&raw_models, favorite_ids);
                 let mut guard = self.cache.lock().await;
@@ -233,7 +204,7 @@ impl ModelCatalog {
                 result
             }
             Err(e) => {
-                warn!(error = %e, "failed to fetch OpenRouter models, using fallback");
+                warn!(error = %e, "failed to fetch models from provider, using fallback");
                 // Try stale cache
                 let guard = self.cache.lock().await;
                 if let Some(ref entry) = *guard {
@@ -249,29 +220,23 @@ impl ModelCatalog {
         }
     }
 
-    /// Fetch models from the OpenRouter API.
-    async fn fetch_models(&self, api_key: &str) -> Result<Vec<RawModel>, reqwest::Error> {
-        debug!("fetching models from OpenRouter API");
-        let resp: OpenRouterResponse = self
-            .http_client
-            .get(OPENROUTER_MODELS_URL)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+    /// Fetch models from the provider via the driver.
+    async fn fetch_models(&self) -> anyhow::Result<Vec<RawModel>> {
+        debug!("fetching models from LLM provider");
+        let models = self
+            .model_lister
+            .list_models()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to list models: {e}"))?;
 
-        let models = resp
-            .data
+        Ok(models
             .into_iter()
             .map(|m| RawModel {
-                id:             m.id,
-                name:           m.name,
-                context_length: m.context_length as u32,
+                id:             m.id.clone(),
+                name:           m.id,
+                context_length: 0,
             })
-            .collect();
-        Ok(models)
+            .collect())
     }
 
     /// Convert raw cached models into [`ChatModel`]s with favorite flags and

@@ -55,6 +55,8 @@ pub(crate) struct BootResult {
         std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
     /// Knowledge layer service for long-term memory.
     pub knowledge_service:    rara_kernel::memory::knowledge::KnowledgeServiceRef,
+    /// Default provider's model lister for `/v1/models` queries.
+    pub model_lister:         rara_kernel::llm::LlmModelListerRef,
     /// Shared mutation sink for dock tools — passed to both tools and routes.
     pub dock_mutation_sink:   rara_dock::DockMutationSink,
 }
@@ -247,9 +249,24 @@ pub(crate) async fn boot(
 
     let agent_registry = Arc::new(load_default_registry());
 
+    // -- default provider model lister / embedder ----------------------------
+
+    let default_provider = {
+        use rara_domain_shared::settings::keys;
+        settings_provider
+            .get_first(&[keys::LLM_DEFAULT_PROVIDER, keys::LLM_PROVIDER])
+            .await
+            .unwrap_or_else(|| "openrouter".to_owned())
+    };
+    let default_driver: Arc<rara_kernel::llm::OpenAiDriver> = Arc::new(
+        rara_kernel::llm::OpenAiDriver::from_settings(settings_provider.clone(), &default_provider),
+    );
+    let model_lister: rara_kernel::llm::LlmModelListerRef = default_driver.clone();
+    let embedder: rara_kernel::llm::LlmEmbedderRef = default_driver;
+
     // -- knowledge layer ------------------------------------------------------
 
-    let knowledge_service = init_knowledge_service(pool, settings_provider.as_ref())
+    let knowledge_service = init_knowledge_service(pool, settings_provider.as_ref(), embedder)
         .await
         .whatever_context("Failed to initialize knowledge layer")?;
 
@@ -272,6 +289,7 @@ pub(crate) async fn boot(
         list_sessions_handle: tool_result.list_sessions_handle,
         knowledge_service,
         dock_mutation_sink,
+        model_lister,
     })
 }
 
@@ -727,6 +745,7 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 async fn init_knowledge_service(
     pool: sqlx::SqlitePool,
     settings: &dyn rara_domain_shared::settings::SettingsProvider,
+    embedder: rara_kernel::llm::LlmEmbedderRef,
 ) -> anyhow::Result<rara_kernel::memory::knowledge::KnowledgeServiceRef> {
     use rara_domain_shared::settings::keys;
     use rara_kernel::memory::knowledge::{EmbeddingService, KnowledgeConfig, KnowledgeService};
@@ -759,21 +778,6 @@ async fn init_knowledge_service(
         .await
         .ok_or_else(|| anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_EXTRACTOR_MODEL))?;
 
-    let provider = settings
-        .get_first(&[keys::LLM_DEFAULT_PROVIDER, keys::LLM_PROVIDER])
-        .await
-        .ok_or_else(|| anyhow::anyhow!("llm.default_provider is not configured"))?;
-    let api_key_key = format!("llm.providers.{provider}.api_key");
-    let api_key = settings
-        .get(&api_key_key)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("{api_key_key} is not configured"))?;
-    let base_url_key = format!("llm.providers.{provider}.base_url");
-    let base_url = settings
-        .get(&base_url_key)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("{base_url_key} is not configured"))?;
-
     let config = KnowledgeConfig::builder()
         .embedding_dimensions(embedding_dimensions)
         .search_top_k(search_top_k)
@@ -782,9 +786,8 @@ async fn init_knowledge_service(
 
     let embedding_svc = Arc::new(EmbeddingService::new(
         config.clone(),
-        api_key,
+        embedder,
         embedding_model,
-        base_url,
     )?);
 
     info!("knowledge layer initialized");

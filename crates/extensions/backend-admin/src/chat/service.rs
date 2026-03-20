@@ -64,7 +64,7 @@ pub struct SessionService {
     session_index:     SessionIndexRef,
     /// Tape service for append-only session recording.
     tape_service:      TapeService,
-    /// Cached catalog of models fetched from OpenRouter.
+    /// Cached catalog of models fetched from the LLM provider.
     model_catalog:     ModelCatalog,
     /// Settings provider for reading and writing flat KV settings.
     settings_provider: Arc<dyn SettingsProvider>,
@@ -77,31 +77,26 @@ impl SessionService {
         session_index: SessionIndexRef,
         tape_service: TapeService,
         settings_provider: Arc<dyn SettingsProvider>,
+        model_lister: rara_kernel::llm::LlmModelListerRef,
     ) -> Self {
         Self {
             session_index,
             tape_service,
-            model_catalog: ModelCatalog::new(),
+            model_catalog: ModelCatalog::new(model_lister),
             settings_provider,
         }
     }
 
     // -- model catalog ------------------------------------------------------
 
-    /// List available models, dynamically fetching from OpenRouter when an
-    /// API key is configured. Favorites are marked and sorted to the top.
+    /// List available models from the configured provider. Favorites are
+    /// marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {
-        let api_key = self
-            .settings_provider
-            .get(keys::LLM_PROVIDERS_OPENROUTER_API_KEY)
-            .await;
         let favorites_json = self.settings_provider.get(keys::LLM_FAVORITE_MODELS).await;
         let favorites: Vec<String> = favorites_json
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default();
-        self.model_catalog
-            .list_models(api_key.as_deref(), &favorites)
-            .await
+        self.model_catalog.list_models(&favorites).await
     }
 
     /// Replace the user's favorite model list and persist to settings.

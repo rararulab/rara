@@ -294,6 +294,7 @@ pub async fn start_with_options(
         rara.tape_service.clone(),
         settings_provider.clone(),
         settings_svc.clone(),
+        rara.model_lister.clone(),
     )
     .await
     .whatever_context("Failed to initialize BackendState")?;
