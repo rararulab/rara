@@ -304,6 +304,12 @@ impl LlmDriver for OpenAiDriver {
         let mut acc = StreamAccumulator::new();
 
         loop {
+            // Break early if the receiver has been dropped (e.g. user cancelled)
+            if tx.is_closed() {
+                tracing::debug!("stream consumer disconnected, returning partial response");
+                break;
+            }
+
             let maybe_event = tokio::time::timeout(SSE_IDLE_TIMEOUT, event_stream.next()).await;
 
             match maybe_event {
@@ -315,6 +321,8 @@ impl LlmDriver for OpenAiDriver {
                         break;
                     }
                     let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
+                        let truncated = truncate_utf8(&event.data, 200);
+                        tracing::debug!(data = truncated, "skipping unparseable SSE chunk");
                         continue;
                     };
                     acc.process_chunk(&chunk, &tx).await;
@@ -515,6 +523,19 @@ impl StreamAccumulator {
 
 fn non_empty(s: String) -> Option<String> { if s.is_empty() { None } else { Some(s) } }
 
+/// Truncate a string to at most `max_bytes` bytes without splitting a UTF-8
+/// code point.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 fn parse_stop_reason(reason: Option<&str>) -> StopReason {
     match reason {
         Some("stop") => StopReason::Stop,
@@ -640,18 +661,14 @@ impl<'a> ChatRequest<'a> {
 
             let tool_choice = match &request.tool_choice {
                 ToolChoice::Auto => Some(serde_json::json!("auto")),
-                ToolChoice::None => Some(serde_json::json!("auto")),
+                ToolChoice::None => Some(serde_json::json!("none")),
                 ToolChoice::Required => Some(serde_json::json!("required")),
                 ToolChoice::Specific(name) => {
-                    Some(serde_json::json!({"type": "function", "name": name}))
+                    Some(serde_json::json!({"type": "function", "function": {"name": name}}))
                 }
             };
 
-            let parallel = if request.parallel_tool_calls {
-                Some(true)
-            } else {
-                None
-            };
+            let parallel = Some(request.parallel_tool_calls);
 
             (Some(tools), tool_choice, parallel)
         };
