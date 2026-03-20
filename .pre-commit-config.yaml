@@ -35,7 +35,7 @@ repos:
 
       - id: check-agent-md
         name: check AGENT.md presence
-        entry: go run ./scripts/cmd/devtool/ check-agent-md
+        entry: devkit check-agent-md
         language: system
         pass_filenames: false
         files: ^crates/

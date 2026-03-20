@@ -14,24 +14,24 @@ Three principles guide our approach:
 2. **Waiting is expensive; corrections are cheap.** We use minimal blocking gates at commit time and continuous quality tracking on `main`.
 3. **Build the missing capability into the repo.** When an agent struggles, the fix is never "try harder" — it's making the codebase more legible and enforceable.
 
-## Devtool Commands
+## Devkit Commands
 
-All enforcement tools live as subcommands of the Go-based `devtool` CLI under `scripts/`.
+Enforcement tools are provided by [devkit](https://github.com/rararulab/devkit), a standalone Go CLI. Install with `go install github.com/rararulab/devkit@latest`. Configuration lives in `.devkit.toml` at the repo root.
 
-### `devtool check-agent-md`
+### `devkit check-agent-md`
 
 Verifies every crate under `crates/` has an `AGENT.md` file. AGENT.md files are the primary way agents understand a crate's purpose, invariants, and anti-patterns without reading every source file.
 
 ```bash
 just check-agent-md          # Run standalone
-scripts/bin/devtool check-agent-md
+devkit check-agent-md
 ```
 
-**Runs in:** PR lint CI (blocking).
+**Runs in:** pre-commit hook (blocking).
 
-### `devtool check-deps`
+### `devkit check-deps`
 
-Validates crate dependency direction against a 7-layer architecture map. Lower-layer crates must not depend on higher-layer crates:
+Validates crate dependency direction against a 7-layer architecture map defined in `.devkit.toml`. Lower-layer crates must not depend on higher-layer crates:
 
 ```
 Layer 0 (foundation)  → common/*, paths, rara-model, domain/*, rara-api
@@ -45,17 +45,28 @@ Layer 6 (entry)       → rara-cli
 
 ```bash
 just check-deps               # Run standalone
-scripts/bin/devtool check-deps
+devkit check-deps
 ```
 
-**Runs in:** PR lint CI (blocking).
+**Runs in:** pre-commit hook (blocking).
+
+### `devkit wt`
+
+Interactive worktree manager TUI. Provides selection, bulk cleanup of merged worktrees, pruning, and disk size reporting.
+
+```bash
+just wt                       # Launch TUI
+devkit wt list                # Non-interactive list
+devkit wt clean               # Remove merged worktrees
+devkit wt nuke                # Force-remove all except main
+```
 
 ## CI Integration
 
 | Check | Trigger | Blocking? | Purpose |
 |-------|---------|-----------|---------|
-| `check-agent-md` | PR lint | Yes | Prevent crates without agent guidelines |
-| `check-deps` | PR lint | Yes | Prevent architecture layer violations |
+| `check-agent-md` | Pre-commit hook | Yes | Prevent crates without agent guidelines |
+| `check-deps` | Pre-commit hook | Yes | Prevent architecture layer violations |
 | `cargo clippy -D warnings` | PR lint | Yes | Code quality |
 | `cargo +nightly fmt --check` | PR lint | Yes | Formatting consistency |
 | `buf lint` | PR lint | Yes | Protobuf schema quality |
@@ -65,10 +76,10 @@ scripts/bin/devtool check-deps
 
 When you identify a rule that agents frequently violate:
 
-1. Create a `scripts/internal/<name>/commands.go` subcommand
-2. Register it in `scripts/cmd/devtool/main.go`
-3. Add a `just` recipe in `justfile`
-4. Add a CI job in `.github/workflows/lint.yml`
-5. Decide: **blocking** (PR gate) or **tracking** (main-only report)?
+1. Add a new subcommand in [devkit](https://github.com/rararulab/devkit) under `internal/<name>/commands.go`
+2. Register it in `main.go`
+3. Add a `just` recipe in this repo's `justfile`
+4. Optionally add a pre-commit hook in `.pre-commit-config.yaml`
+5. Decide: **blocking** (pre-commit gate) or **tracking** (main-only report)?
 
 The bar for blocking checks is high — they must be deterministic, fast, and have zero false positives. Quality tracking checks can be softer.

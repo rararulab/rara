@@ -45,39 +45,19 @@ jobs:
       - name: Buf format check
         run: cd api && buf format --diff --exit-code
 
-  devtool-checks:
-    name: Devtool Checks
-    runs-on: arc-runner-set
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          persist-credentials: false
-
-      - name: Build devtool
-        run: cd scripts && go build -o bin/devtool ./cmd/devtool/
-
-      - name: Check AGENT.md existence
-        run: scripts/bin/devtool check-agent-md
-
-      - name: Check crate dependency direction
-        run: scripts/bin/devtool check-deps
-
   lint-success:
     name: Lint Success
     runs-on: arc-runner-set
-    needs: [rust-format, proto-lint, devtool-checks]
+    needs: [rust-format, proto-lint]
     if: always()
     steps:
       - name: Check all lint jobs status
         env:
           RUST_FORMAT_RESULT: ${{ needs.rust-format.result }}
           PROTO_LINT_RESULT: ${{ needs.proto-lint.result }}
-          DEVTOOL_CHECKS_RESULT: ${{ needs.devtool-checks.result }}
         run: |
           if [[ "$RUST_FORMAT_RESULT" != "success" || \
-                "$PROTO_LINT_RESULT" != "success" || \
-                "$DEVTOOL_CHECKS_RESULT" != "success" ]]; then
+                "$PROTO_LINT_RESULT" != "success" ]]; then
             echo "One or more lint jobs failed"
             exit 1
           fi

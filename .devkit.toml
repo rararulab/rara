@@ -1,0 +1,48 @@
+# devkit configuration — used by https://github.com/rararulab/devkit
+# Install: go install github.com/rararulab/devkit@latest
+
+[agent-md]
+crates_dir = "crates"
+
+[deps]
+crates_dir = "crates"
+
+# Layer assignments for dependency direction checking.
+# A crate at layer N must NOT depend on a crate at layer N+1 or higher.
+# Key = layer number (0 = lowest), value = list of crate package names.
+[deps.layers]
+0 = [
+  "base",
+  "rara-error",
+  "common-runtime",
+  "common-telemetry",
+  "common-worker",
+  "yunara-store",
+  "rara-tool-macro",
+  "crawl4ai",
+  "rara-paths",
+  "rara-model",
+  "rara-domain-shared",
+  "rara-api",
+]
+1 = [
+  "rara-soul",
+  "rara-symphony",
+  "rara-skills",
+  "rara-vault",
+  "rara-composio",
+  "rara-keyring-store",
+  "rara-codex-oauth",
+  "rara-git",
+]
+2 = ["rara-kernel"]
+3 = [
+  "rara-dock",
+  "rara-sessions",
+  "rara-agents",
+  "rara-mcp",
+  "rara-pg-credential-store",
+]
+4 = ["rara-channels", "rara-backend-admin"]
+5 = ["rara-app", "rara-server"]
+6 = ["rara-cli"]
