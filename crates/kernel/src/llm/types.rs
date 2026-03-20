@@ -435,7 +435,7 @@ pub struct EmbeddingRequest {
 }
 
 /// Response from an embedding request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct EmbeddingResponse {
     /// One embedding vector per input text, in order.
     pub embeddings: Vec<Vec<f32>>,
