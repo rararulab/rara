@@ -42,12 +42,13 @@ const DEFAULT_THRESHOLD: usize = 8 * 1024;
 
 /// Static system prompt fragment injected when context-mode is active.
 const CONTEXT_MODE_PROMPT_FRAGMENT: &str =
-    "[Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
-     indexed. When you see a tool result containing `[INDEXED]`, the full output has been stored \
-     in a searchable index. To retrieve specific content:\n- Call: context-mode \
-     search(query=\"keyword or phrase\")\n- The search returns matching excerpts from the indexed \
-     output.\nDo NOT assume the indexed output is empty or unavailable — always search when you \
-     need the details.";
+    "\
+[Context Mode]\nSome tool outputs exceed the context threshold and are automatically \
+     indexed.\nWhen you see `[INDEXED]` in a tool result, the output was captured successfully \
+     and stored in a searchable index.\n\nIMPORTANT: Do NOT re-invoke the same tool to get the \
+     \"real\" content — the indexed result IS the real content, just compressed. Instead, \
+     retrieve specific parts with:\n- Call tool: ctx_search(query=\"keyword or phrase\")\n\nUse \
+     targeted queries for best results. Multiple searches with different keywords are fine.";
 
 /// Monotonic counter to ensure unique index IDs under concurrent execution.
 static INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -262,7 +263,8 @@ fn build_summary(tool_name: &str, json_str: &str) -> String {
     let structure = extract_structure_preview(json_str);
     format!(
         "[INDEXED] {tool_name} output ({bytes} bytes).\nStructure: {structure}\nTo retrieve \
-         details, call: context-mode search(query=\"<your query>\")"
+         details, call tool: ctx_search(query=\"<your query>\")\nDo NOT re-call {tool_name} — use \
+         ctx_search instead."
     )
 }
 
@@ -300,6 +302,6 @@ mod tests {
         let json = r#"{"data":[1,2,3]}"#;
         let summary = build_summary("test-tool", json);
         assert!(summary.contains("[INDEXED]"));
-        assert!(summary.contains("context-mode search"));
+        assert!(summary.contains("ctx_search"));
     }
 }
