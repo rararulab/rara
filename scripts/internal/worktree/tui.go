@@ -103,17 +103,18 @@ type toast struct {
 }
 
 type tuiModel struct {
-	table      table.Model
-	entries    []Entry
-	selected   map[int]bool
-	message    string // status message after an action
-	messageSeq int    // incremented on each new message, used for auto-dismiss
-	busy       bool   // true while an async operation is running
-	quitting   bool
-	toasts     []toast // active toast notifications (errors)
-	toastSeq   int     // auto-incrementing toast ID
-	sizesLoaded bool   // true once async size computation has completed
-	generation  int    // incremented on each reload, guards against stale sizeResultMsg
+	table        table.Model
+	entries      []Entry
+	selected     map[int]bool
+	message      string // status message after an action
+	messageSeq   int    // incremented on each new message, used for auto-dismiss
+	busy         bool   // true while an async operation is running
+	quitting     bool
+	toasts       []toast // active toast notifications (errors)
+	toastSeq     int     // auto-incrementing toast ID
+	sizesLoaded  bool    // true once async size computation has completed
+	generation   int     // incremented on each reload, guards against stale sizeResultMsg
+	windowHeight int     // terminal height from tea.WindowSizeMsg
 }
 
 // RunTUI launches the interactive worktree manager.
@@ -211,13 +212,15 @@ func newTUIModel(entries []Entry) tuiModel {
 	t.SetStyles(s)
 
 	t.SetRows(rows)
+	// Initial height before WindowSizeMsg; will be recalculated on resize
 	t.SetHeight(min(len(entries)+1, 25))
 
-	return tuiModel{
+	m := tuiModel{
 		table:    t,
 		entries:  entries,
 		selected: make(map[int]bool),
 	}
+	return m
 }
 
 func entryToRow(e Entry, selected bool, sizesLoaded bool) table.Row {
@@ -309,6 +312,25 @@ func (m *tuiModel) pushToast(text string) tea.Cmd {
 	})
 }
 
+// chromeLines is the number of vertical lines consumed by non-table UI elements:
+// title (1) + margin (1) + blank (2) + post-table blank (2) + help (1) + trailing newline (1) = 8.
+const chromeLines = 8
+
+// tableHeight computes the ideal table height based on terminal size and entry count.
+// Falls back to a sensible default when the terminal size is not yet known.
+func (m *tuiModel) tableHeight() int {
+	rows := len(m.entries) + 1 // +1 for header
+	if m.windowHeight > 0 {
+		available := m.windowHeight - chromeLines
+		if available < 5 {
+			available = 5
+		}
+		return min(rows, available)
+	}
+	// Before first WindowSizeMsg, use a conservative default
+	return min(rows, 25)
+}
+
 func (m tuiModel) Init() tea.Cmd {
 	return m.computeSizesCmd()
 }
@@ -396,7 +418,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sizesLoaded = false
 		m.generation++
 		m.refreshRows()
-		m.table.SetHeight(min(len(msg.entries)+1, 25))
+		m.table.SetHeight(m.tableHeight())
 		// Re-trigger async size computation for the new entries
 		sizeCmd := m.computeSizesCmd()
 		// If no message was set by a prior handler (e.g. deleteResultMsg),
@@ -405,6 +427,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.setMessage("Refreshed"), sizeCmd)
 		}
 		return m, sizeCmd
+
+	case tea.WindowSizeMsg:
+		m.windowHeight = msg.Height
+		m.table.SetHeight(m.tableHeight())
+		return m, nil
 
 	case tea.KeyPressMsg:
 		// Ignore keys while busy
