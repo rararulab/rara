@@ -993,6 +993,7 @@ pub(crate) async fn run_agent_loop(
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
+    let mut last_progress_at = Instant::now();
 
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
@@ -2295,12 +2296,16 @@ pub(crate) async fn run_agent_loop(
             session_length_warned = true;
         }
 
-        // Emit a progress event on every silent (tool-only, no text) iteration
-        // so the user always sees that the agent is still working.
-        if accumulated_text.len() == last_accumulated_text.len() {
+        // Emit a progress event on silent (tool-only, no text) iterations so
+        // the user sees the agent is still working. Throttled to at most once
+        // every 5 seconds to avoid flooding the UI.
+        if accumulated_text.len() == last_accumulated_text.len()
+            && last_progress_at.elapsed() >= std::time::Duration::from_secs(5)
+        {
             stream_handle.emit(StreamEvent::Progress {
                 stage: format!("Processing... ({tool_calls_made} steps completed)"),
             });
+            last_progress_at = Instant::now();
         }
     }
 

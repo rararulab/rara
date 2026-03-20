@@ -332,7 +332,11 @@ async fn build_driver_registry(
     for &name in &provider_names {
         registry.register_driver(
             name,
-            Arc::new(OpenAiDriver::from_settings(settings.clone(), name)),
+            Arc::new(OpenAiDriver::from_settings(
+                settings.clone(),
+                name,
+                OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+            )),
         );
 
         // Read per-provider default_model and fallback_models

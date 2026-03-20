@@ -114,10 +114,6 @@ pub struct KernelConfig {
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
     pub memory_quota_per_agent:  usize,
-    /// SSE idle timeout for LLM streaming responses. If no event is received
-    /// within this duration, the stream is aborted and retried.
-    #[default(_code = "Duration::from_secs(45)")]
-    pub streaming_idle_timeout:  Duration,
     /// Mita heartbeat interval. `None` disables the heartbeat.
     #[default(_code = "None")]
     pub mita_heartbeat_interval: Option<Duration>,
