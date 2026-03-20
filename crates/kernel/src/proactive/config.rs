@@ -65,6 +65,11 @@ pub struct ProactiveConfig {
     /// duration trigger a `SessionCompleted` signal (conversation ended).
     /// Typically shorter than `idle_threshold_secs` (e.g. 600 = 10 minutes).
     pub session_completed_secs: u64,
+
+    /// Optional model name for lightweight signal judgment LLM calls.
+    /// When absent, signals pass directly to Mita without LLM pre-filtering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgment_model: Option<String>,
 }
 
 impl ProactiveConfig {

@@ -45,7 +45,7 @@ use futures::FutureExt;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::{
     KernelError,
@@ -1775,6 +1775,49 @@ impl Kernel {
             session_ctx.as_ref(),
             mita_history.as_ref(),
         );
+
+        // Lightweight LLM judgment: is this signal worth a full Mita turn?
+        if let Some(model) = self
+            .config
+            .proactive
+            .as_ref()
+            .and_then(|c| c.judgment_model.as_deref())
+        {
+            match self
+                .syscall
+                .driver_registry()
+                .resolve("__proactive_judgment__", None, None)
+            {
+                Ok((driver, resolved_model)) => {
+                    let model_name = if model.is_empty() {
+                        &resolved_model
+                    } else {
+                        model
+                    };
+                    match crate::proactive::should_act(&driver, model_name, &context).await {
+                        crate::proactive::SignalJudgment::ShouldDrop { reason } => {
+                            info!(
+                                kind = signal.kind_name(),
+                                reason = %reason,
+                                "signal dropped by LLM judgment"
+                            );
+                            return;
+                        }
+                        crate::proactive::SignalJudgment::ShouldAct { reason } => {
+                            debug!(
+                                kind = signal.kind_name(),
+                                reason = %reason,
+                                "signal approved by LLM judgment"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!(error = %e, "signal judgment: driver not available, passing through");
+                }
+            }
+        }
+
         self.deliver_proactive_to_mita(&context).await;
     }
 

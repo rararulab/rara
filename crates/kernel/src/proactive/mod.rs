@@ -20,18 +20,21 @@
 //! - **Filter** — pure rule-based gate (quiet hours, cooldowns, rate limits)
 //! - **Context** — structured context pack builder for Mita
 //! - **Judgment** — lightweight LLM judgment for group-chat replies
+//! - **Signal judgment** — lightweight LLM pre-filter for proactive signals
 
 mod config;
 mod context;
 mod filter;
 mod judgment;
 mod signal;
+mod signal_judgment;
 
 pub use config::ProactiveConfig;
 pub use context::{MitaHistory, SessionContext, build_context_pack, build_heartbeat_context_pack};
 pub use filter::ProactiveFilter;
 pub use judgment::{ProactiveJudgment, should_reply};
 pub use signal::ProactiveSignal;
+pub use signal_judgment::{SignalJudgment, should_act};
 
 /// Truncate a string to at most `max` characters.
 pub(crate) fn truncate(s: &str, max: usize) -> &str {
