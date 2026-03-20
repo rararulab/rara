@@ -121,6 +121,10 @@ pub struct KernelConfig {
     /// Mita heartbeat interval. `None` disables the heartbeat.
     #[default(_code = "None")]
     pub mita_heartbeat_interval: Option<Duration>,
+    /// Proactive signal filter configuration. `None` disables proactive
+    /// signals (heartbeat-only mode).
+    #[default(_code = "None")]
+    pub proactive:               Option<crate::proactive::ProactiveConfig>,
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
     pub event_queue:             ShardedEventQueueConfig,
@@ -191,6 +195,9 @@ pub struct Kernel {
     trace_service:         crate::trace::TraceService,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: crate::handle::SkillPromptProvider,
+    /// Optional proactive signal filter. `None` when proactive config is
+    /// absent, which disables all proactive signals.
+    proactive_filter:      std::sync::Mutex<Option<crate::proactive::ProactiveFilter>>,
 }
 
 impl Kernel {
@@ -254,6 +261,13 @@ impl Kernel {
             dynamic_tool_provider,
         );
 
+        let proactive_filter = std::sync::Mutex::new(
+            config
+                .proactive
+                .as_ref()
+                .map(|c| crate::proactive::ProactiveFilter::new(c.clone())),
+        );
+
         Self {
             config,
             process_table: Arc::new(SessionTable::new()),
@@ -273,6 +287,7 @@ impl Kernel {
             guard_pipeline,
             trace_service,
             skill_prompt_provider,
+            proactive_filter,
         }
     }
 
@@ -682,6 +697,9 @@ impl Kernel {
             }
             KernelEvent::MitaHeartbeat => {
                 self.handle_mita_heartbeat().await;
+            }
+            KernelEvent::ProactiveSignal(signal) => {
+                self.handle_proactive_signal(signal).await;
             }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
@@ -1669,11 +1687,47 @@ impl Kernel {
             return;
         }
 
-        // Deliver heartbeat message to the existing Mita session.
+        // Deliver structured heartbeat context pack to the existing Mita session.
+        let active_count = self
+            .process_table
+            .list()
+            .iter()
+            .filter(|p| matches!(p.state, SessionState::Active | SessionState::Ready))
+            .count();
+        let context = crate::proactive::build_heartbeat_context_pack(active_count);
         let msg = InboundMessage::synthetic(
-            "Heartbeat triggered. Analyze active sessions and determine if any proactive actions \
-             are needed. Review your previous tape entries to avoid repeating recent actions."
-                .to_string(),
+            context,
+            crate::identity::UserId("system".to_string()),
+            session_key,
+        );
+
+        self.deliver_to_session(session_key, msg).await;
+    }
+
+    /// Handle a proactive signal — build context pack and deliver to Mita.
+    async fn handle_proactive_signal(&self, signal: crate::proactive::ProactiveSignal) {
+        info!(kind = signal.kind_name(), "handling proactive signal");
+
+        let context = crate::proactive::build_context_pack(&signal, None);
+        self.deliver_proactive_to_mita(&context).await;
+    }
+
+    /// Deliver a proactive context pack to the Mita session.
+    ///
+    /// Similar to `handle_mita_heartbeat` delivery but with structured
+    /// context pack text instead of a one-line instruction.
+    async fn deliver_proactive_to_mita(&self, context: &str) {
+        let session_key = crate::session::SessionKey::deterministic("mita");
+
+        if !self.process_table.contains(&session_key) {
+            // Mita session not running — the next heartbeat will bootstrap it.
+            // Drop this signal rather than spawning Mita just for one event.
+            info!("proactive signal dropped: Mita session not yet running");
+            return;
+        }
+
+        let msg = InboundMessage::synthetic(
+            context.to_string(),
             crate::identity::UserId("system".to_string()),
             session_key,
         );

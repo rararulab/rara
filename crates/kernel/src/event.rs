@@ -362,6 +362,13 @@ pub enum KernelEvent {
     /// delivers a heartbeat message to it.
     MitaHeartbeat,
 
+    // === Proactive ===
+    /// Proactive signal for Mita orchestration.
+    ///
+    /// Emitted by internal event sources (idle check, task failure, time
+    /// triggers) after passing through the `ProactiveFilter`.
+    ProactiveSignal(crate::proactive::ProactiveSignal),
+
     // === System ===
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
@@ -389,6 +396,7 @@ impl KernelEvent {
             | Self::ScheduledTask { .. }
             | Self::MitaDirective { .. }
             | Self::MitaHeartbeat
+            | Self::ProactiveSignal(_)
             | Self::IdleCheck => EventPriority::Low,
         }
     }
@@ -592,6 +600,14 @@ impl KernelEventEnvelope {
         }
     }
 
+    /// Create a `ProactiveSignal` event.
+    pub fn proactive_signal(signal: crate::proactive::ProactiveSignal) -> Self {
+        Self {
+            base: EventBase::from(SessionKey::new()),
+            kind: KernelEvent::ProactiveSignal(signal),
+        }
+    }
+
     /// Create a `MitaHeartbeat` event.
     pub fn mita_heartbeat() -> Self {
         Self {
@@ -682,6 +698,9 @@ impl KernelEventEnvelope {
                 format!("mita directive for session {}", self.base.session_key)
             }
             KernelEvent::MitaHeartbeat => "periodic mita heartbeat".to_string(),
+            KernelEvent::ProactiveSignal(signal) => {
+                format!("proactive signal: {}", signal.kind_name())
+            }
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }
