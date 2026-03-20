@@ -56,6 +56,7 @@ struct ToolAttrs {
     manual_impl:        bool,
     bypass_interceptor: bool,
     tier:               Option<LitStr>,
+    timeout_secs:       Option<syn::LitInt>,
 }
 
 fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
@@ -66,6 +67,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
     let mut manual_impl = false;
     let mut bypass_interceptor = false;
     let mut tier: Option<LitStr> = None;
+    let mut timeout_secs: Option<syn::LitInt> = None;
 
     for attr in &input.attrs {
         if !attr.path().is_ident("tool") {
@@ -93,6 +95,9 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
             } else if meta.path.is_ident("tier") {
                 meta.input.parse::<Token![=]>()?;
                 tier = Some(meta.input.parse::<LitStr>()?);
+            } else if meta.path.is_ident("timeout_secs") {
+                meta.input.parse::<Token![=]>()?;
+                timeout_secs = Some(meta.input.parse::<syn::LitInt>()?);
             } else if meta.path.is_ident("bypass_interceptor") {
                 if meta.input.peek(Token![=]) {
                     meta.input.parse::<Token![=]>()?;
@@ -127,6 +132,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
         manual_impl,
         bypass_interceptor,
         tier,
+        timeout_secs,
     })
 }
 
@@ -187,6 +193,15 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         quote! {}
     };
 
+    let timeout_impl = match &attrs.timeout_secs {
+        Some(lit) => quote! {
+            fn execution_timeout(&self) -> Option<std::time::Duration> {
+                Some(std::time::Duration::from_secs(#lit))
+            }
+        },
+        None => quote! {},
+    };
+
     let tier_impl = match &attrs.tier {
         Some(lit) if lit.value() == "deferred" => quote! {
             fn tier(&self) -> crate::tool::ToolTier { crate::tool::ToolTier::Deferred }
@@ -228,6 +243,8 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             #bypass_impl
 
             #tier_impl
+
+            #timeout_impl
         }
     };
 

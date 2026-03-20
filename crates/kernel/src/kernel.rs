@@ -114,6 +114,13 @@ pub struct KernelConfig {
     /// offending tool is killed rather than the entire wave.
     #[default(_code = "Duration::from_secs(180)")]
     pub tool_execution_timeout:  Duration,
+    /// Default per-tool timeout applied when a tool's
+    /// `execution_timeout()` returns `None`.
+    ///
+    /// Must be strictly less than `tool_execution_timeout` so the per-tool
+    /// timeout fires before the global wave timeout.
+    #[default(_code = "Duration::from_secs(120)")]
+    pub default_tool_timeout:    Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
@@ -214,6 +221,23 @@ impl Kernel {
         skill_prompt_provider: crate::handle::SkillPromptProvider,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
+        // Clamp default_tool_timeout so it never exceeds the global wave timeout.
+        let mut config = config;
+        if config.default_tool_timeout >= config.tool_execution_timeout {
+            warn!(
+                default_tool_timeout = ?config.default_tool_timeout,
+                tool_execution_timeout = ?config.tool_execution_timeout,
+                "default_tool_timeout must be less than tool_execution_timeout — clamping to {}s",
+                config.tool_execution_timeout.as_secs().saturating_sub(30),
+            );
+            // Margin is at most 30s, but shrinks to half the wave timeout
+            // when it is very small (e.g. 10s wave → 5s margin → 5s default).
+            let margin = Duration::from_secs(30.min(config.tool_execution_timeout.as_secs() / 2));
+            config.default_tool_timeout = config
+                .tool_execution_timeout
+                .checked_sub(margin)
+                .unwrap_or(Duration::from_secs(60));
+        }
         info!(
             max_concurrency = config.max_concurrency,
             default_child_limit = config.default_child_limit,
