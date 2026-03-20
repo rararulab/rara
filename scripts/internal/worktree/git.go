@@ -142,16 +142,19 @@ func dirSize(path string) int64 {
 }
 
 // lastActiveTime returns the most recent modification time among key git files
-// in the worktree (.git, HEAD, index), providing a meaningful "last active" signal.
+// in the worktree, providing a meaningful "last active" signal.
+// In linked worktrees, .git is a file containing "gitdir: <path>" — this function
+// resolves the actual git directory to find HEAD and index files.
 // Falls back to the directory mtime if no git files are found.
 func lastActiveTime(path string) time.Time {
 	var latest time.Time
-	// Check git-related files that change on commits and checkouts
+
+	// Resolve the actual git directory (handles both main checkout and linked worktrees)
+	gitDir := resolveGitDir(path)
 	candidates := []string{
-		filepath.Join(path, ".git"),
-		filepath.Join(path, "HEAD"),
-		filepath.Join(path, ".git", "HEAD"),
-		filepath.Join(path, ".git", "index"),
+		filepath.Join(gitDir, "HEAD"),
+		filepath.Join(gitDir, "index"),
+		filepath.Join(path, ".git"), // mtime of .git itself (file or dir)
 	}
 	for _, c := range candidates {
 		if info, err := os.Stat(c); err == nil {
@@ -167,6 +170,35 @@ func lastActiveTime(path string) time.Time {
 		}
 	}
 	return latest
+}
+
+// resolveGitDir returns the path to the actual git directory for a worktree.
+// For the main checkout, this is <path>/.git. For linked worktrees, .git is a
+// file containing "gitdir: <path>" pointing to the real git metadata.
+func resolveGitDir(worktreePath string) string {
+	dotGit := filepath.Join(worktreePath, ".git")
+	info, err := os.Stat(dotGit)
+	if err != nil {
+		return dotGit
+	}
+	// Main checkout: .git is a directory
+	if info.IsDir() {
+		return dotGit
+	}
+	// Linked worktree: .git is a file with "gitdir: <path>"
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return dotGit
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir: ") {
+		return dotGit
+	}
+	gitdir := strings.TrimPrefix(line, "gitdir: ")
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(worktreePath, gitdir)
+	}
+	return gitdir
 }
 
 func classifyEntry(e Entry, merged map[string]bool) Status {
