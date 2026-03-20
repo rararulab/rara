@@ -14,42 +14,40 @@ Unlike generic AI assistants that wait for your commands, Rara proactively monit
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                         Channels                              │
-│               Telegram  ·  WebChat  ·  Terminal                │
-└───────────────────────────┬──────────────────────────────────┘
-                            │
-┌───────────────────────────▼──────────────────────────────────┐
-│                         Kernel                                │
-│                                                               │
-│   ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
-│   │   LLM   │  │   Tool   │  │  Memory  │  │   Session    │  │
-│   │ Driver  │  │ Registry │  │  (Tape)  │  │   Index      │  │
-│   └─────────┘  └──────────┘  └──────────┘  └─────────────┘  │
-│   ┌─────────┐  ┌──────────────────────────────────────────┐  │
-│   │  Guard  │  │  EventBus · Notifications · Queue        │  │
-│   │Pipeline │  │  (sharded event dispatch + pub/sub)      │  │
-│   └─────────┘  └──────────────────────────────────────────┘  │
-│                                                               │
-│   Agent Loop · Context Budget · IO Subsystem · Rate Limiter  │
-└───┬──────────────┬──────────────┬────────────────────────────┘
-    │              │              │
-    ▼              ▼              ▼
-┌────────┐  ┌───────────┐  ┌──────────────┐
-│  Tape  │  │   Skills  │  │  Extensions  │
-│        │  │           │  │              │
-│ JSONL  │  │ discovery │  │ git          │
-│ append │  │ registry  │  │ backend-admin│
-│ anchor │  │           │  │              │
-│ fork   │  │           │  │              │
-└────────┘  └───────────┘  └──────────────┘
-    │              │              │
-    ▼              ▼              ▼
-┌──────────────────────────────────────────────────────────────┐
-│                       Integrations                            │
-│          MCP  ·  Composio  ·  OAuth  ·  Credential Store      │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Channels
+        Telegram
+        WebChat
+        Terminal
+    end
+
+    subgraph Kernel
+        LLM[LLM Driver]
+        Tool[Tool Registry]
+        Memory[Memory / Tape]
+        Session[Session Index]
+        Guard[Guard Pipeline]
+        EventBus[EventBus · Notifications · Queue]
+        AgentLoop[Agent Loop · Context Budget · IO · Rate Limiter]
+    end
+
+    subgraph Capabilities
+        Tape[Tape\nJSONL · append · anchor · fork]
+        Skills[Skills\ndiscovery · registry]
+        Extensions[Extensions\ngit · backend-admin]
+    end
+
+    subgraph Integrations
+        MCP
+        Composio
+        OAuth
+        CredentialStore[Credential Store]
+    end
+
+    Channels --> Kernel
+    Kernel --> Capabilities
+    Capabilities --> Integrations
 ```
 
 ### Tape Memory
