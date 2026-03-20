@@ -27,14 +27,14 @@ const MAX_DESCRIPTION_CHARS: usize = 1024;
 
 /// Truncate a string to at most `max_chars` characters, appending "…" if cut.
 fn truncate(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
+    if s.chars().count() <= max_chars {
         return s.to_string();
     }
-    // Find a char boundary at or before max_chars.
-    let mut end = max_chars;
-    while !s.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
+    let end = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
     format!("{}…", &s[..end])
 }
 
@@ -91,4 +91,17 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
          references an unfamiliar tool name.\n\n",
     );
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_multibyte() {
+        let input = "你好世界测试文本额外内容";
+        let result = truncate(input, 5);
+        assert_eq!(result, "你好世界测…");
+        assert_eq!(truncate(input, 50).chars().count(), input.chars().count());
+    }
 }

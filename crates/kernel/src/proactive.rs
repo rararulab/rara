@@ -73,7 +73,9 @@ Respond with EXACTLY one line:
 - "YES: <brief reason>" if Rara should reply
 - "NO: <brief reason>" if Rara should stay silent
 
-Be conservative — when in doubt, stay silent. Rara should feel like a helpful presence, not a noisy bot."#;
+Be conservative — when in doubt, stay silent. Rara should feel like a helpful presence, not a noisy bot.
+
+Note: You do not have access to Rara's full capability list or current task context. Base your judgment on the conversation content alone."#;
 
 /// Result of the proactive reply judgment.
 #[derive(Debug, Clone)]

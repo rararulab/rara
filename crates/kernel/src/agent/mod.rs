@@ -800,32 +800,57 @@ fn build_runtime_contract_prompt(
     max_children: Option<usize>,
 ) -> String {
     let mut prompt = format!(
-        "{base_prompt}\n\n<context_contract>\nThe `tape` tool is your persistent memory.\n\n## \
-         Tape actions\n- `anchor`: checkpoint + trim context. Older entries stay searchable via \
-         `search`.\n- `search` / `entries`: recall details from before an anchor.\n- `anchors`: \
-         list all checkpoints.\n- `checkout`: fork a new session from a past anchor (original \
-         unchanged).\n\n## MUST anchor when:\n- Context is getting long or a [Context Usage \
-         Warning] appears\n- A tool result exceeds ~2000 chars\n- Iterative tasks accumulate \
-         large outputs (screenshots, scraping, listings)\n- The user switches to a clearly \
-         different topic or task (e.g. debugging → feature discussion, Q&A → hands-on \
-         coding)\n\n## SHOULD anchor when:\n- Completing a logical work phase\n- Processing \
-         multiple tool results in sequence\n\n## MUST search before answering when:\n- The \
-         question refers to anything before an anchor or outside current window\n- You need exact \
-         tokens, IDs, codes, names, or quoted details from earlier context\n\n## Anchor best \
-         practices\n- Always include a detailed `summary` and concrete `next_steps`\n- A missing \
-         summary = lost context\n- Use `checkout` to retry from a past checkpoint or when the \
-         user asks to go back\n\n</context_contract>"
+        r#"{base_prompt}
+
+<context_contract>
+The `tape` tool is your persistent memory.
+
+## Tape actions
+- `anchor`: checkpoint + trim context. Older entries stay searchable via `search`.
+- `search` / `entries`: recall details from before an anchor.
+- `anchors`: list all checkpoints.
+- `checkout`: fork a new session from a past anchor (original unchanged).
+
+## MUST anchor when:
+- Context is getting long or a [Context Usage Warning] appears
+- A tool result exceeds ~2000 chars
+- Iterative tasks accumulate large outputs (screenshots, scraping, listings)
+- The user switches to a clearly different topic or task (e.g. debugging → feature discussion, Q&A → hands-on coding)
+
+## SHOULD anchor when:
+- Completing a logical work phase
+- Processing multiple tool results in sequence
+
+## MUST search before answering when:
+- The question refers to anything before an anchor or outside current window
+- You need exact tokens, IDs, codes, names, or quoted details from earlier context
+
+## Anchor best practices
+- Always include a detailed `summary` and concrete `next_steps`
+- A missing summary = lost context
+- Use `checkout` to retry from a past checkpoint or when the user asks to go back
+
+</context_contract>"#
     );
 
     let can_delegate = has_kernel_tool && max_children != Some(0);
     if can_delegate {
         prompt.push_str(
-            "\n\n<delegation_contract>\nUse the `kernel` tool to delegate to child agents.\n\n## \
-             MUST delegate when:\n- 2+ independent subtasks exist\n- Broad discovery + \
-             implementation + verification across many files\n- Long tool-heavy execution that \
-             would bloat your context\n\n## How:\n- `action: \"spawn\"`, `agent: \"worker\"` — \
-             single focused task\n- `action: \"spawn_parallel\"` — multiple independent tasks\n- \
-             Keep each worker's scope narrow; synthesize results in parent\n</delegation_contract>",
+            r#"
+
+<delegation_contract>
+Use the `kernel` tool to delegate to child agents.
+
+## MUST delegate when:
+- 2+ independent subtasks exist
+- Broad discovery + implementation + verification across many files
+- Long tool-heavy execution that would bloat your context
+
+## How:
+- `action: "spawn"`, `agent: "worker"` — single focused task
+- `action: "spawn_parallel"` — multiple independent tasks
+- Keep each worker's scope narrow; synthesize results in parent
+</delegation_contract>"#,
         );
     }
 
