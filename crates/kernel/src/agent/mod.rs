@@ -993,7 +993,7 @@ pub(crate) async fn run_agent_loop(
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
     let mut context_window_recovery_used = false;
-    let mut consecutive_silent_iters: usize = 0;
+
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
@@ -2295,18 +2295,12 @@ pub(crate) async fn run_agent_loop(
             session_length_warned = true;
         }
 
-        // Track consecutive silent (tool-only, no text) iterations and emit
-        // a Progress event so the user knows we're still working.
+        // Emit a progress event on every silent (tool-only, no text) iteration
+        // so the user always sees that the agent is still working.
         if accumulated_text.len() == last_accumulated_text.len() {
-            consecutive_silent_iters += 1;
-        } else {
-            consecutive_silent_iters = 0;
-        }
-        if consecutive_silent_iters >= 3 {
             stream_handle.emit(StreamEvent::Progress {
                 stage: format!("Processing... ({tool_calls_made} steps completed)"),
             });
-            consecutive_silent_iters = 0;
         }
     }
 

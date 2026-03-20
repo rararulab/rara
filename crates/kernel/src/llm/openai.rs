@@ -44,7 +44,11 @@ use crate::error::{KernelError, Result};
 /// Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 /// like `reasoning_content` that `async-openai` doesn't expose.
 pub struct OpenAiDriver {
+    /// Client for non-streaming requests (with total timeout).
     client:        reqwest::Client,
+    /// Client for streaming requests (no total timeout — SSE idle timeout
+    /// handles stall detection instead).
+    stream_client: reqwest::Client,
     config_source: OpenAiDriverConfigSource,
 }
 
@@ -66,7 +70,8 @@ struct ResolvedConfig {
 }
 
 /// SSE idle timeout — if no event is received within this duration, abort.
-const SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Reduced from 90s to 45s for faster detection of provider disconnects.
+const SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Maximum number of retries for rate-limited (429) requests.
 const RATE_LIMIT_MAX_RETRIES: u32 = 4;
@@ -76,7 +81,8 @@ const RATE_LIMIT_INITIAL_DELAY: Duration = Duration::from_secs(5);
 const RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
 
 impl OpenAiDriver {
-    /// Build a reqwest client with connect and overall read timeouts.
+    /// Build a reqwest client for non-streaming requests (5-minute total
+    /// timeout).
     fn build_http_client() -> reqwest::Client {
         reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -85,10 +91,23 @@ impl OpenAiDriver {
             .expect("failed to build HTTP client")
     }
 
+    /// Build a reqwest client for streaming requests.
+    ///
+    /// No total timeout — the SSE idle timeout ([`SSE_IDLE_TIMEOUT`]) handles
+    /// stall detection per-event. A global timeout would incorrectly kill
+    /// long-running streams with extended thinking or large context.
+    fn build_stream_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("failed to build streaming HTTP client")
+    }
+
     /// Create a new driver targeting the given API base URL.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             client:        Self::build_http_client(),
+            stream_client: Self::build_stream_client(),
             config_source: OpenAiDriverConfigSource::Static {
                 base_url: base_url.into(),
                 api_key:  api_key.into(),
@@ -107,6 +126,7 @@ impl OpenAiDriver {
     ) -> Self {
         Self {
             client:        Self::build_http_client(),
+            stream_client: Self::build_stream_client(),
             config_source: OpenAiDriverConfigSource::SettingsBacked {
                 settings,
                 provider_name: provider_name.into(),
@@ -212,10 +232,16 @@ impl OpenAiDriver {
         );
 
         let mut attempt = 0u32;
+        // Use stream_client for streaming (no total timeout; SSE idle timeout
+        // handles stalls) and client for non-streaming (5-min hard cap).
+        let http = if stream {
+            &self.stream_client
+        } else {
+            &self.client
+        };
 
         loop {
-            let response = self
-                .client
+            let response = http
                 .post(format!("{}/chat/completions", config.base_url))
                 .bearer_auth(&config.api_key)
                 .json(&body)

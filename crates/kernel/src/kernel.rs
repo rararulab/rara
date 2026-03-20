@@ -108,7 +108,7 @@ pub struct KernelConfig {
     #[default = 25]
     pub default_max_iterations:  usize,
     /// Hard cap for one tool execution wave inside a turn.
-    #[default(_code = "Duration::from_secs(180)")]
+    #[default(_code = "Duration::from_secs(120)")]
     pub tool_execution_timeout:  Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
@@ -116,7 +116,7 @@ pub struct KernelConfig {
     pub memory_quota_per_agent:  usize,
     /// SSE idle timeout for LLM streaming responses. If no event is received
     /// within this duration, the stream is aborted and retried.
-    #[default(_code = "Duration::from_secs(90)")]
+    #[default(_code = "Duration::from_secs(45)")]
     pub streaming_idle_timeout:  Duration,
     /// Mita heartbeat interval. `None` disables the heartbeat.
     #[default(_code = "None")]
