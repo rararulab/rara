@@ -7,42 +7,59 @@ Unlike generic AI assistants that wait for your commands, Rara proactively monit
 ## Highlights
 
 - **Proactive** — Heartbeat-driven background actions, not just request-response
-- **Self-evolving** — 3-layer memory (facts, notes, recall) + skills system that learns and adapts
-- **Developer-first** — Deep integration with Git, K8s, coding workflows, workspace management
+- **Tape memory** — Append-only JSONL tape with anchor-based context windowing, fork/merge for transactional turns
+- **Developer-first** — Deep integration with Git, coding workflows, workspace management
 - **Multi-channel** — Telegram, Web Chat, Terminal interfaces
-- **Kernel architecture** — OS-inspired event loop, process table, sessions, and approval guards
+- **Kernel architecture** — OS-inspired event loop with 6 core components: LLM, Tool, Memory, Session, Guard, EventBus
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Channels                             │
-│              Telegram  ·  WebChat  ·  Terminal               │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│                        Kernel                               │
-│  Event Loop  ·  Process Table  ·  Sessions  ·  Approval     │
-│  LLM API  ·  Tool Registry  ·  Memory  ·  Guard  ·  Events │
-└──┬───────────────┬───────────────┬──────────────────────────┘
-   │               │               │
-   ▼               ▼               ▼
-┌────────┐  ┌────────────┐  ┌──────────────┐
-│ Memory │  │   Skills   │  │  Extensions  │
-│        │  │            │  │              │
-│ mem0   │  │ discovery  │  │ git          │
-│ Memos  │  │ registry   │  │ coding-task  │
-│Hindsight│ │ install    │  │ workspace    │
-│        │  │ watcher    │  │ k8s          │
-└────────┘  └────────────┘  │ backend-admin│
-                            └──────────────┘
-   │               │               │
-   ▼               ▼               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Integrations                           │
-│         MCP  ·  Composio  ·  OAuth  ·  Credential Store     │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         Channels                              │
+│               Telegram  ·  WebChat  ·  Terminal                │
+└───────────────────────────┬──────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│                         Kernel                                │
+│                                                               │
+│   ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
+│   │   LLM   │  │   Tool   │  │  Memory  │  │   Session    │  │
+│   │ Driver  │  │ Registry │  │  (Tape)  │  │   Index      │  │
+│   └─────────┘  └──────────┘  └──────────┘  └─────────────┘  │
+│   ┌─────────┐  ┌──────────────────────────────────────────┐  │
+│   │  Guard  │  │  EventBus · Notifications · Queue        │  │
+│   │Pipeline │  │  (sharded event dispatch + pub/sub)      │  │
+│   └─────────┘  └──────────────────────────────────────────┘  │
+│                                                               │
+│   Agent Loop · Context Budget · IO Subsystem · Rate Limiter  │
+└───┬──────────────┬──────────────┬────────────────────────────┘
+    │              │              │
+    ▼              ▼              ▼
+┌────────┐  ┌───────────┐  ┌──────────────┐
+│  Tape  │  │   Skills  │  │  Extensions  │
+│        │  │           │  │              │
+│ JSONL  │  │ discovery │  │ git          │
+│ append │  │ registry  │  │ backend-admin│
+│ anchor │  │           │  │              │
+│ fork   │  │           │  │              │
+└────────┘  └───────────┘  └──────────────┘
+    │              │              │
+    ▼              ▼              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                       Integrations                            │
+│          MCP  ·  Composio  ·  OAuth  ·  Credential Store      │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+### Tape Memory
+
+The tape is the single source of truth for conversation history — an append-only JSONL file per session.
+
+- **Entry types**: Message, ToolCall, ToolResult, Event, Anchor, Note, Summary
+- **Anchors** enable context windowing — entries before an anchor can be trimmed from the LLM context, but the full tape remains searchable
+- **Fork/merge** provides transactional turns — failed turns are discarded without polluting the tape
+- **Two-layer context budget** keeps LLM context within limits (truncate large tool results, compress older outputs)
 
 ### Crate Map
 
@@ -50,11 +67,13 @@ Unlike generic AI assistants that wait for your commands, Rara proactively monit
 |-------|--------|---------|
 | **Entry** | `rara-cmd`, `rara-app` | CLI binary and application composition root |
 | **Server** | `rara-server` | HTTP + gRPC endpoints |
-| **Core** | `rara-kernel`, `rara-boot`, `rara-channels` | Agent kernel, bootstrap, channel adapters |
-| **Capabilities** | `rara-memory`, `rara-skills`, `rara-sessions` | 3-layer memory, skill discovery/management, conversation persistence |
-| **Extensions** | `rara-git`, `rara-coding-task`, `rara-workspace`, `rara-backend-admin` | Developer-focused agent capabilities |
-| **Integrations** | `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-k8s` | External service adapters |
-| **Foundation** | `base`, `rara-error`, `rara-paths`, `rara-model` | Shared primitives, error types, paths, data models |
+| **Core** | `rara-kernel`, `rara-channels`, `rara-agents`, `rara-soul` | Agent kernel, channel adapters, agent manifests, personality |
+| **Capabilities** | `rara-skills`, `rara-sessions`, `rara-symphony` | Skill discovery, session persistence, issue orchestration |
+| **Extensions** | `rara-git`, `rara-backend-admin` | Developer-focused agent capabilities |
+| **Integrations** | `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-dock`, `rara-acp` | External service adapters, container orchestration, access control |
+| **Infrastructure** | `rara-vault`, `rara-keyring-store`, `rara-pg-credential-store` | Secrets and credential management |
+| **Foundation** | `base`, `rara-error`, `rara-runtime`, `rara-telemetry`, `rara-worker`, `rara-paths`, `rara-model`, `yunara-store`, `tool-macro`, `crawl4ai` | Shared primitives, error types, async runtimes, telemetry, task scheduling, paths, data models, KV store, proc macros |
+| **Domain** | `rara-domain-shared` | Settings, identity, security primitives |
 
 ## Getting Started
 
@@ -84,18 +103,20 @@ just clippy
 
 ### Configuration
 
-Copy `env.local.example` to `.env` and configure:
+All configuration is loaded from YAML (`~/.config/rara/config.yaml`). Copy `config.example.yaml` and configure:
 
-- `DATABASE_URL` — PostgreSQL connection
-- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — Telegram channel
-- LLM provider API keys
+- LLM provider and model settings
+- PostgreSQL connection
+- Telegram bot token and chat ID
+- Tape storage directory
+- Kernel concurrency limits
 
 ## Tech Stack
 
 - **Backend**: Rust, axum, tokio, sqlx, tonic (gRPC)
 - **Frontend**: React 19, Tailwind v4, shadcn/ui, TanStack Query v5
 - **Database**: PostgreSQL
-- **Memory**: mem0 (facts) + Memos (notes) + Hindsight (recall/reflect)
+- **Memory**: Tape system (append-only JSONL with anchor-based context windowing)
 - **Tools**: MCP protocol, Composio integration
 - **Deploy**: Docker Compose, Helm chart (K8s)
 
