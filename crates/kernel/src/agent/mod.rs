@@ -951,7 +951,9 @@ pub(crate) async fn run_agent_loop(
         }
     };
 
-    let max_iterations = manifest.max_iterations.unwrap_or(25);
+    let max_iterations = manifest
+        .max_iterations
+        .unwrap_or(handle.config().default_max_iterations);
     let (effective_prompt, has_soul) = build_agent_system_prompt(handle, &manifest);
     let provider_hint = manifest.provider_hint.as_deref();
 

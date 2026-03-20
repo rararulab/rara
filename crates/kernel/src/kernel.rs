@@ -105,7 +105,7 @@ pub struct KernelConfig {
     #[default = 8]
     pub default_child_limit:     usize,
     /// Default max LLM iterations for spawned agents.
-    #[default = 25]
+    #[default = 12]
     pub default_max_iterations:  usize,
     /// Hard cap for one tool execution wave inside a turn.
     ///
