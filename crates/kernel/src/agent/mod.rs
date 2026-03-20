@@ -1061,13 +1061,10 @@ pub(crate) async fn run_agent_loop(
         None
     };
 
-    // Pre-fetch interceptor system prompt fragment (avoids per-iteration lock).
-    let interceptor_fragment: Option<String> = {
-        let guard = output_interceptor.read().await;
-        guard
-            .as_ref()
-            .and_then(|i| i.system_prompt_fragment().map(str::to_owned))
-    };
+    // Interceptor prompt fragment is read dynamically each iteration (not cached)
+    // so it reflects the current MCP connection state — when context-mode
+    // disconnects, the fragment disappears and the LLM stops being told to
+    // call tools that no longer exist.
 
     for iteration in 0..max_iterations {
         // ── Auto-fold: pressure-driven context compression ───────────
@@ -1169,12 +1166,16 @@ pub(crate) async fn run_agent_loop(
             })?;
 
         // Inject output interceptor system prompt (e.g. context-mode guidance).
-        if let Some(ref fragment) = interceptor_fragment {
-            let insert_pos = messages
-                .iter()
-                .position(|m| m.role != crate::llm::Role::System)
-                .unwrap_or(messages.len());
-            messages.insert(insert_pos, crate::llm::Message::system(fragment.clone()));
+        // Read fresh each iteration so it tracks MCP connection state (#763).
+        {
+            let guard = output_interceptor.read().await;
+            if let Some(fragment) = guard.as_ref().and_then(|i| i.system_prompt_fragment()) {
+                let insert_pos = messages
+                    .iter()
+                    .position(|m| m.role != crate::llm::Role::System)
+                    .unwrap_or(messages.len());
+                messages.insert(insert_pos, crate::llm::Message::system(fragment.to_owned()));
+            }
         }
 
         // Conditional injections (tape search reminder only on first iteration)
