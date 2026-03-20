@@ -173,7 +173,8 @@ Guidelines:
 - Use "inline" mode for most steps (direct agent execution)
 - Use "worker" mode only for truly independent, heavyweight sub-tasks
 - Each step should be self-contained with clear acceptance criteria
-- Order steps logically — later steps may depend on earlier ones"#;
+- Order steps logically — later steps may depend on earlier ones
+- Only plan steps that use the tools listed in the tool summary below. Do not assume capabilities that are not listed."#;
 
 /// System prompt for the replan LLM call.
 const REPLAN_SYSTEM_PROMPT: &str = r#"You are a task planner performing a replan. A previous plan encountered an issue and needs revision.
