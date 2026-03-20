@@ -60,6 +60,11 @@ pub struct ProactiveConfig {
     /// Idle threshold in seconds — sessions idle beyond this duration
     /// trigger a `SessionIdle` signal.
     pub idle_threshold_secs: u64,
+
+    /// Session completed threshold in seconds — sessions idle beyond this
+    /// duration trigger a `SessionCompleted` signal (conversation ended).
+    /// Typically shorter than `idle_threshold_secs` (e.g. 600 = 10 minutes).
+    pub session_completed_secs: u64,
 }
 
 impl ProactiveConfig {
@@ -193,6 +198,7 @@ work_hours_start: "09:00"
 work_hours_end: "18:00"
 timezone: "Asia/Shanghai"
 idle_threshold_secs: 1800
+session_completed_secs: 600
 "#;
         let config: ProactiveConfig = serde_yaml::from_str(yaml).expect("should parse");
         assert_eq!(config.max_hourly, 5);

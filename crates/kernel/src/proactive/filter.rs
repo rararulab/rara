@@ -205,6 +205,7 @@ mod tests {
             .work_hours_end("18:00".to_string())
             .timezone("UTC".to_string())
             .idle_threshold_secs(1800)
+            .session_completed_secs(600)
             .build()
     }
 

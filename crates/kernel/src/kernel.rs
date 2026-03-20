@@ -1845,11 +1845,12 @@ impl Kernel {
     /// Emit `SessionIdle` signals for sessions that have been idle beyond
     /// the configured threshold.
     fn emit_idle_signals(&self) {
-        let idle_threshold_secs = match self.config.proactive.as_ref() {
-            Some(c) => c.idle_threshold_secs,
+        let proactive_config = match self.config.proactive.as_ref() {
+            Some(c) => c,
             None => return, // Proactive disabled.
         };
-        let idle_threshold = Duration::from_secs(idle_threshold_secs);
+        let completed_threshold = Duration::from_secs(proactive_config.session_completed_secs);
+        let idle_threshold = Duration::from_secs(proactive_config.idle_threshold_secs);
         let now = jiff::Timestamp::now();
         let mita_key = crate::session::SessionKey::deterministic("mita");
 
@@ -1873,10 +1874,18 @@ impl Kernel {
                 .map(|secs| Duration::from_secs_f64(secs))
                 .unwrap_or(Duration::ZERO);
 
+            // Emit at most one signal per session: SessionCompleted for the
+            // shorter window, SessionIdle for the longer one (not both).
             if idle_duration >= idle_threshold {
                 let signal = crate::proactive::ProactiveSignal::SessionIdle {
                     session_key: stats.session_key.clone(),
                     idle_duration,
+                };
+                self.try_emit_proactive_signal(signal);
+            } else if idle_duration >= completed_threshold {
+                let signal = crate::proactive::ProactiveSignal::SessionCompleted {
+                    session_key: stats.session_key.clone(),
+                    summary:     String::new(),
                 };
                 self.try_emit_proactive_signal(signal);
             }
@@ -2861,34 +2870,6 @@ impl Kernel {
             .unwrap_or(false);
 
         if has_result_tx {
-            // Worker/child session completed — emit SessionCompleted signal,
-            // but only for non-Mita children to avoid feedback loops where
-            // Mita dispatches agent → completes → signal → Mita again.
-            if !turn_failed {
-                let mita_key = crate::session::SessionKey::deterministic("mita");
-                let is_mita_child = self
-                    .process_table
-                    .with(&session_key, |p| p.parent_id.as_ref() == Some(&mita_key))
-                    .unwrap_or(false);
-
-                if !is_mita_child {
-                    let summary = self
-                        .process_table
-                        .with(&session_key, |p| {
-                            p.result
-                                .as_ref()
-                                .map(|r| r.output.chars().take(100).collect::<String>())
-                                .unwrap_or_default()
-                        })
-                        .unwrap_or_default();
-                    self.try_emit_proactive_signal(
-                        crate::proactive::ProactiveSignal::SessionCompleted {
-                            session_key: session_key.clone(),
-                            summary,
-                        },
-                    );
-                }
-            }
             self.cleanup_process(session_key).await;
             return;
         }
