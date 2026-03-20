@@ -62,6 +62,7 @@ unicode-normalization.workspace = true
 urlencoding.workspace = true
 usearch = "2"
 uuid.workspace = true
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 async-trait.workspace = true

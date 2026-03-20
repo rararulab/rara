@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod fold;
+pub(crate) mod loop_breaker;
 pub(crate) mod repetition;
 
 /// Maximum **byte** length for child/worker agent results passed back to
@@ -997,6 +998,9 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    let mut loop_breaker =
+        loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
+    let mut loop_breaker_warning: Option<String> = None;
 
     // ── Session length reminder state ─────────────────────────────────
     // Count user turns since the last anchor to detect long sessions that
@@ -1199,6 +1203,11 @@ pub(crate) async fn run_agent_loop(
 
         // Inject context pressure warning from previous iteration
         if let Some(warning) = context_pressure_warning.take() {
+            messages.push(llm::Message::user(warning));
+        }
+
+        // Inject loop breaker warning from previous iteration
+        if let Some(warning) = loop_breaker_warning.take() {
             messages.push(llm::Message::user(warning));
         }
 
@@ -2109,6 +2118,49 @@ pub(crate) async fn run_agent_loop(
             if did_create_anchor(&results_json) {
                 user_turns_since_anchor = 0;
                 session_length_warned = false;
+            }
+
+            // Record tool calls for loop detection.
+            for (_id, name, args) in &valid_tool_calls {
+                loop_breaker.record(name, &args.to_string());
+            }
+            let intervention = loop_breaker.check();
+            match intervention {
+                loop_breaker::LoopIntervention::None => {}
+                loop_breaker::LoopIntervention::Warn { pattern, message } => {
+                    warn!(
+                        tool_calls_made,
+                        pattern,
+                        %message,
+                        "loop breaker: injecting strategy-change warning"
+                    );
+                    stream_handle.emit(StreamEvent::LoopBreakerTriggered {
+                        tools: vec![],
+                        pattern: pattern.to_owned(),
+                        tool_calls_made,
+                    });
+                    loop_breaker_warning = Some(message);
+                }
+                loop_breaker::LoopIntervention::DisableTools {
+                    pattern,
+                    tools,
+                    message,
+                } => {
+                    warn!(
+                        tool_calls_made,
+                        pattern,
+                        ?tools,
+                        %message,
+                        "loop breaker: disabling tools and injecting warning"
+                    );
+                    stream_handle.emit(StreamEvent::LoopBreakerTriggered {
+                        tools: tools.clone(),
+                        pattern: pattern.to_owned(),
+                        tool_calls_made,
+                    });
+                    tool_defs.retain(|td| !tools.contains(&td.name));
+                    loop_breaker_warning = Some(message);
+                }
             }
         }
 

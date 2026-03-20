@@ -302,6 +302,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         }
         StreamEvent::ToolCallLimit { .. } => None, // handled by dedicated channel listener
         StreamEvent::ToolCallLimitResolved { .. } => None, // informational only
+        StreamEvent::LoopBreakerTriggered { .. } => None, // informational only
     }
 }
 
