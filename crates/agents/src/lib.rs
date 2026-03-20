@@ -136,6 +136,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "update-soul-state".to_string(),
         "evolve-soul".to_string(),
         "update-session-title".to_string(),
+        "update-proactive-config".to_string(),
     ],
     max_children:           Some(0),
     max_context_tokens:     None,
