@@ -117,7 +117,8 @@ pub struct AcpDelegateResult {
     name = "acp-delegate",
     description = "Delegate a task to an external coding agent via the Agent Communication \
                    Protocol. The agent runs as a subprocess, executes the prompt, and returns its \
-                   text output and tool call summary. Use list-acp-agents to see available agents."
+                   text output and tool call summary. Use list-acp-agents to see available agents.",
+    tier = "deferred"
 )]
 pub struct AcpDelegateTool {
     registry: AcpRegistryRef,

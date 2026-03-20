@@ -98,6 +98,31 @@ impl From<serde_json::Value> for ToolOutput {
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
+/// Typed result returned by the `discover-tools` tool.
+///
+/// Shared between the tool implementation (serializes) and the agent loop
+/// (deserializes), so schema changes cause compile errors on both sides.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiscoverToolsResult {
+    /// `"activated"` or `"no_matches"`.
+    pub status:  String,
+    /// Tool entries that were discovered (empty on no_matches).
+    #[serde(default)]
+    pub tools:   Vec<DiscoveredToolEntry>,
+    /// Human-readable message for the LLM.
+    pub message: String,
+}
+
+/// A single tool entry in a [`DiscoverToolsResult`].
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiscoveredToolEntry {
+    /// The tool name used for activation.
+    pub name:        String,
+    /// One-line description of the tool.
+    #[serde(default)]
+    pub description: String,
+}
+
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).
 /// Implementors are called on every `GetToolRegistry` syscall to inject
 /// dynamic tools into the registry.
@@ -157,6 +182,9 @@ pub struct ToolContext {
     pub rara_message_id:       crate::io::MessageId,
     /// Context window size in tokens for the current model.
     pub context_window_tokens: usize,
+    /// Live tool registry for the current session (includes dynamic MCP tools).
+    /// Used by `discover-tools` to query the deferred catalog at runtime.
+    pub tool_registry:         Option<ToolRegistryRef>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -168,8 +196,21 @@ impl std::fmt::Debug for ToolContext {
             .field("event_queue", &"...")
             .field("rara_message_id", &self.rara_message_id)
             .field("context_window_tokens", &self.context_window_tokens)
+            .field("tool_registry", &self.tool_registry.as_ref().map(|_| "..."))
             .finish()
     }
+}
+
+/// Tool loading tier for deferred tool discovery.
+///
+/// `Core` tools are always included in LLM requests. `Deferred` tools are
+/// only included after the LLM explicitly activates them via `discover-tools`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolTier {
+    /// Always sent in tool definitions.
+    Core,
+    /// Only sent after activation via `discover-tools`.
+    Deferred,
 }
 
 /// Agent-callable tool.
@@ -195,6 +236,9 @@ pub trait AgentTool: Send + Sync {
     /// (e.g. context-mode indexing). Tools with binary, always-small, or
     /// write-only output should override this to return `true`.
     fn bypass_output_interceptor(&self) -> bool { false }
+
+    /// The loading tier for this tool. Defaults to [`ToolTier::Core`].
+    fn tier(&self) -> ToolTier { ToolTier::Core }
 }
 
 /// Registry of available tools for an agent run.
@@ -230,17 +274,35 @@ impl ToolRegistry {
         self.tools.iter().map(|(name, tool)| (name.as_str(), tool))
     }
 
-    /// Convert all tools to `llm::ToolDefinition` format for the
-    /// `LlmDriver` path.
+    /// Return tool definitions for only Core tools plus any tools in the
+    /// `activated` set. This is the primary method used by the agent loop.
     #[must_use]
-    pub fn to_llm_tool_definitions(&self) -> Vec<crate::llm::ToolDefinition> {
+    pub fn to_llm_tool_definitions_active(
+        &self,
+        activated: &std::collections::HashSet<String>,
+    ) -> Vec<crate::llm::ToolDefinition> {
         self.tools
             .values()
+            .filter(|tool| tool.tier() == ToolTier::Core || activated.contains(tool.name()))
             .map(|tool| crate::llm::ToolDefinition {
                 name:        tool.name().to_string(),
                 description: tool.description().to_string(),
                 parameters:  tool.parameters_schema(),
             })
+            .collect()
+    }
+
+    /// Return a catalog of all Deferred tools that are NOT yet activated.
+    /// Each entry is `(name, description)` for the discover-tools search.
+    #[must_use]
+    pub fn deferred_catalog(
+        &self,
+        activated: &std::collections::HashSet<String>,
+    ) -> Vec<(String, String)> {
+        self.tools
+            .values()
+            .filter(|tool| tool.tier() == ToolTier::Deferred && !activated.contains(tool.name()))
+            .map(|tool| (tool.name().to_string(), tool.description().to_string()))
             .collect()
     }
 
@@ -572,5 +634,109 @@ mod tests {
     fn clean_schema_empty_params() {
         let cleaned = super::clean_schema(schemars::schema_for!(super::EmptyParams));
         assert_eq!(cleaned["type"], "object");
+    }
+
+    #[test]
+    fn to_llm_tool_definitions_active_filters_by_tier() {
+        use std::collections::HashSet;
+
+        struct CoreTool;
+        #[async_trait]
+        impl AgentTool for CoreTool {
+            fn name(&self) -> &str { "core-tool" }
+
+            fn description(&self) -> &str { "A core tool" }
+
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolContext,
+            ) -> anyhow::Result<ToolOutput> {
+                unimplemented!()
+            }
+        }
+
+        struct DeferredTool;
+        #[async_trait]
+        impl AgentTool for DeferredTool {
+            fn name(&self) -> &str { "deferred-tool" }
+
+            fn description(&self) -> &str { "A deferred tool" }
+
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolContext,
+            ) -> anyhow::Result<ToolOutput> {
+                unimplemented!()
+            }
+
+            fn tier(&self) -> ToolTier { ToolTier::Deferred }
+        }
+
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(CoreTool));
+        reg.register(Arc::new(DeferredTool));
+
+        // Without activation: only core tool
+        let empty = HashSet::new();
+        let defs = reg.to_llm_tool_definitions_active(&empty);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "core-tool");
+
+        // With activation: both tools
+        let mut activated = HashSet::new();
+        activated.insert("deferred-tool".to_string());
+        let defs = reg.to_llm_tool_definitions_active(&activated);
+        assert_eq!(defs.len(), 2);
+
+        // Deferred catalog shows unactivated tools
+        let catalog = reg.deferred_catalog(&empty);
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].0, "deferred-tool");
+
+        // Deferred catalog excludes activated tools
+        let catalog = reg.deferred_catalog(&activated);
+        assert!(catalog.is_empty());
+    }
+
+    #[test]
+    fn discover_tools_result_deserializes_activated() {
+        let json = serde_json::json!({
+            "status": "activated",
+            "tools": [
+                {"name": "send-email", "description": "Send email"},
+                {"name": "send-image", "description": "Send image"},
+            ],
+            "message": "Activated 2 tool(s)."
+        });
+        let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
+        assert_eq!(result.status, "activated");
+        assert_eq!(result.tools.len(), 2);
+        assert_eq!(result.tools[0].name, "send-email");
+        assert_eq!(result.tools[1].name, "send-image");
+    }
+
+    #[test]
+    fn discover_tools_result_deserializes_no_matches() {
+        let json = serde_json::json!({
+            "status": "no_matches",
+            "tools": [],
+            "message": "No deferred tools match 'xyz'."
+        });
+        let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
+        assert_eq!(result.status, "no_matches");
+        assert!(result.tools.is_empty());
+    }
+
+    #[test]
+    fn discover_tools_result_defaults_tools_when_missing() {
+        let json = serde_json::json!({"status": "no_matches", "message": "nothing"});
+        let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
+        assert!(result.tools.is_empty());
     }
 }

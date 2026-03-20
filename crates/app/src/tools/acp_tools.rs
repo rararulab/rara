@@ -42,7 +42,8 @@ pub struct InstallAcpAgentResult {
     name = "install-acp-agent",
     description = "Register a new ACP agent so it becomes available for delegation via \
                    acp-delegate. The agent is not started immediately — ACP agents are spawned on \
-                   demand."
+                   demand.",
+    tier = "deferred"
 )]
 pub struct InstallAcpAgentTool {
     registry: AcpRegistryRef,
@@ -116,7 +117,8 @@ pub struct ListAcpAgentsResult {
 #[tool(
     name = "list-acp-agents",
     description = "List all registered ACP agents with their status (enabled, builtin) and spawn \
-                   command."
+                   command.",
+    tier = "deferred"
 )]
 pub struct ListAcpAgentsTool {
     registry: AcpRegistryRef,
@@ -189,7 +191,8 @@ pub struct RemoveAcpAgentResult {
 #[derive(ToolDef)]
 #[tool(
     name = "remove-acp-agent",
-    description = "Remove an ACP agent from the registry. Built-in agents cannot be removed."
+    description = "Remove an ACP agent from the registry. Built-in agents cannot be removed.",
+    tier = "deferred"
 )]
 pub struct RemoveAcpAgentTool {
     registry: AcpRegistryRef,

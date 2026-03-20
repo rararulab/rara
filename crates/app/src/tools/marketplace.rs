@@ -54,7 +54,8 @@ pub struct MarketplaceParams {
                    skill repo from GitHub (owner/repo or full URL). Use install to install a \
                    single plugin from a marketplace. Actions: browse, search, install, \
                    install_repo, enable, disable, add_source, remove_source, refresh, \
-                   clawhub_search, clawhub_browse, clawhub_install."
+                   clawhub_search, clawhub_browse, clawhub_install.",
+    tier = "deferred"
 )]
 pub struct MarketplaceTool {
     service: Arc<MarketplaceService>,

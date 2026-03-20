@@ -60,7 +60,8 @@ pub struct ListSkillsParams {}
 #[tool(
     name = "list-skills",
     description = "List all available skills with their metadata (name, description, \
-                   allowed_tools, source, eligibility)."
+                   allowed_tools, source, eligibility).",
+    tier = "deferred"
 )]
 pub struct ListSkillsTool {
     registry: InMemoryRegistry,
@@ -124,7 +125,8 @@ pub struct CreateSkillParams {
 #[derive(ToolDef)]
 #[tool(
     name = "create-skill",
-    description = "Create a new skill by writing a SKILL.md file with frontmatter and prompt body."
+    description = "Create a new skill by writing a SKILL.md file with frontmatter and prompt body.",
+    tier = "deferred"
 )]
 pub struct CreateSkillTool {
     registry: InMemoryRegistry,
@@ -195,7 +197,8 @@ pub struct DeleteSkillParams {
 #[derive(ToolDef)]
 #[tool(
     name = "delete-skill",
-    description = "Delete a skill by removing its directory and unregistering it."
+    description = "Delete a skill by removing its directory and unregistering it.",
+    tier = "deferred"
 )]
 pub struct DeleteSkillTool {
     registry: InMemoryRegistry,
