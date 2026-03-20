@@ -970,11 +970,16 @@ pub(crate) async fn run_agent_loop(
     let input_text = user_text.clone();
     let tool_execution_timeout = handle.config().tool_execution_timeout;
 
+    // Deferred tool activation state — tracks which deferred tools the LLM
+    // has discovered via `discover-tools` during this turn.
+    let mut activated_deferred: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
     // Check model tool support
     let mut tool_defs = if tools.is_empty() {
         vec![]
     } else if capabilities.supports_tools {
-        tools.to_llm_tool_definitions()
+        tools.to_llm_tool_definitions_active(&activated_deferred)
     } else {
         warn!(
             model_name = %model,
@@ -2102,6 +2107,25 @@ pub(crate) async fn run_agent_loop(
             }
             if should_remind_tape_anchor(&tool_names, &results_json) {
                 needs_anchor_reminder = true;
+            }
+            // If discover-tools was called, extract activated tool names and
+            // regenerate tool_defs so newly activated tools are available in
+            // the next iteration.
+            if tool_names.iter().any(|n| n == "discover-tools") {
+                for (name, result) in tool_names.iter().zip(results_json.iter()) {
+                    if name == "discover-tools" {
+                        if let Some(tools_arr) = result.get("tools").and_then(|v| v.as_array()) {
+                            for tool_val in tools_arr {
+                                if let Some(tool_name) =
+                                    tool_val.get("name").and_then(|v| v.as_str())
+                                {
+                                    activated_deferred.insert(tool_name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                tool_defs = tools.to_llm_tool_definitions_active(&activated_deferred);
             }
             // Reset session-length counter when the agent creates an anchor.
             // Detected via result payload rather than hardcoded tool names so

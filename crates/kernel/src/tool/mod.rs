@@ -172,6 +172,18 @@ impl std::fmt::Debug for ToolContext {
     }
 }
 
+/// Tool loading tier for deferred tool discovery.
+///
+/// `Core` tools are always included in LLM requests. `Deferred` tools are
+/// only included after the LLM explicitly activates them via `discover-tools`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolTier {
+    /// Always sent in tool definitions.
+    Core,
+    /// Only sent after activation via `discover-tools`.
+    Deferred,
+}
+
 /// Agent-callable tool.
 #[async_trait]
 pub trait AgentTool: Send + Sync {
@@ -195,6 +207,9 @@ pub trait AgentTool: Send + Sync {
     /// (e.g. context-mode indexing). Tools with binary, always-small, or
     /// write-only output should override this to return `true`.
     fn bypass_output_interceptor(&self) -> bool { false }
+
+    /// The loading tier for this tool. Defaults to [`ToolTier::Core`].
+    fn tier(&self) -> ToolTier { ToolTier::Core }
 }
 
 /// Registry of available tools for an agent run.
@@ -241,6 +256,38 @@ impl ToolRegistry {
                 description: tool.description().to_string(),
                 parameters:  tool.parameters_schema(),
             })
+            .collect()
+    }
+
+    /// Return tool definitions for only Core tools plus any tools in the
+    /// `activated` set. This is the primary method used by the agent loop.
+    #[must_use]
+    pub fn to_llm_tool_definitions_active(
+        &self,
+        activated: &std::collections::HashSet<String>,
+    ) -> Vec<crate::llm::ToolDefinition> {
+        self.tools
+            .values()
+            .filter(|tool| tool.tier() == ToolTier::Core || activated.contains(tool.name()))
+            .map(|tool| crate::llm::ToolDefinition {
+                name:        tool.name().to_string(),
+                description: tool.description().to_string(),
+                parameters:  tool.parameters_schema(),
+            })
+            .collect()
+    }
+
+    /// Return a catalog of all Deferred tools that are NOT yet activated.
+    /// Each entry is `(name, description)` for the discover-tools search.
+    #[must_use]
+    pub fn deferred_catalog(
+        &self,
+        activated: &std::collections::HashSet<String>,
+    ) -> Vec<(String, String)> {
+        self.tools
+            .values()
+            .filter(|tool| tool.tier() == ToolTier::Deferred && !activated.contains(tool.name()))
+            .map(|tool| (tool.name().to_string(), tool.description().to_string()))
             .collect()
     }
 
@@ -572,5 +619,73 @@ mod tests {
     fn clean_schema_empty_params() {
         let cleaned = super::clean_schema(schemars::schema_for!(super::EmptyParams));
         assert_eq!(cleaned["type"], "object");
+    }
+
+    #[test]
+    fn to_llm_tool_definitions_active_filters_by_tier() {
+        use std::collections::HashSet;
+
+        struct CoreTool;
+        #[async_trait]
+        impl AgentTool for CoreTool {
+            fn name(&self) -> &str { "core-tool" }
+
+            fn description(&self) -> &str { "A core tool" }
+
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolContext,
+            ) -> anyhow::Result<ToolOutput> {
+                unimplemented!()
+            }
+        }
+
+        struct DeferredTool;
+        #[async_trait]
+        impl AgentTool for DeferredTool {
+            fn name(&self) -> &str { "deferred-tool" }
+
+            fn description(&self) -> &str { "A deferred tool" }
+
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolContext,
+            ) -> anyhow::Result<ToolOutput> {
+                unimplemented!()
+            }
+
+            fn tier(&self) -> ToolTier { ToolTier::Deferred }
+        }
+
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(CoreTool));
+        reg.register(Arc::new(DeferredTool));
+
+        // Without activation: only core tool
+        let empty = HashSet::new();
+        let defs = reg.to_llm_tool_definitions_active(&empty);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "core-tool");
+
+        // With activation: both tools
+        let mut activated = HashSet::new();
+        activated.insert("deferred-tool".to_string());
+        let defs = reg.to_llm_tool_definitions_active(&activated);
+        assert_eq!(defs.len(), 2);
+
+        // Deferred catalog shows unactivated tools
+        let catalog = reg.deferred_catalog(&empty);
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].0, "deferred-tool");
+
+        // Deferred catalog excludes activated tools
+        let catalog = reg.deferred_catalog(&activated);
+        assert!(catalog.is_empty());
     }
 }

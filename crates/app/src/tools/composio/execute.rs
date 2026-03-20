@@ -28,7 +28,8 @@ pub struct ComposioExecuteParams {
     name = "composio_execute",
     description = "Execute an action on a connected app via Composio. Requires the tool_slug \
                    (from composio_list) and action parameters. The connected_account_id is \
-                   auto-resolved when omitted."
+                   auto-resolved when omitted.",
+    tier = "deferred"
 )]
 pub(super) struct ComposioExecuteTool {
     shared: ComposioShared,

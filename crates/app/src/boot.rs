@@ -231,6 +231,14 @@ pub(crate) async fn boot(
         }
     };
 
+    // Register discover-tools with a snapshot of the current registry so it
+    // can enumerate deferred tools. The snapshot excludes discover-tools itself
+    // (which is Core), so the catalog is accurate.
+    let catalog_snapshot = Arc::new(tool_registry.clone());
+    tool_registry.register(Arc::new(crate::tools::DiscoverToolsTool::new(
+        catalog_snapshot,
+    )));
+
     let tools = Arc::new(tool_registry);
 
     // -- user store --------------------------------------------------------

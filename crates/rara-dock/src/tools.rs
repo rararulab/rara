@@ -121,7 +121,8 @@ impl DockMutationResult {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.block.add",
-    description = "Add a new content block to the dock canvas. Returns the mutation to apply."
+    description = "Add a new content block to the dock canvas. Returns the mutation to apply.",
+    tier = "deferred"
 )]
 pub struct DockBlockAddTool {
     sink: DockMutationSink,
@@ -176,7 +177,8 @@ impl ToolExecute for DockBlockAddTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.block.update",
-    description = "Update the HTML content of an existing canvas block."
+    description = "Update the HTML content of an existing canvas block.",
+    tier = "deferred"
 )]
 pub struct DockBlockUpdateTool {
     sink: DockMutationSink,
@@ -228,7 +230,8 @@ impl ToolExecute for DockBlockUpdateTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.block.remove",
-    description = "Remove a canvas block by ID."
+    description = "Remove a canvas block by ID.",
+    tier = "deferred"
 )]
 pub struct DockBlockRemoveTool {
     sink: DockMutationSink,
@@ -277,7 +280,8 @@ impl ToolExecute for DockBlockRemoveTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.fact.add",
-    description = "Add a shared fact to the dock session. Facts persist across turns."
+    description = "Add a shared fact to the dock session. Facts persist across turns.",
+    tier = "deferred"
 )]
 pub struct DockFactAddTool {
     sink: DockMutationSink,
@@ -329,7 +333,8 @@ impl ToolExecute for DockFactAddTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.fact.update",
-    description = "Update the content of an existing shared fact."
+    description = "Update the content of an existing shared fact.",
+    tier = "deferred"
 )]
 pub struct DockFactUpdateTool {
     sink: DockMutationSink,
@@ -378,7 +383,11 @@ impl ToolExecute for DockFactUpdateTool {
 
 /// Remove a shared fact.
 #[derive(ToolDef)]
-#[tool(name = "dock.fact.remove", description = "Remove a shared fact by ID.")]
+#[tool(
+    name = "dock.fact.remove",
+    description = "Remove a shared fact by ID.",
+    tier = "deferred"
+)]
 pub struct DockFactRemoveTool {
     sink: DockMutationSink,
 }
@@ -426,7 +435,8 @@ impl ToolExecute for DockFactRemoveTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.annotation.add",
-    description = "Add an annotation to the dock canvas, optionally attached to a block."
+    description = "Add an annotation to the dock canvas, optionally attached to a block.",
+    tier = "deferred"
 )]
 pub struct DockAnnotationAddTool {
     sink: DockMutationSink,
@@ -502,7 +512,8 @@ impl ToolExecute for DockAnnotationAddTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.annotation.update",
-    description = "Update an existing annotation."
+    description = "Update an existing annotation.",
+    tier = "deferred"
 )]
 pub struct DockAnnotationUpdateTool {
     sink: DockMutationSink,
@@ -577,7 +588,8 @@ impl ToolExecute for DockAnnotationUpdateTool {
 #[derive(ToolDef)]
 #[tool(
     name = "dock.annotation.remove",
-    description = "Remove an annotation by ID."
+    description = "Remove an annotation by ID.",
+    tier = "deferred"
 )]
 pub struct DockAnnotationRemoveTool {
     sink: DockMutationSink,

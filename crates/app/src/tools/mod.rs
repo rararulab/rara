@@ -23,6 +23,7 @@ mod acp_tools;
 mod bash;
 mod composio;
 mod debug_trace;
+mod discover;
 mod edit_file;
 mod find_files;
 mod grep;
@@ -55,6 +56,7 @@ use acp_delegate::AcpDelegateTool;
 use acp_tools::{InstallAcpAgentTool, ListAcpAgentsTool, RemoveAcpAgentTool};
 use bash::BashTool;
 use debug_trace::DebugTraceTool;
+pub use discover::DiscoverToolsTool;
 use edit_file::EditFileTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -143,6 +145,8 @@ pub fn rara_tool_names() -> Vec<String> {
         InstallAcpAgentTool::TOOL_NAME,
         ListAcpAgentsTool::TOOL_NAME,
         RemoveAcpAgentTool::TOOL_NAME,
+        // Deferred tool discovery
+        DiscoverToolsTool::TOOL_NAME,
     ]
     .into_iter()
     .map(String::from)

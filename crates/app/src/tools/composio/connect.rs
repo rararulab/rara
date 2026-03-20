@@ -24,7 +24,8 @@ pub struct ComposioConnectParams {
     name = "composio_connect",
     description = "Get an OAuth connection URL to authorize a third-party app via Composio. \
                    Returns a redirect URL the user should open in their browser to complete \
-                   authorization."
+                   authorization.",
+    tier = "deferred"
 )]
 pub(super) struct ComposioConnectTool {
     shared: ComposioShared,

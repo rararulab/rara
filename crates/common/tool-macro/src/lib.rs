@@ -55,6 +55,7 @@ struct ToolAttrs {
     execute_fn:         Option<Expr>,
     manual_impl:        bool,
     bypass_interceptor: bool,
+    tier:               Option<LitStr>,
 }
 
 fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
@@ -64,6 +65,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
     let mut execute_fn: Option<Expr> = None;
     let mut manual_impl = false;
     let mut bypass_interceptor = false;
+    let mut tier: Option<LitStr> = None;
 
     for attr in &input.attrs {
         if !attr.path().is_ident("tool") {
@@ -88,6 +90,9 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
                 meta.input.parse::<Token![=]>()?;
                 let lit: LitBool = meta.input.parse()?;
                 manual_impl = lit.value();
+            } else if meta.path.is_ident("tier") {
+                meta.input.parse::<Token![=]>()?;
+                tier = Some(meta.input.parse::<LitStr>()?);
             } else if meta.path.is_ident("bypass_interceptor") {
                 if meta.input.peek(Token![=]) {
                     meta.input.parse::<Token![=]>()?;
@@ -121,6 +126,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
         execute_fn,
         manual_impl,
         bypass_interceptor,
+        tier,
     })
 }
 
@@ -181,6 +187,13 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         quote! {}
     };
 
+    let tier_impl = match &attrs.tier {
+        Some(lit) if lit.value() == "deferred" => quote! {
+            fn tier(&self) -> crate::tool::ToolTier { crate::tool::ToolTier::Deferred }
+        },
+        _ => quote! {},
+    };
+
     let expanded = quote! {
         #constants
 
@@ -203,6 +216,8 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             }
 
             #bypass_impl
+
+            #tier_impl
         }
     };
 

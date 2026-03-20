@@ -21,7 +21,8 @@ pub struct ComposioAccountsParams {
 #[tool(
     name = "composio_accounts",
     description = "List connected OAuth accounts on Composio. Shows which third-party apps \
-                   (Gmail, Notion, GitHub, etc.) have been authorized and their connection status."
+                   (Gmail, Notion, GitHub, etc.) have been authorized and their connection status.",
+    tier = "deferred"
 )]
 pub(super) struct ComposioAccountsTool {
     shared: ComposioShared,
