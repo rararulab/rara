@@ -501,6 +501,35 @@ mod tests {
         assert!(g.check("read-file", &args).is_some());
     }
 
+    #[test]
+    fn multiple_whitelist_entries_all_pass() {
+        let g = PathScopeGuard::new(
+            PathBuf::from("/home/user/project"),
+            vec![
+                PathBuf::from("/tmp/scratch"),
+                PathBuf::from("/var/log/rara"),
+                PathBuf::from("/home/user/.claude"),
+            ],
+        );
+        // Each whitelist entry allows its subtree.
+        assert_eq!(
+            g.check("read-file", &json!({"file_path": "/var/log/rara/rara.log"})),
+            None
+        );
+        assert_eq!(
+            g.check(
+                "list-directory",
+                &json!({"path": "/home/user/.claude/skills"})
+            ),
+            None
+        );
+        // Unrelated path still blocked.
+        assert!(
+            g.check("read-file", &json!({"file_path": "/etc/secret"}))
+                .is_some()
+        );
+    }
+
     // ── dynamic approval ────────────────────────────────────────────
 
     #[test]
