@@ -321,10 +321,8 @@ impl LlmDriver for OpenAiDriver {
                         break;
                     }
                     let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
-                        tracing::debug!(
-                            data = &event.data[..event.data.len().min(200)],
-                            "skipping unparseable SSE chunk"
-                        );
+                        let truncated = truncate_utf8(&event.data, 200);
+                        tracing::debug!(data = truncated, "skipping unparseable SSE chunk");
                         continue;
                     };
                     acc.process_chunk(&chunk, &tx).await;
@@ -524,6 +522,19 @@ impl StreamAccumulator {
 // ---------------------------------------------------------------------------
 
 fn non_empty(s: String) -> Option<String> { if s.is_empty() { None } else { Some(s) } }
+
+/// Truncate a string to at most `max_bytes` bytes without splitting a UTF-8
+/// code point.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 fn parse_stop_reason(reason: Option<&str>) -> StopReason {
     match reason {
