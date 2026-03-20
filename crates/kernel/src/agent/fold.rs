@@ -91,6 +91,11 @@ impl ContextFolder {
         }
         content.push_str("## New conversation to summarize\n");
         content.push_str(&format_messages_for_fold(messages));
+        content.push_str(&format!(
+            "\n\nTarget output length: ~{} tokens. Keep the JSON output concise to fit within \
+             this budget.",
+            max_tokens
+        ));
 
         let user_msg = Message::user(content);
 
