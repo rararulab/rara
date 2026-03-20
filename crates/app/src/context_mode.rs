@@ -34,9 +34,6 @@ use tracing::{debug, warn};
 /// Name of the context-mode MCP server in the registry.
 const SERVER_NAME: &str = "context-mode";
 
-/// Tool name prefix used by context-mode MCP server.
-const TOOL_PREFIX: &str = "context-mode__";
-
 /// Default output size threshold in bytes (8 KB).
 const DEFAULT_THRESHOLD: usize = 8 * 1024;
 
