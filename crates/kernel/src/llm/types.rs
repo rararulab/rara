@@ -30,6 +30,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
+    /// Developer role (GPT-4.1+); semantically equivalent to system for most
+    /// providers.
+    Developer,
     User,
     Assistant,
     Tool,
