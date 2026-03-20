@@ -252,3 +252,4 @@ Remind user to clean up worktrees after the PR is merged. Load cleanup commands 
 - **Missing labels** — Every issue and PR must have type + component labels.
 - **Design doc for trivial changes** — Use `--quick` instead of proposing 2-3 approaches for a typo.
 - **Stale worktree base** — Always create worktrees from latest `origin/main` to avoid merge conflicts.
+- **Assuming no review on subagent failure** — When a review subagent fails (rate limit, timeout), ALWAYS check PR/issue comments first (`gh api repos/.../issues/{PR}/comments`) — the subagent may have posted its review before failing. Do NOT substitute with a superficial inline review. Process every existing finding before proceeding.
