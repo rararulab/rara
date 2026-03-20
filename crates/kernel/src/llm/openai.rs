@@ -702,6 +702,8 @@ impl<'a> ChatRequest<'a> {
             messages,
             stream,
             temperature: request.temperature,
+            // Send both: `max_tokens` (legacy) and `max_completion_tokens` (new)
+            // so the request works with older and newer OpenAI-compatible APIs.
             max_tokens: request.max_tokens,
             max_completion_tokens: request.max_tokens,
             tools,
@@ -831,6 +833,11 @@ struct RawFunctionChunk {
     arguments: Option<String>,
 }
 
+/// Token usage from the provider response.
+///
+/// Field names vary across providers (OpenAI uses `prompt_tokens` /
+/// `completion_tokens`, Anthropic uses `input_tokens` / `output_tokens`),
+/// so we accept all common variants via serde aliases.
 #[derive(Debug, Deserialize)]
 struct RawUsage {
     #[serde(alias = "prompt_tokens", alias = "input_tokens")]
