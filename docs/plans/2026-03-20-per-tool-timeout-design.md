@@ -59,8 +59,8 @@ let tool_result = tokio::select! {
 };
 ```
 
-Tool futures are spawned into a `JoinSet` (not `join_all`) so that completed
-results are preserved if the global wave timeout fires.
+Tool futures are collected into a `FuturesUnordered` (not `join_all`) so that
+completed results are preserved if the global wave timeout fires.
 
 ### 5. Timeout behavior
 

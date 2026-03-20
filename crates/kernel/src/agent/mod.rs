@@ -1881,8 +1881,8 @@ pub(crate) async fn run_agent_loop(
             .ok()
             .flatten();
 
-        // Execute all tool calls concurrently via JoinSet so we can
-        // harvest partial results if the global wave timeout fires.
+        // Execute all tool calls concurrently via FuturesUnordered so we
+        // can harvest partial results if the global wave timeout fires.
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
             .map(|(_id, name, args)| {

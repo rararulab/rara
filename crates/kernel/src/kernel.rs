@@ -230,6 +230,8 @@ impl Kernel {
                 "default_tool_timeout must be less than tool_execution_timeout — clamping to {}s",
                 config.tool_execution_timeout.as_secs().saturating_sub(30),
             );
+            // Margin is at most 30s, but shrinks to half the wave timeout
+            // when it is very small (e.g. 10s wave → 5s margin → 5s default).
             let margin = Duration::from_secs(30.min(config.tool_execution_timeout.as_secs() / 2));
             config.default_tool_timeout = config
                 .tool_execution_timeout
