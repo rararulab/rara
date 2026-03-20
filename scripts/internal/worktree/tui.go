@@ -78,8 +78,10 @@ type deleteResultMsg struct {
 }
 
 // sizeResultMsg delivers asynchronously computed disk sizes.
+// The generation field prevents stale results from overwriting a newer entry list.
 type sizeResultMsg struct {
-	sizes map[int]int64 // index → bytes
+	generation int            // must match tuiModel.generation to apply
+	sizes      map[int]int64 // index → bytes
 }
 
 type pruneResultMsg struct{ err error }
@@ -101,16 +103,17 @@ type toast struct {
 }
 
 type tuiModel struct {
-	table    table.Model
-	entries  []Entry
-	selected map[int]bool
+	table      table.Model
+	entries    []Entry
+	selected   map[int]bool
 	message    string // status message after an action
 	messageSeq int    // incremented on each new message, used for auto-dismiss
 	busy       bool   // true while an async operation is running
 	quitting   bool
 	toasts     []toast // active toast notifications (errors)
 	toastSeq   int     // auto-incrementing toast ID
-	sizesLoaded bool  // true once async size computation has completed
+	sizesLoaded bool   // true once async size computation has completed
+	generation  int    // incremented on each reload, guards against stale sizeResultMsg
 }
 
 // RunTUI launches the interactive worktree manager.
@@ -136,7 +139,7 @@ func humanSize(bytes int64) string {
 	case bytes < 1024:
 		return fmt.Sprintf("%d B", bytes)
 	case bytes < 1024*1024:
-		return fmt.Sprintf("%d KB", bytes/1024)
+		return fmt.Sprintf("%.0f KB", float64(bytes)/1024)
 	case bytes < 1024*1024*1024:
 		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
 	default:
@@ -311,8 +314,10 @@ func (m tuiModel) Init() tea.Cmd {
 }
 
 // computeSizesCmd returns a tea.Cmd that computes disk sizes for all entries in the background.
+// Captures the current generation to discard stale results after a reload.
 func (m *tuiModel) computeSizesCmd() tea.Cmd {
 	entries := m.entries
+	gen := m.generation
 	return func() tea.Msg {
 		sizes := make(map[int]int64, len(entries))
 		for i, e := range entries {
@@ -324,7 +329,7 @@ func (m *tuiModel) computeSizesCmd() tea.Cmd {
 			}
 			sizes[i] = dirSize(e.Path)
 		}
-		return sizeResultMsg{sizes: sizes}
+		return sizeResultMsg{generation: gen, sizes: sizes}
 	}
 }
 
@@ -347,6 +352,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sizeResultMsg:
+		// Discard stale results from a previous generation
+		if msg.generation != m.generation {
+			return m, nil
+		}
 		for i, sz := range msg.sizes {
 			if i < len(m.entries) {
 				m.entries[i].DiskSize = sz
@@ -385,6 +394,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = msg.entries
 		m.selected = make(map[int]bool)
 		m.sizesLoaded = false
+		m.generation++
 		m.refreshRows()
 		m.table.SetHeight(min(len(msg.entries)+1, 25))
 		// Re-trigger async size computation for the new entries
@@ -474,8 +484,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // deleteSelectedCmd returns a tea.Cmd that removes selected worktrees in the background.
 func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 	type target struct {
-		path   string
-		branch string
+		path     string
+		branch   string
+		diskSize int64 // cached size from entry, or computed fresh if not loaded
 	}
 	var targets []target
 	for idx, sel := range m.selected {
@@ -486,7 +497,7 @@ func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 		if e.Protected() {
 			continue
 		}
-		targets = append(targets, target{path: e.Path, branch: e.Branch})
+		targets = append(targets, target{path: e.Path, branch: e.Branch, diskSize: e.DiskSize})
 	}
 	if len(targets) == 0 {
 		return nil
@@ -502,8 +513,11 @@ func (m *tuiModel) deleteSelectedCmd(force bool) tea.Cmd {
 		var freedBytes int64
 		var errors []string
 		for _, t := range targets {
-			// Measure size before removal so we can report freed space
-			sz := dirSize(t.path)
+			// Use cached size if available, otherwise compute fresh
+			sz := t.diskSize
+			if sz == 0 {
+				sz = dirSize(t.path)
+			}
 			if err := Remove(t.path, force); err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %s", shortenPath(t.path), err))
 				continue

@@ -79,6 +79,23 @@ func List() ([]Entry, error) {
 	var cur Entry
 	prunable := false
 	locked := false
+
+	// finalizeEntry fills computed fields and returns the entry ready for collection.
+	finalizeEntry := func(e Entry) Entry {
+		e.IsMain = e.Path == mainPath
+		e.Prunable = prunable
+		e.Locked = locked
+		e.IsCurrent = isSameOrChild(cwd, e.Path)
+		e.Status = classifyEntry(e, merged)
+		// Populate LastActive for non-prunable entries with existing paths
+		if !e.Prunable {
+			if _, err := os.Stat(e.Path); err == nil {
+				e.LastActive = lastActiveTime(e.Path)
+			}
+		}
+		return e
+	}
+
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -94,35 +111,14 @@ func List() ([]Entry, error) {
 		case line == "locked", strings.HasPrefix(line, "locked "):
 			locked = true
 		case line == "":
-			cur.IsMain = cur.Path == mainPath
-			cur.Prunable = prunable
-			cur.Locked = locked
-			cur.IsCurrent = isSameOrChild(cwd, cur.Path)
-			cur.Status = classifyEntry(cur, merged)
 			if cur.Path != "" {
-				// Populate LastActive if the path exists (skip prunable/missing)
-				if !cur.Prunable {
-					if _, err := os.Stat(cur.Path); err == nil {
-						cur.LastActive = lastActiveTime(cur.Path)
-					}
-				}
-				entries = append(entries, cur)
+				entries = append(entries, finalizeEntry(cur))
 			}
 			cur = Entry{}
 		}
 	}
 	if cur.Path != "" {
-		cur.IsMain = cur.Path == mainPath
-		cur.Prunable = prunable
-		cur.Locked = locked
-		cur.IsCurrent = isSameOrChild(cwd, cur.Path)
-		cur.Status = classifyEntry(cur, merged)
-		if !cur.Prunable {
-			if _, err := os.Stat(cur.Path); err == nil {
-				cur.LastActive = lastActiveTime(cur.Path)
-			}
-		}
-		entries = append(entries, cur)
+		entries = append(entries, finalizeEntry(cur))
 	}
 	return entries, nil
 }
@@ -145,14 +141,32 @@ func dirSize(path string) int64 {
 	return total
 }
 
-// lastActiveTime returns the modification time of the directory itself.
-// Returns zero time on error.
+// lastActiveTime returns the most recent modification time among key git files
+// in the worktree (.git, HEAD, index), providing a meaningful "last active" signal.
+// Falls back to the directory mtime if no git files are found.
 func lastActiveTime(path string) time.Time {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}
+	var latest time.Time
+	// Check git-related files that change on commits and checkouts
+	candidates := []string{
+		filepath.Join(path, ".git"),
+		filepath.Join(path, "HEAD"),
+		filepath.Join(path, ".git", "HEAD"),
+		filepath.Join(path, ".git", "index"),
 	}
-	return info.ModTime()
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil {
+			if info.ModTime().After(latest) {
+				latest = info.ModTime()
+			}
+		}
+	}
+	// Fall back to directory mtime
+	if latest.IsZero() {
+		if info, err := os.Stat(path); err == nil {
+			latest = info.ModTime()
+		}
+	}
+	return latest
 }
 
 func classifyEntry(e Entry, merged map[string]bool) Status {
