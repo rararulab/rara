@@ -34,9 +34,10 @@ use crate::{
 #[derive(ToolDef)]
 #[tool(
     name = "spawn-background",
-    description = "Spawn a background agent to handle a long-running task. The agent runs \
-                   independently and results are delivered when complete. You cannot interact \
-                   with the background agent after spawning it."
+    description = "Spawn a background agent for a long-running task. Provide `input` (task \
+                   instruction), `description` (short status label), and `system_prompt` (agent \
+                   behavior). Optional: `name`, `tools`, `model`, `max_iterations`. The agent \
+                   runs independently and results are delivered when complete."
 )]
 pub struct SpawnBackgroundTool {
     handle:      KernelHandle,
