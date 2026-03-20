@@ -1722,7 +1722,9 @@ impl Kernel {
             .iter()
             .filter(|p| matches!(p.state, SessionState::Active | SessionState::Ready))
             .count();
-        let context = crate::proactive::build_heartbeat_context_pack(active_count);
+        let mita_history = self.build_mita_history().await;
+        let context =
+            crate::proactive::build_heartbeat_context_pack(active_count, mita_history.as_ref());
         let msg = InboundMessage::synthetic(
             context,
             crate::identity::UserId("system".to_string()),
@@ -1767,8 +1769,42 @@ impl Kernel {
             _ => None,
         };
 
-        let context = crate::proactive::build_context_pack(&signal, session_ctx.as_ref());
+        let mita_history = self.build_mita_history().await;
+        let context = crate::proactive::build_context_pack(
+            &signal,
+            session_ctx.as_ref(),
+            mita_history.as_ref(),
+        );
         self.deliver_proactive_to_mita(&context).await;
+    }
+
+    /// Extract recent Mita actions from the Mita tape.
+    async fn build_mita_history(&self) -> Option<crate::proactive::MitaHistory> {
+        let mita_tape = crate::session::SessionKey::deterministic("mita").to_string();
+        let entries = self
+            .tape_service
+            .from_last_anchor(&mita_tape, Some(&[crate::memory::TapEntryKind::ToolCall]))
+            .await
+            .ok()?;
+
+        // Take last 5 tool calls as recent actions.
+        let recent_actions: Vec<String> = entries
+            .iter()
+            .rev()
+            .take(5)
+            .filter_map(|entry| {
+                let payload = entry.payload.as_object()?;
+                let tool_name = payload.get("name")?.as_str()?;
+                let timestamp = entry.timestamp;
+                Some(format!("{}: called {}", timestamp, tool_name))
+            })
+            .collect();
+
+        if recent_actions.is_empty() {
+            None
+        } else {
+            Some(crate::proactive::MitaHistory { recent_actions })
+        }
     }
 
     /// Read the last user message from a session's tape.

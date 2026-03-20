@@ -28,7 +28,7 @@ mod judgment;
 mod signal;
 
 pub use config::ProactiveConfig;
-pub use context::{SessionContext, build_context_pack, build_heartbeat_context_pack};
+pub use context::{MitaHistory, SessionContext, build_context_pack, build_heartbeat_context_pack};
 pub use filter::ProactiveFilter;
 pub use judgment::{ProactiveJudgment, should_reply};
 pub use signal::ProactiveSignal;

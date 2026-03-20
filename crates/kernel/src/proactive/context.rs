@@ -27,6 +27,13 @@ const AVAILABLE_ACTIONS: &str = "[Available Actions]\n- dispatch_rara: send a me
                                  device\n- (no action): decide this event doesn't need \
                                  intervention";
 
+/// Recent Mita action history for context pack.
+#[derive(Debug, Clone)]
+pub struct MitaHistory {
+    /// Recent Mita actions as human-readable lines.
+    pub recent_actions: Vec<String>,
+}
+
 /// Optional session context attached to a proactive signal.
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -47,6 +54,7 @@ pub struct SessionContext {
 pub fn build_context_pack(
     signal: &ProactiveSignal,
     session_context: Option<&SessionContext>,
+    mita_history: Option<&MitaHistory>,
 ) -> String {
     let now = Timestamp::now();
     let mut sections = Vec::new();
@@ -103,6 +111,16 @@ pub fn build_context_pack(
         sections.push(format!("[Context]\n{}", context_lines.join("\n")));
     }
 
+    // [Mita History] section
+    if let Some(history) = mita_history {
+        if !history.recent_actions.is_empty() {
+            sections.push(format!(
+                "[Mita History]\n{}",
+                history.recent_actions.join("\n")
+            ));
+        }
+    }
+
     // [Available Actions] section
     sections.push(AVAILABLE_ACTIONS.to_string());
 
@@ -113,7 +131,10 @@ pub fn build_context_pack(
 ///
 /// Replaces the previous one-line heartbeat message with the same
 /// structured format used by proactive signals.
-pub fn build_heartbeat_context_pack(active_session_count: usize) -> String {
+pub fn build_heartbeat_context_pack(
+    active_session_count: usize,
+    mita_history: Option<&MitaHistory>,
+) -> String {
     let now = Timestamp::now();
     let mut sections = Vec::new();
 
@@ -127,6 +148,16 @@ pub fn build_heartbeat_context_pack(active_session_count: usize) -> String {
          actions are needed. Review your previous tape entries to avoid repeating recent actions.",
         active_session_count,
     ));
+
+    // [Mita History] section
+    if let Some(history) = mita_history {
+        if !history.recent_actions.is_empty() {
+            sections.push(format!(
+                "[Mita History]\n{}",
+                history.recent_actions.join("\n")
+            ));
+        }
+    }
 
     sections.push(AVAILABLE_ACTIONS.to_string());
 
@@ -153,7 +184,7 @@ mod tests {
             idle_since:        Some("2h ago".to_string()),
             last_user_message: Some("check that PR".to_string()),
         };
-        let pack = build_context_pack(&signal, Some(&ctx));
+        let pack = build_context_pack(&signal, Some(&ctx), None);
         assert!(pack.contains("kind: session_idle"));
         assert!(pack.contains("idle_duration: 120m"));
         assert!(pack.contains("\"PR review\""));
@@ -163,7 +194,7 @@ mod tests {
     #[test]
     fn context_pack_morning_greeting() {
         let signal = ProactiveSignal::MorningGreeting;
-        let pack = build_context_pack(&signal, None);
+        let pack = build_context_pack(&signal, None, None);
         assert!(pack.contains("kind: morning_greeting"));
         assert!(pack.contains("[Available Actions]"));
         // No [Context] section when no session context.
@@ -172,8 +203,49 @@ mod tests {
 
     #[test]
     fn heartbeat_context_pack() {
-        let pack = build_heartbeat_context_pack(3);
+        let pack = build_heartbeat_context_pack(3, None);
         assert!(pack.contains("kind: heartbeat_patrol"));
         assert!(pack.contains("active_sessions: 3"));
+    }
+
+    #[test]
+    fn context_pack_with_mita_history() {
+        let signal = ProactiveSignal::MorningGreeting;
+        let history = MitaHistory {
+            recent_actions: vec![
+                "2026-03-21T08:00:00Z: called dispatch_rara".to_string(),
+                "2026-03-21T07:30:00Z: called notify".to_string(),
+            ],
+        };
+        let pack = build_context_pack(&signal, None, Some(&history));
+        assert!(pack.contains("[Mita History]"));
+        assert!(pack.contains("called dispatch_rara"));
+        assert!(pack.contains("called notify"));
+        // History should appear before Available Actions.
+        let history_pos = pack.find("[Mita History]").expect("history section exists");
+        let actions_pos = pack
+            .find("[Available Actions]")
+            .expect("actions section exists");
+        assert!(history_pos < actions_pos);
+    }
+
+    #[test]
+    fn context_pack_empty_history_omitted() {
+        let signal = ProactiveSignal::MorningGreeting;
+        let history = MitaHistory {
+            recent_actions: vec![],
+        };
+        let pack = build_context_pack(&signal, None, Some(&history));
+        assert!(!pack.contains("[Mita History]"));
+    }
+
+    #[test]
+    fn heartbeat_context_pack_with_history() {
+        let history = MitaHistory {
+            recent_actions: vec!["2026-03-21T09:00:00Z: called notify".to_string()],
+        };
+        let pack = build_heartbeat_context_pack(2, Some(&history));
+        assert!(pack.contains("[Mita History]"));
+        assert!(pack.contains("called notify"));
     }
 }
