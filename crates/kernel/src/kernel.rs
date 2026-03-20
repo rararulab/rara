@@ -116,7 +116,10 @@ pub struct KernelConfig {
     pub tool_execution_timeout:  Duration,
     /// Default per-tool timeout applied when a tool's
     /// `execution_timeout()` returns `None`.
-    #[default(_code = "Duration::from_secs(60)")]
+    ///
+    /// Must be strictly less than `tool_execution_timeout` so the per-tool
+    /// timeout fires before the global wave timeout.
+    #[default(_code = "Duration::from_secs(120)")]
     pub default_tool_timeout:    Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
@@ -218,6 +221,12 @@ impl Kernel {
         skill_prompt_provider: crate::handle::SkillPromptProvider,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
+        debug_assert!(
+            config.tool_execution_timeout > config.default_tool_timeout,
+            "tool_execution_timeout ({:?}) must exceed default_tool_timeout ({:?})",
+            config.tool_execution_timeout,
+            config.default_tool_timeout,
+        );
         info!(
             max_concurrency = config.max_concurrency,
             default_child_limit = config.default_child_limit,

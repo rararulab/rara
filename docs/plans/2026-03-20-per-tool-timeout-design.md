@@ -67,15 +67,10 @@ let tool_result = tokio::select! {
 
 ### 6. Tools with internal cleanup
 
-Tools like `bash` and `http-fetch` that manage their own timeouts do NOT declare
-`timeout_secs` in the macro — they return `None` from `execution_timeout()` and
-get the kernel default (60s). Since bash's own timeout (120s) is longer than the
-default, bash should override `execution_timeout` to return `None` with a
-comment explaining it handles its own timeout internally. Actually, since `None`
-means "use kernel default 60s" which is shorter than bash's 120s, bash needs to
-explicitly return a longer timeout or we need a sentinel. Better approach: bash
-overrides to return `Some(Duration::from_secs(180))` — larger than its own 120s
-internal timeout, so the internal timeout fires first.
+Tools like `bash` and `http-fetch` that manage their own timeouts declare
+`timeout_secs` in the macro with a value larger than their internal timeout
+(e.g. bash: internal 120s, external 150s). This ensures the internal cleanup
+mechanism fires first while the external timeout acts as a safety net.
 
 ## Files to modify
 
