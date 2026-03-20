@@ -975,6 +975,7 @@ pub(crate) async fn run_agent_loop(
     tool_context.tool_registry = Some(tools.clone());
     let input_text = user_text.clone();
     let tool_execution_timeout = handle.config().tool_execution_timeout;
+    let default_tool_timeout = handle.config().default_tool_timeout;
 
     // Deferred tool activation state — persists across turns within the same
     // session so the LLM does not need to re-discover tools after each message.
@@ -1997,8 +1998,20 @@ pub(crate) async fn run_agent_loop(
 
                     if let Some(tool) = tool {
                         let args_snapshot = args.to_string();
+                        let per_tool_timeout = tool.execution_timeout().unwrap_or(default_tool_timeout);
                         let tool_result = tokio::select! {
-                            result = tool.execute(args, &tc) => result,
+                            result = tokio::time::timeout(per_tool_timeout, tool.execute(args, &tc)) => {
+                                match result {
+                                    Ok(inner) => inner,
+                                    Err(_elapsed) => {
+                                        warn!(tool = %name, timeout_secs = per_tool_timeout.as_secs(), "per-tool timeout exceeded");
+                                        Err(anyhow::anyhow!(
+                                            "tool execution timed out after {}s",
+                                            per_tool_timeout.as_secs()
+                                        ))
+                                    }
+                                }
+                            }
                             _ = tool_cancel.cancelled() => {
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 tool_span.record("success", false);
@@ -2064,12 +2077,27 @@ pub(crate) async fn run_agent_loop(
                 match results {
                     Ok(results) => results,
                     Err(_) => {
-                        return Err(KernelError::AgentExecution {
-                            message: format!(
-                                "tool execution timed out after {}s",
-                                tool_execution_timeout.as_secs()
-                            ),
-                        });
+                        warn!("global tool wave timeout exceeded after {}s", tool_execution_timeout.as_secs());
+                        // Return synthetic timeout error for each tool call
+                        // so the agent turn continues instead of aborting.
+                        valid_tool_calls
+                            .iter()
+                            .map(|(_id, _name, _args)| {
+                                let msg = format!(
+                                    "tool wave timed out after {}s",
+                                    tool_execution_timeout.as_secs()
+                                );
+                                (
+                                    false,
+                                    crate::tool::ToolOutput::from(serde_json::json!({
+                                        "status": "timeout",
+                                        "error": &msg,
+                                    })),
+                                    Some(msg),
+                                    tool_execution_timeout.as_millis() as u64,
+                                )
+                            })
+                            .collect()
                     }
                 }
             }

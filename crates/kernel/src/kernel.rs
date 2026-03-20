@@ -114,6 +114,10 @@ pub struct KernelConfig {
     /// offending tool is killed rather than the entire wave.
     #[default(_code = "Duration::from_secs(180)")]
     pub tool_execution_timeout:  Duration,
+    /// Default per-tool timeout applied when a tool's
+    /// `execution_timeout()` returns `None`.
+    #[default(_code = "Duration::from_secs(60)")]
+    pub default_tool_timeout:    Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]

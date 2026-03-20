@@ -232,6 +232,14 @@ pub trait AgentTool: Send + Sync {
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput>;
 
+    /// Per-tool execution timeout override.
+    ///
+    /// Returns `None` to use the kernel's `default_tool_timeout`.
+    /// Tools with internal timeout management (e.g. bash with its own 120s
+    /// timeout) should return a value larger than their internal timeout
+    /// so the internal mechanism fires first.
+    fn execution_timeout(&self) -> Option<std::time::Duration> { None }
+
     /// Whether this tool's output should bypass the output interceptor
     /// (e.g. context-mode indexing). Tools with binary, always-small, or
     /// write-only output should override this to return `true`.
