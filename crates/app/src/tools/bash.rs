@@ -220,6 +220,10 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
     let mut pending_text = String::new();
     let mut last_emit = Instant::now();
 
+    // Tail buffer for incomplete UTF-8 sequences at chunk boundaries.
+    let mut utf8_tail: Vec<u8> = Vec::new();
+    let mut truncation_notified = false;
+
     loop {
         match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
@@ -227,15 +231,52 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
                 let mut buf = buffer.lock().await;
                 let remaining = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
                 if remaining == 0 {
-                    // Buffer full — keep reading to drain the pipe but discard data.
+                    // Buffer full — keep reading to drain the pipe but discard
+                    // data. Notify the stream once so the user knows output
+                    // continues but is no longer displayed.
+                    if !truncation_notified {
+                        if let Some((ref handle, ref tool_call_id)) = stream_ctx {
+                            // Flush any pending text before the truncation notice.
+                            if !pending_text.is_empty() {
+                                handle.emit(StreamEvent::ToolOutput {
+                                    tool_call_id: tool_call_id.clone(),
+                                    chunk:        std::mem::take(&mut pending_text),
+                                });
+                            }
+                            handle.emit(StreamEvent::ToolOutput {
+                                tool_call_id: tool_call_id.clone(),
+                                chunk:        "\n[output truncated — 50 KB cap reached]\n"
+                                    .to_string(),
+                            });
+                        }
+                        truncation_notified = true;
+                    }
                     continue;
                 }
                 let to_copy = n.min(remaining);
                 buf.extend_from_slice(&chunk[..to_copy]);
+                // Drop the lock before streaming to avoid holding it during emit.
+                drop(buf);
 
-                // Emit streaming chunk if a stream context is available.
+                // Emit streaming chunk — only stream bytes that were actually
+                // stored (to_copy) so streamed content matches the final result.
                 if let Some((ref handle, ref tool_call_id)) = stream_ctx {
-                    pending_text.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                    // Prepend any incomplete UTF-8 tail from the previous chunk.
+                    utf8_tail.extend_from_slice(&chunk[..to_copy]);
+                    // Find the last valid UTF-8 boundary in the accumulated bytes.
+                    let valid_up_to = match std::str::from_utf8(&utf8_tail) {
+                        Ok(_) => utf8_tail.len(),
+                        Err(e) => e.valid_up_to(),
+                    };
+                    if valid_up_to > 0 {
+                        // valid_up_to was determined by from_utf8, so this won't panic.
+                        let text = std::str::from_utf8(&utf8_tail[..valid_up_to])
+                            .expect("valid_up_to guarantees valid UTF-8");
+                        pending_text.push_str(text);
+                    }
+                    // Keep incomplete tail bytes for the next iteration.
+                    utf8_tail = utf8_tail[valid_up_to..].to_vec();
+
                     if pending_text.len() >= STREAM_CHUNK_MIN_BYTES
                         || last_emit.elapsed() >= STREAM_FLUSH_INTERVAL
                     {
@@ -250,8 +291,11 @@ async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
         }
     }
 
-    // Flush any remaining pending text.
+    // Flush any remaining pending text (including incomplete UTF-8 tail).
     if let Some((ref handle, ref tool_call_id)) = stream_ctx {
+        if !utf8_tail.is_empty() {
+            pending_text.push_str(&String::from_utf8_lossy(&utf8_tail));
+        }
         if !pending_text.is_empty() {
             handle.emit(StreamEvent::ToolOutput {
                 tool_call_id: tool_call_id.clone(),
