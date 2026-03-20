@@ -63,6 +63,33 @@ pub struct ProactiveConfig {
 }
 
 impl ProactiveConfig {
+    /// Validate the configuration at startup.
+    ///
+    /// Logs warnings for any invalid values so operators know what's
+    /// misconfigured rather than silently disabling features.
+    pub fn validate(&self) {
+        if self.parsed_timezone().is_none() {
+            // Warning already logged by parsed_timezone().
+        }
+        if self.parsed_work_start().is_none() || self.parsed_work_end().is_none() {
+            // Warnings already logged by parsed_work_start/end().
+        }
+        if let Some((start, end)) = &self.quiet_hours {
+            if parse_time_str(start).is_none() {
+                warn!(
+                    value = start.as_str(),
+                    "proactive config: invalid quiet_hours start, quiet hours disabled"
+                );
+            }
+            if parse_time_str(end).is_none() {
+                warn!(
+                    value = end.as_str(),
+                    "proactive config: invalid quiet_hours end, quiet hours disabled"
+                );
+            }
+        }
+    }
+
     /// Parse `work_hours_start` as a `jiff::civil::Time`.
     pub fn parsed_work_start(&self) -> Option<jiff::civil::Time> {
         let result = parse_time_str(&self.work_hours_start);

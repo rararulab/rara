@@ -19,7 +19,13 @@
 
 use jiff::Timestamp;
 
-use super::signal::ProactiveSignal;
+use super::{signal::ProactiveSignal, truncate};
+
+/// Shared available actions block appended to all context packs.
+const AVAILABLE_ACTIONS: &str = "[Available Actions]\n- dispatch_rara: send a message to user \
+                                 through a session\n- notify: push notification to user's \
+                                 device\n- (no action): decide this event doesn't need \
+                                 intervention";
 
 /// Optional session context attached to a proactive signal.
 #[derive(Debug, Clone)]
@@ -54,7 +60,7 @@ pub fn build_context_pack(
 
     // Signal-specific details
     match signal {
-        ProactiveSignal::SessionIdle { idle_duration } => {
+        ProactiveSignal::SessionIdle { idle_duration, .. } => {
             let mins = idle_duration.as_secs() / 60;
             sections
                 .last_mut()
@@ -67,7 +73,7 @@ pub fn build_context_pack(
                 .expect("sections is non-empty")
                 .push_str(&format!("\nerror: {}", truncate(error, 200),));
         }
-        ProactiveSignal::SessionCompleted { summary } => {
+        ProactiveSignal::SessionCompleted { summary, .. } => {
             sections
                 .last_mut()
                 .expect("sections is non-empty")
@@ -98,12 +104,7 @@ pub fn build_context_pack(
     }
 
     // [Available Actions] section
-    sections.push(
-        "[Available Actions]\n- dispatch_rara: send a message to user through a session\n- \
-         notify: push notification to user's device\n- (no action): decide this event doesn't \
-         need intervention"
-            .to_string(),
-    );
+    sections.push(AVAILABLE_ACTIONS.to_string());
 
     sections.join("\n\n")
 }
@@ -114,23 +115,22 @@ pub fn build_context_pack(
 /// structured format used by proactive signals.
 pub fn build_heartbeat_context_pack(active_session_count: usize) -> String {
     let now = Timestamp::now();
+    let mut sections = Vec::new();
 
-    format!(
-        "[Proactive Event]\nkind: heartbeat_patrol\ntimestamp: \
-         {now}\n\n[Context]\nactive_sessions: {active_session_count}\nAnalyze active sessions and \
-         determine if any proactive actions are needed. Review your previous tape entries to \
-         avoid repeating recent actions.\n\n[Available Actions]\n- dispatch_rara: send a message \
-         to user through a session\n- notify: push notification to user's device\n- (no action): \
-         decide this event doesn't need intervention"
-    )
-}
+    sections.push(format!(
+        "[Proactive Event]\nkind: heartbeat_patrol\ntimestamp: {}",
+        now,
+    ));
 
-/// Truncate a string to at most `max` characters.
-fn truncate(s: &str, max: usize) -> &str {
-    match s.char_indices().nth(max) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
+    sections.push(format!(
+        "[Context]\nactive_sessions: {}\nAnalyze active sessions and determine if any proactive \
+         actions are needed. Review your previous tape entries to avoid repeating recent actions.",
+        active_session_count,
+    ));
+
+    sections.push(AVAILABLE_ACTIONS.to_string());
+
+    sections.join("\n\n")
 }
 
 #[cfg(test)]
@@ -141,7 +141,10 @@ mod tests {
 
     #[test]
     fn context_pack_session_idle() {
+        use crate::session::SessionKey;
+
         let signal = ProactiveSignal::SessionIdle {
+            session_key:   SessionKey::deterministic("session-abc"),
             idle_duration: Duration::from_secs(7200),
         };
         let ctx = SessionContext {

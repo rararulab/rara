@@ -18,6 +18,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::session::SessionKey;
+
 /// Proactive signal for Mita orchestration.
 ///
 /// Each variant represents a distinct event that may warrant proactive
@@ -27,6 +29,8 @@ use serde::Serialize;
 pub enum ProactiveSignal {
     /// Session has been idle beyond threshold.
     SessionIdle {
+        /// The session that has been idle.
+        session_key:   SessionKey,
         /// How long the session has been idle.
         idle_duration: Duration,
     },
@@ -37,8 +41,10 @@ pub enum ProactiveSignal {
     },
     /// Conversation naturally completed (turn ended without pending work).
     SessionCompleted {
+        /// The session that completed.
+        session_key: SessionKey,
         /// Brief summary of what the session accomplished.
-        summary: String,
+        summary:     String,
     },
     /// Daily morning greeting trigger (fires at work hours start).
     MorningGreeting,
@@ -64,12 +70,14 @@ impl ProactiveSignal {
     /// Returns a cooldown key that distinguishes per-session signals.
     ///
     /// For session-scoped signals like `SessionIdle`, the key includes
-    /// the session identifier so that cooldowns apply per-session rather
-    /// than globally blocking all sessions of the same kind.
-    pub fn cooldown_key(&self, session_key: Option<&str>) -> String {
-        match (self, session_key) {
-            (Self::SessionIdle { .. }, Some(sk)) => format!("session_idle:{sk}"),
-            (Self::SessionCompleted { .. }, Some(sk)) => format!("session_completed:{sk}"),
+    /// the embedded session identifier so that cooldowns apply per-session
+    /// rather than globally blocking all sessions of the same kind.
+    pub fn cooldown_key(&self) -> String {
+        match self {
+            Self::SessionIdle { session_key, .. } => format!("session_idle:{session_key}"),
+            Self::SessionCompleted { session_key, .. } => {
+                format!("session_completed:{session_key}")
+            }
             _ => self.kind_name().to_string(),
         }
     }

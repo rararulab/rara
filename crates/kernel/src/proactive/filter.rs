@@ -27,10 +27,17 @@ use super::{config::ProactiveConfig, signal::ProactiveSignal};
 /// Pure rule-based filter for proactive signals.
 ///
 /// All checks are deterministic with zero LLM cost. Signals that fail
-/// any check are silently dropped.
+/// any check are silently dropped. Parsed config values (timezone, times)
+/// are cached at construction to avoid re-parsing on every signal check.
 pub struct ProactiveFilter {
     /// Filter configuration (quiet hours, cooldowns, rate limits).
     config:              ProactiveConfig,
+    /// Cached parsed timezone (avoids IANA lookup per signal).
+    timezone:            Option<jiff::tz::TimeZone>,
+    /// Cached parsed quiet hours start.
+    quiet_start:         Option<jiff::civil::Time>,
+    /// Cached parsed quiet hours end.
+    quiet_end:           Option<jiff::civil::Time>,
     /// Last fire time per signal kind (for cooldown dedup).
     last_fired:          HashMap<String, Timestamp>,
     /// Number of signals passed in the current hourly window.
@@ -41,9 +48,18 @@ pub struct ProactiveFilter {
 
 impl ProactiveFilter {
     /// Create a new filter from the given configuration.
+    ///
+    /// Parses timezone and time strings once and caches the results.
     pub fn new(config: ProactiveConfig) -> Self {
+        config.validate();
+        let timezone = config.parsed_timezone();
+        let quiet_start = config.parsed_quiet_start();
+        let quiet_end = config.parsed_quiet_end();
         Self {
             config,
+            timezone,
+            quiet_start,
+            quiet_end,
             last_fired: HashMap::new(),
             hourly_count: 0,
             hourly_window_start: Timestamp::now(),
@@ -56,7 +72,7 @@ impl ProactiveFilter {
     /// rate limit checks. Note: the hourly window may be reset as a
     /// side effect. Call [`Self::record_fired`] after successfully
     /// emitting the signal.
-    pub fn should_pass(&mut self, signal: &ProactiveSignal, session_key: Option<&str>) -> bool {
+    pub fn should_pass(&mut self, signal: &ProactiveSignal) -> bool {
         let now = Timestamp::now();
 
         // 1. Quiet hours check.
@@ -69,7 +85,7 @@ impl ProactiveFilter {
         }
 
         // 2. Per-kind cooldown dedup (session-scoped for session signals).
-        let cooldown_key = signal.cooldown_key(session_key);
+        let cooldown_key = signal.cooldown_key();
         if let Some(cooldown) = self.config.cooldowns.get(signal.kind_name()) {
             if let Some(last) = self.last_fired.get(&cooldown_key) {
                 let elapsed_secs = now
@@ -108,10 +124,9 @@ impl ProactiveFilter {
     /// Record that a signal was successfully emitted.
     ///
     /// Updates the cooldown timestamp and hourly counter.
-    pub fn record_fired(&mut self, signal: &ProactiveSignal, session_key: Option<&str>) {
+    pub fn record_fired(&mut self, signal: &ProactiveSignal) {
         let now = Timestamp::now();
-        self.last_fired
-            .insert(signal.cooldown_key(session_key), now);
+        self.last_fired.insert(signal.cooldown_key(), now);
         self.maybe_reset_hourly_window(now);
         self.hourly_count += 1;
     }
@@ -121,16 +136,13 @@ impl ProactiveFilter {
     /// Handles midnight wrap-around: if start > end (e.g. 23:00–08:00),
     /// quiet hours span midnight.
     fn is_quiet_hours(&self, now: Timestamp) -> bool {
-        let (start, end) = match (
-            self.config.parsed_quiet_start(),
-            self.config.parsed_quiet_end(),
-        ) {
+        let (start, end) = match (self.quiet_start, self.quiet_end) {
             (Some(s), Some(e)) => (s, e),
             _ => return false,
         };
 
-        let tz = match self.config.parsed_timezone() {
-            Some(tz) => tz,
+        let tz = match &self.timezone {
+            Some(tz) => tz.clone(),
             None => return false,
         };
 
@@ -147,6 +159,9 @@ impl ProactiveFilter {
     }
 
     /// Reset the hourly window if more than one hour has elapsed.
+    ///
+    /// Also evicts stale cooldown entries to prevent unbounded growth
+    /// of the `last_fired` map from per-session cooldown keys.
     fn maybe_reset_hourly_window(&mut self, now: Timestamp) {
         let elapsed_secs = now
             .since(self.hourly_window_start)
@@ -155,6 +170,22 @@ impl ProactiveFilter {
         if elapsed_secs >= 3600.0 {
             self.hourly_window_start = now;
             self.hourly_count = 0;
+
+            // Evict cooldown entries older than the maximum cooldown duration
+            // to prevent unbounded growth from session-scoped keys.
+            let max_cooldown = self
+                .config
+                .cooldowns
+                .values()
+                .max()
+                .copied()
+                .unwrap_or(Duration::from_secs(3600));
+            self.last_fired.retain(|_, ts| {
+                now.since(*ts)
+                    .and_then(|s| s.total(jiff::Unit::Second))
+                    .unwrap_or(0.0)
+                    < max_cooldown.as_secs_f64() * 2.0
+            });
         }
     }
 }
@@ -181,7 +212,7 @@ mod tests {
     fn pass_when_no_cooldown_hit() {
         let mut filter = ProactiveFilter::new(test_config());
         let signal = ProactiveSignal::MorningGreeting;
-        assert!(filter.should_pass(&signal, None));
+        assert!(filter.should_pass(&signal));
     }
 
     #[test]
@@ -191,27 +222,34 @@ mod tests {
 
         // Exhaust the hourly limit.
         for _ in 0..3 {
-            assert!(filter.should_pass(&signal, None));
-            filter.record_fired(&signal, None);
+            assert!(filter.should_pass(&signal));
+            filter.record_fired(&signal);
         }
         // Fourth should be blocked.
-        assert!(!filter.should_pass(&signal, None));
+        assert!(!filter.should_pass(&signal));
     }
 
     #[test]
     fn cooldown_blocks_same_session_only() {
+        use crate::session::SessionKey;
+
         let mut filter = ProactiveFilter::new(test_config());
-        let signal = ProactiveSignal::SessionIdle {
+        let signal_a = ProactiveSignal::SessionIdle {
+            session_key:   SessionKey::deterministic("session-a"),
+            idle_duration: Duration::from_secs(600),
+        };
+        let signal_b = ProactiveSignal::SessionIdle {
+            session_key:   SessionKey::deterministic("session-b"),
             idle_duration: Duration::from_secs(600),
         };
 
-        assert!(filter.should_pass(&signal, Some("session-a")));
-        filter.record_fired(&signal, Some("session-a"));
+        assert!(filter.should_pass(&signal_a));
+        filter.record_fired(&signal_a);
 
         // Same session within cooldown should be blocked.
-        assert!(!filter.should_pass(&signal, Some("session-a")));
+        assert!(!filter.should_pass(&signal_a));
 
         // Different session should still pass.
-        assert!(filter.should_pass(&signal, Some("session-b")));
+        assert!(filter.should_pass(&signal_b));
     }
 }

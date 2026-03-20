@@ -539,7 +539,7 @@ impl Kernel {
                             } else {
                                 crate::proactive::ProactiveSignal::DailySummary
                             };
-                            self.try_emit_proactive_signal(signal, None);
+                            self.try_emit_proactive_signal(signal);
                             next_proactive_time = self.compute_next_proactive_time_event();
                         }
                     }
@@ -1492,12 +1492,9 @@ impl Kernel {
                     "failed to spawn scheduled job agent"
                 );
                 // Emit TaskFailed proactive signal so Mita is aware.
-                self.try_emit_proactive_signal(
-                    crate::proactive::ProactiveSignal::TaskFailed {
-                        error: format!("job {job_id}: {e}"),
-                    },
-                    None,
-                );
+                self.try_emit_proactive_signal(crate::proactive::ProactiveSignal::TaskFailed {
+                    error: format!("job {job_id}: {e}"),
+                });
             }
         }
     }
@@ -1736,10 +1733,37 @@ impl Kernel {
     }
 
     /// Handle a proactive signal — build context pack and deliver to Mita.
+    ///
+    /// For session-scoped signals, looks up session info from the process
+    /// table to populate the context pack with session name, idle duration,
+    /// and last activity time.
     async fn handle_proactive_signal(&self, signal: crate::proactive::ProactiveSignal) {
         info!(kind = signal.kind_name(), "handling proactive signal");
 
-        let context = crate::proactive::build_context_pack(&signal, None);
+        let session_ctx = match &signal {
+            crate::proactive::ProactiveSignal::SessionIdle {
+                session_key,
+                idle_duration,
+            } => self
+                .process_table
+                .with(session_key, |p| crate::proactive::SessionContext {
+                    session_name:      Some(p.manifest.name.clone()),
+                    session_key:       session_key.to_string(),
+                    idle_since:        Some(format!("{}m ago", idle_duration.as_secs() / 60)),
+                    last_user_message: None,
+                }),
+            crate::proactive::ProactiveSignal::SessionCompleted { session_key, .. } => self
+                .process_table
+                .with(session_key, |p| crate::proactive::SessionContext {
+                    session_name:      Some(p.manifest.name.clone()),
+                    session_key:       session_key.to_string(),
+                    idle_since:        None,
+                    last_user_message: None,
+                }),
+            _ => None,
+        };
+
+        let context = crate::proactive::build_context_pack(&signal, session_ctx.as_ref());
         self.deliver_proactive_to_mita(&context).await;
     }
 
@@ -1827,6 +1851,7 @@ impl Kernel {
         };
         let idle_threshold = Duration::from_secs(idle_threshold_secs);
         let now = jiff::Timestamp::now();
+        let mita_key = crate::session::SessionKey::deterministic("mita");
 
         for stats in self.process_table.list() {
             // Only check Ready sessions (Active means currently running).
@@ -1834,7 +1859,7 @@ impl Kernel {
                 continue;
             }
             // Skip the Mita session itself.
-            if stats.session_key == crate::session::SessionKey::deterministic("mita") {
+            if stats.session_key == mita_key {
                 continue;
             }
 
@@ -1849,9 +1874,11 @@ impl Kernel {
                 .unwrap_or(Duration::ZERO);
 
             if idle_duration >= idle_threshold {
-                let signal = crate::proactive::ProactiveSignal::SessionIdle { idle_duration };
-                let sk = stats.session_key.to_string();
-                self.try_emit_proactive_signal(signal, Some(&sk));
+                let signal = crate::proactive::ProactiveSignal::SessionIdle {
+                    session_key: stats.session_key.clone(),
+                    idle_duration,
+                };
+                self.try_emit_proactive_signal(signal);
             }
         }
     }
@@ -1860,13 +1887,9 @@ impl Kernel {
     ///
     /// Checks the proactive filter; if the signal passes, pushes a
     /// `ProactiveSignal` event into the kernel event queue and records
-    /// the fire. The optional `session_key` enables per-session cooldown
-    /// tracking for session-scoped signals.
-    fn try_emit_proactive_signal(
-        &self,
-        signal: crate::proactive::ProactiveSignal,
-        session_key: Option<&str>,
-    ) {
+    /// the fire. Session-scoped cooldowns use the session key embedded
+    /// in the signal variant.
+    fn try_emit_proactive_signal(&self, signal: crate::proactive::ProactiveSignal) {
         let mut guard = self
             .proactive_filter
             .lock()
@@ -1877,10 +1900,10 @@ impl Kernel {
             None => return, // Proactive disabled.
         };
 
-        if !filter.should_pass(&signal, session_key) {
+        if !filter.should_pass(&signal) {
             return;
         }
-        filter.record_fired(&signal, session_key);
+        filter.record_fired(&signal);
 
         if let Err(e) = self
             .event_queue
@@ -2694,7 +2717,7 @@ impl Kernel {
 
         // Track whether the turn errored so we can choose the right terminal
         // state below (Completed vs Failed).
-        let mut _turn_failed = false;
+        let mut turn_failed = false;
 
         let agent_name = self
             .process_table
@@ -2798,8 +2821,8 @@ impl Kernel {
             }
             Err(err_msg) => {
                 span.record("success", false);
-                _turn_failed = !interrupted;
-                if _turn_failed {
+                turn_failed = !interrupted;
+                if turn_failed {
                     error!(session_key = %session_key, error = %err_msg, "turn failed");
                 } else {
                     info!(session_key = %session_key, "turn interrupted by user");
@@ -2810,7 +2833,7 @@ impl Kernel {
                 // already sent a confirmation message) and when
                 // origin_endpoint is None (same rationale as reply delivery
                 // above).
-                if _turn_failed && origin_endpoint.is_some() {
+                if turn_failed && origin_endpoint.is_some() {
                     let envelope = OutboundEnvelope::error(
                         in_reply_to,
                         user.clone(),
@@ -2841,7 +2864,7 @@ impl Kernel {
             // Worker/child session completed — emit SessionCompleted signal,
             // but only for non-Mita children to avoid feedback loops where
             // Mita dispatches agent → completes → signal → Mita again.
-            if !_turn_failed {
+            if !turn_failed {
                 let mita_key = crate::session::SessionKey::deterministic("mita");
                 let is_mita_child = self
                     .process_table
@@ -2859,8 +2882,10 @@ impl Kernel {
                         })
                         .unwrap_or_default();
                     self.try_emit_proactive_signal(
-                        crate::proactive::ProactiveSignal::SessionCompleted { summary },
-                        None,
+                        crate::proactive::ProactiveSignal::SessionCompleted {
+                            session_key: session_key.clone(),
+                            summary,
+                        },
                     );
                 }
             }
@@ -2876,7 +2901,7 @@ impl Kernel {
         // After each successful turn, spawn an async task to extract long-term
         // memories from the conversation tape. Failures are logged but never
         // block the main event loop.
-        if !_turn_failed {
+        if !turn_failed {
             let tape_service = self.tape_service.clone();
             let knowledge = Arc::clone(&self.knowledge);
             let driver_registry = Arc::clone(self.syscall.driver_registry());
@@ -2929,7 +2954,7 @@ impl Kernel {
         // After the first successful turn, spawn a task to auto-generate a
         // human-readable title for the session using LLM. Only fires when
         // the session has no title yet.
-        if !_turn_failed {
+        if !turn_failed {
             let session_index = Arc::clone(self.io.session_index());
             let needs_title = match session_index.get_session(&session_key).await {
                 Ok(Some(entry)) => entry.title.is_none(),

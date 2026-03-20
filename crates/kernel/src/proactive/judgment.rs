@@ -260,13 +260,7 @@ fn parse_judgment(text: &str) -> ProactiveJudgment {
     }
 }
 
-/// Truncate a string to at most `max` characters.
-fn truncate(s: &str, max: usize) -> &str {
-    match s.char_indices().nth(max) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
-}
+use super::truncate;
 
 #[cfg(test)]
 mod tests {

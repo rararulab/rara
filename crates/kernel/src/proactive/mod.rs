@@ -32,3 +32,11 @@ pub use context::{SessionContext, build_context_pack, build_heartbeat_context_pa
 pub use filter::ProactiveFilter;
 pub use judgment::{ProactiveJudgment, should_reply};
 pub use signal::ProactiveSignal;
+
+/// Truncate a string to at most `max` characters.
+pub(crate) fn truncate(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
