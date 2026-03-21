@@ -160,6 +160,11 @@ impl ToolExecute for UpdateProactiveConfigTool {
 
         save_config(&config)?;
 
+        // Notify kernel to reload the in-memory proactive filter.
+        let _ = context
+            .event_queue
+            .try_push(rara_kernel::event::KernelEventEnvelope::reload_proactive_config());
+
         push_notification(
             context,
             format!(

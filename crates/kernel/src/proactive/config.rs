@@ -84,6 +84,14 @@ impl ProactiveConfig {
         if self.parsed_work_start().is_none() || self.parsed_work_end().is_none() {
             // Warnings already logged by parsed_work_start/end().
         }
+        if self.session_completed_secs >= self.idle_threshold_secs {
+            warn!(
+                session_completed_secs = self.session_completed_secs,
+                idle_threshold_secs = self.idle_threshold_secs,
+                "proactive config: session_completed_secs must be less than idle_threshold_secs, \
+                 SessionCompleted signals will never fire"
+            );
+        }
         if let Some((start, end)) = &self.quiet_hours {
             if parse_time_str(start).is_none() {
                 warn!(

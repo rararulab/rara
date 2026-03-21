@@ -370,6 +370,13 @@ pub enum KernelEvent {
     ProactiveSignal(crate::proactive::ProactiveSignal),
 
     // === System ===
+    /// Reload proactive filter configuration from disk.
+    ///
+    /// Emitted by the `update-proactive-config` tool after writing a new
+    /// config to `config_dir()/mita/proactive.yaml`. The kernel re-reads
+    /// the file and reconstructs the in-memory `ProactiveFilter`.
+    ReloadProactiveConfig,
+
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
 
@@ -397,6 +404,7 @@ impl KernelEvent {
             | Self::MitaDirective { .. }
             | Self::MitaHeartbeat
             | Self::ProactiveSignal(_)
+            | Self::ReloadProactiveConfig
             | Self::IdleCheck => EventPriority::Low,
         }
     }
@@ -616,6 +624,14 @@ impl KernelEventEnvelope {
         }
     }
 
+    /// Create a `ReloadProactiveConfig` event.
+    pub fn reload_proactive_config() -> Self {
+        Self {
+            base: EventBase::from(SessionKey::new()),
+            kind: KernelEvent::ReloadProactiveConfig,
+        }
+    }
+
     /// Create an `IdleCheck` event.
     pub fn idle_check() -> Self {
         Self {
@@ -701,6 +717,7 @@ impl KernelEventEnvelope {
             KernelEvent::ProactiveSignal(signal) => {
                 format!("proactive signal: {}", signal.kind_name())
             }
+            KernelEvent::ReloadProactiveConfig => "reload proactive filter config".to_string(),
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }

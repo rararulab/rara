@@ -725,6 +725,9 @@ impl Kernel {
             KernelEvent::ProactiveSignal(signal) => {
                 self.handle_proactive_signal(signal).await;
             }
+            KernelEvent::ReloadProactiveConfig => {
+                self.handle_reload_proactive_config();
+            }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
                 self.process_table
@@ -1963,6 +1966,38 @@ impl Kernel {
         Some((instant, is_morning))
     }
 
+    /// Reload the proactive filter from `config_dir()/mita/proactive.yaml`.
+    ///
+    /// Called when the `update-proactive-config` tool writes a new config
+    /// to disk. Reconstructs the in-memory `ProactiveFilter` so changes
+    /// take effect immediately without restarting rara.
+    fn handle_reload_proactive_config(&self) {
+        let path = rara_paths::config_dir().join("mita").join("proactive.yaml");
+        let config = match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                match serde_yaml::from_str::<crate::proactive::ProactiveConfig>(&contents) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(error = %e, path = %path.display(), "failed to parse proactive config");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, path = %path.display(), "failed to read proactive config");
+                return;
+            }
+        };
+
+        let new_filter = crate::proactive::ProactiveFilter::new(config);
+        let mut guard = self
+            .proactive_filter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = Some(new_filter);
+        info!("proactive filter reloaded from {}", path.display());
+    }
+
     /// Emit `SessionIdle` signals for sessions that have been idle beyond
     /// the configured threshold.
     fn emit_idle_signals(&self) {
@@ -2004,9 +2039,13 @@ impl Kernel {
                 };
                 self.try_emit_proactive_signal(signal);
             } else if idle_duration >= completed_threshold {
+                let summary = self
+                    .process_table
+                    .with(&stats.session_key, |p| p.manifest.name.clone())
+                    .unwrap_or_default();
                 let signal = crate::proactive::ProactiveSignal::SessionCompleted {
                     session_key: stats.session_key.clone(),
-                    summary:     String::new(),
+                    summary,
                 };
                 self.try_emit_proactive_signal(signal);
             }

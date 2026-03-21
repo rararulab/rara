@@ -350,9 +350,28 @@ pub async fn start_with_options(
         boot::McpDynamicToolProvider::new(rara.mcp_manager.clone()),
     ));
 
+    // Prefer Mita's own proactive.yaml (updated at runtime by the
+    // update-proactive-config tool) over the main config file.
+    let proactive_config = {
+        let runtime_path = rara_paths::config_dir().join("mita").join("proactive.yaml");
+        match std::fs::read_to_string(&runtime_path) {
+            Ok(contents) => match serde_yaml::from_str(&contents) {
+                Ok(c) => {
+                    tracing::info!(path = %runtime_path.display(), "loaded proactive config from runtime override");
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %runtime_path.display(), "invalid runtime proactive config, falling back to main config");
+                    config.mita.proactive.clone()
+                }
+            },
+            Err(_) => config.mita.proactive.clone(),
+        }
+    };
+
     let kernel_config = rara_kernel::kernel::KernelConfig {
         mita_heartbeat_interval: Some(config.mita.heartbeat_interval),
-        proactive: config.mita.proactive.clone(),
+        proactive: proactive_config,
         context_folding: config.context_folding.clone(),
         ..Default::default()
     };
