@@ -238,9 +238,7 @@ impl TaintTracker {
         match tool_name {
             // Network tools fetch content from untrusted external sources.
             "web_fetch" | "browser_navigate" | "browser_snapshot" | "browser_click"
-            | "browser_fill_form" | "browser_evaluate" => {
-                HashSet::from([TaintLabel::ExternalNetwork])
-            }
+            | "browser_evaluate" => HashSet::from([TaintLabel::ExternalNetwork]),
             // Sub-agent output is untrusted because we don't control its prompt.
             "agent_send" | "agent_spawn" => HashSet::from([TaintLabel::UntrustedAgent]),
             _ => HashSet::new(),
