@@ -85,10 +85,15 @@ use user_note::UserNoteTool;
 use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
+///
+/// Only **Core** tools appear here. All other tools are registered in the
+/// [`ToolRegistry`] but marked `tier = "deferred"` and discovered on demand
+/// via the `discover-tools` tool.
 pub fn rara_tool_names() -> Vec<String> {
     use rara_kernel::tool_names;
 
     vec![
+        // File operations
         BashTool::TOOL_NAME,
         GrepTool::TOOL_NAME,
         ReadFileTool::TOOL_NAME,
@@ -96,38 +101,18 @@ pub fn rara_tool_names() -> Vec<String> {
         EditFileTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
+        // Network
         HttpFetchTool::TOOL_NAME,
-        SendEmailTool::TOOL_NAME,
-        SendImageTool::TOOL_NAME,
+        // Memory & session
         tool_names::TAPE,
-        TapeInfoTool::TOOL_NAME,
-        TapeHandoffTool::TOOL_NAME,
         UserNoteTool::TOOL_NAME,
         tool_names::MEMORY,
-        tool_names::KERNEL,
-        SettingsTool::TOOL_NAME,
-        tool_names::SCHEDULE_ONCE,
-        tool_names::SCHEDULE_INTERVAL,
-        tool_names::SCHEDULE_CRON,
-        tool_names::SCHEDULE_REMOVE,
-        tool_names::SCHEDULE_LIST,
-        ListSkillsTool::TOOL_NAME,
-        CreateSkillTool::TOOL_NAME,
-        DeleteSkillTool::TOOL_NAME,
-        MarketplaceTool::TOOL_NAME,
-        InstallMcpServerTool::TOOL_NAME,
-        ListMcpServersTool::TOOL_NAME,
-        RemoveMcpServerTool::TOOL_NAME,
-        tool_names::CREATE_PLAN,
+        // Execution
         tool_names::SPAWN_BACKGROUND,
         tool_names::CANCEL_BACKGROUND,
-        // ACP delegation
-        AcpDelegateTool::TOOL_NAME,
-        // ACP management
-        InstallAcpAgentTool::TOOL_NAME,
-        ListAcpAgentsTool::TOOL_NAME,
-        RemoveAcpAgentTool::TOOL_NAME,
-        // Deferred tool discovery
+        // Plan
+        tool_names::CREATE_PLAN,
+        // Discovery
         DiscoverToolsTool::TOOL_NAME,
     ]
     .into_iter()
@@ -255,10 +240,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rara_tool_names_includes_key_tools() {
+    fn rara_tool_names_includes_core_tools() {
         let names = rara_tool_names();
-        for expected in ["bash", "tape", "marketplace", "kernel"] {
+        // Only Core tools appear in the manifest; deferred tools (kernel,
+        // marketplace, schedule-*, etc.) are discovered on demand.
+        for expected in ["bash", "tape", "memory", "discover-tools"] {
             assert!(names.iter().any(|n| n == expected), "missing: {expected}");
+        }
+        // Verify deferred tools are NOT in the core list.
+        for deferred in ["kernel", "marketplace", "schedule-once", "send-email"] {
+            assert!(
+                !names.iter().any(|n| n == deferred),
+                "deferred tool should not be in core: {deferred}"
+            );
         }
     }
 }

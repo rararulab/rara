@@ -1373,6 +1373,8 @@ impl crate::tool::AgentTool for SyscallTool {
         })
     }
 
+    fn tier(&self) -> crate::tool::ToolTier { crate::tool::ToolTier::Deferred }
+
     // FIXME: don't write this like match.
     async fn execute(
         &self,
