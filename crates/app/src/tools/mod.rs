@@ -50,6 +50,7 @@ mod skill_tools;
 mod tape_handoff;
 mod tape_info;
 mod user_note;
+mod walk_directory;
 mod write_file;
 
 use acp_delegate::AcpDelegateTool;
@@ -82,6 +83,7 @@ use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use tape_handoff::TapeHandoffTool;
 use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
+pub use walk_directory::WalkDirectoryTool;
 use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
@@ -101,6 +103,7 @@ pub fn rara_tool_names() -> Vec<String> {
         EditFileTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
+        WalkDirectoryTool::TOOL_NAME,
         // Network
         HttpFetchTool::TOOL_NAME,
         // Memory & session
@@ -170,6 +173,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(FindFilesTool::new()),
         Arc::new(GrepTool::new()),
         Arc::new(ListDirectoryTool::new()),
+        Arc::new(WalkDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendImageTool::new()),
