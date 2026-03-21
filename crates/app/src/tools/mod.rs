@@ -39,6 +39,7 @@ mod mita_read_tape;
 mod mita_update_session_title;
 mod mita_update_soul_state;
 mod mita_write_user_note;
+mod multi_edit;
 mod notify;
 mod read_file;
 mod send_email;
@@ -73,6 +74,7 @@ use mita_read_tape::ReadTapeTool;
 use mita_update_session_title::UpdateSessionTitleTool;
 use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
+use multi_edit::MultiEditTool;
 use read_file::ReadFileTool;
 use send_email::SendEmailTool;
 use send_image::SendImageTool;
@@ -101,6 +103,7 @@ pub fn rara_tool_names() -> Vec<String> {
         ReadFileTool::TOOL_NAME,
         WriteFileTool::TOOL_NAME,
         EditFileTool::TOOL_NAME,
+        MultiEditTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
         WalkDirectoryTool::TOOL_NAME,
@@ -170,6 +173,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ReadFileTool::new()),
         Arc::new(WriteFileTool::new()),
         Arc::new(EditFileTool::new()),
+        Arc::new(MultiEditTool::new()),
         Arc::new(FindFilesTool::new()),
         Arc::new(GrepTool::new()),
         Arc::new(ListDirectoryTool::new()),
