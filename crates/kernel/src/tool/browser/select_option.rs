@@ -26,7 +26,8 @@ use crate::tool::{ToolContext, ToolExecute};
 #[derive(ToolDef)]
 #[tool(
     name = "browser-select-option",
-    description = "Select an option from a dropdown (select) element on the page."
+    description = "Select an option from a dropdown (select) element on the page.",
+    tier = "deferred"
 )]
 pub struct BrowserSelectOptionTool;
 

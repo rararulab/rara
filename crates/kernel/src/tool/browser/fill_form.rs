@@ -28,7 +28,8 @@ use crate::tool::{ToolContext, ToolExecute};
 #[derive(ToolDef)]
 #[tool(
     name = "browser-fill-form",
-    description = "Fill multiple form fields at once by providing a mapping of ref IDs to values."
+    description = "Fill multiple form fields at once by providing a mapping of ref IDs to values.",
+    tier = "deferred"
 )]
 pub struct BrowserFillFormTool;
 

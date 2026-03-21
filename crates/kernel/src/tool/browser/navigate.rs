@@ -29,7 +29,8 @@ use crate::{
 #[tool(
     name = "browser-navigate",
     description = "Navigate to a URL in the browser. Returns the page title and an accessibility \
-                   snapshot of the page content."
+                   snapshot of the page content.",
+    tier = "deferred"
 )]
 pub struct BrowserNavigateTool {
     manager: BrowserManagerRef,

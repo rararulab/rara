@@ -26,7 +26,8 @@ use crate::tool::{ToolContext, ToolExecute};
 #[derive(ToolDef)]
 #[tool(
     name = "browser-hover",
-    description = "Hover over an element on the page using its ref ID."
+    description = "Hover over an element on the page using its ref ID.",
+    tier = "deferred"
 )]
 pub struct BrowserHoverTool;
 

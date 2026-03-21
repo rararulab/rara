@@ -25,7 +25,8 @@ use crate::tool::{EmptyParams, ToolContext, ToolExecute};
 #[derive(ToolDef)]
 #[tool(
     name = "browser-console-messages",
-    description = "Retrieve console messages (log, warn, error) from the browser page."
+    description = "Retrieve console messages (log, warn, error) from the browser page.",
+    tier = "deferred"
 )]
 pub struct BrowserConsoleMessagesTool;
 

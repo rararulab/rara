@@ -27,7 +27,8 @@ use crate::tool::{ToolContext, ToolExecute};
 #[derive(ToolDef)]
 #[tool(
     name = "browser-drag",
-    description = "Drag an element from one position to another on the page."
+    description = "Drag an element from one position to another on the page.",
+    tier = "deferred"
 )]
 pub struct BrowserDragTool;
 

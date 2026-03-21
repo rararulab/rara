@@ -29,7 +29,8 @@ use crate::{
 #[tool(
     name = "browser-wait-for",
     description = "Wait for a condition before taking a snapshot. You can wait for text to \
-                   appear, text to disappear, or a fixed number of seconds."
+                   appear, text to disappear, or a fixed number of seconds.",
+    tier = "deferred"
 )]
 pub struct BrowserWaitForTool {
     manager: BrowserManagerRef,

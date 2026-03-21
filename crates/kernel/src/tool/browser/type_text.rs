@@ -29,7 +29,8 @@ use crate::{
 #[tool(
     name = "browser-type",
     description = "Type text into an input element on the page. Optionally submit the form by \
-                   pressing Enter after typing."
+                   pressing Enter after typing.",
+    tier = "deferred"
 )]
 pub struct BrowserTypeTool {
     manager: BrowserManagerRef,

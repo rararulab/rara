@@ -27,7 +27,8 @@ use crate::{
 #[derive(ToolDef)]
 #[tool(
     name = "browser-close",
-    description = "Close all browser tabs and reset the browser state."
+    description = "Close all browser tabs and reset the browser state.",
+    tier = "deferred"
 )]
 pub struct BrowserCloseTool {
     manager: BrowserManagerRef,

@@ -26,7 +26,8 @@ use crate::tool::{EmptyParams, ToolContext, ToolExecute};
 #[tool(
     name = "browser-network-requests",
     description = "Retrieve network requests made by the browser page, including URLs, methods, \
-                   and status codes."
+                   and status codes.",
+    tier = "deferred"
 )]
 pub struct BrowserNetworkRequestsTool;
 

@@ -28,7 +28,8 @@ use crate::tool::{ToolContext, ToolExecute};
 #[tool(
     name = "browser-handle-dialog",
     description = "Handle a JavaScript dialog (alert, confirm, prompt) by accepting or dismissing \
-                   it."
+                   it.",
+    tier = "deferred"
 )]
 pub struct BrowserHandleDialogTool;
 
