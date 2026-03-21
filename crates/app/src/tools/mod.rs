@@ -255,4 +255,15 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn rara_core_tool_count_stays_slim() {
+        let names = rara_tool_names();
+        assert!(
+            names.len() <= 20,
+            "Core tool set has {} tools — keep it under 20 to control token costs. Use tier = \
+             \"deferred\" for non-essential tools.",
+            names.len()
+        );
+    }
 }
