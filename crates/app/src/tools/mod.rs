@@ -25,6 +25,7 @@ mod composio;
 mod debug_trace;
 mod discover;
 mod edit_file;
+mod file_stats;
 mod find_files;
 mod grep;
 mod http_fetch;
@@ -60,6 +61,7 @@ use bash::BashTool;
 use debug_trace::DebugTraceTool;
 pub use discover::DiscoverToolsTool;
 use edit_file::EditFileTool;
+use file_stats::FileStatsTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
 use http_fetch::HttpFetchTool;
@@ -107,6 +109,7 @@ pub fn rara_tool_names() -> Vec<String> {
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
         WalkDirectoryTool::TOOL_NAME,
+        FileStatsTool::TOOL_NAME,
         // Network
         HttpFetchTool::TOOL_NAME,
         // Memory & session
@@ -178,6 +181,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(GrepTool::new()),
         Arc::new(ListDirectoryTool::new()),
         Arc::new(WalkDirectoryTool::new()),
+        Arc::new(FileStatsTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendImageTool::new()),
