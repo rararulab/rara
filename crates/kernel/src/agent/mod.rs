@@ -1192,6 +1192,17 @@ pub(crate) async fn run_agent_loop(
             )));
         }
 
+        // Inject available skills list (first iteration only — stable across
+        // iterations so no need to repeat).
+        if iteration == 0 {
+            let skills_prompt = handle.skills_prompt();
+            if !skills_prompt.is_empty() {
+                messages.push(crate::llm::Message::user(format!(
+                    "<system-reminder>\n{skills_prompt}</system-reminder>"
+                )));
+            }
+        }
+
         messages = sanitize_messages_for_llm(&messages);
 
         let iter_span = info_span!(
