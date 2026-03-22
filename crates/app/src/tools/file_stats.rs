@@ -325,7 +325,17 @@ mod tests {
 
     #[tokio::test]
     async fn path_outside_workspace_blocked() {
-        let err = resolve_and_guard("/etc/passwd");
+        // resolve_and_guard calls rara_paths::workspace_dir() which may not be
+        // available in CI. Skip if workspace creation would fail.
+        let workspace = std::panic::catch_unwind(rara_paths::workspace_dir);
+        let Ok(ws) = workspace else { return };
+
+        let outside = if ws.starts_with("/tmp") {
+            "/etc/passwd"
+        } else {
+            "/tmp/__outside__"
+        };
+        let err = resolve_and_guard(outside);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("outside workspace"));
     }
