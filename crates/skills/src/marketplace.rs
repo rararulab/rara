@@ -379,28 +379,32 @@ impl MarketplaceService {
 
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
-        let mut manifest = store.load()?;
 
-        if manifest.find_repo(&source_repo).is_none() {
+        // Check if repo is already installed; if not, download it first.
+        let needs_install = store.load()?.find_repo(&source_repo).is_none();
+        if needs_install {
             crate::install::install_skill(&source_repo, &install_dir).await?;
-            manifest = store.load()?;
         }
 
-        let mut enabled_skills = Vec::new();
-        if let Some(repo_entry) = manifest.find_repo_mut(&source_repo) {
-            for skill in &mut repo_entry.skills {
-                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
-                    skill.enabled = true;
-                    skill.trusted = true;
-                    enabled_skills.push(skill.name.clone());
+        // Enable matching skills under exclusive lock.
+        let (enabled_skills, manifest_snapshot) = store.with_lock(|manifest| {
+            let plugin = plugin_name.to_string();
+            let mut enabled = Vec::new();
+            if let Some(repo_entry) = manifest.find_repo_mut(&source_repo) {
+                for skill in &mut repo_entry.skills {
+                    if skill.name.starts_with(&format!("{plugin}:")) || skill.name == plugin {
+                        skill.enabled = true;
+                        skill.trusted = true;
+                        enabled.push(skill.name.clone());
+                    }
                 }
             }
-        }
-        store.save(&manifest)?;
+            Ok((enabled, manifest.clone()))
+        })?;
 
         // Update in-memory registry so the agent prompt reflects new skills
         // immediately.
-        self.sync_repo_to_registry(&manifest, &source_repo);
+        self.sync_repo_to_registry(&manifest_snapshot, &source_repo);
 
         Ok(PluginInstallResult {
             plugin:       plugin_name.to_string(),
@@ -426,24 +430,25 @@ impl MarketplaceService {
 
         self.add_source(&normalized)?;
 
-        // Load manifest, enable all skills from this repo, and save.
+        // Enable all skills from this repo under exclusive lock.
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
-        let mut manifest = store.load()?;
 
-        let mut enabled_skills = Vec::new();
-        if let Some(repo_entry) = manifest.find_repo_mut(&normalized) {
-            for skill in &mut repo_entry.skills {
-                skill.enabled = true;
-                skill.trusted = true;
-                enabled_skills.push(skill.name.clone());
+        let (enabled_skills, manifest_snapshot) = store.with_lock(|manifest| {
+            let mut enabled = Vec::new();
+            if let Some(repo_entry) = manifest.find_repo_mut(&normalized) {
+                for skill in &mut repo_entry.skills {
+                    skill.enabled = true;
+                    skill.trusted = true;
+                    enabled.push(skill.name.clone());
+                }
             }
-        }
-        store.save(&manifest)?;
+            Ok((enabled, manifest.clone()))
+        })?;
 
         // Update in-memory registry so the agent prompt reflects new skills
         // immediately.
-        self.sync_repo_to_registry(&manifest, &normalized);
+        self.sync_repo_to_registry(&manifest_snapshot, &normalized);
 
         let display_name = repo.split('/').next_back().unwrap_or(repo);
         Ok(PluginInstallResult {
@@ -466,35 +471,37 @@ impl MarketplaceService {
     fn set_plugin_state(&self, plugin_name: &str, enabled: bool) -> Result<()> {
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
-        let mut manifest = store.load()?;
 
-        let mut found = false;
-        let mut affected_names = Vec::new();
-        for repo in &mut manifest.repos {
-            for skill in &mut repo.skills {
-                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
-                    skill.enabled = enabled;
-                    if enabled {
-                        skill.trusted = true;
+        let (affected_names, manifest_snapshot) = store.with_lock(|manifest| {
+            let plugin = plugin_name.to_string();
+            let mut found = false;
+            let mut affected = Vec::new();
+            for repo in &mut manifest.repos {
+                for skill in &mut repo.skills {
+                    if skill.name.starts_with(&format!("{plugin}:")) || skill.name == plugin {
+                        skill.enabled = enabled;
+                        if enabled {
+                            skill.trusted = true;
+                        }
+                        affected.push(skill.name.clone());
+                        found = true;
                     }
-                    affected_names.push(skill.name.clone());
-                    found = true;
                 }
             }
-        }
-        if !found {
-            return Err(crate::error::SkillError::NotFound {
-                name: format!("plugin '{plugin_name}' is not installed"),
-            });
-        }
-        store.save(&manifest)?;
+            if !found {
+                return Err(crate::error::SkillError::NotFound {
+                    name: format!("plugin '{plugin}' is not installed"),
+                });
+            }
+            Ok((affected, manifest.clone()))
+        })?;
 
         // Update in-memory registry for immediate effect.
         if let Some(ref registry) = self.registry {
             if enabled {
                 // Re-discover and insert enabled skills.
-                for repo in &manifest.repos {
-                    self.sync_repo_to_registry(&manifest, &repo.source);
+                for repo in &manifest_snapshot.repos {
+                    self.sync_repo_to_registry(&manifest_snapshot, &repo.source);
                 }
             } else {
                 // Remove disabled skills from the registry.

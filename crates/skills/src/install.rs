@@ -46,10 +46,14 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
     if target.exists() {
         let manifest_path = ManifestStore::default_path()?;
         let store = ManifestStore::new(manifest_path);
-        let manifest = store.load()?;
-        if manifest.find_repo(source).is_none() {
-            tokio::fs::remove_dir_all(&target).await.context(IoSnafu)?;
-        } else {
+        let already_installed = store.with_lock(|manifest| {
+            if manifest.find_repo(source).is_some() {
+                return Ok(true);
+            }
+            Ok(false)
+        })?;
+
+        if already_installed {
             return InstallSnafu {
                 message: format!(
                     "repo directory already exists: {}. Remove it first with `skills remove`.",
@@ -58,6 +62,8 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
             }
             .fail();
         }
+        // Directory exists but not in manifest — stale leftover, remove it.
+        tokio::fs::remove_dir_all(&target).await.context(IoSnafu)?;
     }
 
     tokio::fs::create_dir_all(install_dir)
@@ -129,25 +135,25 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
         .fail();
     }
 
-    // Write manifest.
+    // Write manifest under exclusive lock.
     let manifest_path = ManifestStore::default_path()?;
     let store = ManifestStore::new(manifest_path);
-    let mut manifest = store.load()?;
+    store.with_lock(|manifest| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    manifest.add_repo(RepoEntry {
-        source: format!("{owner}/{repo}"),
-        repo_name: dir_name,
-        installed_at_ms: now,
-        commit_sha,
-        format,
-        skills: skill_states,
-    });
-    store.save(&manifest)?;
+        manifest.add_repo(RepoEntry {
+            source: format!("{owner}/{repo}"),
+            repo_name: dir_name.clone(),
+            installed_at_ms: now,
+            commit_sha: commit_sha.clone(),
+            format,
+            skills: skill_states.clone(),
+        });
+        Ok(())
+    })?;
 
     tracing::info!(count = skills_meta.len(), %source, "installed repo skills");
     Ok(skills_meta)
@@ -157,22 +163,23 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
 pub async fn remove_repo(source: &str, install_dir: &Path) -> Result<()> {
     let manifest_path = ManifestStore::default_path()?;
     let store = ManifestStore::new(manifest_path);
-    let mut manifest = store.load()?;
 
-    let repo = manifest.find_repo(source).ok_or_else(|| {
-        NotFoundSnafu {
-            name: format!("repo '{source}' not found in manifest"),
-        }
-        .build()
+    let dir = store.with_lock(|manifest| {
+        let repo = manifest.find_repo(source).ok_or_else(|| {
+            NotFoundSnafu {
+                name: format!("repo '{source}' not found in manifest"),
+            }
+            .build()
+        })?;
+        let dir = install_dir.join(&repo.repo_name);
+        manifest.remove_repo(source);
+        Ok(dir)
     })?;
-    let dir = install_dir.join(&repo.repo_name);
 
     if dir.exists() {
         tokio::fs::remove_dir_all(&dir).await.context(IoSnafu)?;
     }
 
-    manifest.remove_repo(source);
-    store.save(&manifest)?;
     Ok(())
 }
 
