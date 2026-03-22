@@ -87,6 +87,10 @@ impl AgentTool for McpToolBridge {
 
     fn parameters_schema(&self) -> serde_json::Value { self.input_schema.clone() }
 
+    /// MCP tools are deferred — only included after `discover-tools`
+    /// activation.
+    fn tier(&self) -> rara_kernel::tool::ToolTier { rara_kernel::tool::ToolTier::Deferred }
+
     async fn execute(
         &self,
         params: serde_json::Value,
