@@ -22,7 +22,9 @@ mod acp_delegate;
 mod acp_tools;
 mod bash;
 mod composio;
+mod create_directory;
 mod debug_trace;
+mod delete_file;
 mod discover;
 mod edit_file;
 mod file_stats;
@@ -58,7 +60,9 @@ mod write_file;
 use acp_delegate::AcpDelegateTool;
 use acp_tools::{InstallAcpAgentTool, ListAcpAgentsTool, RemoveAcpAgentTool};
 use bash::BashTool;
+use create_directory::CreateDirectoryTool;
 use debug_trace::DebugTraceTool;
+use delete_file::DeleteFileTool;
 pub use discover::DiscoverToolsTool;
 use edit_file::EditFileTool;
 use file_stats::FileStatsTool;
@@ -110,6 +114,8 @@ pub fn rara_tool_names() -> Vec<String> {
         FindFilesTool::TOOL_NAME,
         WalkDirectoryTool::TOOL_NAME,
         FileStatsTool::TOOL_NAME,
+        DeleteFileTool::TOOL_NAME,
+        CreateDirectoryTool::TOOL_NAME,
         // Network
         HttpFetchTool::TOOL_NAME,
         // Memory & session
@@ -182,6 +188,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ListDirectoryTool::new()),
         Arc::new(WalkDirectoryTool::new()),
         Arc::new(FileStatsTool::new()),
+        Arc::new(DeleteFileTool::new()),
+        Arc::new(CreateDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendImageTool::new()),
@@ -272,8 +280,8 @@ mod tests {
     fn rara_core_tool_count_stays_slim() {
         let names = rara_tool_names();
         assert!(
-            names.len() <= 20,
-            "Core tool set has {} tools — keep it under 20 to control token costs. Use tier = \
+            names.len() <= 22,
+            "Core tool set has {} tools — keep it under 22 to control token costs. Use tier = \
              \"deferred\" for non-essential tools.",
             names.len()
         );
