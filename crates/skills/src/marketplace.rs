@@ -171,74 +171,21 @@ impl MarketplaceService {
             return Ok(idx.clone());
         }
 
-        let url =
-            format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json");
-        let client = reqwest::Client::new();
-        let raw_resp = client
-            .get(&url)
-            .header("User-Agent", "rara-marketplace")
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
+        let gh = crate::github::GitHubClient::new();
+
+        // Try marketplace.json first; fall back to plugin.json for
+        // single-plugin repos.
+        let content_b64 = match self
+            .fetch_github_content_b64(&gh, repo, "marketplace.json")
             .await
-            .context(crate::error::RequestSnafu)?;
-
-        let status = raw_resp.status();
-        let is_not_found = status == reqwest::StatusCode::NOT_FOUND;
-
-        // For non-404 errors (rate limit, auth failure, server error), propagate
-        // immediately.
-        if !status.is_success() && !is_not_found {
-            return Err(crate::error::SkillError::HttpStatus {
-                status: status.as_u16(),
-                url,
-            });
-        }
-
-        let resp: serde_json::Value = raw_resp.json().await.context(crate::error::RequestSnafu)?;
-
-        let content_b64 = match resp.get("content").and_then(|v| v.as_str()) {
-            Some(c) => c.to_string(),
-            None => {
-                // Only fall back to plugin.json when marketplace.json is genuinely absent
-                // (404).
-                if !is_not_found {
-                    return Err(crate::error::SkillError::InvalidInput {
-                        message: format!(
-                            "marketplace.json for '{repo}' returned HTTP {status} but has no \
-                             'content' field"
-                        ),
-                    });
-                }
-
+        {
+            Ok(b64) => b64,
+            Err(_) => {
                 // Fallback: try .claude-plugin/plugin.json for single-plugin repos.
-                let fallback_url = format!(
-                    "https://api.github.com/repos/{repo}/contents/.claude-plugin/plugin.json"
-                );
-                let fallback_raw = client
-                    .get(&fallback_url)
-                    .header("User-Agent", "rara-marketplace")
-                    .header("Accept", "application/vnd.github.v3+json")
-                    .send()
+                let fallback_b64 = self
+                    .fetch_github_content_b64(&gh, repo, "plugin.json")
                     .await
-                    .context(crate::error::RequestSnafu)?;
-
-                let fallback_status = fallback_raw.status();
-                if !fallback_status.is_success() {
-                    return Err(crate::error::SkillError::HttpStatus {
-                        status: fallback_status.as_u16(),
-                        url:    fallback_url,
-                    });
-                }
-
-                let fallback_resp: serde_json::Value = fallback_raw
-                    .json()
-                    .await
-                    .context(crate::error::RequestSnafu)?;
-
-                let fallback_b64 = fallback_resp
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| crate::error::SkillError::InvalidInput {
+                    .map_err(|_| crate::error::SkillError::InvalidInput {
                         message: format!(
                             "repo '{repo}' has neither marketplace.json nor plugin.json"
                         ),
@@ -517,6 +464,27 @@ impl MarketplaceService {
 
 // Private helpers.
 impl MarketplaceService {
+    /// Fetch the base64 `content` field from a GitHub Contents API response.
+    ///
+    /// Used by [`fetch_index`](Self::fetch_index) to retrieve JSON files from
+    /// `.claude-plugin/` without cloning the entire repo.
+    async fn fetch_github_content_b64(
+        &self,
+        gh: &crate::github::GitHubClient,
+        repo: &str,
+        filename: &str,
+    ) -> Result<String> {
+        let url = format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/{filename}");
+        let resp = gh.get(&url, &format!("{filename} fetch")).await?;
+        let body: serde_json::Value = resp.json().await.context(crate::error::RequestSnafu)?;
+        body.get("content")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string)
+            .ok_or_else(|| crate::error::SkillError::InvalidInput {
+                message: format!("{filename} for '{repo}' has no 'content' field"),
+            })
+    }
+
     /// Re-discover enabled skills for a repo and insert them into the
     /// in-memory registry.
     fn sync_repo_to_registry(&self, manifest: &crate::types::SkillsManifest, source_repo: &str) {
