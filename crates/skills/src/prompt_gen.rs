@@ -20,10 +20,8 @@
 
 use crate::types::SkillMetadata;
 
-/// Maximum description length in characters. Descriptions longer than this are
-/// truncated with an ellipsis. Matches the Claude Code plugin spec (1024
-/// chars).
-const MAX_DESCRIPTION_CHARS: usize = 1024;
+/// Maximum one-line description length before truncation.
+const MAX_SHORT_DESC_CHARS: usize = 80;
 
 /// Truncate a string to at most `max_chars` characters, appending "…" if cut.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -47,48 +45,48 @@ fn escape_xml(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Generate the `<available_skills>` XML block for injection into the system
-/// prompt.
+/// Extract the first sentence from a description.
+///
+/// Looks for English (". ") or Chinese ("。") sentence boundaries. If none
+/// found, truncates to [`MAX_SHORT_DESC_CHARS`] with an ellipsis.
+fn first_sentence(s: &str) -> String {
+    // English sentence boundary: period followed by space
+    if let Some(idx) = s.find(". ") {
+        return s[..=idx].to_string();
+    }
+    // Chinese sentence boundary
+    if let Some(idx) = s.find('。') {
+        let end = idx + '。'.len_utf8();
+        return s[..end].to_string();
+    }
+    // No sentence boundary — truncate if needed
+    truncate(s, MAX_SHORT_DESC_CHARS)
+}
+
+/// Generate a compact skills listing for injection into the system prompt.
+///
+/// Each skill is rendered as a single line (`- name: short_description`) to
+/// minimize token usage (~800 tokens for 25 skills vs ~6,250 with full XML).
 pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
     if skills.is_empty() {
         return String::new();
     }
-
-    use crate::types::SkillSource;
 
     // Sort by name for deterministic output (improves provider-side prompt cache
     // hit rate by keeping the prefix stable across restarts and rehashes).
     let mut sorted: Vec<&SkillMetadata> = skills.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut out = String::from("## Available Skills\n\n<available_skills>\n");
-    for skill in sorted {
-        let is_plugin = skill.source.as_ref() == Some(&SkillSource::Plugin);
-        let path_display = if is_plugin {
-            skill.path.display().to_string()
-        } else {
-            skill.path.join("SKILL.md").display().to_string()
-        };
-        out.push_str(&format!(
-            "<skill name=\"{}\" source=\"{}\" path=\"{}\">\n{}\n</skill>\n",
-            escape_xml(&skill.name),
-            if is_plugin { "plugin" } else { "skill" },
-            escape_xml(&path_display),
-            escape_xml(&truncate(&skill.description, MAX_DESCRIPTION_CHARS)),
-        ));
+    let mut out = String::from("## Available Skills\n\n");
+    for skill in &sorted {
+        let short_desc = first_sentence(&skill.description);
+        out.push_str(&format!("- {}: {}\n", escape_xml(&skill.name), short_desc));
     }
-    out.push_str("</available_skills>\n\n");
+    out.push('\n');
     out.push_str(
-        "To activate a skill, read its SKILL.md file (or the plugin's .md file at the given path) \
-         for full instructions.\n\n",
-    );
-    out.push_str(
-        "IMPORTANT: Some skills were written for other environments and may reference tools you \
-         don't have (e.g. WebSearch, WebFetch, Skill, Task). Ignore those tool names. Use YOUR \
-         actual tools instead — for example, use `http_fetch` for any web/HTTP access, `bash` for \
-         shell commands, `read_file`/`write_file` for file operations. You DO have internet \
-         access via `http_fetch`. Never claim you lack capabilities just because a skill \
-         references an unfamiliar tool name.\n\n",
+        "To use a skill, read its SKILL.md file for full instructions.\nUse YOUR actual tools \
+         (http_fetch, bash, read_file, etc.) — not tool names from skills written for other \
+         environments.\n\n",
     );
     out
 }
@@ -103,5 +101,31 @@ mod tests {
         let result = truncate(input, 5);
         assert_eq!(result, "你好世界测…");
         assert_eq!(truncate(input, 50).chars().count(), input.chars().count());
+    }
+
+    #[test]
+    fn first_sentence_english() {
+        assert_eq!(
+            first_sentence("This is a tool. It does things."),
+            "This is a tool."
+        );
+    }
+
+    #[test]
+    fn first_sentence_chinese() {
+        assert_eq!(first_sentence("这是一个工具。它做事情。"), "这是一个工具。");
+    }
+
+    #[test]
+    fn first_sentence_no_period_short() {
+        assert_eq!(first_sentence("Short text"), "Short text");
+    }
+
+    #[test]
+    fn first_sentence_no_period_long() {
+        let long = "a".repeat(100);
+        let result = first_sentence(&long);
+        assert_eq!(result.chars().count(), MAX_SHORT_DESC_CHARS + 1); // 80 + "…"
+        assert!(result.ends_with('…'));
     }
 }
