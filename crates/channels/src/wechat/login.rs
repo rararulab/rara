@@ -123,24 +123,44 @@ impl LoginSession {
         Ok(buf.into_inner())
     }
 
+    /// Returns the QR code ID for this session.
+    ///
+    /// Can be passed to [`wait_for_confirmation_with`] to resume
+    /// polling in a separate tool call.
+    pub fn qrcode_id(&self) -> &str { &self.qrcode_id }
+
+    /// Returns the API base URL for this session.
+    pub fn base_url(&self) -> &str { &self.base_url }
+
     /// Polls the API until the user scans and confirms the QR code.
     ///
     /// Times out after 5 minutes. On success the credentials are
     /// persisted to `~/.config/rara/wechat/` and the account ID is
     /// returned.
     pub async fn wait_for_confirmation(self) -> Result<String> {
-        tokio::time::timeout(
-            LOGIN_TIMEOUT,
-            poll_until_confirmed(&self.client, &self.qrcode_id, &self.base_url),
-        )
-        .await
-        .map_err(|_| {
-            LoginFailedSnafu {
-                reason: "login timed out after 5 minutes",
-            }
-            .build()
-        })?
+        wait_for_confirmation_with(&self.qrcode_id, &self.base_url).await
     }
+}
+
+/// Resumes polling for a previously started login session.
+///
+/// This is the two-step counterpart to [`LoginSession::start`]:
+/// call `start` to get the QR code, present it to the user, then
+/// call this function with the `qrcode_id` and `base_url` to wait
+/// for confirmation.
+pub async fn wait_for_confirmation_with(qrcode_id: &str, base_url: &str) -> Result<String> {
+    let client = WeixinApiClient::new(base_url, "", None);
+    tokio::time::timeout(
+        LOGIN_TIMEOUT,
+        poll_until_confirmed(&client, qrcode_id, base_url),
+    )
+    .await
+    .map_err(|_| {
+        LoginFailedSnafu {
+            reason: "login timed out after 5 minutes",
+        }
+        .build()
+    })?
 }
 
 async fn poll_until_confirmed(
