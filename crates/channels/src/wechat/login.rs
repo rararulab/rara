@@ -58,9 +58,16 @@ pub async fn login(base_url: Option<&str>) -> Result<String> {
     println!("{image}");
     println!("Scan the QR code above with WeChat to login");
 
-    // Poll until the user scans and confirms.
+    // Poll until the user scans and confirms (timeout after 5 minutes).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(LoginFailedSnafu {
+                reason: "login timed out after 5 minutes",
+            }
+            .build());
+        }
         let status_resp = client.get_qr_code_status(qrcode_id).await?;
         let status = status_resp["data"]["status"].as_str().unwrap_or("unknown");
 
