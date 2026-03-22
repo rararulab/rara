@@ -29,7 +29,8 @@ use crate::{
 #[tool(
     name = "browser-press-key",
     description = "Press a keyboard key in the active browser page. Use key names like 'Enter', \
-                   'Escape', 'Tab', 'ArrowDown', etc."
+                   'Escape', 'Tab', 'ArrowDown', etc.",
+    tier = "deferred"
 )]
 pub struct BrowserPressKeyTool {
     manager: BrowserManagerRef,

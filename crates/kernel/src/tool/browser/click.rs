@@ -29,7 +29,8 @@ use crate::{
 #[tool(
     name = "browser-click",
     description = "Click an element on the page using its ref ID from the accessibility snapshot. \
-                   Returns a fresh snapshot after clicking."
+                   Returns a fresh snapshot after clicking.",
+    tier = "deferred"
 )]
 pub struct BrowserClickTool {
     manager: BrowserManagerRef,

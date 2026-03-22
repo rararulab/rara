@@ -29,7 +29,8 @@ use crate::{
     name = "browser-snapshot",
     description = "Take an accessibility snapshot of the current page without performing any \
                    action. Use this to inspect the page content after waiting or to refresh your \
-                   view."
+                   view.",
+    tier = "deferred"
 )]
 pub struct BrowserSnapshotTool {
     manager: BrowserManagerRef,

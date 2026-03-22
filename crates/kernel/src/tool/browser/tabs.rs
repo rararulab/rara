@@ -30,7 +30,8 @@ use crate::{
     name = "browser-tabs",
     description = "Manage browser tabs. Actions: 'list' — list all tabs; 'select' — switch to a \
                    tab by index; 'close' — close a tab by index (or the active tab); 'new' — open \
-                   a new blank tab."
+                   a new blank tab.",
+    tier = "deferred"
 )]
 pub struct BrowserTabsTool {
     manager: BrowserManagerRef,

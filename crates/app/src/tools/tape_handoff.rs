@@ -46,7 +46,8 @@ pub struct TapeHandoffResult {
                    This is a core workflow tool \u{2014} use it proactively to manage context, \
                    not just when failures occur. You MUST provide a summary to preserve context \
                    across the handoff boundary.",
-    bypass_interceptor
+    bypass_interceptor,
+    tier = "deferred"
 )]
 pub struct TapeHandoffTool {
     tape_service: TapeService,

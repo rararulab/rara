@@ -30,7 +30,8 @@ use crate::{
 #[tool(
     name = "browser-evaluate",
     description = "Evaluate a JavaScript expression in the active browser page and return the \
-                   result."
+                   result.",
+    tier = "deferred"
 )]
 pub struct BrowserEvaluateTool {
     manager: BrowserManagerRef,

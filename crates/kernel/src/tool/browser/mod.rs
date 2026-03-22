@@ -15,22 +15,13 @@
 //! Browser tools — LLM-callable tools for controlling the headless browser.
 //!
 //! Each tool wraps a [`BrowserManagerRef`] and delegates to its methods.
-//! Stub tools return a clear "not yet implemented" message for features
-//! pending Lightpanda support.
 
 mod click;
 mod close;
-mod console;
-mod drag;
 mod evaluate;
-mod fill_form;
-mod handle_dialog;
-mod hover;
 mod navigate;
 mod navigate_back;
-mod network;
 mod press_key;
-mod select_option;
 mod snapshot;
 mod tabs;
 mod type_text;
@@ -52,13 +43,5 @@ pub fn browser_tools(manager: BrowserManagerRef) -> Vec<AgentToolRef> {
         Arc::new(wait_for::BrowserWaitForTool::new(manager.clone())),
         Arc::new(tabs::BrowserTabsTool::new(manager.clone())),
         Arc::new(close::BrowserCloseTool::new(manager.clone())),
-        // Stub tools — not yet implemented in Lightpanda
-        Arc::new(hover::BrowserHoverTool),
-        Arc::new(drag::BrowserDragTool),
-        Arc::new(select_option::BrowserSelectOptionTool),
-        Arc::new(fill_form::BrowserFillFormTool),
-        Arc::new(handle_dialog::BrowserHandleDialogTool),
-        Arc::new(console::BrowserConsoleMessagesTool),
-        Arc::new(network::BrowserNetworkRequestsTool),
     ]
 }

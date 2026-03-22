@@ -28,7 +28,8 @@ use crate::{
 #[tool(
     name = "browser-navigate-back",
     description = "Navigate back in the active browser tab. Returns a fresh accessibility \
-                   snapshot."
+                   snapshot.",
+    tier = "deferred"
 )]
 pub struct BrowserNavigateBackTool {
     manager: BrowserManagerRef,

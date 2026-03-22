@@ -36,12 +36,16 @@ use std::{
 /// SYNC: when adding a new file-access tool to the registry
 /// (`crates/app/src/tools/mod.rs`), add it here too.
 pub const FILE_PATH_TOOLS: &[&str] = &["read-file", "write-file", "edit-file"];
+// TODO: `multi-edit` uses `edits[].file_path` and `file-stats` uses `paths[]`
+// (arrays of paths). The guard currently only checks a single top-level param,
+// so neither tool is covered here yet. Add array-aware path checking in a
+// follow-up.
 
 /// Tools that use a `path` parameter.
 ///
 /// SYNC: when adding a new file-access tool to the registry
 /// (`crates/app/src/tools/mod.rs`), add it here too.
-pub const PATH_TOOLS: &[&str] = &["grep", "list-directory", "find-files"];
+pub const PATH_TOOLS: &[&str] = &["grep", "list-directory", "find-files", "walk-directory"];
 
 /// Guard that restricts file-access tools to a workspace directory and optional
 /// whitelist entries.
@@ -289,7 +293,7 @@ fn path_starts_with(path: &Path, base: &Path) -> bool {
 /// Expects an **absolute** path. For relative paths, `..` components that
 /// escape the root are preserved as-is, which is likely not what you want.
 /// Callers should join relative paths to an absolute root before calling this.
-pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path) -> PathBuf {
     debug_assert!(
         path.is_absolute(),
         "normalize_path expects absolute paths, got: {}",
@@ -318,6 +322,40 @@ pub(crate) fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// Resolve a user-supplied path to an absolute path and verify it is within
+/// the workspace root.
+///
+/// Relative paths are joined to [`rara_paths::workspace_dir()`]. Returns
+/// `Err` if the resolved path escapes the workspace, preventing writes to
+/// arbitrary filesystem locations.
+pub fn resolve_and_guard(raw: &str) -> Result<PathBuf, String> {
+    let workspace = rara_paths::workspace_dir();
+    let resolved = if Path::new(raw).is_absolute() {
+        normalize_path(Path::new(raw))
+    } else {
+        normalize_path(&workspace.join(raw))
+    };
+
+    // Case-insensitive comparison on macOS/Windows.
+    let starts_with = if cfg!(any(target_os = "macos", target_os = "windows")) {
+        resolved
+            .to_string_lossy()
+            .to_lowercase()
+            .starts_with(&workspace.to_string_lossy().to_lowercase())
+    } else {
+        resolved.starts_with(&workspace)
+    };
+
+    if !starts_with {
+        return Err(format!(
+            "path '{}' is outside workspace '{}'",
+            resolved.display(),
+            workspace.display()
+        ));
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]

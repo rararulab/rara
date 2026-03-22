@@ -25,6 +25,7 @@ mod composio;
 mod debug_trace;
 mod discover;
 mod edit_file;
+mod file_stats;
 mod find_files;
 mod grep;
 mod http_fetch;
@@ -39,6 +40,7 @@ mod mita_read_tape;
 mod mita_update_session_title;
 mod mita_update_soul_state;
 mod mita_write_user_note;
+mod multi_edit;
 mod notify;
 mod read_file;
 mod send_email;
@@ -50,6 +52,7 @@ mod skill_tools;
 mod tape_handoff;
 mod tape_info;
 mod user_note;
+mod walk_directory;
 mod write_file;
 
 use acp_delegate::AcpDelegateTool;
@@ -58,6 +61,7 @@ use bash::BashTool;
 use debug_trace::DebugTraceTool;
 pub use discover::DiscoverToolsTool;
 use edit_file::EditFileTool;
+use file_stats::FileStatsTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
 use http_fetch::HttpFetchTool;
@@ -72,6 +76,7 @@ use mita_read_tape::ReadTapeTool;
 use mita_update_session_title::UpdateSessionTitleTool;
 use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
+use multi_edit::MultiEditTool;
 use read_file::ReadFileTool;
 use send_email::SendEmailTool;
 use send_image::SendImageTool;
@@ -82,70 +87,41 @@ use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use tape_handoff::TapeHandoffTool;
 use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
+use walk_directory::WalkDirectoryTool;
 use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
+///
+/// Only **Core** tools appear here. All other tools are registered in the
+/// [`ToolRegistry`] but marked `tier = "deferred"` and discovered on demand
+/// via the `discover-tools` tool.
 pub fn rara_tool_names() -> Vec<String> {
     use rara_kernel::tool_names;
 
     vec![
+        // File operations
         BashTool::TOOL_NAME,
         GrepTool::TOOL_NAME,
         ReadFileTool::TOOL_NAME,
         WriteFileTool::TOOL_NAME,
         EditFileTool::TOOL_NAME,
+        MultiEditTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
+        WalkDirectoryTool::TOOL_NAME,
+        FileStatsTool::TOOL_NAME,
+        // Network
         HttpFetchTool::TOOL_NAME,
-        SendEmailTool::TOOL_NAME,
-        SendImageTool::TOOL_NAME,
+        // Memory & session
         tool_names::TAPE,
-        TapeInfoTool::TOOL_NAME,
-        TapeHandoffTool::TOOL_NAME,
         UserNoteTool::TOOL_NAME,
         tool_names::MEMORY,
-        tool_names::KERNEL,
-        SettingsTool::TOOL_NAME,
-        tool_names::SCHEDULE_ONCE,
-        tool_names::SCHEDULE_INTERVAL,
-        tool_names::SCHEDULE_CRON,
-        tool_names::SCHEDULE_REMOVE,
-        tool_names::SCHEDULE_LIST,
-        ListSkillsTool::TOOL_NAME,
-        CreateSkillTool::TOOL_NAME,
-        DeleteSkillTool::TOOL_NAME,
-        MarketplaceTool::TOOL_NAME,
-        InstallMcpServerTool::TOOL_NAME,
-        ListMcpServersTool::TOOL_NAME,
-        RemoveMcpServerTool::TOOL_NAME,
-        tool_names::CREATE_PLAN,
+        // Execution
         tool_names::SPAWN_BACKGROUND,
         tool_names::CANCEL_BACKGROUND,
-        // Browser tools
-        tool_names::BROWSER_NAVIGATE,
-        tool_names::BROWSER_NAVIGATE_BACK,
-        tool_names::BROWSER_SNAPSHOT,
-        tool_names::BROWSER_CLICK,
-        tool_names::BROWSER_TYPE,
-        tool_names::BROWSER_PRESS_KEY,
-        tool_names::BROWSER_EVALUATE,
-        tool_names::BROWSER_WAIT_FOR,
-        tool_names::BROWSER_TABS,
-        tool_names::BROWSER_CLOSE,
-        tool_names::BROWSER_HOVER,
-        tool_names::BROWSER_DRAG,
-        tool_names::BROWSER_SELECT_OPTION,
-        tool_names::BROWSER_FILL_FORM,
-        tool_names::BROWSER_HANDLE_DIALOG,
-        tool_names::BROWSER_CONSOLE_MESSAGES,
-        tool_names::BROWSER_NETWORK_REQUESTS,
-        // ACP delegation
-        AcpDelegateTool::TOOL_NAME,
-        // ACP management
-        InstallAcpAgentTool::TOOL_NAME,
-        ListAcpAgentsTool::TOOL_NAME,
-        RemoveAcpAgentTool::TOOL_NAME,
-        // Deferred tool discovery
+        // Plan
+        tool_names::CREATE_PLAN,
+        // Discovery
         DiscoverToolsTool::TOOL_NAME,
     ]
     .into_iter()
@@ -200,9 +176,12 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ReadFileTool::new()),
         Arc::new(WriteFileTool::new()),
         Arc::new(EditFileTool::new()),
+        Arc::new(MultiEditTool::new()),
         Arc::new(FindFilesTool::new()),
         Arc::new(GrepTool::new()),
         Arc::new(ListDirectoryTool::new()),
+        Arc::new(WalkDirectoryTool::new()),
+        Arc::new(FileStatsTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendImageTool::new()),
@@ -273,10 +252,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rara_tool_names_includes_key_tools() {
+    fn rara_tool_names_includes_core_tools() {
         let names = rara_tool_names();
-        for expected in ["bash", "tape", "marketplace", "kernel"] {
+        // Only Core tools appear in the manifest; deferred tools (kernel,
+        // marketplace, schedule-*, etc.) are discovered on demand.
+        for expected in ["bash", "tape", "memory", "discover-tools"] {
             assert!(names.iter().any(|n| n == expected), "missing: {expected}");
         }
+        // Verify deferred tools are NOT in the core list.
+        for deferred in ["kernel", "marketplace", "schedule-once", "send-email"] {
+            assert!(
+                !names.iter().any(|n| n == deferred),
+                "deferred tool should not be in core: {deferred}"
+            );
+        }
+    }
+
+    #[test]
+    fn rara_core_tool_count_stays_slim() {
+        let names = rara_tool_names();
+        assert!(
+            names.len() <= 20,
+            "Core tool set has {} tools — keep it under 20 to control token costs. Use tier = \
+             \"deferred\" for non-essential tools.",
+            names.len()
+        );
     }
 }

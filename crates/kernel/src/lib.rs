@@ -85,13 +85,6 @@ pub mod tool_names {
     pub const BROWSER_WAIT_FOR: &str = "browser-wait-for";
     pub const BROWSER_TABS: &str = "browser-tabs";
     pub const BROWSER_CLOSE: &str = "browser-close";
-    pub const BROWSER_HOVER: &str = "browser-hover";
-    pub const BROWSER_DRAG: &str = "browser-drag";
-    pub const BROWSER_SELECT_OPTION: &str = "browser-select-option";
-    pub const BROWSER_FILL_FORM: &str = "browser-fill-form";
-    pub const BROWSER_HANDLE_DIALOG: &str = "browser-handle-dialog";
-    pub const BROWSER_CONSOLE_MESSAGES: &str = "browser-console-messages";
-    pub const BROWSER_NETWORK_REQUESTS: &str = "browser-network-requests";
 
     // ACP delegation
     pub const ACP_DELEGATE: &str = "acp-delegate";
