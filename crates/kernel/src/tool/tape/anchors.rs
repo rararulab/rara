@@ -44,7 +44,11 @@ pub struct TapeAnchorsResult {
 
 /// List recent tape anchors.
 #[derive(ToolDef)]
-#[tool(name = "tape-anchors", description = "List recent tape anchors.")]
+#[tool(
+    name = "tape-anchors",
+    description = "List recent tape anchors.",
+    tier = "deferred"
+)]
 pub(crate) struct TapeAnchorsTool {
     tape_service: TapeService,
     tape_name:    String,

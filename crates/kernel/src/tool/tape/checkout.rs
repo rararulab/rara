@@ -48,7 +48,8 @@ pub struct TapeCheckoutResult {
 #[derive(ToolDef)]
 #[tool(
     name = "tape-checkout",
-    description = "Fork a new session from a named anchor."
+    description = "Fork a new session from a named anchor.",
+    tier = "deferred"
 )]
 pub(crate) struct TapeCheckoutTool {
     tape_service: TapeService,

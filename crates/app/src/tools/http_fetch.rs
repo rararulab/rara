@@ -47,7 +47,8 @@ pub struct HttpFetchResult {
 #[tool(
     name = "http-fetch",
     description = "Fetch a URL via HTTP GET or POST; returns status, content type, and body \
-                   (truncated to 100KB)."
+                   (truncated to 100KB).",
+    tier = "deferred"
 )]
 pub struct HttpFetchTool {
     client: reqwest::Client,

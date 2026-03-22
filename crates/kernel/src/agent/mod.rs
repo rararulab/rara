@@ -763,10 +763,7 @@ fn ensure_agent_md(path: &Path, agent_name: &str) {
 ///
 /// Returns `(prompt, has_soul)` so callers can avoid re-calling
 /// `resolve_soul_prompt`.
-pub(crate) fn build_agent_system_prompt(
-    handle: &KernelHandle,
-    manifest: &AgentManifest,
-) -> (String, bool) {
+pub(crate) fn build_agent_system_prompt(manifest: &AgentManifest) -> (String, bool) {
     // 1. Soul prompt: prepend soul text if available, otherwise use manifest prompt
     //    as-is.
     let (effective_prompt, has_soul) = match resolve_soul_prompt(&manifest.name) {
@@ -779,65 +776,23 @@ pub(crate) fn build_agent_system_prompt(
     } else {
         effective_prompt
     };
-    // 3. Append runtime contract (tape actions, delegation rules, etc.).
-    let has_kernel_tool = handle.tool_registry().get("kernel").is_some();
-    let effective_prompt =
-        build_runtime_contract_prompt(&effective_prompt, has_kernel_tool, manifest.max_children);
-    // 4. Append available skills after the static runtime contract so that
-    // the stable prefix (soul + system_prompt + agent.md + contract) stays
-    // intact for provider-side prompt caching.
-    let skills_block = handle.skills_prompt();
-    let prompt = if skills_block.is_empty() {
-        effective_prompt
-    } else {
-        format!("{effective_prompt}\n\n{skills_block}")
-    };
-    (prompt, has_soul)
+    // 3. Append runtime contract (tape actions, discover-tools hint).
+    let effective_prompt = build_runtime_contract_prompt(&effective_prompt);
+    (effective_prompt, has_soul)
 }
 
-fn build_runtime_contract_prompt(
-    base_prompt: &str,
-    has_kernel_tool: bool,
-    max_children: Option<usize>,
-) -> String {
-    let mut prompt = format!(
+fn build_runtime_contract_prompt(base_prompt: &str) -> String {
+    format!(
         r#"{base_prompt}
 
 <context_contract>
-The `tape-*` tools are your persistent memory.
-
-`tape-anchor` (checkpoint + trim), `tape-search`/`tape-entries` (recall old context), `tape-anchors` (list checkpoints), `tape-checkout` (fork from a past anchor).
+`tape-anchor` (checkpoint + trim), `tape-search` (recall old context). Use `discover-tools` to find additional tape tools, memory, http-fetch, scheduling, browser, skills, and more.
 
 MUST anchor when: context is long or [Context Usage Warning] appears, tool result exceeds ~2000 chars, user switches topic.
-SHOULD anchor when: completing a logical phase, processing multiple tool results.
 MUST search when: question refers to content before an anchor, or you need exact details from earlier.
-
-Always include `summary` and `next_steps` in anchors — missing summary = lost context.
+Always include `summary` and `next_steps` in anchors.
 </context_contract>"#
-    );
-
-    let can_delegate = has_kernel_tool && max_children != Some(0);
-    if can_delegate {
-        prompt.push_str(
-            r#"
-
-<delegation_contract>
-Use the `kernel` tool to delegate to child agents.
-
-## MUST delegate when:
-- 2+ independent subtasks exist
-- Broad discovery + implementation + verification across many files
-- Long tool-heavy execution that would bloat your context
-
-## How:
-- `action: "spawn"`, `agent: "worker"` — single focused task
-- `action: "spawn_parallel"` — multiple independent tasks
-- Keep each worker's scope narrow; synthesize results in parent
-</delegation_contract>"#,
-        );
-    }
-
-    prompt
+    )
 }
 
 /// Execute a single agent turn inline: build messages, stream LLM responses,
@@ -935,7 +890,7 @@ pub(crate) async fn run_agent_loop(
     let max_iterations = manifest
         .max_iterations
         .unwrap_or(handle.config().default_max_iterations);
-    let (effective_prompt, has_soul) = build_agent_system_prompt(handle, &manifest);
+    let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest);
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
@@ -2549,34 +2504,14 @@ mod tests {
     }
 
     #[test]
-    fn runtime_contract_prompt_includes_tape_and_delegation_rules() {
-        let prompt = build_runtime_contract_prompt("base", true, None);
+    fn runtime_contract_prompt_includes_tape_and_discover_tools() {
+        let prompt = build_runtime_contract_prompt("base");
         assert!(prompt.contains("<context_contract>"));
-        assert!(prompt.contains("`tape-*`"));
         assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
-        assert!(prompt.contains("`tape-search`/`tape-entries` (recall old context)"));
+        assert!(prompt.contains("`tape-search` (recall old context)"));
+        assert!(prompt.contains("`discover-tools`"));
         assert!(prompt.contains("you need exact details from earlier"));
         assert!(prompt.contains("`summary` and `next_steps` in anchors"));
-        assert!(prompt.contains("<delegation_contract>"));
-        assert!(prompt.contains("action: \"spawn\""));
-        assert!(prompt.contains("action: \"spawn_parallel\""));
-        assert!(prompt.contains("agent: \"worker\""));
-    }
-
-    #[test]
-    fn runtime_contract_prompt_keeps_tape_rules_without_kernel() {
-        let prompt = build_runtime_contract_prompt("base", false, None);
-        assert!(prompt.contains("<context_contract>"));
-        assert!(!prompt.contains("<delegation_contract>"));
-        assert!(!prompt.contains("action: \"spawn_parallel\""));
-    }
-
-    #[test]
-    fn runtime_contract_prompt_skips_delegation_when_children_disabled() {
-        let prompt = build_runtime_contract_prompt("base", true, Some(0));
-        assert!(prompt.contains("<context_contract>"));
-        assert!(!prompt.contains("<delegation_contract>"));
-        assert!(!prompt.contains("action: \"spawn\""));
     }
 
     #[test]
@@ -2594,10 +2529,8 @@ mod tests {
 
     #[test]
     fn runtime_contract_includes_topic_switch_in_must_anchor() {
-        let prompt = build_runtime_contract_prompt("base", false, None);
+        let prompt = build_runtime_contract_prompt("base");
         assert!(prompt.contains("user switches topic"));
-        // Verify "switching subtasks" is no longer in the SHOULD section
-        assert!(!prompt.contains("switching subtasks"));
     }
 
     #[test]
