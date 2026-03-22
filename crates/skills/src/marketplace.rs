@@ -171,77 +171,30 @@ impl MarketplaceService {
             return Ok(idx.clone());
         }
 
-        let url =
-            format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json");
-        let client = reqwest::Client::new();
-        let raw_resp = client
-            .get(&url)
-            .header("User-Agent", "rara-marketplace")
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
+        let gh = crate::github::GitHubClient::new();
+
+        // Try marketplace.json first; fall back to plugin.json ONLY when the
+        // file is genuinely absent (404).  Non-retriable errors (403 bad token,
+        // 429 rate limit after retries exhausted, 5xx) must propagate
+        // immediately so they are not masked by a confusing "has neither
+        // marketplace.json nor plugin.json" message.
+        let content_b64 = match self
+            .fetch_github_content_b64(&gh, repo, "marketplace.json")
             .await
-            .context(crate::error::RequestSnafu)?;
-
-        let status = raw_resp.status();
-        let is_not_found = status == reqwest::StatusCode::NOT_FOUND;
-
-        // For non-404 errors (rate limit, auth failure, server error), propagate
-        // immediately.
-        if !status.is_success() && !is_not_found {
-            return Err(crate::error::SkillError::HttpStatus {
-                status: status.as_u16(),
-                url,
-            });
-        }
-
-        let resp: serde_json::Value = raw_resp.json().await.context(crate::error::RequestSnafu)?;
-
-        let content_b64 = match resp.get("content").and_then(|v| v.as_str()) {
-            Some(c) => c.to_string(),
-            None => {
-                // Only fall back to plugin.json when marketplace.json is genuinely absent
-                // (404).
-                if !is_not_found {
-                    return Err(crate::error::SkillError::InvalidInput {
-                        message: format!(
-                            "marketplace.json for '{repo}' returned HTTP {status} but has no \
-                             'content' field"
-                        ),
-                    });
-                }
-
+        {
+            Ok(b64) => b64,
+            Err(crate::error::SkillError::HttpStatus { status: 404, .. }) => {
                 // Fallback: try .claude-plugin/plugin.json for single-plugin repos.
-                let fallback_url = format!(
-                    "https://api.github.com/repos/{repo}/contents/.claude-plugin/plugin.json"
-                );
-                let fallback_raw = client
-                    .get(&fallback_url)
-                    .header("User-Agent", "rara-marketplace")
-                    .header("Accept", "application/vnd.github.v3+json")
-                    .send()
+                let fallback_b64 = self
+                    .fetch_github_content_b64(&gh, repo, "plugin.json")
                     .await
-                    .context(crate::error::RequestSnafu)?;
-
-                let fallback_status = fallback_raw.status();
-                if !fallback_status.is_success() {
-                    return Err(crate::error::SkillError::HttpStatus {
-                        status: fallback_status.as_u16(),
-                        url:    fallback_url,
-                    });
-                }
-
-                let fallback_resp: serde_json::Value = fallback_raw
-                    .json()
-                    .await
-                    .context(crate::error::RequestSnafu)?;
-
-                let fallback_b64 = fallback_resp
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| crate::error::SkillError::InvalidInput {
-                        message: format!(
-                            "repo '{repo}' has neither marketplace.json nor plugin.json"
-                        ),
+                    .map_err(|e| {
+                        tracing::debug!(%e, repo, "plugin.json fallback also failed");
+                        crate::error::SkillError::InvalidInput {
+                            message: format!(
+                                "repo '{repo}' has neither marketplace.json nor plugin.json"
+                            ),
+                        }
                     })?;
 
                 use base64::Engine;
@@ -267,6 +220,9 @@ impl MarketplaceService {
                     .insert(repo.to_string(), index.clone());
                 return Ok(index);
             }
+            // Non-404 errors (rate limit, auth failure, server error) —
+            // propagate immediately.
+            Err(e) => return Err(e),
         };
 
         // GitHub returns base64 with newlines.
@@ -379,28 +335,35 @@ impl MarketplaceService {
 
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
-        let mut manifest = store.load()?;
 
-        if manifest.find_repo(&source_repo).is_none() {
+        // Check if repo is already installed; if not, download it first.
+        // Note: this read is intentionally outside the lock — holding the lock
+        // across the HTTP download would block all concurrent manifest access.
+        // TOCTOU is acceptable: install_skill() has its own conflict handling.
+        let needs_install = store.load()?.find_repo(&source_repo).is_none();
+        if needs_install {
             crate::install::install_skill(&source_repo, &install_dir).await?;
-            manifest = store.load()?;
         }
 
-        let mut enabled_skills = Vec::new();
-        if let Some(repo_entry) = manifest.find_repo_mut(&source_repo) {
-            for skill in &mut repo_entry.skills {
-                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
-                    skill.enabled = true;
-                    skill.trusted = true;
-                    enabled_skills.push(skill.name.clone());
+        // Enable matching skills under exclusive lock.
+        let (enabled_skills, manifest_snapshot) = store.with_lock(|manifest| {
+            let plugin = plugin_name.to_string();
+            let mut enabled = Vec::new();
+            if let Some(repo_entry) = manifest.find_repo_mut(&source_repo) {
+                for skill in &mut repo_entry.skills {
+                    if skill.name.starts_with(&format!("{plugin}:")) || skill.name == plugin {
+                        skill.enabled = true;
+                        skill.trusted = true;
+                        enabled.push(skill.name.clone());
+                    }
                 }
             }
-        }
-        store.save(&manifest)?;
+            Ok((enabled, manifest.clone()))
+        })?;
 
         // Update in-memory registry so the agent prompt reflects new skills
         // immediately.
-        self.sync_repo_to_registry(&manifest, &source_repo);
+        self.sync_repo_to_registry(&manifest_snapshot, &source_repo);
 
         Ok(PluginInstallResult {
             plugin:       plugin_name.to_string(),
@@ -426,24 +389,25 @@ impl MarketplaceService {
 
         self.add_source(&normalized)?;
 
-        // Load manifest, enable all skills from this repo, and save.
+        // Enable all skills from this repo under exclusive lock.
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
-        let mut manifest = store.load()?;
 
-        let mut enabled_skills = Vec::new();
-        if let Some(repo_entry) = manifest.find_repo_mut(&normalized) {
-            for skill in &mut repo_entry.skills {
-                skill.enabled = true;
-                skill.trusted = true;
-                enabled_skills.push(skill.name.clone());
+        let (enabled_skills, manifest_snapshot) = store.with_lock(|manifest| {
+            let mut enabled = Vec::new();
+            if let Some(repo_entry) = manifest.find_repo_mut(&normalized) {
+                for skill in &mut repo_entry.skills {
+                    skill.enabled = true;
+                    skill.trusted = true;
+                    enabled.push(skill.name.clone());
+                }
             }
-        }
-        store.save(&manifest)?;
+            Ok((enabled, manifest.clone()))
+        })?;
 
         // Update in-memory registry so the agent prompt reflects new skills
         // immediately.
-        self.sync_repo_to_registry(&manifest, &normalized);
+        self.sync_repo_to_registry(&manifest_snapshot, &normalized);
 
         let display_name = repo.split('/').next_back().unwrap_or(repo);
         Ok(PluginInstallResult {
@@ -466,35 +430,37 @@ impl MarketplaceService {
     fn set_plugin_state(&self, plugin_name: &str, enabled: bool) -> Result<()> {
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
-        let mut manifest = store.load()?;
 
-        let mut found = false;
-        let mut affected_names = Vec::new();
-        for repo in &mut manifest.repos {
-            for skill in &mut repo.skills {
-                if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
-                    skill.enabled = enabled;
-                    if enabled {
-                        skill.trusted = true;
+        let (affected_names, manifest_snapshot) = store.with_lock(|manifest| {
+            let plugin = plugin_name.to_string();
+            let mut found = false;
+            let mut affected = Vec::new();
+            for repo in &mut manifest.repos {
+                for skill in &mut repo.skills {
+                    if skill.name.starts_with(&format!("{plugin}:")) || skill.name == plugin {
+                        skill.enabled = enabled;
+                        if enabled {
+                            skill.trusted = true;
+                        }
+                        affected.push(skill.name.clone());
+                        found = true;
                     }
-                    affected_names.push(skill.name.clone());
-                    found = true;
                 }
             }
-        }
-        if !found {
-            return Err(crate::error::SkillError::NotFound {
-                name: format!("plugin '{plugin_name}' is not installed"),
-            });
-        }
-        store.save(&manifest)?;
+            if !found {
+                return Err(crate::error::SkillError::NotFound {
+                    name: format!("plugin '{plugin}' is not installed"),
+                });
+            }
+            Ok((affected, manifest.clone()))
+        })?;
 
         // Update in-memory registry for immediate effect.
         if let Some(ref registry) = self.registry {
             if enabled {
                 // Re-discover and insert enabled skills.
-                for repo in &manifest.repos {
-                    self.sync_repo_to_registry(&manifest, &repo.source);
+                for repo in &manifest_snapshot.repos {
+                    self.sync_repo_to_registry(&manifest_snapshot, &repo.source);
                 }
             } else {
                 // Remove disabled skills from the registry.
@@ -510,6 +476,27 @@ impl MarketplaceService {
 
 // Private helpers.
 impl MarketplaceService {
+    /// Fetch the base64 `content` field from a GitHub Contents API response.
+    ///
+    /// Used by [`fetch_index`](Self::fetch_index) to retrieve JSON files from
+    /// `.claude-plugin/` without cloning the entire repo.
+    async fn fetch_github_content_b64(
+        &self,
+        gh: &crate::github::GitHubClient,
+        repo: &str,
+        filename: &str,
+    ) -> Result<String> {
+        let url = format!("https://api.github.com/repos/{repo}/contents/.claude-plugin/{filename}");
+        let resp = gh.get(&url, &format!("{filename} fetch")).await?;
+        let body: serde_json::Value = resp.json().await.context(crate::error::RequestSnafu)?;
+        body.get("content")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string)
+            .ok_or_else(|| crate::error::SkillError::InvalidInput {
+                message: format!("{filename} for '{repo}' has no 'content' field"),
+            })
+    }
+
     /// Re-discover enabled skills for a repo and insert them into the
     /// in-memory registry.
     fn sync_repo_to_registry(&self, manifest: &crate::types::SkillsManifest, source_repo: &str) {

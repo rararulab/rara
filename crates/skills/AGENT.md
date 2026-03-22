@@ -98,3 +98,29 @@ The three API shapes have different structures:
 - **Detail** (`/skills/{slug}`): wraps skill info in a `skill` object, adds `owner` and `latestVersion` at top level
 
 Do NOT unify these into a single struct — the API shapes are genuinely different.
+
+## GitHub Client (`github.rs`)
+
+`GitHubClient` provides authenticated HTTP access to the GitHub API with automatic retry on transient errors (429 / 5xx). It reads `GITHUB_TOKEN` or `GH_TOKEN` from the environment for authenticated requests (5 000 req/hour vs 60 unauthenticated).
+
+Used by:
+- `install.rs` — tarball download and commit SHA lookup
+- `marketplace.rs` — GitHub Contents API for marketplace.json / plugin.json
+
+The retry logic mirrors `ClawhubClient::get_with_retry()`: exponential backoff with `Retry-After` header support.
+
+Do NOT:
+- Remove the token auth — unauthenticated rate limits (60/hour) break CI and heavy usage
+- Duplicate retry logic in callers — use `GitHubClient::get()` instead
+
+## Manifest Locking Invariant
+
+All manifest modifications MUST use `ManifestStore::with_lock()`. This acquires an exclusive `flock()` on a `.lock` file before loading, runs the mutation closure, saves, and releases the lock on drop.
+
+Bare `load()` / `save()` is only acceptable for **read-only** access (e.g. `load_install_manifest()`).
+
+**fs2 / flock() limitation**: advisory only on NFS. Acceptable for single-host CLI usage.
+
+Do NOT:
+- Use bare `load()` + `save()` for mutations — causes race conditions between concurrent installs
+- Hold the lock across async `.await` points — the closure passed to `with_lock()` must be synchronous

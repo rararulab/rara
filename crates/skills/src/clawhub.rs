@@ -231,7 +231,9 @@ impl ClawhubClient {
                 }
                 .fail();
             }
-            std::fs::remove_dir_all(&skill_dir).context(IoSnafu)?;
+            tokio::fs::remove_dir_all(&skill_dir)
+                .await
+                .context(IoSnafu)?;
         }
 
         // Fetch detail first to validate slug exists and get version before
@@ -269,7 +271,7 @@ impl ClawhubClient {
             .await;
 
         if result.is_err() {
-            let _ = std::fs::remove_dir_all(&skill_dir);
+            let _ = tokio::fs::remove_dir_all(&skill_dir).await;
         }
 
         result
@@ -295,8 +297,6 @@ impl ClawhubClient {
             std::fs::write(skill_dir.join("SKILL.md"), bytes).context(IoSnafu)?;
         }
 
-        let mut manifest = store.load()?;
-
         let skills = scan_skill_files(install_dir, skill_dir, slug);
         if skills.is_empty() {
             return InstallSnafu {
@@ -305,19 +305,22 @@ impl ClawhubClient {
             .fail();
         }
 
-        manifest.remove_repo(source);
-        manifest.add_repo(crate::types::RepoEntry {
-            source:          source.to_string(),
-            repo_name:       slug.to_string(),
-            installed_at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            commit_sha:      None,
-            format:          crate::formats::PluginFormat::Skill,
-            skills:          skills.clone(),
-        });
-        store.save(&manifest)?;
+        // Register in manifest under exclusive lock.
+        store.with_lock(|manifest| {
+            manifest.remove_repo(source);
+            manifest.add_repo(crate::types::RepoEntry {
+                source:          source.to_string(),
+                repo_name:       slug.to_string(),
+                installed_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                commit_sha:      None,
+                format:          crate::formats::PluginFormat::Skill,
+                skills:          skills.clone(),
+            });
+            Ok(())
+        })?;
 
         let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
         info!(slug, skills = skill_names.len(), "installed ClawHub skill");

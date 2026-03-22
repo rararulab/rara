@@ -20,6 +20,7 @@ base64.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 flate2 = "1"
+fs2 = "0.4"
 notify-debouncer-full = "0.7"
 percent-encoding = "2"
 rara-paths.workspace = true

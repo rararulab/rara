@@ -25,6 +25,7 @@ pub mod clawhub;
 pub mod discover;
 pub mod error;
 pub mod formats;
+pub mod github;
 pub mod hash;
 pub mod install;
 pub mod manifest;
