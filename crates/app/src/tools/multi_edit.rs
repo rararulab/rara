@@ -80,37 +80,7 @@ impl MultiEditTool {
     pub fn new() -> Self { Self }
 }
 
-/// Resolve a user-supplied path to an absolute path within the workspace.
-///
-/// Returns `Err` if the resolved path escapes the workspace root, preventing
-/// writes to arbitrary filesystem locations via prompt injection.
-fn resolve_and_guard(raw: &str) -> Result<std::path::PathBuf, String> {
-    let workspace = rara_paths::workspace_dir();
-    let resolved = if std::path::Path::new(raw).is_absolute() {
-        rara_kernel::guard::path_scope::normalize_path(std::path::Path::new(raw))
-    } else {
-        rara_kernel::guard::path_scope::normalize_path(&workspace.join(raw))
-    };
-
-    // Case-insensitive comparison on macOS/Windows.
-    let starts_with = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        resolved
-            .to_string_lossy()
-            .to_lowercase()
-            .starts_with(&workspace.to_string_lossy().to_lowercase())
-    } else {
-        resolved.starts_with(&workspace)
-    };
-
-    if !starts_with {
-        return Err(format!(
-            "path '{}' is outside workspace '{}'",
-            resolved.display(),
-            workspace.display()
-        ));
-    }
-    Ok(resolved)
-}
+use rara_kernel::guard::path_scope::resolve_and_guard;
 
 /// Apply edits for a single file, grouped and applied sequentially in-memory.
 ///

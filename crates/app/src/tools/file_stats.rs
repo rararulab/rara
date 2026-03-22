@@ -82,33 +82,7 @@ impl FileStatsTool {
     pub fn new() -> Self { Self }
 }
 
-/// Resolve a user-supplied path and check it is within the workspace.
-fn resolve_and_guard(raw: &str) -> Result<std::path::PathBuf, String> {
-    let workspace = rara_paths::workspace_dir();
-    let resolved = if std::path::Path::new(raw).is_absolute() {
-        rara_kernel::guard::path_scope::normalize_path(std::path::Path::new(raw))
-    } else {
-        rara_kernel::guard::path_scope::normalize_path(&workspace.join(raw))
-    };
-
-    let starts_with = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        resolved
-            .to_string_lossy()
-            .to_lowercase()
-            .starts_with(&workspace.to_string_lossy().to_lowercase())
-    } else {
-        resolved.starts_with(&workspace)
-    };
-
-    if !starts_with {
-        return Err(format!(
-            "path '{}' is outside workspace '{}'",
-            resolved.display(),
-            workspace.display()
-        ));
-    }
-    Ok(resolved)
-}
+use rara_kernel::guard::path_scope::resolve_and_guard;
 
 /// Compute statistics for a single file using streaming reads.
 async fn stat_single_file(path: &std::path::Path) -> FileStat {

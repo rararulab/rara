@@ -324,6 +324,40 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     out
 }
 
+/// Resolve a user-supplied path to an absolute path and verify it is within
+/// the workspace root.
+///
+/// Relative paths are joined to [`rara_paths::workspace_dir()`]. Returns
+/// `Err` if the resolved path escapes the workspace, preventing writes to
+/// arbitrary filesystem locations.
+pub fn resolve_and_guard(raw: &str) -> Result<PathBuf, String> {
+    let workspace = rara_paths::workspace_dir();
+    let resolved = if Path::new(raw).is_absolute() {
+        normalize_path(Path::new(raw))
+    } else {
+        normalize_path(&workspace.join(raw))
+    };
+
+    // Case-insensitive comparison on macOS/Windows.
+    let starts_with = if cfg!(any(target_os = "macos", target_os = "windows")) {
+        resolved
+            .to_string_lossy()
+            .to_lowercase()
+            .starts_with(&workspace.to_string_lossy().to_lowercase())
+    } else {
+        resolved.starts_with(&workspace)
+    };
+
+    if !starts_with {
+        return Err(format!(
+            "path '{}' is outside workspace '{}'",
+            resolved.display(),
+            workspace.display()
+        ));
+    }
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
