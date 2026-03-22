@@ -12,7 +12,6 @@ Application orchestration crate that wires all subsystems together, boots the ke
 - `src/boot.rs` — `boot()` function that resolves users, builds registries (tool, agent, driver, skill, MCP), session index, tape service, and identity resolver from the database pool + settings.
 - `src/tools/` — All application-level tool implementations (bash, file ops, mita proactive tools, email, screenshots, MCP, composio, etc.). Each file is a single tool.
 - `src/config_sync.rs` — Bidirectional sync between YAML config file and runtime settings store.
-- `src/context_mode.rs` — MCP-based output interceptor for context-mode integration.
 - `src/gateway.rs` — Gateway supervisor for auto-update and health monitoring.
 - `src/flatten.rs` — Flattened config structs for seeding settings store from YAML.
 

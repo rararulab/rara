@@ -41,8 +41,7 @@ pub struct DiscoverToolsParams {
     name = "discover-tools",
     description = "Search for and activate additional tools not loaded by default. Use when you \
                    need capabilities beyond the core tools (e.g. email, skills management, dock \
-                   canvas, MCP servers). Pass a keyword to search.",
-    bypass_interceptor
+                   canvas, MCP servers). Pass a keyword to search."
 )]
 pub struct DiscoverToolsTool;
 

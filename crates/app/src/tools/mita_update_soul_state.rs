@@ -62,8 +62,7 @@ pub struct UpdateSoulStateParams {
                    \"close_friend\"\n- emerged_traits: array of {\"trait\": \"...\", \
                    \"confidence\": 0.0-1.0, \"first_seen\": \"...\"}\n- style_drift: \
                    {\"formality\": 1-10, \"verbosity\": 1-10, \"humor_frequency\": 1-10}\n- \
-                   discovered_interests: array of strings",
-    bypass_interceptor
+                   discovered_interests: array of strings"
 )]
 pub struct UpdateSoulStateTool;
 
