@@ -20,6 +20,7 @@
 mod adapter;
 pub mod api;
 pub mod errors;
+pub mod login;
 pub mod runtime;
 pub mod storage;
 

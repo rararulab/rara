@@ -18,6 +18,7 @@ use snafu::{ResultExt, Whatever, whatever};
 mod build_info;
 mod chat;
 mod top;
+mod wechat;
 
 use chat::ChatArgs;
 use rara_app::{AppConfig, run as run_app};
@@ -41,6 +42,7 @@ enum Commands {
     Top(top::TopCmd),
     Gateway(GatewayArgs),
     Symphony(SymphonyArgs),
+    Wechat(wechat::WechatCmd),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -370,5 +372,6 @@ async fn main() -> Result<(), Whatever> {
         Commands::Top(args) => args.run().await,
         Commands::Gateway(_) => GatewayArgs::run().await,
         Commands::Symphony(_) => SymphonyArgs::run().await,
+        Commands::Wechat(cmd) => cmd.run().await,
     }
 }

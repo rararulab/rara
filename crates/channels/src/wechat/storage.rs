@@ -30,12 +30,10 @@ pub const DEFAULT_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
 /// Base URL for downloading encrypted media from the WeChat CDN.
 pub const CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
 
-fn storage_root() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home directory")
-        .join(".openclaw")
-        .join("openclaw-weixin")
-}
+/// Returns the root directory for WeChat credential storage.
+///
+/// Uses `~/.config/rara/wechat/` (via `rara_paths::config_dir()`).
+fn storage_root() -> PathBuf { rara_paths::config_dir().join("wechat") }
 
 /// Persisted authentication credentials for a single WeChat account.
 #[derive(Debug, Serialize, Deserialize)]
