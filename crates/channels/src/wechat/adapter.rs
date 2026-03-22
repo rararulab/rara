@@ -1,0 +1,243 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! WeChat iLink Bot channel adapter.
+//!
+//! Implements [`ChannelAdapter`] using the WeChat iLink Bot API via
+//! long-polling `getUpdates`. Inbound messages are converted to
+//! [`RawPlatformMessage`] and handed to the [`KernelHandle`]. Outbound
+//! delivery converts markdown to plain text before sending.
+
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use async_trait::async_trait;
+use dashmap::DashMap;
+use rara_kernel::{
+    channel::{
+        adapter::ChannelAdapter,
+        types::{ChannelType, MessageContent},
+    },
+    error::KernelError,
+    handle::KernelHandle,
+    io::{EgressError, Endpoint, EndpointAddress, PlatformOutbound, RawPlatformMessage},
+};
+use tokio::sync::{Mutex, watch};
+use tracing::{error, info, instrument, warn};
+use wechat_agent_rs::{
+    api::WeixinApiClient,
+    runtime::{body_from_item_list, markdown_to_plain_text},
+    storage,
+};
+
+/// Channel adapter for WeChat iLink Bot.
+///
+/// Uses long-polling to receive inbound messages and the iLink API to
+/// send outbound replies. Context tokens (required by the iLink protocol
+/// for reply routing) are cached per user.
+pub struct WechatAdapter {
+    /// HTTP client for the iLink API.
+    api_client:     Arc<Mutex<WeixinApiClient>>,
+    /// WeChat account identifier used for credential and buffer storage.
+    account_id:     String,
+    /// Sender half of the shutdown signal.
+    shutdown_tx:    watch::Sender<bool>,
+    /// Receiver half of the shutdown signal.
+    shutdown_rx:    watch::Receiver<bool>,
+    /// Maps `user_id` to the latest `context_token` received from that user.
+    /// The iLink API requires a context token when sending replies.
+    context_tokens: Arc<DashMap<String, String>>,
+}
+
+impl WechatAdapter {
+    /// Creates a new adapter for the given WeChat account.
+    ///
+    /// Loads credentials from local storage and initialises the API client.
+    pub fn new(account_id: String, base_url: String) -> Result<Self, KernelError> {
+        let account_data =
+            storage::get_account_data(&account_id).map_err(|e| KernelError::Boot {
+                message: format!("failed to load wechat account data: {e}"),
+            })?;
+
+        let route_tag = storage::get_account_config(&account_id).and_then(|c| c.route_tag);
+
+        let api_client = WeixinApiClient::new(&base_url, &account_data.token, route_tag);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        Ok(Self {
+            api_client: Arc::new(Mutex::new(api_client)),
+            account_id,
+            shutdown_tx,
+            shutdown_rx,
+            context_tokens: Arc::new(DashMap::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl ChannelAdapter for WechatAdapter {
+    fn channel_type(&self) -> ChannelType { ChannelType::Wechat }
+
+    #[instrument(skip_all)]
+    async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
+        let api_client = Arc::clone(&self.api_client);
+        let account_id = self.account_id.clone();
+        let context_tokens = Arc::clone(&self.context_tokens);
+        let shutdown_rx = self.shutdown_rx.clone();
+
+        info!(account_id = %account_id, "starting wechat long-polling loop");
+
+        tokio::spawn(async move {
+            let mut consecutive_errors: u32 = 0;
+            let mut buf = storage::get_updates_buf(&account_id);
+
+            loop {
+                // Check for shutdown signal.
+                if *shutdown_rx.borrow() {
+                    info!("wechat polling loop received shutdown signal");
+                    break;
+                }
+
+                let result = {
+                    let client = api_client.lock().await;
+                    client.get_updates(buf.as_deref()).await
+                };
+
+                match result {
+                    Ok(resp) => {
+                        consecutive_errors = 0;
+
+                        if let Some(new_buf) = resp["get_updates_buf"].as_str() {
+                            buf = Some(new_buf.to_string());
+                            let _ = storage::save_updates_buf(&account_id, new_buf);
+                        }
+
+                        if let Some(messages) = resp["msg_list"].as_array() {
+                            for msg in messages {
+                                let item_list =
+                                    msg["item_list"].as_array().cloned().unwrap_or_default();
+                                let to_user_id =
+                                    msg["to_user_id"].as_str().unwrap_or("").to_string();
+                                let context_token =
+                                    msg["context_token"].as_str().unwrap_or("").to_string();
+
+                                // Cache the context token for outbound replies.
+                                if !to_user_id.is_empty() && !context_token.is_empty() {
+                                    context_tokens
+                                        .insert(to_user_id.clone(), context_token.clone());
+                                }
+
+                                let body = body_from_item_list(&item_list);
+                                if body.is_empty() {
+                                    continue;
+                                }
+
+                                let raw = RawPlatformMessage {
+                                    channel_type:        ChannelType::Wechat,
+                                    platform_message_id: None,
+                                    platform_user_id:    to_user_id.clone(),
+                                    platform_chat_id:    Some(to_user_id),
+                                    content:             MessageContent::Text(body),
+                                    reply_context:       None,
+                                    metadata:            HashMap::new(),
+                                };
+
+                                if let Err(e) = handle.ingest(raw).await {
+                                    error!(error = %e, "failed to ingest wechat message");
+                                }
+                            }
+                        }
+                    }
+                    Err(wechat_agent_rs::Error::SessionExpired) => {
+                        warn!("wechat session expired, stopping polling loop");
+                        break;
+                    }
+                    Err(wechat_agent_rs::Error::Http { ref source }) if source.is_timeout() => {
+                        // Long-poll timeout is normal — just retry.
+                    }
+                    Err(e) => {
+                        consecutive_errors += 1;
+                        error!(consecutive_errors, "wechat get_updates error: {e}");
+                        if consecutive_errors >= 3 {
+                            warn!("too many consecutive errors, backing off 30s");
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            consecutive_errors = 0;
+                        } else {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        }
+                    }
+                }
+            }
+
+            info!("wechat polling loop exited");
+        });
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
+        let user_id = match &endpoint.address {
+            EndpointAddress::Wechat { user_id } => user_id.clone(),
+            other => {
+                return Err(EgressError::DeliveryFailed {
+                    message: format!("expected Wechat endpoint, got: {other:?}"),
+                });
+            }
+        };
+
+        let context_token = self
+            .context_tokens
+            .get(&user_id)
+            .map(|r| r.value().clone())
+            .unwrap_or_default();
+
+        match msg {
+            PlatformOutbound::Reply { content, .. } => {
+                let plain = markdown_to_plain_text(&content);
+                let client = self.api_client.lock().await;
+                client
+                    .send_text_message(&user_id, &context_token, &plain)
+                    .await
+                    .map_err(|e| EgressError::DeliveryFailed {
+                        message: format!("wechat send_text_message failed: {e}"),
+                    })?;
+            }
+            // WeChat does not support streaming edits or progress messages.
+            PlatformOutbound::StreamChunk { .. } | PlatformOutbound::Progress { .. } => {}
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn stop(&self) -> Result<(), KernelError> {
+        info!("stopping wechat adapter");
+        let _ = self.shutdown_tx.send(true);
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn typing_indicator(&self, session_key: &str) -> Result<(), KernelError> {
+        let context_token = self
+            .context_tokens
+            .get(session_key)
+            .map(|r| r.value().clone())
+            .unwrap_or_default();
+
+        let client = self.api_client.lock().await;
+        // Best-effort — typing indicators are optional UX hooks.
+        let _ = client.send_typing(session_key, &context_token).await;
+        Ok(())
+    }
+}

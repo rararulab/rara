@@ -12,22 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Channel adapter implementations for the rara platform.
-//!
-//! This crate provides concrete
-//! [`ChannelAdapter`](rara_kernel::channel::adapter::ChannelAdapter)
-//! implementations for different communication platforms.
-//!
-//! ## Available adapters
-//!
-//! - [`TelegramAdapter`](telegram::TelegramAdapter) — Telegram Bot API via
-//!   `getUpdates` long polling.
-//! - [`WebAdapter`](web::WebAdapter) — WebSocket + SSE for web chat UI.
+//! WeChat iLink Bot channel adapter.
 
-pub mod telegram;
-pub mod terminal;
-pub mod tool_display;
-pub mod web;
-pub mod wechat;
+mod adapter;
 
-pub use wechat::WechatAdapter;
+pub use adapter::WechatAdapter;
