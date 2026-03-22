@@ -68,24 +68,26 @@ impl ToolExecute for DiscoverToolsTool {
         let query = params.query.to_lowercase();
 
         // --- Search deferred tools ---
-        let tool_matches: Vec<DiscoveredToolEntry> = context
+        // TODO: pass actual activation state so already-activated tools are excluded.
+        // For now, always show the full catalog — harmless since re-activation is a
+        // no-op.
+        let empty = std::collections::HashSet::new();
+        let catalog = context
             .tool_registry
             .as_ref()
-            .map(|registry| {
-                let empty = std::collections::HashSet::new();
-                let catalog = registry.deferred_catalog(&empty);
-                catalog
-                    .iter()
-                    .filter(|(name, desc)| {
-                        name.to_lowercase().contains(&query) || desc.to_lowercase().contains(&query)
-                    })
-                    .map(|(name, desc)| DiscoveredToolEntry {
-                        name:        name.to_string(),
-                        description: desc.to_string(),
-                    })
-                    .collect()
-            })
+            .map(|registry| registry.deferred_catalog(&empty))
             .unwrap_or_default();
+
+        let tool_matches: Vec<DiscoveredToolEntry> = catalog
+            .iter()
+            .filter(|(name, desc)| {
+                name.to_lowercase().contains(&query) || desc.to_lowercase().contains(&query)
+            })
+            .map(|(name, desc)| DiscoveredToolEntry {
+                name:        name.to_string(),
+                description: desc.to_string(),
+            })
+            .collect();
 
         // --- Search skills ---
         let skill_matches: Vec<DiscoveredSkillEntry> = self
@@ -99,7 +101,7 @@ impl ToolExecute for DiscoverToolsTool {
             .map(|s| DiscoveredSkillEntry {
                 name:        s.name,
                 description: s.description,
-                path:        s.path.to_string_lossy().to_string(),
+                path:        s.path.display().to_string(),
             })
             .collect();
 
@@ -107,24 +109,14 @@ impl ToolExecute for DiscoverToolsTool {
         let skill_count = skill_matches.len();
 
         if tool_count == 0 && skill_count == 0 {
-            // Build category hints from tools
-            let categories: Vec<String> = context
-                .tool_registry
-                .as_ref()
-                .map(|registry| {
-                    let empty = std::collections::HashSet::new();
-                    let catalog = registry.deferred_catalog(&empty);
-                    let mut cats: Vec<&str> = catalog
-                        .iter()
-                        .filter_map(|(name, _)| name.find(['-', '.', '_']).map(|pos| &name[..pos]))
-                        .collect();
-                    cats.sort_unstable();
-                    cats.dedup();
-                    cats.truncate(10);
-                    cats.into_iter().map(String::from).collect()
-                })
-                .unwrap_or_default();
-            let hint = categories.join(", ");
+            let mut cats: Vec<&str> = catalog
+                .iter()
+                .filter_map(|(name, _)| name.find(['-', '.', '_']).map(|pos| &name[..pos]))
+                .collect();
+            cats.sort_unstable();
+            cats.dedup();
+            cats.truncate(10);
+            let hint = cats.join(", ");
             let result = DiscoverToolsResult {
                 status:  "no_matches".to_string(),
                 tools:   vec![],
