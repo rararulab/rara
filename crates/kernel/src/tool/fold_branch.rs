@@ -83,7 +83,8 @@ pub(crate) const FOLD_BRANCH_NAME_PREFIX: &str = "fold-branch-";
     name = "fold-branch",
     description = "Spawn a child agent for a focused sub-task, wait for completion, and return a \
                    compressed result. Use this when you need the result inline (synchronous). For \
-                   fire-and-forget tasks, use spawn-background instead."
+                   fire-and-forget tasks, use spawn-background instead.",
+    tier = "deferred"
 )]
 pub struct FoldBranchTool {
     handle:         KernelHandle,

@@ -264,7 +264,7 @@ pub(crate) async fn run_plan_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to get manifest for planning: {e}"),
             })?;
-    let (agent_prompt, _) = crate::agent::build_agent_system_prompt(handle, &manifest);
+    let (agent_prompt, _) = crate::agent::build_agent_system_prompt(&manifest);
     let full_tools = handle
         .session_tool_registry(session_key)
         .await

@@ -1323,9 +1323,10 @@ impl crate::tool::AgentTool for SyscallTool {
     fn name(&self) -> &str { Self::NAME }
 
     fn description(&self) -> &str {
-        "Interact with the kernel: spawn agents, query process status, send signals, manage memory \
-         (private & shared), publish events, subscribe to task notifications, and publish task \
-         reports. Set the 'action' field to select the operation."
+        "Interact with the kernel: spawn child agents, query status, send signals, manage memory, \
+         publish events. MUST delegate when: 2+ independent subtasks, or long tool-heavy execution \
+         that would bloat context. Use 'spawn' for single tasks, 'spawn_parallel' for multiple \
+         independent tasks with 'agent: worker'."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

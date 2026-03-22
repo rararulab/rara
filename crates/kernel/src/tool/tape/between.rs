@@ -51,7 +51,8 @@ pub struct TapeBetweenResult {
 #[derive(ToolDef)]
 #[tool(
     name = "tape-between",
-    description = "Read entries between two named anchors."
+    description = "Read entries between two named anchors.",
+    tier = "deferred"
 )]
 pub(crate) struct TapeBetweenTool {
     tape_service: TapeService,

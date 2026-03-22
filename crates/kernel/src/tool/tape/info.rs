@@ -48,7 +48,8 @@ pub struct TapeInfoParams {}
 #[derive(ToolDef)]
 #[tool(
     name = "tape-info",
-    description = "Show tape state: entry count, anchor count, context token estimate."
+    description = "Show tape state: entry count, anchor count, context token estimate.",
+    tier = "deferred"
 )]
 pub(crate) struct TapeInfoTool {
     tape_service: TapeService,

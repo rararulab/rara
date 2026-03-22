@@ -107,18 +107,9 @@ pub fn rara_tool_names() -> Vec<String> {
         EditFileTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
-        // Network
-        HttpFetchTool::TOOL_NAME,
-        // Tape memory (7 Core tools; tape-checkout-root is Deferred)
-        tool_names::TAPE_INFO,
-        tool_names::TAPE_SEARCH,
+        // Tape memory (2 Core; info/anchors/entries/between/checkout are Deferred)
         tool_names::TAPE_ANCHOR,
-        tool_names::TAPE_ANCHORS,
-        tool_names::TAPE_ENTRIES,
-        tool_names::TAPE_BETWEEN,
-        tool_names::TAPE_CHECKOUT,
-        // Long-term memory
-        tool_names::MEMORY,
+        tool_names::TAPE_SEARCH,
         // Discovery
         DiscoverToolsTool::TOOL_NAME,
     ]
@@ -254,11 +245,18 @@ mod tests {
         let names = rara_tool_names();
         // Only Core tools appear in the manifest; deferred tools (kernel,
         // marketplace, schedule-*, etc.) are discovered on demand.
-        for expected in ["bash", "tape-anchor", "memory", "discover-tools"] {
+        for expected in ["bash", "tape-anchor", "tape-search", "discover-tools"] {
             assert!(names.iter().any(|n| n == expected), "missing: {expected}");
         }
         // Verify deferred tools are NOT in the core list.
-        for deferred in ["kernel", "marketplace", "schedule-once", "send-email"] {
+        for deferred in [
+            "kernel",
+            "marketplace",
+            "schedule-once",
+            "send-email",
+            "memory",
+            "http-fetch",
+        ] {
             assert!(
                 !names.iter().any(|n| n == deferred),
                 "deferred tool should not be in core: {deferred}"
@@ -270,8 +268,8 @@ mod tests {
     fn rara_core_tool_count_stays_slim() {
         let names = rara_tool_names();
         assert!(
-            names.len() <= 17,
-            "Core tool set has {} tools — keep it under 17 to control token costs. Use tier = \
+            names.len() <= 10,
+            "Core tool set has {} tools — keep it under 10 to control token costs. Use tier = \
              \"deferred\" for non-essential tools.",
             names.len()
         );

@@ -36,7 +36,8 @@ use crate::tool::{ToolContext, ToolExecute};
 #[tool(
     name = "memory",
     description = "Search and read the user's long-term memory by keyword, category listing, or \
-                   full category read."
+                   full category read.",
+    tier = "deferred"
 )]
 pub struct MemoryTool {
     pool:          SqlitePool,

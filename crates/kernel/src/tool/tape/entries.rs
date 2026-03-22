@@ -49,7 +49,8 @@ pub struct TapeEntriesResult {
 #[derive(ToolDef)]
 #[tool(
     name = "tape-entries",
-    description = "Read tape entries from current or named anchor."
+    description = "Read tape entries from current or named anchor.",
+    tier = "deferred"
 )]
 pub(crate) struct TapeEntriesTool {
     tape_service: TapeService,
