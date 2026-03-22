@@ -211,7 +211,9 @@ pub(crate) async fn boot(
 
     // Register discover-tools — it reads the live registry from ToolContext at
     // query time, so dynamically registered tools (e.g. MCP) are always visible.
-    tool_registry.register(Arc::new(crate::tools::DiscoverToolsTool::new()));
+    tool_registry.register(Arc::new(crate::tools::DiscoverToolsTool::new(
+        skill_registry.clone(),
+    )));
 
     let tools = Arc::new(tool_registry);
 

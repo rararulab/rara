@@ -109,8 +109,24 @@ pub struct DiscoverToolsResult {
     /// Tool entries that were discovered (empty on no_matches).
     #[serde(default)]
     pub tools:   Vec<DiscoveredToolEntry>,
+    /// Skill entries matching the query (informational — read SKILL.md to use).
+    #[serde(default)]
+    pub skills:  Vec<DiscoveredSkillEntry>,
     /// Human-readable message for the LLM.
     pub message: String,
+}
+
+/// A single skill entry in a [`DiscoverToolsResult`].
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiscoveredSkillEntry {
+    /// The skill name.
+    pub name:        String,
+    /// One-line description of the skill.
+    #[serde(default)]
+    pub description: String,
+    /// Filesystem path to the skill directory (read SKILL.md inside).
+    #[serde(default)]
+    pub path:        String,
 }
 
 /// A single tool entry in a [`DiscoverToolsResult`].
