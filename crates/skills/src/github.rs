@@ -80,7 +80,11 @@ impl GitHubClient {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
 
-            let mut req = self.client.get(url).header("User-Agent", USER_AGENT);
+            let mut req = self
+                .client
+                .get(url)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/vnd.github.v3+json");
             if let Some(ref token) = self.token {
                 req = req.header("Authorization", format!("Bearer {token}"));
             }
@@ -113,11 +117,12 @@ impl GitHubClient {
                         }
                         .fail();
                     }
-                    // Non-retriable HTTP error.
-                    return InstallSnafu {
-                        message: format!("{context} returned {status}"),
-                    }
-                    .fail();
+                    // Non-retriable HTTP error — return HttpStatus so callers
+                    // can match on the status code (e.g. 404 fallback logic).
+                    return Err(crate::error::SkillError::HttpStatus {
+                        status: status.as_u16(),
+                        url:    url.to_string(),
+                    });
                 }
                 Err(e) => {
                     if attempt + 1 >= MAX_RETRIES {

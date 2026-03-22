@@ -46,12 +46,10 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
     if target.exists() {
         let manifest_path = ManifestStore::default_path()?;
         let store = ManifestStore::new(manifest_path);
-        let already_installed = store.with_lock(|manifest| {
-            if manifest.find_repo(source).is_some() {
-                return Ok(true);
-            }
-            Ok(false)
-        })?;
+        // Read-only check — bare load() is acceptable per locking policy.
+        // TOCTOU between this check and the final write is best-effort;
+        // install_skill() is typically called from a single agent process.
+        let already_installed = store.load()?.find_repo(source).is_some();
 
         if already_installed {
             return InstallSnafu {

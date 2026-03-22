@@ -173,14 +173,17 @@ impl MarketplaceService {
 
         let gh = crate::github::GitHubClient::new();
 
-        // Try marketplace.json first; fall back to plugin.json for
-        // single-plugin repos.
+        // Try marketplace.json first; fall back to plugin.json ONLY when the
+        // file is genuinely absent (404).  Non-retriable errors (403 bad token,
+        // 429 rate limit after retries exhausted, 5xx) must propagate
+        // immediately so they are not masked by a confusing "has neither
+        // marketplace.json nor plugin.json" message.
         let content_b64 = match self
             .fetch_github_content_b64(&gh, repo, "marketplace.json")
             .await
         {
             Ok(b64) => b64,
-            Err(_) => {
+            Err(crate::error::SkillError::HttpStatus { status: 404, .. }) => {
                 // Fallback: try .claude-plugin/plugin.json for single-plugin repos.
                 let fallback_b64 = self
                     .fetch_github_content_b64(&gh, repo, "plugin.json")
@@ -214,6 +217,9 @@ impl MarketplaceService {
                     .insert(repo.to_string(), index.clone());
                 return Ok(index);
             }
+            // Non-404 errors (rate limit, auth failure, server error) —
+            // propagate immediately.
+            Err(e) => return Err(e),
         };
 
         // GitHub returns base64 with newlines.
@@ -328,6 +334,9 @@ impl MarketplaceService {
         let store = crate::manifest::ManifestStore::new(manifest_path);
 
         // Check if repo is already installed; if not, download it first.
+        // Note: this read is intentionally outside the lock — holding the lock
+        // across the HTTP download would block all concurrent manifest access.
+        // TOCTOU is acceptable: install_skill() has its own conflict handling.
         let needs_install = store.load()?.find_repo(&source_repo).is_none();
         if needs_install {
             crate::install::install_skill(&source_repo, &install_dir).await?;
