@@ -15,7 +15,10 @@
 //! Batch file editing primitive.
 //!
 //! Applies multiple exact-string replacements across one or more files in a
-//! single tool call, reducing LLM round-trips for bulk edits.
+//! single tool call, reducing LLM round-trips for bulk edits. Edits targeting
+//! the same file are applied sequentially in the order given.
+
+use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use rara_kernel::tool::{ToolContext, ToolExecute};
@@ -39,7 +42,8 @@ pub struct SingleEdit {
 /// Parameters for the multi-edit tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MultiEditParams {
-    /// List of edit operations to apply. Each is an independent replacement.
+    /// List of edit operations to apply. Edits targeting the same file are
+    /// applied sequentially in the order given.
     edits: Vec<SingleEdit>,
 }
 
@@ -66,9 +70,9 @@ pub struct MultiEditResult {
 #[tool(
     name = "multi-edit",
     description = "Apply multiple exact-string replacements across one or more files in a single \
-                   call. Each edit is independent — partial failures are reported per-edit \
-                   without rolling back successful ones. Use this instead of repeated edit-file \
-                   calls."
+                   call. Edits targeting the same file are applied sequentially in order. Partial \
+                   failures are reported per-edit without rolling back successful ones. Use this \
+                   instead of repeated edit-file calls."
 )]
 pub struct MultiEditTool;
 
@@ -76,74 +80,141 @@ impl MultiEditTool {
     pub fn new() -> Self { Self }
 }
 
-/// Apply a single edit operation and return the result.
-async fn apply_single_edit(edit: &SingleEdit) -> SingleEditResult {
-    let file_path = if std::path::Path::new(&edit.file_path).is_absolute() {
-        std::path::PathBuf::from(&edit.file_path)
+/// Resolve a user-supplied path to an absolute path within the workspace.
+///
+/// Returns `Err` if the resolved path escapes the workspace root, preventing
+/// writes to arbitrary filesystem locations via prompt injection.
+fn resolve_and_guard(raw: &str) -> Result<std::path::PathBuf, String> {
+    let workspace = rara_paths::workspace_dir();
+    let resolved = if std::path::Path::new(raw).is_absolute() {
+        rara_kernel::guard::path_scope::normalize_path(std::path::Path::new(raw))
     } else {
-        rara_paths::workspace_dir().join(&edit.file_path)
+        rara_kernel::guard::path_scope::normalize_path(&workspace.join(raw))
     };
+
+    // Case-insensitive comparison on macOS/Windows.
+    let starts_with = if cfg!(any(target_os = "macos", target_os = "windows")) {
+        resolved
+            .to_string_lossy()
+            .to_lowercase()
+            .starts_with(&workspace.to_string_lossy().to_lowercase())
+    } else {
+        resolved.starts_with(&workspace)
+    };
+
+    if !starts_with {
+        return Err(format!(
+            "path '{}' is outside workspace '{}'",
+            resolved.display(),
+            workspace.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+/// Apply edits for a single file, grouped and applied sequentially in-memory.
+///
+/// Reads the file once, applies all edits in order to the in-memory content,
+/// then writes once. This avoids TOCTOU issues when multiple edits target the
+/// same file.
+async fn apply_grouped_edits(
+    file_path: &std::path::Path,
+    edits: &[(usize, &SingleEdit)],
+) -> Vec<(usize, SingleEditResult)> {
     let display_path = file_path.display().to_string();
 
-    let content = match tokio::fs::read_to_string(&file_path).await {
+    let mut content = match tokio::fs::read_to_string(file_path).await {
         Ok(c) => c,
         Err(e) => {
-            return SingleEditResult {
-                file_path:    display_path,
-                success:      false,
-                replacements: 0,
-                error:        Some(format!("failed to read file: {e}")),
-            };
+            // All edits for this file fail with the same read error.
+            return edits
+                .iter()
+                .map(|(idx, _)| {
+                    (
+                        *idx,
+                        SingleEditResult {
+                            file_path:    display_path.clone(),
+                            success:      false,
+                            replacements: 0,
+                            error:        Some(format!("failed to read file: {e}")),
+                        },
+                    )
+                })
+                .collect();
         }
     };
 
-    let replace_all = edit.replace_all.unwrap_or(false);
-    let count = content.matches(&edit.old_string).count();
+    let mut results = Vec::with_capacity(edits.len());
+    let mut any_modified = false;
 
-    if count == 0 {
-        return SingleEditResult {
-            file_path:    display_path,
-            success:      false,
-            replacements: 0,
-            error:        Some(
-                "old_string not found. Make sure the string matches exactly.".into(),
-            ),
+    for (idx, edit) in edits {
+        let replace_all = edit.replace_all.unwrap_or(false);
+        let count = content.matches(&edit.old_string).count();
+
+        if count == 0 {
+            results.push((
+                *idx,
+                SingleEditResult {
+                    file_path:    display_path.clone(),
+                    success:      false,
+                    replacements: 0,
+                    error:        Some(
+                        "old_string not found. Make sure the string matches exactly.".into(),
+                    ),
+                },
+            ));
+            continue;
+        }
+
+        if !replace_all && count > 1 {
+            results.push((
+                *idx,
+                SingleEditResult {
+                    file_path:    display_path.clone(),
+                    success:      false,
+                    replacements: 0,
+                    error:        Some(format!(
+                        "old_string found {count} times. Use replace_all=true to replace all \
+                         occurrences, or provide a more specific old_string."
+                    )),
+                },
+            ));
+            continue;
+        }
+
+        content = if replace_all {
+            content.replace(&edit.old_string, &edit.new_string)
+        } else {
+            content.replacen(&edit.old_string, &edit.new_string, 1)
         };
+        any_modified = true;
+
+        results.push((
+            *idx,
+            SingleEditResult {
+                file_path:    display_path.clone(),
+                success:      true,
+                replacements: if replace_all { count } else { 1 },
+                error:        None,
+            },
+        ));
     }
 
-    if !replace_all && count > 1 {
-        return SingleEditResult {
-            file_path:    display_path,
-            success:      false,
-            replacements: 0,
-            error:        Some(format!(
-                "old_string found {count} times. Use replace_all=true to replace all occurrences, \
-                 or provide a more specific old_string."
-            )),
-        };
+    // Write back only if at least one edit succeeded.
+    if any_modified {
+        if let Err(e) = tokio::fs::write(file_path, &content).await {
+            // Mark all previously-successful edits as failed.
+            for (_, result) in &mut results {
+                if result.success {
+                    result.success = false;
+                    result.replacements = 0;
+                    result.error = Some(format!("failed to write file: {e}"));
+                }
+            }
+        }
     }
 
-    let new_content = if replace_all {
-        content.replace(&edit.old_string, &edit.new_string)
-    } else {
-        content.replacen(&edit.old_string, &edit.new_string, 1)
-    };
-
-    if let Err(e) = tokio::fs::write(&file_path, &new_content).await {
-        return SingleEditResult {
-            file_path:    display_path,
-            success:      false,
-            replacements: 0,
-            error:        Some(format!("failed to write file: {e}")),
-        };
-    }
-
-    SingleEditResult {
-        file_path:    display_path,
-        success:      true,
-        replacements: if replace_all { count } else { 1 },
-        error:        None,
-    }
+    results
 }
 
 #[async_trait]
@@ -156,10 +227,43 @@ impl ToolExecute for MultiEditTool {
         params: MultiEditParams,
         _context: &ToolContext,
     ) -> anyhow::Result<MultiEditResult> {
-        let mut results = Vec::with_capacity(params.edits.len());
-        for edit in &params.edits {
-            results.push(apply_single_edit(edit).await);
+        // Phase 1: resolve and guard all paths upfront.
+        let mut resolved: Vec<(usize, std::path::PathBuf)> = Vec::new();
+        let mut guard_errors: Vec<(usize, SingleEditResult)> = Vec::new();
+
+        for (idx, edit) in params.edits.iter().enumerate() {
+            match resolve_and_guard(&edit.file_path) {
+                Ok(path) => resolved.push((idx, path)),
+                Err(msg) => guard_errors.push((
+                    idx,
+                    SingleEditResult {
+                        file_path:    edit.file_path.clone(),
+                        success:      false,
+                        replacements: 0,
+                        error:        Some(msg),
+                    },
+                )),
+            }
         }
+
+        // Phase 2: group edits by file path (preserving original order).
+        let mut by_file: BTreeMap<std::path::PathBuf, Vec<(usize, &SingleEdit)>> = BTreeMap::new();
+        for (idx, path) in &resolved {
+            by_file
+                .entry(path.clone())
+                .or_default()
+                .push((*idx, &params.edits[*idx]));
+        }
+
+        // Phase 3: apply edits per file.
+        let mut all_results: Vec<(usize, SingleEditResult)> = guard_errors;
+        for (file_path, edits) in &by_file {
+            all_results.extend(apply_grouped_edits(file_path, edits).await);
+        }
+
+        // Phase 4: sort results back to original edit order.
+        all_results.sort_by_key(|(idx, _)| *idx);
+        let results: Vec<SingleEditResult> = all_results.into_iter().map(|(_, r)| r).collect();
 
         let total_success = results.iter().filter(|r| r.success).count();
         let total_failed = results.len() - total_success;
@@ -180,6 +284,19 @@ mod tests {
 
     use super::*;
 
+    /// Helper: apply grouped edits to a single temp file.
+    async fn apply_edits_to_file(
+        file_path: &std::path::Path,
+        edits: Vec<SingleEdit>,
+    ) -> Vec<SingleEditResult> {
+        let indexed: Vec<(usize, &SingleEdit)> = edits.iter().enumerate().collect();
+        apply_grouped_edits(file_path, &indexed)
+            .await
+            .into_iter()
+            .map(|(_, r)| r)
+            .collect()
+    }
+
     #[tokio::test]
     async fn multi_file_replacement_works() {
         let mut f1 = NamedTempFile::new().expect("create temp file");
@@ -187,27 +304,29 @@ mod tests {
         let mut f2 = NamedTempFile::new().expect("create temp file");
         write!(f2, "foo bar baz").expect("write");
 
-        let edits = [
-            SingleEdit {
+        let r1 = apply_edits_to_file(
+            f1.path(),
+            vec![SingleEdit {
                 file_path:   f1.path().display().to_string(),
                 old_string:  "hello".into(),
                 new_string:  "goodbye".into(),
                 replace_all: None,
-            },
-            SingleEdit {
+            }],
+        )
+        .await;
+        let r2 = apply_edits_to_file(
+            f2.path(),
+            vec![SingleEdit {
                 file_path:   f2.path().display().to_string(),
                 old_string:  "bar".into(),
                 new_string:  "qux".into(),
                 replace_all: None,
-            },
-        ];
+            }],
+        )
+        .await;
 
-        let r1 = apply_single_edit(&edits[0]).await;
-        let r2 = apply_single_edit(&edits[1]).await;
-        assert!(r1.success, "edit 1 failed: {:?}", r1.error);
-        assert!(r2.success, "edit 2 failed: {:?}", r2.error);
-        assert_eq!(r1.replacements, 1);
-        assert_eq!(r2.replacements, 1);
+        assert!(r1[0].success, "edit 1 failed: {:?}", r1[0].error);
+        assert!(r2[0].success, "edit 2 failed: {:?}", r2[0].error);
 
         let c1 = std::fs::read_to_string(f1.path()).expect("read");
         assert_eq!(c1, "goodbye world");
@@ -217,28 +336,25 @@ mod tests {
 
     #[tokio::test]
     async fn partial_failure_on_nonexistent_file() {
-        let mut f1 = NamedTempFile::new().expect("create temp file");
-        write!(f1, "hello world").expect("write");
+        let results = apply_edits_to_file(
+            std::path::Path::new("/tmp/nonexistent_rara_test_12345.txt"),
+            vec![SingleEdit {
+                file_path:   "/tmp/nonexistent_rara_test_12345.txt".into(),
+                old_string:  "x".into(),
+                new_string:  "y".into(),
+                replace_all: None,
+            }],
+        )
+        .await;
 
-        let good = SingleEdit {
-            file_path:   f1.path().display().to_string(),
-            old_string:  "hello".into(),
-            new_string:  "goodbye".into(),
-            replace_all: None,
-        };
-        let bad = SingleEdit {
-            file_path:   "/tmp/nonexistent_rara_test_file_12345.txt".into(),
-            old_string:  "x".into(),
-            new_string:  "y".into(),
-            replace_all: None,
-        };
-
-        let r_good = apply_single_edit(&good).await;
-        let r_bad = apply_single_edit(&bad).await;
-
-        assert!(r_good.success);
-        assert!(!r_bad.success);
-        assert!(r_bad.error.as_ref().unwrap().contains("failed to read"));
+        assert!(!results[0].success);
+        assert!(
+            results[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("failed to read")
+        );
     }
 
     #[tokio::test]
@@ -246,21 +362,61 @@ mod tests {
         let mut f1 = NamedTempFile::new().expect("create temp file");
         write!(f1, "hello world").expect("write");
 
-        let edit = SingleEdit {
-            file_path:   f1.path().display().to_string(),
-            old_string:  "nonexistent".into(),
-            new_string:  "replacement".into(),
-            replace_all: None,
-        };
+        let results = apply_edits_to_file(
+            f1.path(),
+            vec![SingleEdit {
+                file_path:   f1.path().display().to_string(),
+                old_string:  "nonexistent".into(),
+                new_string:  "replacement".into(),
+                replace_all: None,
+            }],
+        )
+        .await;
 
-        let result = apply_single_edit(&edit).await;
-        assert!(!result.success);
+        assert!(!results[0].success);
         assert!(
-            result
+            results[0]
                 .error
                 .as_ref()
                 .unwrap()
                 .contains("old_string not found")
         );
+    }
+
+    #[tokio::test]
+    async fn same_file_edits_applied_sequentially() {
+        let mut f = NamedTempFile::new().expect("create temp file");
+        write!(f, "aaa bbb ccc").expect("write");
+
+        let results = apply_edits_to_file(
+            f.path(),
+            vec![
+                SingleEdit {
+                    file_path:   f.path().display().to_string(),
+                    old_string:  "aaa".into(),
+                    new_string:  "xxx".into(),
+                    replace_all: None,
+                },
+                SingleEdit {
+                    file_path:   f.path().display().to_string(),
+                    old_string:  "bbb".into(),
+                    new_string:  "yyy".into(),
+                    replace_all: None,
+                },
+            ],
+        )
+        .await;
+
+        assert!(results[0].success);
+        assert!(results[1].success);
+        let content = std::fs::read_to_string(f.path()).expect("read");
+        assert_eq!(content, "xxx yyy ccc");
+    }
+
+    #[tokio::test]
+    async fn path_outside_workspace_blocked() {
+        let err = resolve_and_guard("/etc/passwd");
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("outside workspace"));
     }
 }

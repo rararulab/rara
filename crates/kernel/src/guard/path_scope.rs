@@ -293,7 +293,7 @@ fn path_starts_with(path: &Path, base: &Path) -> bool {
 /// Expects an **absolute** path. For relative paths, `..` components that
 /// escape the root are preserved as-is, which is likely not what you want.
 /// Callers should join relative paths to an absolute root before calling this.
-pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path) -> PathBuf {
     debug_assert!(
         path.is_absolute(),
         "normalize_path expects absolute paths, got: {}",

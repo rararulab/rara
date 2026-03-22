@@ -87,7 +87,7 @@ use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use tape_handoff::TapeHandoffTool;
 use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
-pub use walk_directory::WalkDirectoryTool;
+use walk_directory::WalkDirectoryTool;
 use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
