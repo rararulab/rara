@@ -35,6 +35,9 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 url = "2"
 uuid = { workspace = true }
+qrcode = "0.14"
+regex-lite = "0.1"
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

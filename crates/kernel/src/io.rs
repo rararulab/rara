@@ -281,6 +281,13 @@ impl InboundMessage {
                     },
                 })
             }
+            ChannelType::Wechat => {
+                let user_id = self.source.platform_chat_id.clone()?;
+                Some(Endpoint {
+                    channel_type: ChannelType::Wechat,
+                    address:      EndpointAddress::Wechat { user_id },
+                })
+            }
             // Web endpoints are already per-connection; CLI/Internal don't need scoping.
             _ => None,
         }
@@ -1274,6 +1281,11 @@ pub enum EndpointAddress {
         /// CLI session identifier.
         session_id: String,
     },
+    /// WeChat iLink Bot endpoint.
+    Wechat {
+        /// WeChat user ID (wxid).
+        user_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1708,25 +1720,34 @@ impl IOSubsystem {
     /// Stateless channels have no persistent connection, so we register on
     /// every inbound message (idempotent — EndpointRegistry uses a HashSet).
     pub fn register_stateless_endpoint(&self, msg: &InboundMessage) {
-        if msg.source.channel_type != ChannelType::Telegram {
-            return;
-        }
-        let Some(ref chat_id_str) = msg.source.platform_chat_id else {
+        let endpoint = match msg.source.channel_type {
+            ChannelType::Telegram => {
+                let chat_id_str = msg.source.platform_chat_id.as_ref();
+                let chat_id = chat_id_str.and_then(|s| s.parse::<i64>().ok());
+                chat_id.map(|id| Endpoint {
+                    channel_type: ChannelType::Telegram,
+                    address:      EndpointAddress::Telegram {
+                        chat_id:   id,
+                        thread_id: None,
+                    },
+                })
+            }
+            ChannelType::Wechat => msg
+                .source
+                .platform_chat_id
+                .as_ref()
+                .map(|user_id| Endpoint {
+                    channel_type: ChannelType::Wechat,
+                    address:      EndpointAddress::Wechat {
+                        user_id: user_id.clone(),
+                    },
+                }),
+            _ => return,
+        };
+        let Some(endpoint) = endpoint else {
             return;
         };
-        let Ok(chat_id) = chat_id_str.parse::<i64>() else {
-            return;
-        };
-        self.endpoint_registry.register(
-            &msg.user,
-            Endpoint {
-                channel_type: ChannelType::Telegram,
-                address:      EndpointAddress::Telegram {
-                    chat_id,
-                    thread_id: None,
-                },
-            },
-        );
+        self.endpoint_registry.register(&msg.user, endpoint);
     }
 
     // -- Accessors (external consumers) ---------------------------------------

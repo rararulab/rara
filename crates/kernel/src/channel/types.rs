@@ -63,6 +63,9 @@ pub enum ChannelType {
     /// Internal synthetic message (workers, SyscallTool, etc.).
     #[strum(serialize = "internal")]
     Internal,
+    /// WeChat iLink Bot.
+    #[strum(serialize = "wechat")]
+    Wechat,
 }
 
 impl ChannelType {

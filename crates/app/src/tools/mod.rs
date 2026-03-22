@@ -53,6 +53,7 @@ mod settings;
 mod skill_tools;
 mod user_note;
 mod walk_directory;
+mod wechat_login;
 mod write_file;
 
 use acp_delegate::AcpDelegateTool;
@@ -88,6 +89,7 @@ use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 use user_note::UserNoteTool;
 use walk_directory::WalkDirectoryTool;
+use wechat_login::{WechatLoginConfirmTool, WechatLoginStartTool};
 use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
@@ -214,6 +216,9 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(InstallAcpAgentTool::new(deps.acp_registry.clone())),
         Arc::new(ListAcpAgentsTool::new(deps.acp_registry.clone())),
         Arc::new(RemoveAcpAgentTool::new(deps.acp_registry)),
+        // WeChat login (two-step: start → confirm)
+        Arc::new(WechatLoginStartTool::new()),
+        Arc::new(WechatLoginConfirmTool::new()),
     ];
 
     for tool in tools {
