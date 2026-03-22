@@ -18,8 +18,9 @@
 //! crate for pattern matching. No external process dependency (rg/grep).
 
 use std::{
+    collections::HashSet,
     fmt::Write as _,
-    io::BufRead,
+    io::{BufRead, Read as _},
     path::{Path, PathBuf},
 };
 
@@ -142,8 +143,16 @@ fn grep_in_process(
             continue;
         }
         if let Some(ref matcher) = glob_matcher {
+            // Match against both filename and relative path so patterns like
+            // `src/**/*.rs` work the same as ripgrep's `--glob`.
             let file_name = entry.file_name().to_string_lossy();
-            if !matcher.is_match(file_name.as_ref()) {
+            let rel_path = entry
+                .path()
+                .strip_prefix(search_path)
+                .unwrap_or(entry.path());
+            if !matcher.is_match(file_name.as_ref())
+                && !matcher.is_match(rel_path.to_string_lossy().as_ref())
+            {
                 continue;
             }
         }
@@ -163,7 +172,19 @@ fn grep_in_process(
     };
 
     'outer: for file_path in &files {
-        // Read lines; skip binary files.
+        // Detect binary content before reading the full file: check the first
+        // 512 bytes for NUL bytes to avoid loading large binaries into memory.
+        let mut file = match std::fs::File::open(file_path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let mut header = [0u8; 512];
+        let header_len = file.read(&mut header).unwrap_or(0);
+        if header[..header_len].contains(&0) {
+            continue;
+        }
+
+        // Re-open for line-by-line reading (seek would skip buffered data).
         let file = match std::fs::File::open(file_path) {
             Ok(f) => f,
             Err(_) => continue,
@@ -171,21 +192,14 @@ fn grep_in_process(
         let reader = std::io::BufReader::new(file);
         let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
 
-        // Detect binary content (NUL byte in first 512 bytes).
-        if lines
-            .first()
-            .is_some_and(|l| l.as_bytes().iter().take(512).any(|&b| b == 0))
-        {
-            continue;
-        }
-
         let rel_path = file_path
             .strip_prefix(strip_base)
             .unwrap_or(file_path)
             .to_string_lossy();
 
-        // Find matching line indices.
-        let match_indices: Vec<usize> = lines
+        // Find matching line indices using a HashSet for O(1) lookup during
+        // context line emission.
+        let match_indices: HashSet<usize> = lines
             .iter()
             .enumerate()
             .filter(|(_, line)| re.is_match(line))
@@ -196,8 +210,12 @@ fn grep_in_process(
             continue;
         }
 
+        // Sorted copy for building contiguous ranges.
+        let mut sorted_indices: Vec<usize> = match_indices.iter().copied().collect();
+        sorted_indices.sort_unstable();
+
         // Build ranges of lines to display (match + context).
-        let ranges = build_context_ranges(&match_indices, context, lines.len());
+        let ranges = build_context_ranges(&sorted_indices, context, lines.len());
         let mut prev_range_end: Option<usize> = None;
 
         for range in &ranges {

@@ -67,21 +67,23 @@ impl ToolExecute for DeleteFileTool {
             rara_paths::workspace_dir().join(&params.file_path)
         };
 
-        // Refuse to delete directories — use bash `rm -r` for that.
-        if file_path.is_dir() {
-            bail!(
-                "'{}' is a directory, not a file. Use bash to remove directories.",
-                file_path.display()
-            );
+        // Call remove_file directly and map OS errors to user-friendly messages,
+        // avoiding TOCTOU races from separate is_dir()/exists() checks.
+        if let Err(e) = tokio::fs::remove_file(&file_path).await {
+            match e.kind() {
+                std::io::ErrorKind::IsADirectory => bail!(
+                    "'{}' is a directory, not a file. Use bash to remove directories.",
+                    file_path.display()
+                ),
+                std::io::ErrorKind::NotFound => {
+                    bail!("file '{}' does not exist", file_path.display())
+                }
+                _ => {
+                    return Err(e)
+                        .context(format!("failed to delete file {}", file_path.display()));
+                }
+            }
         }
-
-        if !file_path.exists() {
-            bail!("file '{}' does not exist", file_path.display());
-        }
-
-        tokio::fs::remove_file(&file_path)
-            .await
-            .context(format!("failed to delete file {}", file_path.display()))?;
 
         Ok(DeleteFileResult {
             file_path: file_path.display().to_string(),
