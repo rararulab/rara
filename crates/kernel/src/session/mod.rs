@@ -337,9 +337,6 @@ pub struct Session {
     /// Persists across turns so the LLM does not need to re-discover tools
     /// after each user message.
     pub activated_deferred: std::collections::HashSet<String>,
-    /// Deferred prompt modules injected during this session.
-    /// Persists across turns so modules are not re-injected.
-    pub injected_modules: std::collections::HashSet<String>,
     /// Per-session semaphore limiting concurrent child sessions.
     pub child_semaphore: Arc<Semaphore>,
     /// Permit from the *parent*'s `child_semaphore`.

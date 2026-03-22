@@ -803,7 +803,6 @@ impl Kernel {
             background_tasks: Vec::new(),
             pending_tool_call_limit: None,
             activated_deferred: std::collections::HashSet::new(),
-            injected_modules: std::collections::HashSet::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _parent_child_permit: None,
             _global_permit: global_permit,

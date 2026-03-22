@@ -24,37 +24,6 @@ pub(crate) mod repetition;
 /// splitting multi-byte UTF-8 characters.
 pub(crate) const CHILD_RESULT_SAFETY_LIMIT_BYTES: usize = 8000;
 
-/// Deferred prompt module: background task usage rules.
-/// Injected when the agent first uses `spawn-background`.
-pub(crate) const PROMPT_MODULE_BACKGROUND: &str = "\
-## Background Tasks
-- Use `spawn-background` for long tasks: bulk processing, multi-step research, large file \
-                                                   analysis, batch API calls.
-- Required: `input`, `description`, `system_prompt`. Optional: `name`, `tools`, `model`, \
-                                                   `max_iterations`.
-- Don't use for tasks where the user is waiting for the answer.
-- Tell the user what you kicked off. When results arrive, summarize concisely.
-- Quick+slow request? Answer the quick part immediately, spawn the slow part.";
-
-/// Deferred prompt module: user-note observation rules.
-/// Injected when the agent first uses `user-note`.
-pub(crate) const PROMPT_MODULE_USER_MEMORY: &str = "\
-## User Notes
-Record when: user shares personal info, corrects your understanding, mentions goals/deadlines, \
-                                                    reveals expertise, expresses style \
-                                                    preferences.
-Do NOT record: trivial conversation, info already in memory, speculation, ephemeral details.
-One good note beats three vague ones.";
-
-/// Deferred prompt module: proactive behavior rules.
-/// Injected on proactive triggers.
-pub(crate) const PROMPT_MODULE_PROACTIVE: &str = "\
-## Proactive Behavior
-- When user mentions a deadline, TODO, or future event, propose creating a reminder.
-- When a conversation ends with an open question, suggest a follow-up check-in.
-- When completing a task, mention obvious next steps without being asked.
-- Propose once; if declined, drop it.";
-
 /// Structured-output instructions appended to child agent system prompts
 /// so they self-summarize before returning results to the parent.
 pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
@@ -995,13 +964,6 @@ pub(crate) async fn run_agent_loop(
         .with(&session_key, |s| s.activated_deferred.clone())
         .unwrap_or_default();
 
-    // Deferred prompt modules — injected on first use of specific tools and
-    // persisted across turns so they are not re-injected.
-    let mut injected_modules: std::collections::HashSet<String> = handle
-        .process_table()
-        .with(&session_key, |s| s.injected_modules.clone())
-        .unwrap_or_default();
-
     // Check model tool support
     let mut tool_defs = if tools.is_empty() {
         vec![]
@@ -1195,27 +1157,6 @@ pub(crate) async fn run_agent_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to rebuild messages from tape: {e}"),
             })?;
-
-        // Inject deferred prompt modules activated during this session.
-        if !injected_modules.is_empty() {
-            let module_text: String = injected_modules
-                .iter()
-                .filter_map(|key| match key.as_str() {
-                    "background" => Some(PROMPT_MODULE_BACKGROUND),
-                    "user_memory" => Some(PROMPT_MODULE_USER_MEMORY),
-                    "proactive" => Some(PROMPT_MODULE_PROACTIVE),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            if !module_text.is_empty() {
-                let insert_pos = messages
-                    .iter()
-                    .position(|m| m.role != crate::llm::Role::System)
-                    .unwrap_or(messages.len());
-                messages.insert(insert_pos, crate::llm::Message::system(module_text));
-            }
-        }
 
         // Conditional injections (tape search reminder only on first iteration)
         if iteration == 0 && should_remind_tape_search(&input_text) {
@@ -2215,23 +2156,6 @@ pub(crate) async fn run_agent_loop(
                     s.activated_deferred = snapshot;
                 });
             }
-            // Inject deferred prompt modules based on tool usage.
-            for name in &tool_names {
-                let module_key = match name.as_str() {
-                    "spawn-background" => Some("background"),
-                    "user-note" => Some("user_memory"),
-                    _ => None,
-                };
-                if let Some(key) = module_key {
-                    injected_modules.insert(key.to_string());
-                }
-            }
-            // Persist injected modules to session.
-            let modules_snapshot = injected_modules.clone();
-            handle.process_table().with_mut(&session_key, |s| {
-                s.injected_modules = modules_snapshot;
-            });
-
             // Reset session-length counter when the agent creates an anchor.
             // Detected via result payload rather than hardcoded tool names so
             // that new anchor-creating tools are automatically covered.
