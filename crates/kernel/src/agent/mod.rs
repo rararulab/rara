@@ -24,6 +24,37 @@ pub(crate) mod repetition;
 /// splitting multi-byte UTF-8 characters.
 pub(crate) const CHILD_RESULT_SAFETY_LIMIT_BYTES: usize = 8000;
 
+/// Deferred prompt module: background task usage rules.
+/// Injected when the agent first uses `spawn-background`.
+pub(crate) const PROMPT_MODULE_BACKGROUND: &str = "\
+## Background Tasks
+- Use `spawn-background` for long tasks: bulk processing, multi-step research, large file \
+                                                   analysis, batch API calls.
+- Required: `input`, `description`, `system_prompt`. Optional: `name`, `tools`, `model`, \
+                                                   `max_iterations`.
+- Don't use for tasks where the user is waiting for the answer.
+- Tell the user what you kicked off. When results arrive, summarize concisely.
+- Quick+slow request? Answer the quick part immediately, spawn the slow part.";
+
+/// Deferred prompt module: user-note observation rules.
+/// Injected when the agent first uses `user-note`.
+pub(crate) const PROMPT_MODULE_USER_MEMORY: &str = "\
+## User Notes
+Record when: user shares personal info, corrects your understanding, mentions goals/deadlines, \
+                                                    reveals expertise, expresses style \
+                                                    preferences.
+Do NOT record: trivial conversation, info already in memory, speculation, ephemeral details.
+One good note beats three vague ones.";
+
+/// Deferred prompt module: proactive behavior rules.
+/// Injected on proactive triggers.
+pub(crate) const PROMPT_MODULE_PROACTIVE: &str = "\
+## Proactive Behavior
+- When user mentions a deadline, TODO, or future event, propose creating a reminder.
+- When a conversation ends with an open question, suggest a follow-up check-in.
+- When completing a task, mention obvious next steps without being asked.
+- Propose once; if declined, drop it.";
+
 /// Structured-output instructions appended to child agent system prompts
 /// so they self-summarize before returning results to the parent.
 pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
@@ -806,52 +837,13 @@ fn build_runtime_contract_prompt(
 <context_contract>
 The `tape` tool is your persistent memory.
 
-## Tape actions
-- `anchor`: checkpoint + trim context. Older entries stay searchable via `search`.
-- `search` / `entries`: recall details from before an anchor.
-- `anchors`: list all checkpoints.
-- `checkout`: fork a new session from a past anchor (original unchanged).
+Actions: `anchor` (checkpoint + trim), `search`/`entries` (recall old context), `anchors` (list checkpoints), `checkout` (fork from a past anchor).
 
-## MUST anchor when:
-- Context is getting long or a [Context Usage Warning] appears
-- A tool result exceeds ~2000 chars
-- Iterative tasks accumulate large outputs (screenshots, scraping, listings)
-- The user switches to a clearly different topic or task (e.g. debugging → feature discussion, Q&A → hands-on coding)
+MUST anchor when: context is long or [Context Usage Warning] appears, tool result exceeds ~2000 chars, user switches topic.
+SHOULD anchor when: completing a logical phase, processing multiple tool results.
+MUST search when: question refers to content before an anchor, or you need exact details from earlier.
 
-## SHOULD anchor when:
-- Completing a logical work phase
-- Processing multiple tool results in sequence
-
-## MUST search before answering when:
-- The question refers to anything before an anchor or outside current window
-- You need exact tokens, IDs, codes, names, or quoted details from earlier context
-
-## Anchor best practices
-- Always include a detailed `summary` and concrete `next_steps`
-- A missing summary = lost context
-- Use `checkout` to retry from a past checkpoint or when the user asks to go back
-
-## Context Mode
-
-When running commands or reading files that might produce large output (>50 lines), use the context-mode MCP tools instead of consuming the output directly:
-
-- `ctx_execute(language, code)` — run shell/script in sandbox, only stdout enters context
-- `ctx_execute_file(path, language, code)` — load file into sandbox as FILE_CONTENT, process with code, only stdout enters context
-- `ctx_search(queries)` — search previously indexed content with keyword queries (queries is an array)
-
-**When to use context-mode:**
-- CLI commands that return data: git log, git diff, test output, API calls
-- Reading large files for analysis (not for editing — use normal read for edits)
-- Build/test output
-
-**When to use tools directly:**
-- File mutations: write, edit, move, delete
-- Git writes: commit, push, checkout, branch
-- Commands with small/no output: mkdir, touch, echo
-- Reading files you need to edit (use the normal read tool)
-
-When uncertain about output size, prefer context-mode.
-
+Always include `summary` and `next_steps` in anchors — missing summary = lost context.
 </context_contract>"#
     );
 
@@ -1001,6 +993,13 @@ pub(crate) async fn run_agent_loop(
     let mut activated_deferred: std::collections::HashSet<String> = handle
         .process_table()
         .with(&session_key, |s| s.activated_deferred.clone())
+        .unwrap_or_default();
+
+    // Deferred prompt modules — injected on first use of specific tools and
+    // persisted across turns so they are not re-injected.
+    let mut injected_modules: std::collections::HashSet<String> = handle
+        .process_table()
+        .with(&session_key, |s| s.injected_modules.clone())
         .unwrap_or_default();
 
     // Check model tool support
@@ -1196,6 +1195,27 @@ pub(crate) async fn run_agent_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to rebuild messages from tape: {e}"),
             })?;
+
+        // Inject deferred prompt modules activated during this session.
+        if !injected_modules.is_empty() {
+            let module_text: String = injected_modules
+                .iter()
+                .filter_map(|key| match key.as_str() {
+                    "background" => Some(PROMPT_MODULE_BACKGROUND),
+                    "user_memory" => Some(PROMPT_MODULE_USER_MEMORY),
+                    "proactive" => Some(PROMPT_MODULE_PROACTIVE),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if !module_text.is_empty() {
+                let insert_pos = messages
+                    .iter()
+                    .position(|m| m.role != crate::llm::Role::System)
+                    .unwrap_or(messages.len());
+                messages.insert(insert_pos, crate::llm::Message::system(module_text));
+            }
+        }
 
         // Conditional injections (tape search reminder only on first iteration)
         if iteration == 0 && should_remind_tape_search(&input_text) {
@@ -2195,6 +2215,23 @@ pub(crate) async fn run_agent_loop(
                     s.activated_deferred = snapshot;
                 });
             }
+            // Inject deferred prompt modules based on tool usage.
+            for name in &tool_names {
+                let module_key = match name.as_str() {
+                    "spawn-background" => Some("background"),
+                    "user-note" => Some("user_memory"),
+                    _ => None,
+                };
+                if let Some(key) = module_key {
+                    injected_modules.insert(key.to_string());
+                }
+            }
+            // Persist injected modules to session.
+            let modules_snapshot = injected_modules.clone();
+            handle.process_table().with_mut(&session_key, |s| {
+                s.injected_modules = modules_snapshot;
+            });
+
             // Reset session-length counter when the agent creates an anchor.
             // Detected via result payload rather than hardcoded tool names so
             // that new anchor-creating tools are automatically covered.
@@ -2592,12 +2629,10 @@ mod tests {
         let prompt = build_runtime_contract_prompt("base", true, None);
         assert!(prompt.contains("<context_contract>"));
         assert!(prompt.contains("`tape`"));
-        assert!(prompt.contains("- `anchor`: checkpoint + trim context."));
-        assert!(prompt.contains("- `search` / `entries`: recall details from before an anchor."));
-        assert!(prompt.contains(
-            "You need exact tokens, IDs, codes, names, or quoted details from earlier context"
-        ));
-        assert!(prompt.contains("Always include a detailed `summary` and concrete `next_steps`"));
+        assert!(prompt.contains("`anchor` (checkpoint + trim)"));
+        assert!(prompt.contains("`search`/`entries` (recall old context)"));
+        assert!(prompt.contains("you need exact details from earlier"));
+        assert!(prompt.contains("`summary` and `next_steps` in anchors"));
         assert!(prompt.contains("<delegation_contract>"));
         assert!(prompt.contains("action: \"spawn\""));
         assert!(prompt.contains("action: \"spawn_parallel\""));
@@ -2636,7 +2671,7 @@ mod tests {
     #[test]
     fn runtime_contract_includes_topic_switch_in_must_anchor() {
         let prompt = build_runtime_contract_prompt("base", false, None);
-        assert!(prompt.contains("user switches to a clearly different topic"));
+        assert!(prompt.contains("user switches topic"));
         // Verify "switching subtasks" is no longer in the SHOULD section
         assert!(!prompt.contains("switching subtasks"));
     }
