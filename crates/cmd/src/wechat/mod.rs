@@ -15,6 +15,7 @@
 //! `rara wechat` subcommand — WeChat iLink Bot management.
 
 use clap::{Args, Subcommand};
+use rara_channels::wechat::login::LoginSession;
 use snafu::{FromString, Whatever};
 
 /// WeChat iLink Bot management commands.
@@ -48,14 +49,20 @@ impl WechatCmd {
 
 impl LoginArgs {
     async fn run(self) -> Result<(), Whatever> {
-        let account_id = rara_channels::wechat::login::login(self.base_url.as_deref())
+        let session = LoginSession::start(self.base_url.as_deref())
             .await
             .map_err(|e| Whatever::without_source(format!("{e}")))?;
 
-        println!("\nAdd this to ~/.config/rara/config.yaml:\n");
-        println!("wechat:");
-        println!("  account_id: \"{account_id}\"");
-        println!("\nThen restart rara to activate the WeChat channel.");
+        println!("{}", session.qrcode_terminal());
+        println!("Scan the QR code above with WeChat to login");
+
+        let account_id = session
+            .wait_for_confirmation()
+            .await
+            .map_err(|e| Whatever::without_source(format!("{e}")))?;
+
+        println!("\nLogin successful! Account ID: {account_id}");
+        println!("Restart rara to activate the WeChat channel.");
 
         Ok(())
     }

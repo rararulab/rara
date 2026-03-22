@@ -14,13 +14,15 @@
 
 //! Agent tool that initiates WeChat iLink Bot QR-code login.
 //!
-//! When invoked the tool prints a QR code to stdout for the user to
-//! scan with WeChat. On success the credentials are persisted to
-//! `~/.config/rara/wechat/` and the account ID is returned so the
-//! agent can confirm the setup is complete.
+//! When invoked the tool saves a QR code PNG to a temporary file and
+//! returns its path so the agent can send it to the user. The tool
+//! then polls until the user scans and confirms.
+
+use std::path::PathBuf;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use rara_channels::wechat::login::LoginSession;
 use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
@@ -38,21 +40,24 @@ pub struct WechatLoginParams {
 #[derive(Debug, Clone, Serialize)]
 pub struct WechatLoginResult {
     /// The account ID that was authenticated.
-    pub account_id: String,
+    pub account_id:   String,
+    /// Path to the QR code PNG image for the user to scan.
+    pub qrcode_image: PathBuf,
     /// Human-readable status message.
-    pub message:    String,
+    pub message:      String,
 }
 
 /// Initiates an interactive WeChat iLink Bot QR-code login.
 ///
-/// A QR code is displayed in the terminal for the user to scan with
-/// WeChat. Credentials are saved automatically and the adapter will
-/// pick them up on next restart.
+/// Saves a QR code PNG to a temporary file and returns its path.
+/// The user must scan the QR code with WeChat within 5 minutes.
+/// On success credentials are saved automatically.
 #[derive(ToolDef)]
 #[tool(
     name = "wechat-login",
-    description = "Start WeChat iLink Bot login. Displays a QR code in the terminal for the user \
-                   to scan with WeChat. Credentials are saved automatically.",
+    description = "Start WeChat iLink Bot login. Saves a QR code image to a temp file for the \
+                   user to scan with WeChat. Returns the image path and waits for confirmation. \
+                   Credentials are saved automatically.",
     tier = "deferred",
     timeout_secs = 330
 )]
@@ -73,7 +78,19 @@ impl ToolExecute for WechatLoginTool {
         params: WechatLoginParams,
         _context: &ToolContext,
     ) -> anyhow::Result<WechatLoginResult> {
-        let account_id = rara_channels::wechat::login::login(params.base_url.as_deref())
+        let session = LoginSession::start(params.base_url.as_deref())
+            .await
+            .context("failed to start wechat login")?;
+
+        // Save QR code PNG to a temp file the agent can send to the user.
+        let png_bytes = session.qrcode_png().context("failed to render QR code")?;
+        let tmp_dir = std::env::temp_dir().join("rara-wechat");
+        std::fs::create_dir_all(&tmp_dir).context("failed to create temp dir")?;
+        let qrcode_path = tmp_dir.join("login-qrcode.png");
+        std::fs::write(&qrcode_path, &png_bytes).context("failed to write QR code image")?;
+
+        let account_id = session
+            .wait_for_confirmation()
             .await
             .context("wechat login failed")?;
 
@@ -82,6 +99,7 @@ impl ToolExecute for WechatLoginTool {
                 "WeChat login successful. Account {account_id} saved. Restart rara to activate \
                  the WeChat channel."
             ),
+            qrcode_image: qrcode_path,
             account_id,
         })
     }
