@@ -79,6 +79,9 @@ pub struct AppConfig {
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram:               Option<flatten::TelegramConfig>,
+    /// WeChat iLink Bot configuration (seeded to settings store at startup).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wechat:                 Option<flatten::WechatConfig>,
     /// Composio credentials (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composio:               Option<flatten::ComposioConfig>,

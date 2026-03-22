@@ -34,6 +34,8 @@ pub mod keys {
     pub const TELEGRAM_ALLOWED_GROUP_CHAT_ID: &str = "telegram.allowed_group_chat_id";
     pub const TELEGRAM_GROUP_POLICY: &str = "telegram.group_policy";
     pub const TELEGRAM_NOTIFICATION_CHANNEL_ID: &str = "telegram.notification_channel_id";
+    pub const WECHAT_ACCOUNT_ID: &str = "wechat.account_id";
+    pub const WECHAT_BASE_URL: &str = "wechat.base_url";
     pub const GMAIL_ADDRESS: &str = "gmail.address";
     pub const GMAIL_APP_PASSWORD: &str = "gmail.app_password";
     pub const GMAIL_AUTO_SEND_ENABLED: &str = "gmail.auto_send_enabled";

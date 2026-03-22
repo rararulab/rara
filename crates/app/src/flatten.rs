@@ -94,6 +94,22 @@ pub struct TelegramConfig {
 }
 
 // ---------------------------------------------------------------------------
+// WeChat config types
+// ---------------------------------------------------------------------------
+
+/// WeChat iLink Bot configuration section in config.yaml.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WechatConfig {
+    /// Account ID obtained from `wechat-agent-rs` login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Base URL for the WeChat iLink API (defaults to production endpoint).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url:   Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Composio config types
 // ---------------------------------------------------------------------------
 
@@ -149,6 +165,9 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     if let Some(ref tg) = config.telegram {
         flatten_telegram(tg, &mut pairs);
     }
+    if let Some(ref wechat) = config.wechat {
+        flatten_wechat(wechat, &mut pairs);
+    }
     if let Some(ref composio) = config.composio {
         flatten_composio(composio, &mut pairs);
     }
@@ -201,6 +220,16 @@ fn flatten_telegram(tg: &TelegramConfig, out: &mut Vec<(String, String)>) {
     }
 }
 
+fn flatten_wechat(wc: &WechatConfig, out: &mut Vec<(String, String)>) {
+    use rara_domain_shared::settings::keys;
+    if let Some(ref v) = wc.account_id {
+        out.push((keys::WECHAT_ACCOUNT_ID.into(), v.clone()));
+    }
+    if let Some(ref v) = wc.base_url {
+        out.push((keys::WECHAT_BASE_URL.into(), v.clone()));
+    }
+}
+
 fn flatten_composio(config: &ComposioConfig, out: &mut Vec<(String, String)>) {
     use rara_domain_shared::settings::keys;
     if let Some(ref v) = config.api_key {
@@ -243,12 +272,14 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
 ) -> (
     Option<LlmConfig>,
     Option<TelegramConfig>,
+    Option<WechatConfig>,
     Option<ComposioConfig>,
     Option<KnowledgeConfig>,
 ) {
     (
         unflatten_llm(pairs),
         unflatten_telegram(pairs),
+        unflatten_wechat(pairs),
         unflatten_composio(pairs),
         unflatten_knowledge(pairs),
     )
@@ -316,6 +347,23 @@ fn unflatten_telegram(
         allowed_group_chat_id,
         group_policy,
         notification_channel_id,
+    })
+}
+
+fn unflatten_wechat(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<WechatConfig> {
+    use rara_domain_shared::settings::keys;
+    let account_id = pairs.get(keys::WECHAT_ACCOUNT_ID).cloned();
+    let base_url = pairs.get(keys::WECHAT_BASE_URL).cloned();
+
+    if account_id.is_none() && base_url.is_none() {
+        return None;
+    }
+
+    Some(WechatConfig {
+        account_id,
+        base_url,
     })
 }
 
@@ -421,7 +469,7 @@ mod tests {
         let map: HashMap<String, String> = flat.into_iter().collect();
 
         // Unflatten
-        let (got_llm, got_tg, got_composio, got_know) = unflatten_from_settings(&map);
+        let (got_llm, got_tg, _got_wechat, got_composio, got_know) = unflatten_from_settings(&map);
 
         // --- LLM ---
         let got_llm = got_llm.expect("llm should be Some");
@@ -467,7 +515,8 @@ mod tests {
     #[test]
     fn unflatten_empty_map_returns_none() {
         let map = HashMap::new();
-        let (llm, tg, composio, know) = unflatten_from_settings(&map);
+        let (llm, tg, wechat, composio, know) = unflatten_from_settings(&map);
+        assert!(wechat.is_none());
         assert!(llm.is_none());
         assert!(tg.is_none());
         assert!(composio.is_none());

@@ -96,12 +96,14 @@ impl ConfigFileSync {
     /// Write current settings back to config.yaml.
     async fn writeback_to_file(&self) -> anyhow::Result<()> {
         let all_settings = self.settings.list().await;
-        let (llm, telegram, composio, knowledge) = flatten::unflatten_from_settings(&all_settings);
+        let (llm, telegram, wechat, composio, knowledge) =
+            flatten::unflatten_from_settings(&all_settings);
 
         let yaml = {
             let mut cfg = self.app_config.write().await;
             cfg.llm = llm;
             cfg.telegram = telegram;
+            cfg.wechat = wechat;
             cfg.composio = composio;
             cfg.knowledge = knowledge;
             serde_yaml::to_string(&*cfg)?
