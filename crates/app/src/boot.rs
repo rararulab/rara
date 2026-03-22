@@ -41,7 +41,6 @@ pub(crate) struct BootResult {
     pub tape_service:         rara_kernel::memory::TapeService,
     pub skill_registry:       rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:          rara_mcp::manager::mgr::McpManager,
-    pub output_interceptor:   rara_kernel::tool::DynamicOutputInterceptor,
     pub settings_provider:    Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     pub identity_resolver:    Arc<dyn rara_kernel::io::IdentityResolver>,
     pub agent_registry:       Arc<rara_kernel::agent::AgentRegistry>,
@@ -210,29 +209,6 @@ pub(crate) async fn boot(
     //     }
     // }
 
-    // -- output interceptor (context-mode) --------------------------------
-    // Built after tools so we can derive the bypass set from the registry.
-
-    let bypass_set: std::collections::HashSet<String> = tool_registry
-        .iter()
-        .filter(|(_, tool)| tool.bypass_output_interceptor())
-        .map(|(name, _)| name.to_owned())
-        .collect();
-
-    let output_interceptor: rara_kernel::tool::DynamicOutputInterceptor = {
-        let status = mcp_manager.server_connection_status("context-mode").await;
-        if status == rara_mcp::manager::mgr::ConnectionStatus::Connected {
-            info!("context-mode connected, enabling output interceptor");
-            Arc::new(tokio::sync::RwLock::new(Some(Arc::new(
-                crate::context_mode::ContextModeInterceptor::new(mcp_manager.clone())
-                    .with_bypass_set(bypass_set),
-            ))))
-        } else {
-            info!("context-mode not available, output interceptor disabled");
-            Arc::new(tokio::sync::RwLock::new(None))
-        }
-    };
-
     // Register discover-tools — it reads the live registry from ToolContext at
     // query time, so dynamically registered tools (e.g. MCP) are always visible.
     tool_registry.register(Arc::new(crate::tools::DiscoverToolsTool::new()));
@@ -288,7 +264,6 @@ pub(crate) async fn boot(
         tape_service,
         skill_registry,
         mcp_manager,
-        output_interceptor,
         settings_provider,
         identity_resolver,
         agent_registry,

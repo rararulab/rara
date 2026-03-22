@@ -831,6 +831,27 @@ The `tape` tool is your persistent memory.
 - A missing summary = lost context
 - Use `checkout` to retry from a past checkpoint or when the user asks to go back
 
+## Context Mode
+
+When running commands or reading files that might produce large output (>50 lines), use the context-mode MCP tools instead of consuming the output directly:
+
+- `ctx_execute(language, code)` — run shell/script in sandbox, only stdout enters context
+- `ctx_execute_file(path, language, code)` — load file into sandbox as FILE_CONTENT, process with code, only stdout enters context
+- `ctx_search(queries)` — search previously indexed content with keyword queries (queries is an array)
+
+**When to use context-mode:**
+- CLI commands that return data: git log, git diff, test output, API calls
+- Reading large files for analysis (not for editing — use normal read for edits)
+- Build/test output
+
+**When to use tools directly:**
+- File mutations: write, edit, move, delete
+- Git writes: commit, push, checkout, branch
+- Commands with small/no output: mkdir, touch, echo
+- Reading files you need to edit (use the normal read tool)
+
+When uncertain about output size, prefer context-mode.
+
 </context_contract>"#
     );
 
@@ -876,7 +897,6 @@ Use the `kernel` tool to delegate to child agents.
         turn_cancel,
         tape,
         tape_name,
-        output_interceptor,
         guard_pipeline,
         notification_bus
     ),
@@ -894,7 +914,6 @@ pub(crate) async fn run_agent_loop(
     tape_name: &str,
     mut tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
-    output_interceptor: crate::tool::DynamicOutputInterceptor,
     guard_pipeline: Arc<GuardPipeline>,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
@@ -1079,11 +1098,6 @@ pub(crate) async fn run_agent_loop(
         None
     };
 
-    // Interceptor prompt fragment is read dynamically each iteration (not cached)
-    // so it reflects the current MCP connection state — when context-mode
-    // disconnects, the fragment disappears and the LLM stops being told to
-    // call tools that no longer exist.
-
     for iteration in 0..max_iterations {
         // ── Auto-fold: pressure-driven context compression ───────────
         // Runs BEFORE rebuild so the new anchor (if created) takes effect
@@ -1182,19 +1196,6 @@ pub(crate) async fn run_agent_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to rebuild messages from tape: {e}"),
             })?;
-
-        // Inject output interceptor system prompt (e.g. context-mode guidance).
-        // Read fresh each iteration so it tracks MCP connection state (#763).
-        {
-            let guard = output_interceptor.read().await;
-            if let Some(fragment) = guard.as_ref().and_then(|i| i.system_prompt_fragment()) {
-                let insert_pos = messages
-                    .iter()
-                    .position(|m| m.role != crate::llm::Role::System)
-                    .unwrap_or(messages.len());
-                messages.insert(insert_pos, crate::llm::Message::system(fragment.to_owned()));
-            }
-        }
 
         // Conditional injections (tape search reminder only on first iteration)
         if iteration == 0 && should_remind_tape_search(&input_text) {
@@ -1894,7 +1895,6 @@ pub(crate) async fn run_agent_loop(
                 tc.tool_call_id = Some(id.clone());
                 let user_ref = runtime_user.clone();
                 let tool_cancel = turn_cancel.clone();
-                let output_interceptor = output_interceptor.clone();
                 let guard_pipeline = guard_pipeline.clone();
                 let notification_bus = notification_bus.clone();
                 let approval_manager = Arc::clone(handle.security().approval());
@@ -2034,14 +2034,6 @@ pub(crate) async fn run_agent_loop(
                                 tool_span.record("success", true);
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 info!(tool = %name, duration_ms = dur, "tool call succeeded");
-                                let result = {
-                                    let guard = output_interceptor.read().await;
-                                    if let Some(ref interceptor) = *guard {
-                                        interceptor.intercept(&name, result).await
-                                    } else {
-                                        result
-                                    }
-                                };
                                 guard_pipeline.post_execute(&session_key_for_guard, &name);
                                 (true, result, None::<String>, dur)
                             }

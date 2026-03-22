@@ -40,7 +40,6 @@ pub struct SessionInfoResult {
     name = "get-session-info",
     description = "Get metadata for the current session, including uploaded image paths and other \
                    session-specific information.",
-    bypass_interceptor,
     tier = "deferred"
 )]
 pub struct SessionInfoTool {

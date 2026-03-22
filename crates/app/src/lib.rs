@@ -14,7 +14,6 @@
 
 mod boot;
 pub mod config_sync;
-mod context_mode;
 pub mod flatten;
 pub mod gateway;
 // Re-export `rara_kernel::tool` so the `ToolDef` proc macro can resolve
@@ -377,7 +376,6 @@ pub async fn start_with_options(
         )),
         io,
         rara.knowledge_service.clone(),
-        rara.output_interceptor.clone(),
         mcp_tool_provider,
         rara_kernel::trace::TraceService::new(pool.clone()),
         skill_prompt_provider,
@@ -406,34 +404,15 @@ pub async fn start_with_options(
         *lock = Some(kernel_handle.clone());
     }
 
-    // MCP heartbeat: reconnect dead servers + restore context-mode interceptor
+    // MCP heartbeat: reconnect dead servers periodically
     {
         let mcp_mgr = rara.mcp_manager.clone();
-        let interceptor_slot = rara.output_interceptor.clone();
-        let tools = rara.tool_registry.clone();
         tokio::spawn(async move {
-            // Pre-compute the bypass set once — tool registrations are static.
-            let bypass_set: std::collections::HashSet<String> = tools
-                .iter()
-                .filter(|(_, tool)| tool.bypass_output_interceptor())
-                .map(|(name, _)| name.to_owned())
-                .collect();
-
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
             ticker.tick().await; // skip immediate first tick
             loop {
                 ticker.tick().await;
-                let reconnected = mcp_mgr.reconnect_dead().await;
-                if reconnected.iter().any(|n| n == "context-mode") {
-                    let mut guard = interceptor_slot.write().await;
-                    if guard.is_none() {
-                        tracing::info!("context-mode reconnected, enabling output interceptor");
-                        *guard = Some(std::sync::Arc::new(
-                            crate::context_mode::ContextModeInterceptor::new(mcp_mgr.clone())
-                                .with_bypass_set(bypass_set.clone()),
-                        ));
-                    }
-                }
+                mcp_mgr.reconnect_dead().await;
             }
         });
     }

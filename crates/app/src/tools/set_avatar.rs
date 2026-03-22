@@ -36,7 +36,6 @@ pub struct SetAvatarParams {
     name = "set-avatar",
     description = "Change the Telegram bot's profile photo. The image file must be placed in the \
                    images directory beforehand. Use a filename relative to the images directory.",
-    bypass_interceptor,
     tier = "deferred"
 )]
 pub struct SetAvatarTool {

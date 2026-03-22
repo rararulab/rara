@@ -42,7 +42,6 @@ pub struct SettingsParams {
     name = "settings",
     description = "Read and modify runtime settings. Use 'list' to see all settings, 'get' to \
                    read a specific key, 'set' to update a value.",
-    bypass_interceptor,
     tier = "deferred"
 )]
 pub struct SettingsTool {

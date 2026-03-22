@@ -413,10 +413,10 @@ async fn list_server_logs(
 
 async fn context_mode_status(State(manager): State<McpState>) -> Json<serde_json::Value> {
     let status = manager.server_connection_status("context-mode").await;
-    let (status_str, interceptor_enabled) = match status {
-        ConnectionStatus::Connected => ("connected", true),
-        ConnectionStatus::Connecting => ("connecting", false),
-        ConnectionStatus::Disconnected => ("disconnected", false),
+    let status_str = match status {
+        ConnectionStatus::Connected => "connected",
+        ConnectionStatus::Connecting => "connecting",
+        ConnectionStatus::Disconnected => "disconnected",
     };
     let recent_logs = manager.log_buffer().entries("context-mode").await;
     let log_entries: Vec<serde_json::Value> = recent_logs
@@ -435,7 +435,6 @@ async fn context_mode_status(State(manager): State<McpState>) -> Json<serde_json
     Json(serde_json::json!({
         "server": "context-mode",
         "connection_status": status_str,
-        "interceptor_enabled": interceptor_enabled,
         "recent_logs": log_entries,
     }))
 }

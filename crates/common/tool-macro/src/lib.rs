@@ -49,14 +49,13 @@ pub fn derive_tool_def(input: TokenStream) -> TokenStream {
 
 /// Parsed `#[tool(...)]` attributes.
 struct ToolAttrs {
-    name:               LitStr,
-    description:        LitStr,
-    params_schema:      Option<Expr>,
-    execute_fn:         Option<Expr>,
-    manual_impl:        bool,
-    bypass_interceptor: bool,
-    tier:               Option<LitStr>,
-    timeout_secs:       Option<syn::LitInt>,
+    name:          LitStr,
+    description:   LitStr,
+    params_schema: Option<Expr>,
+    execute_fn:    Option<Expr>,
+    manual_impl:   bool,
+    tier:          Option<LitStr>,
+    timeout_secs:  Option<syn::LitInt>,
 }
 
 fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
@@ -65,7 +64,6 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
     let mut params_schema: Option<Expr> = None;
     let mut execute_fn: Option<Expr> = None;
     let mut manual_impl = false;
-    let mut bypass_interceptor = false;
     let mut tier: Option<LitStr> = None;
     let mut timeout_secs: Option<syn::LitInt> = None;
 
@@ -98,14 +96,6 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
             } else if meta.path.is_ident("timeout_secs") {
                 meta.input.parse::<Token![=]>()?;
                 timeout_secs = Some(meta.input.parse::<syn::LitInt>()?);
-            } else if meta.path.is_ident("bypass_interceptor") {
-                if meta.input.peek(Token![=]) {
-                    meta.input.parse::<Token![=]>()?;
-                    let lit: LitBool = meta.input.parse()?;
-                    bypass_interceptor = lit.value();
-                } else {
-                    bypass_interceptor = true;
-                }
             } else {
                 return Err(meta.error(format!(
                     "unknown tool attribute: `{}`",
@@ -130,7 +120,6 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
         params_schema,
         execute_fn,
         manual_impl,
-        bypass_interceptor,
         tier,
         timeout_secs,
     })
@@ -185,14 +174,6 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         }
     };
 
-    let bypass_impl = if attrs.bypass_interceptor {
-        quote! {
-            fn bypass_output_interceptor(&self) -> bool { true }
-        }
-    } else {
-        quote! {}
-    };
-
     let timeout_impl = match &attrs.timeout_secs {
         Some(lit) => quote! {
             fn execution_timeout(&self) -> Option<std::time::Duration> {
@@ -239,8 +220,6 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             ) -> anyhow::Result<crate::tool::ToolOutput> {
                 #execute_body
             }
-
-            #bypass_impl
 
             #tier_impl
 

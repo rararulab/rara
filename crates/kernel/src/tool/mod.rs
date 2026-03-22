@@ -135,32 +135,6 @@ pub trait DynamicToolProvider: Send + Sync {
 /// Shared reference to a dynamic tool provider.
 pub type DynamicToolProviderRef = Arc<dyn DynamicToolProvider>;
 
-/// Intercepts tool output before it is returned to the LLM.
-///
-/// Used for transparent output compression (e.g. indexing large outputs into
-/// a knowledge base and returning a compact reference).
-#[async_trait]
-pub trait OutputInterceptor: Send + Sync {
-    /// Optionally transform a tool's output. Receives the tool name and the
-    /// original output; returns the (possibly replaced) output.
-    async fn intercept(&self, tool_name: &str, output: ToolOutput) -> ToolOutput;
-
-    /// Optional system prompt fragment injected when this interceptor is
-    /// active.
-    ///
-    /// Returns guidance text that teaches the LLM how to interact with
-    /// intercepted (indexed) tool outputs.
-    fn system_prompt_fragment(&self) -> Option<&str> { None }
-}
-
-/// Shared reference to an output interceptor.
-pub type OutputInterceptorRef = Arc<dyn OutputInterceptor>;
-
-/// A dynamically-swappable output interceptor.
-/// Wraps `Option<OutputInterceptorRef>` behind a lock so it can be updated
-/// at runtime (e.g. when context-mode MCP reconnects).
-pub type DynamicOutputInterceptor = Arc<tokio::sync::RwLock<Option<OutputInterceptorRef>>>;
-
 /// Shared reference to the [`ToolRegistry`].
 pub type ToolRegistryRef = Arc<ToolRegistry>;
 
@@ -247,11 +221,6 @@ pub trait AgentTool: Send + Sync {
     /// timeout) should return a value larger than their internal timeout
     /// so the internal mechanism fires first.
     fn execution_timeout(&self) -> Option<std::time::Duration> { None }
-
-    /// Whether this tool's output should bypass the output interceptor
-    /// (e.g. context-mode indexing). Tools with binary, always-small, or
-    /// write-only output should override this to return `true`.
-    fn bypass_output_interceptor(&self) -> bool { false }
 
     /// The loading tier for this tool. Defaults to [`ToolTier::Core`].
     fn tier(&self) -> ToolTier { ToolTier::Core }
@@ -454,8 +423,6 @@ fn clean_value(value: &mut serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     use super::*;
     use crate::identity::{KernelUser, Permission, Role};
 
@@ -570,31 +537,6 @@ mod tests {
             filtered.is_empty(),
             "unknown tool names should result in empty registry"
         );
-    }
-
-    struct TestInterceptor {
-        called: AtomicBool,
-    }
-
-    #[async_trait]
-    impl OutputInterceptor for TestInterceptor {
-        async fn intercept(&self, _tool_name: &str, _output: ToolOutput) -> ToolOutput {
-            self.called.store(true, Ordering::SeqCst);
-            ToolOutput::from(serde_json::json!({ "intercepted": true }))
-        }
-    }
-
-    #[tokio::test]
-    async fn output_interceptor_is_called() {
-        let interceptor = TestInterceptor {
-            called: AtomicBool::new(false),
-        };
-
-        let output = ToolOutput::from(serde_json::json!({ "data": "original" }));
-        let result = interceptor.intercept("test-tool", output).await;
-
-        assert!(interceptor.called.load(Ordering::SeqCst));
-        assert_eq!(result.json["intercepted"], true);
     }
 
     #[test]

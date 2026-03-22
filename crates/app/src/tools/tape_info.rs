@@ -37,7 +37,6 @@ pub struct TapeInfoResult {
     name = "tape-info",
     description = "Return metadata about the current session tape: entry count, anchors, entries \
                    since last anchor, and last known token usage.",
-    bypass_interceptor,
     tier = "deferred"
 )]
 pub struct TapeInfoTool {

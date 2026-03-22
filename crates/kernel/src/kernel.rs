@@ -190,8 +190,6 @@ pub struct Kernel {
     started_at:            Timestamp,
     /// Knowledge layer service for long-term memory extraction.
     knowledge:             crate::memory::knowledge::KnowledgeServiceRef,
-    /// Optional hook to transform tool outputs before sending to the LLM.
-    output_interceptor:    crate::tool::DynamicOutputInterceptor,
     /// Security guard pipeline (taint tracking + pattern scanning).
     guard_pipeline:        Arc<crate::guard::pipeline::GuardPipeline>,
     /// Execution trace service for persisting turn-level traces.
@@ -215,7 +213,6 @@ impl Kernel {
         security: SecurityRef,
         io: IOSubsystem,
         knowledge: crate::memory::knowledge::KnowledgeServiceRef,
-        output_interceptor: crate::tool::DynamicOutputInterceptor,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
         trace_service: crate::trace::TraceService,
         skill_prompt_provider: crate::handle::SkillPromptProvider,
@@ -293,7 +290,6 @@ impl Kernel {
             sharded_queue,
             started_at: Timestamp::now(),
             knowledge,
-            output_interceptor,
             guard_pipeline,
             trace_service,
             skill_prompt_provider,
@@ -2173,7 +2169,6 @@ impl Kernel {
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(self.io.stream_hub());
-        let output_interceptor = self.output_interceptor.clone();
         let guard_pipeline = self.guard_pipeline.clone();
         let notification_bus = self.syscall.event_bus().clone();
 
@@ -2334,7 +2329,6 @@ impl Kernel {
                         effective_tape,
                         tool_context,
                         milestone_tx,
-                        output_interceptor,
                         guard_pipeline,
                         notification_bus,
                         rara_message_id,
@@ -2351,7 +2345,6 @@ impl Kernel {
                         effective_tape,
                         tool_context,
                         milestone_tx,
-                        output_interceptor,
                         guard_pipeline,
                         notification_bus,
                         rara_message_id,
