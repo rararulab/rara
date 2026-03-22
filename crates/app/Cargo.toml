@@ -22,7 +22,10 @@ chrono.workspace = true
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }
+glob = "0.3.3"
+globset = "0.4"
 humantime-serde = "1"
+ignore = "0.4"
 jiff.workspace = true
 lettre.workspace = true
 notify = { workspace = true }
@@ -36,8 +39,6 @@ rara-composio.workspace = true
 rara-dock = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-kernel = { workspace = true }
-rara-tool-macro.workspace = true
-schemars.workspace = true
 rara-keyring-store.workspace = true
 rara-mcp.workspace = true
 rara-paths = { workspace = true }
@@ -47,7 +48,10 @@ rara-sessions.workspace = true
 rara-skills.workspace = true
 rara-soul.workspace = true
 rara-symphony.workspace = true
+rara-tool-macro.workspace = true
+regex.workspace = true
 reqwest = { workspace = true }
+schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -60,9 +64,8 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 uuid.workspace = true
-yunara-store = { workspace = true }
 walkdir = "2.5.0"
-glob = "0.3.3"
+yunara-store = { workspace = true }
 
 [dev-dependencies]
 common-telemetry.workspace = true

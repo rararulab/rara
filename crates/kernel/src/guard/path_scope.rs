@@ -35,7 +35,7 @@ use std::{
 ///
 /// SYNC: when adding a new file-access tool to the registry
 /// (`crates/app/src/tools/mod.rs`), add it here too.
-pub const FILE_PATH_TOOLS: &[&str] = &["read-file", "write-file", "edit-file"];
+pub const FILE_PATH_TOOLS: &[&str] = &["read-file", "write-file", "edit-file", "delete-file"];
 // TODO: `multi-edit` uses `edits[].file_path` and `file-stats` uses `paths[]`
 // (arrays of paths). The guard currently only checks a single top-level param,
 // so neither tool is covered here yet. Add array-aware path checking in a
@@ -45,7 +45,13 @@ pub const FILE_PATH_TOOLS: &[&str] = &["read-file", "write-file", "edit-file"];
 ///
 /// SYNC: when adding a new file-access tool to the registry
 /// (`crates/app/src/tools/mod.rs`), add it here too.
-pub const PATH_TOOLS: &[&str] = &["grep", "list-directory", "find-files", "walk-directory"];
+pub const PATH_TOOLS: &[&str] = &[
+    "grep",
+    "list-directory",
+    "find-files",
+    "walk-directory",
+    "create-directory",
+];
 
 /// Guard that restricts file-access tools to a workspace directory and optional
 /// whitelist entries.
