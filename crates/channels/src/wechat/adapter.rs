@@ -45,9 +45,16 @@ use wechat_agent_rs::{
 /// Uses long-polling to receive inbound messages and the iLink API to
 /// send outbound replies. Context tokens (required by the iLink protocol
 /// for reply routing) are cached per user.
+///
+/// Two separate API clients are used: one dedicated to the long-polling
+/// loop (inbound) and one for outbound sends, so that the long-poll
+/// never blocks outbound delivery.
 pub struct WechatAdapter {
-    /// HTTP client for the iLink API.
-    api_client:     Arc<Mutex<WeixinApiClient>>,
+    /// API client for outbound sends (text, media, typing).
+    send_client:    WeixinApiClient,
+    /// API client for inbound long-polling (held behind a Mutex so the
+    /// spawned task can own it).
+    poll_client:    Arc<Mutex<WeixinApiClient>>,
     /// WeChat account identifier used for credential and buffer storage.
     account_id:     String,
     /// Sender half of the shutdown signal.
@@ -57,12 +64,15 @@ pub struct WechatAdapter {
     /// Maps `user_id` to the latest `context_token` received from that user.
     /// The iLink API requires a context token when sending replies.
     context_tokens: Arc<DashMap<String, String>>,
+    /// Handle to the spawned polling task for graceful shutdown.
+    poll_handle:    Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl WechatAdapter {
     /// Creates a new adapter for the given WeChat account.
     ///
-    /// Loads credentials from local storage and initialises the API client.
+    /// Loads credentials from local storage and initialises two API clients
+    /// (one for polling, one for sending) to avoid mutex contention.
     pub fn new(account_id: String, base_url: String) -> Result<Self, KernelError> {
         let account_data =
             storage::get_account_data(&account_id).map_err(|e| KernelError::Boot {
@@ -71,15 +81,18 @@ impl WechatAdapter {
 
         let route_tag = storage::get_account_config(&account_id).and_then(|c| c.route_tag);
 
-        let api_client = WeixinApiClient::new(&base_url, &account_data.token, route_tag);
+        let send_client = WeixinApiClient::new(&base_url, &account_data.token, route_tag.clone());
+        let poll_client = WeixinApiClient::new(&base_url, &account_data.token, route_tag);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         Ok(Self {
-            api_client: Arc::new(Mutex::new(api_client)),
+            send_client,
+            poll_client: Arc::new(Mutex::new(poll_client)),
             account_id,
             shutdown_tx,
             shutdown_rx,
             context_tokens: Arc::new(DashMap::new()),
+            poll_handle: Mutex::new(None),
         })
     }
 }
@@ -90,26 +103,25 @@ impl ChannelAdapter for WechatAdapter {
 
     #[instrument(skip_all)]
     async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
-        let api_client = Arc::clone(&self.api_client);
+        let poll_client = Arc::clone(&self.poll_client);
         let account_id = self.account_id.clone();
         let context_tokens = Arc::clone(&self.context_tokens);
         let shutdown_rx = self.shutdown_rx.clone();
 
         info!(account_id = %account_id, "starting wechat long-polling loop");
 
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             let mut consecutive_errors: u32 = 0;
             let mut buf = storage::get_updates_buf(&account_id);
 
             loop {
-                // Check for shutdown signal.
                 if *shutdown_rx.borrow() {
                     info!("wechat polling loop received shutdown signal");
                     break;
                 }
 
                 let result = {
-                    let client = api_client.lock().await;
+                    let client = poll_client.lock().await;
                     client.get_updates(buf.as_deref()).await
                 };
 
@@ -126,15 +138,22 @@ impl ChannelAdapter for WechatAdapter {
                             for msg in messages {
                                 let item_list =
                                     msg["item_list"].as_array().cloned().unwrap_or_default();
-                                let to_user_id =
-                                    msg["to_user_id"].as_str().unwrap_or("").to_string();
+
+                                let Some(to_user_id) = msg["to_user_id"]
+                                    .as_str()
+                                    .filter(|s| !s.is_empty())
+                                    .map(String::from)
+                                else {
+                                    warn!("skipping wechat message with missing to_user_id");
+                                    continue;
+                                };
+
                                 let context_token =
                                     msg["context_token"].as_str().unwrap_or("").to_string();
 
                                 // Cache the context token for outbound replies.
-                                if !to_user_id.is_empty() && !context_token.is_empty() {
-                                    context_tokens
-                                        .insert(to_user_id.clone(), context_token.clone());
+                                if !context_token.is_empty() {
+                                    context_tokens.insert(to_user_id.clone(), context_token);
                                 }
 
                                 let body = body_from_item_list(&item_list);
@@ -182,6 +201,8 @@ impl ChannelAdapter for WechatAdapter {
             info!("wechat polling loop exited");
         });
 
+        *self.poll_handle.lock().await = Some(join_handle);
+
         Ok(())
     }
 
@@ -196,18 +217,19 @@ impl ChannelAdapter for WechatAdapter {
             }
         };
 
-        let context_token = self
-            .context_tokens
-            .get(&user_id)
-            .map(|r| r.value().clone())
-            .unwrap_or_default();
+        let context_token = self.context_tokens.get(&user_id).map(|r| r.value().clone());
 
         match msg {
             PlatformOutbound::Reply { content, .. } => {
+                let token = context_token.ok_or_else(|| EgressError::DeliveryFailed {
+                    message: format!(
+                        "no context_token cached for wechat user {user_id} — cannot send without \
+                         a prior inbound message"
+                    ),
+                })?;
                 let plain = markdown_to_plain_text(&content);
-                let client = self.api_client.lock().await;
-                client
-                    .send_text_message(&user_id, &context_token, &plain)
+                self.send_client
+                    .send_text_message(&user_id, &token, &plain)
                     .await
                     .map_err(|e| EgressError::DeliveryFailed {
                         message: format!("wechat send_text_message failed: {e}"),
@@ -224,6 +246,15 @@ impl ChannelAdapter for WechatAdapter {
     async fn stop(&self) -> Result<(), KernelError> {
         info!("stopping wechat adapter");
         let _ = self.shutdown_tx.send(true);
+
+        // Await the polling task so it shuts down cleanly.
+        let handle = self.poll_handle.lock().await.take();
+        if let Some(handle) = handle {
+            if let Err(e) = handle.await {
+                warn!(error = %e, "wechat polling task panicked during shutdown");
+            }
+        }
+
         Ok(())
     }
 
@@ -235,9 +266,11 @@ impl ChannelAdapter for WechatAdapter {
             .map(|r| r.value().clone())
             .unwrap_or_default();
 
-        let client = self.api_client.lock().await;
         // Best-effort — typing indicators are optional UX hooks.
-        let _ = client.send_typing(session_key, &context_token).await;
+        let _ = self
+            .send_client
+            .send_typing(session_key, &context_token)
+            .await;
         Ok(())
     }
 }
