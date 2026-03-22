@@ -721,7 +721,7 @@ async fn try_build_wechat(
     let base_url = settings
         .get(keys::WECHAT_BASE_URL)
         .await
-        .unwrap_or_else(|| wechat_agent_rs::storage::DEFAULT_BASE_URL.to_string());
+        .unwrap_or_else(|| rara_channels::wechat::storage::DEFAULT_BASE_URL.to_string());
 
     let adapter = Arc::new(
         rara_channels::wechat::WechatAdapter::new(account_id, base_url)

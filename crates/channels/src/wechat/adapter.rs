@@ -34,7 +34,8 @@ use rara_kernel::{
 };
 use tokio::sync::{Mutex, watch};
 use tracing::{error, info, instrument, warn};
-use wechat_agent_rs::{
+
+use super::{
     api::WeixinApiClient,
     runtime::{body_from_item_list, markdown_to_plain_text},
     storage,
@@ -177,11 +178,11 @@ impl ChannelAdapter for WechatAdapter {
                             }
                         }
                     }
-                    Err(wechat_agent_rs::Error::SessionExpired) => {
+                    Err(super::errors::Error::SessionExpired) => {
                         warn!("wechat session expired, stopping polling loop");
                         break;
                     }
-                    Err(wechat_agent_rs::Error::Http { ref source }) if source.is_timeout() => {
+                    Err(super::errors::Error::Http { ref source }) if source.is_timeout() => {
                         // Long-poll timeout is normal — just retry.
                     }
                     Err(e) => {

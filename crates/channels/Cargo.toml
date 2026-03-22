@@ -35,7 +35,9 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 url = "2"
 uuid = { workspace = true }
-wechat-agent-rs = { workspace = true }
+dirs = { workspace = true }
+regex-lite = "0.1"
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

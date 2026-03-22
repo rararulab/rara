@@ -13,7 +13,14 @@
 // limitations under the License.
 
 //! WeChat iLink Bot channel adapter.
+//!
+//! Protocol layer ported from
+//! [wechat-agent-rs](https://github.com/rararulab/wechat-agent-rs).
 
 mod adapter;
+pub mod api;
+pub mod errors;
+pub mod runtime;
+pub mod storage;
 
 pub use adapter::WechatAdapter;
