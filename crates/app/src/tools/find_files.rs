@@ -103,7 +103,7 @@ fn find_files_in_process(
     let glob_pattern = glob::Pattern::new(pattern).context("invalid glob pattern")?;
 
     let walker = ignore::WalkBuilder::new(search_root)
-        .hidden(true) // skip hidden files
+        .hidden(false) // include dotfiles to match old `find` behavior
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)

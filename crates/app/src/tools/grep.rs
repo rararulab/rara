@@ -20,7 +20,7 @@
 use std::{
     collections::HashSet,
     fmt::Write as _,
-    io::{BufRead, Read as _},
+    io::{BufRead, Read as _, Seek as _, SeekFrom},
     path::{Path, PathBuf},
 };
 
@@ -184,11 +184,10 @@ fn grep_in_process(
             continue;
         }
 
-        // Re-open for line-by-line reading (seek would skip buffered data).
-        let file = match std::fs::File::open(file_path) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
+        // Seek back to start and reuse the same file handle for line reading.
+        if file.seek(SeekFrom::Start(0)).is_err() {
+            continue;
+        }
         let reader = std::io::BufReader::new(file);
         let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
 

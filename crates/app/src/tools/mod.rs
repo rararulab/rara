@@ -114,8 +114,6 @@ pub fn rara_tool_names() -> Vec<String> {
         FindFilesTool::TOOL_NAME,
         WalkDirectoryTool::TOOL_NAME,
         FileStatsTool::TOOL_NAME,
-        DeleteFileTool::TOOL_NAME,
-        CreateDirectoryTool::TOOL_NAME,
         // Network
         HttpFetchTool::TOOL_NAME,
         // Memory & session
