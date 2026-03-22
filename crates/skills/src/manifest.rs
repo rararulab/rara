@@ -20,6 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use snafu::ResultExt;
 
 use crate::{
@@ -27,19 +28,61 @@ use crate::{
     types::SkillsManifest,
 };
 
-/// Persistent manifest storage with atomic writes.
+/// Persistent manifest storage with atomic writes and file-level locking.
+///
+/// Prefer [`with_lock`](Self::with_lock) for all manifest mutations.
+/// Bare [`load`](Self::load) / [`save`](Self::save) remain available for
+/// read-only access and backward compatibility.
 pub struct ManifestStore {
     path: PathBuf,
 }
 
 impl ManifestStore {
+    /// Create a store backed by the given JSON file path.
     pub fn new(path: PathBuf) -> Self { Self { path } }
 
+    /// Default manifest location under the data directory.
     pub fn default_path() -> Result<PathBuf> {
         Ok(rara_paths::data_dir().join("skills-manifest.json"))
     }
 
+    /// Execute `f` while holding an exclusive file lock on the manifest.
+    ///
+    /// The lock file is `<manifest>.lock` (e.g. `skills-manifest.json.lock`).
+    /// The manifest is loaded before calling `f`, and saved after `f` returns
+    /// `Ok`. The lock is released when the `File` guard drops.
+    ///
+    /// Uses `flock()` via `fs2` — advisory only on NFS, but sufficient for
+    /// single-host CLI usage.
+    pub fn with_lock<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut SkillsManifest) -> Result<T>,
+    {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).context(IoSnafu)?;
+        }
+
+        let lock_path = self.path.with_extension("json.lock");
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .context(IoSnafu)?;
+
+        lock_file.lock_exclusive().context(IoSnafu)?;
+
+        // From here the lock is held; it releases on `lock_file` drop.
+        let mut manifest = self.load()?;
+        let result = f(&mut manifest)?;
+        self.save(&manifest)?;
+        Ok(result)
+    }
+
     /// Load manifest from disk, returning a default if missing.
+    ///
+    /// For read-only access this is fine; for mutations prefer
+    /// [`with_lock`](Self::with_lock).
     pub fn load(&self) -> Result<SkillsManifest> {
         if !self.path.exists() {
             return Ok(SkillsManifest::default());
@@ -50,6 +93,9 @@ impl ManifestStore {
     }
 
     /// Save manifest atomically via temp file + rename.
+    ///
+    /// For mutations prefer [`with_lock`](Self::with_lock) which handles
+    /// load + save under an exclusive lock.
     pub fn save(&self, manifest: &SkillsManifest) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).context(IoSnafu)?;
@@ -61,5 +107,6 @@ impl ManifestStore {
         Ok(())
     }
 
+    /// Path to the backing JSON file.
     pub fn path(&self) -> &Path { &self.path }
 }
