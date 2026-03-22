@@ -231,7 +231,9 @@ impl ClawhubClient {
                 }
                 .fail();
             }
-            std::fs::remove_dir_all(&skill_dir).context(IoSnafu)?;
+            tokio::fs::remove_dir_all(&skill_dir)
+                .await
+                .context(IoSnafu)?;
         }
 
         // Fetch detail first to validate slug exists and get version before
@@ -269,7 +271,7 @@ impl ClawhubClient {
             .await;
 
         if result.is_err() {
-            let _ = std::fs::remove_dir_all(&skill_dir);
+            let _ = tokio::fs::remove_dir_all(&skill_dir).await;
         }
 
         result
