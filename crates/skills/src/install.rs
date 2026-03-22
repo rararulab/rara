@@ -186,21 +186,9 @@ pub async fn remove_repo(source: &str, install_dir: &Path) -> Result<()> {
 /// Install by fetching a tarball from GitHub's API.
 async fn install_via_http(owner: &str, repo: &str, target: &Path) -> Result<Option<String>> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}/tarball");
-    let client = reqwest::Client::new();
-    let commit_sha = fetch_latest_commit_sha(&client, owner, repo).await;
-    let resp = client
-        .get(&url)
-        .header("User-Agent", "moltis-skills")
-        .send()
-        .await
-        .context(RequestSnafu)?;
-
-    if !resp.status().is_success() {
-        return InstallSnafu {
-            message: format!("failed to fetch {}/{}: HTTP {}", owner, repo, resp.status()),
-        }
-        .fail();
-    }
+    let gh = crate::github::GitHubClient::new();
+    let commit_sha = fetch_latest_commit_sha(&gh, owner, repo).await;
+    let resp = gh.get(&url, "GitHub tarball download").await?;
 
     let bytes = resp.bytes().await.context(RequestSnafu)?;
 
@@ -264,21 +252,16 @@ async fn install_via_http(owner: &str, repo: &str, target: &Path) -> Result<Opti
     Ok(commit_sha)
 }
 
+/// Best-effort fetch of the latest commit SHA for a repo.
+///
+/// Returns `None` on any error — the SHA is informational only.
 async fn fetch_latest_commit_sha(
-    client: &reqwest::Client,
+    gh: &crate::github::GitHubClient,
     owner: &str,
     repo: &str,
 ) -> Option<String> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}/commits?per_page=1");
-    let response = client
-        .get(url)
-        .header("User-Agent", "moltis-skills")
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
+    let response = gh.get(&url, "GitHub latest commit SHA").await.ok()?;
     let value: serde_json::Value = response.json().await.ok()?;
     value
         .as_array()?
