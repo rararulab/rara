@@ -1311,7 +1311,7 @@ pub(crate) async fn run_agent_loop(
             messages:            messages.clone(),
             tools:               tool_defs.clone(),
             temperature:         Some(0.7),
-            max_tokens:          Some(1024),
+            max_tokens:          Some(2048),
             thinking:            None,
             tool_choice:         if tool_defs.is_empty() {
                 llm::ToolChoice::None
