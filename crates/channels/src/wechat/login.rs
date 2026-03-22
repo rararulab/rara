@@ -14,6 +14,8 @@
 
 //! Interactive QR-code login flow for WeChat iLink Bot.
 
+use std::time::Duration;
+
 use snafu::OptionExt;
 use tracing::{info, warn};
 
@@ -22,6 +24,9 @@ use super::{
     errors::{LoginFailedSnafu, QrCodeExpiredSnafu, Result},
     storage::{self, AccountData, DEFAULT_BASE_URL},
 };
+
+/// Maximum time to wait for the user to scan the QR code.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Performs an interactive QR-code login and persists the resulting
 /// credentials under `~/.config/rara/wechat/`.
@@ -59,15 +64,26 @@ pub async fn login(base_url: Option<&str>) -> Result<String> {
     println!("Scan the QR code above with WeChat to login");
 
     // Poll until the user scans and confirms (timeout after 5 minutes).
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        if tokio::time::Instant::now() >= deadline {
-            return Err(LoginFailedSnafu {
-                reason: "login timed out after 5 minutes",
-            }
-            .build());
+    tokio::time::timeout(
+        LOGIN_TIMEOUT,
+        poll_until_confirmed(&client, qrcode_id, base_url),
+    )
+    .await
+    .map_err(|_| {
+        LoginFailedSnafu {
+            reason: "login timed out after 5 minutes",
         }
+        .build()
+    })?
+}
+
+async fn poll_until_confirmed(
+    client: &WeixinApiClient,
+    qrcode_id: &str,
+    base_url: &str,
+) -> Result<String> {
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
         let status_resp = client.get_qr_code_status(qrcode_id).await?;
         let status = status_resp["data"]["status"].as_str().unwrap_or("unknown");
 
@@ -80,41 +96,44 @@ pub async fn login(base_url: Option<&str>) -> Result<String> {
                 return Err(QrCodeExpiredSnafu.build());
             }
             "confirmed" => {
-                let data = &status_resp["data"];
-                let token = data["bot_token"].as_str().context(LoginFailedSnafu {
-                    reason: "no bot_token",
-                })?;
-                let bot_id = data["ilink_bot_id"].as_str().context(LoginFailedSnafu {
-                    reason: "no ilink_bot_id",
-                })?;
-                let base = data["baseurl"].as_str().unwrap_or(base_url);
-                let user_id = data["ilink_user_id"].as_str().unwrap_or("");
-
-                let account_id = bot_id
-                    .strip_prefix("ilink_bot_")
-                    .unwrap_or(bot_id)
-                    .to_string();
-
-                let account_data = AccountData {
-                    token:    token.to_string(),
-                    saved_at: chrono::Utc::now().to_rfc3339(),
-                    base_url: base.to_string(),
-                    user_id:  user_id.to_string(),
-                };
-                storage::save_account_data(&account_id, &account_data)?;
-
-                let mut ids = storage::get_account_ids().unwrap_or_default();
-                if !ids.contains(&account_id) {
-                    ids.push(account_id.clone());
-                    storage::save_account_ids(&ids)?;
-                }
-
-                info!("Login successful! Account ID: {account_id}");
-                return Ok(account_id);
+                return save_confirmed_credentials(&status_resp["data"], base_url);
             }
             other => {
                 warn!("Unknown QR status: {other}");
             }
         }
     }
+}
+
+fn save_confirmed_credentials(data: &serde_json::Value, base_url: &str) -> Result<String> {
+    let token = data["bot_token"].as_str().context(LoginFailedSnafu {
+        reason: "no bot_token",
+    })?;
+    let bot_id = data["ilink_bot_id"].as_str().context(LoginFailedSnafu {
+        reason: "no ilink_bot_id",
+    })?;
+    let base = data["baseurl"].as_str().unwrap_or(base_url);
+    let user_id = data["ilink_user_id"].as_str().unwrap_or("");
+
+    let account_id = bot_id
+        .strip_prefix("ilink_bot_")
+        .unwrap_or(bot_id)
+        .to_string();
+
+    let account_data = AccountData {
+        token:    token.to_string(),
+        saved_at: chrono::Utc::now().to_rfc3339(),
+        base_url: base.to_string(),
+        user_id:  user_id.to_string(),
+    };
+    storage::save_account_data(&account_id, &account_data)?;
+
+    let mut ids = storage::get_account_ids().unwrap_or_default();
+    if !ids.contains(&account_id) {
+        ids.push(account_id.clone());
+        storage::save_account_ids(&ids)?;
+    }
+
+    info!("Login successful! Account ID: {account_id}");
+    Ok(account_id)
 }

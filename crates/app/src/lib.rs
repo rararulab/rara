@@ -710,18 +710,30 @@ async fn try_build_telegram(
 async fn try_build_wechat(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
 ) -> Result<Option<Arc<rara_channels::wechat::WechatAdapter>>, Whatever> {
+    use rara_channels::wechat::storage;
     use rara_domain_shared::settings::{SettingsProvider, keys};
 
     let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
+
+    // Try settings first, then fall back to auto-discovering saved credentials.
     let account_id = match settings.get(keys::WECHAT_ACCOUNT_ID).await {
         Some(id) if !id.is_empty() => id,
-        _ => return Ok(None),
+        _ => match storage::get_account_ids() {
+            Ok(ids) if !ids.is_empty() => {
+                info!(
+                    account_id = %ids[0],
+                    "wechat account_id not in settings, auto-discovered from saved credentials"
+                );
+                ids.into_iter().next().expect("non-empty")
+            }
+            _ => return Ok(None),
+        },
     };
 
     let base_url = settings
         .get(keys::WECHAT_BASE_URL)
         .await
-        .unwrap_or_else(|| rara_channels::wechat::storage::DEFAULT_BASE_URL.to_string());
+        .unwrap_or_else(|| storage::DEFAULT_BASE_URL.to_string());
 
     let adapter = Arc::new(
         rara_channels::wechat::WechatAdapter::new(account_id, base_url)

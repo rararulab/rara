@@ -55,6 +55,7 @@ mod tape_handoff;
 mod tape_info;
 mod user_note;
 mod walk_directory;
+mod wechat_login;
 mod write_file;
 
 use acp_delegate::AcpDelegateTool;
@@ -92,6 +93,7 @@ use tape_handoff::TapeHandoffTool;
 use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
 use walk_directory::WalkDirectoryTool;
+use wechat_login::WechatLoginTool;
 use write_file::WriteFileTool;
 
 /// Tool names for the rara agent manifest — single source of truth.
@@ -233,6 +235,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(InstallAcpAgentTool::new(deps.acp_registry.clone())),
         Arc::new(ListAcpAgentsTool::new(deps.acp_registry.clone())),
         Arc::new(RemoveAcpAgentTool::new(deps.acp_registry)),
+        // WeChat login
+        Arc::new(WechatLoginTool::new()),
     ];
 
     for tool in tools {

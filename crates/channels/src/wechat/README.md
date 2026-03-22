@@ -6,31 +6,35 @@ Connect rara to WeChat via the [iLink Bot API](https://ilinkai.weixin.qq.com).
 
 ### 1. Login
 
+**CLI:**
+
 ```bash
 rara wechat login
 ```
 
+**Or via the agent** -- ask rara to connect WeChat and it will invoke
+the `wechat-login` tool automatically.
+
 A QR code will be displayed in the terminal. Scan it with WeChat to authenticate.
+Credentials are saved to `~/.config/rara/wechat/` automatically.
 
-On success the command prints the `account_id` and the config snippet you need.
-
-### 2. Configure
-
-Add the WeChat section to `~/.config/rara/config.yaml`:
-
-```yaml
-wechat:
-  account_id: "<account_id from step 1>"
-  # base_url: "https://ilinkai.weixin.qq.com"  # optional, defaults to production
-```
-
-### 3. Restart rara
+### 2. Restart rara
 
 ```bash
 rara server
 ```
 
-The adapter starts automatically when `account_id` is set.
+The adapter auto-discovers saved credentials on startup -- no manual
+`config.yaml` editing required.
+
+You can optionally pin a specific account or override the API base URL
+in `~/.config/rara/config.yaml`:
+
+```yaml
+wechat:
+  account_id: "<account_id>"                    # optional, auto-discovered if omitted
+  # base_url: "https://ilinkai.weixin.qq.com"   # optional, defaults to production
+```
 
 ## How It Works
 
