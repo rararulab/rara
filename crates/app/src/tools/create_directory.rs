@@ -44,8 +44,7 @@ pub struct CreateDirectoryResult {
 #[tool(
     name = "create-directory",
     description = "Create a directory on the filesystem. Automatically creates parent directories \
-                   if they do not exist.",
-    tier = "deferred"
+                   if they do not exist."
 )]
 pub struct CreateDirectoryTool;
 
