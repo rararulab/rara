@@ -188,10 +188,13 @@ impl MarketplaceService {
                 let fallback_b64 = self
                     .fetch_github_content_b64(&gh, repo, "plugin.json")
                     .await
-                    .map_err(|_| crate::error::SkillError::InvalidInput {
-                        message: format!(
-                            "repo '{repo}' has neither marketplace.json nor plugin.json"
-                        ),
+                    .map_err(|e| {
+                        tracing::debug!(%e, repo, "plugin.json fallback also failed");
+                        crate::error::SkillError::InvalidInput {
+                            message: format!(
+                                "repo '{repo}' has neither marketplace.json nor plugin.json"
+                            ),
+                        }
                     })?;
 
                 use base64::Engine;
