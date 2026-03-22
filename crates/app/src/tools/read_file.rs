@@ -146,10 +146,8 @@ pub struct ReadFileResult {
 #[derive(ToolDef)]
 #[tool(
     name = "read-file",
-    description = "Read a file from the filesystem. Returns content with line number prefixes \
-                   (like cat -n). Without offset/limit, adaptively reads up to the context-window \
-                   budget (multiple pages auto-stitched). Use offset and limit to read a specific \
-                   range. Detects binary files. Long lines are truncated at 2000 characters."
+    description = "Read a file with line numbers; auto-pages to fit context budget, or use \
+                   offset/limit for a specific range."
 )]
 pub struct ReadFileTool;
 

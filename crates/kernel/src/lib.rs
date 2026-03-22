@@ -61,7 +61,14 @@ pub mod trace;
 /// External crates use these for manifest construction without
 /// accessing internal tool modules or structs.
 pub mod tool_names {
-    pub const TAPE: &str = "tape";
+    pub const TAPE_INFO: &str = "tape-info";
+    pub const TAPE_SEARCH: &str = "tape-search";
+    pub const TAPE_ANCHOR: &str = "tape-anchor";
+    pub const TAPE_ANCHORS: &str = "tape-anchors";
+    pub const TAPE_ENTRIES: &str = "tape-entries";
+    pub const TAPE_BETWEEN: &str = "tape-between";
+    pub const TAPE_CHECKOUT: &str = "tape-checkout";
+    pub const TAPE_CHECKOUT_ROOT: &str = "tape-checkout-root";
     pub const CREATE_PLAN: &str = "create-plan";
     pub const KERNEL: &str = "kernel";
     pub const MEMORY: &str = "memory";

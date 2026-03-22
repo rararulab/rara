@@ -51,8 +51,6 @@ mod session_info;
 mod set_avatar;
 mod settings;
 mod skill_tools;
-mod tape_handoff;
-mod tape_info;
 mod user_note;
 mod walk_directory;
 mod write_file;
@@ -88,8 +86,6 @@ use session_info::SessionInfoTool;
 use set_avatar::SetAvatarTool;
 use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
-use tape_handoff::TapeHandoffTool;
-use tape_info::TapeInfoTool;
 use user_note::UserNoteTool;
 use walk_directory::WalkDirectoryTool;
 use write_file::WriteFileTool;
@@ -109,24 +105,20 @@ pub fn rara_tool_names() -> Vec<String> {
         ReadFileTool::TOOL_NAME,
         WriteFileTool::TOOL_NAME,
         EditFileTool::TOOL_NAME,
-        MultiEditTool::TOOL_NAME,
         ListDirectoryTool::TOOL_NAME,
         FindFilesTool::TOOL_NAME,
-        WalkDirectoryTool::TOOL_NAME,
-        FileStatsTool::TOOL_NAME,
-        DeleteFileTool::TOOL_NAME,
-        CreateDirectoryTool::TOOL_NAME,
         // Network
         HttpFetchTool::TOOL_NAME,
-        // Memory & session
-        tool_names::TAPE,
-        UserNoteTool::TOOL_NAME,
+        // Tape memory (7 Core tools; tape-checkout-root is Deferred)
+        tool_names::TAPE_INFO,
+        tool_names::TAPE_SEARCH,
+        tool_names::TAPE_ANCHOR,
+        tool_names::TAPE_ANCHORS,
+        tool_names::TAPE_ENTRIES,
+        tool_names::TAPE_BETWEEN,
+        tool_names::TAPE_CHECKOUT,
+        // Long-term memory
         tool_names::MEMORY,
-        // Execution
-        tool_names::SPAWN_BACKGROUND,
-        tool_names::CANCEL_BACKGROUND,
-        // Plan
-        tool_names::CREATE_PLAN,
         // Discovery
         DiscoverToolsTool::TOOL_NAME,
     ]
@@ -208,9 +200,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
         Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
         Arc::new(RemoveMcpServerTool::new(deps.mcp_manager)),
-        // Tape management tools
-        Arc::new(TapeInfoTool::new(deps.tape_service.clone())),
-        Arc::new(TapeHandoffTool::new(deps.tape_service.clone())),
+        // Tape management tools (tape-info/anchor/search/etc. are kernel-registered)
         Arc::new(DebugTraceTool::new(deps.tape_service.clone())),
         // User memory
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
@@ -264,7 +254,7 @@ mod tests {
         let names = rara_tool_names();
         // Only Core tools appear in the manifest; deferred tools (kernel,
         // marketplace, schedule-*, etc.) are discovered on demand.
-        for expected in ["bash", "tape", "memory", "discover-tools"] {
+        for expected in ["bash", "tape-anchor", "memory", "discover-tools"] {
             assert!(names.iter().any(|n| n == expected), "missing: {expected}");
         }
         // Verify deferred tools are NOT in the core list.
@@ -280,8 +270,8 @@ mod tests {
     fn rara_core_tool_count_stays_slim() {
         let names = rara_tool_names();
         assert!(
-            names.len() <= 22,
-            "Core tool set has {} tools — keep it under 22 to control token costs. Use tier = \
+            names.len() <= 17,
+            "Core tool set has {} tools — keep it under 17 to control token costs. Use tier = \
              \"deferred\" for non-essential tools.",
             names.len()
         );

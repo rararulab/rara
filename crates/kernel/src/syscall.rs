@@ -41,7 +41,13 @@ use crate::{
     notification::{NotificationBusRef, SubscriptionRegistryRef},
     security::SecurityRef,
     session::{SessionKey, SessionTable},
-    tool::{DynamicToolProviderRef, ToolRegistryRef, tape::TapeTool},
+    tool::{
+        DynamicToolProviderRef, ToolRegistryRef,
+        tape::{
+            TapeAnchorTool, TapeAnchorsTool, TapeBetweenTool, TapeCheckoutRootTool,
+            TapeCheckoutTool, TapeEntriesTool, TapeInfoTool, TapeSearchTool,
+        },
+    },
 };
 
 /// Dispatches syscalls from session-scoped operations to the appropriate kernel
@@ -285,12 +291,49 @@ impl SyscallDispatcher {
                     let tape_name = syscall_sender.to_string();
                     let syscall_tool = SyscallTool::new(kernel_handle.clone(), syscall_sender);
                     registry.register(Arc::new(syscall_tool));
-                    let tape_tool = TapeTool::new(
+                    let sessions = Arc::clone(kernel_handle.session_index());
+                    // Register individual tape tools (8 focused tools replacing
+                    // the monolithic TapeTool).
+                    registry.register(Arc::new(TapeInfoTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeSearchTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeAnchorTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeAnchorsTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeEntriesTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeBetweenTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeCheckoutTool::new(
+                        self.tape_service.clone(),
+                        tape_name.clone(),
+                        Arc::clone(&sessions),
+                    )));
+                    registry.register(Arc::new(TapeCheckoutRootTool::new(
                         self.tape_service.clone(),
                         tape_name,
-                        Arc::clone(kernel_handle.session_index()),
-                    );
-                    registry.register(Arc::new(tape_tool));
+                        sessions,
+                    )));
                     // Schedule tools
                     registry.register(Arc::new(crate::tool::schedule::ScheduleOnceTool));
                     registry.register(Arc::new(crate::tool::schedule::ScheduleIntervalTool));

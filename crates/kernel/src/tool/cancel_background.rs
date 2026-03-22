@@ -29,7 +29,8 @@ use crate::{
 #[derive(ToolDef)]
 #[tool(
     name = "cancel-background",
-    description = "Cancel a running background task by task_id."
+    description = "Cancel a running background task by task_id.",
+    tier = "deferred"
 )]
 pub struct CancelBackgroundTool {
     handle:      KernelHandle,

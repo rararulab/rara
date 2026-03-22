@@ -39,9 +39,8 @@ pub struct DiscoverToolsParams {
 #[derive(ToolDef)]
 #[tool(
     name = "discover-tools",
-    description = "Search for and activate additional tools not loaded by default. Use when you \
-                   need capabilities beyond the core tools (e.g. email, skills management, dock \
-                   canvas, MCP servers). Pass a keyword to search."
+    description = "Search for and activate additional tools not loaded by default; pass a keyword \
+                   to search."
 )]
 pub struct DiscoverToolsTool;
 

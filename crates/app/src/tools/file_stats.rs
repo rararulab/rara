@@ -73,7 +73,8 @@ pub struct FileStatsResult {
     name = "file-stats",
     description = "Get line count, byte size, and character count for one or more files. \
                    Equivalent to wc -l. Use this to understand file sizes before reading. Reports \
-                   per-file errors without aborting the entire request."
+                   per-file errors without aborting the entire request.",
+    tier = "deferred"
 )]
 pub struct FileStatsTool;
 

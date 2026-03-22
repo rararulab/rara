@@ -669,9 +669,9 @@ fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::
 /// covered.
 fn did_create_anchor(results_json: &[serde_json::Value]) -> bool {
     results_json.iter().any(|json| {
-        // `tape` tool anchor action returns {"anchor_name": ...}
+        // `tape-anchor` tool returns {"anchor_name": ...}
         json.get("anchor_name").is_some()
-            // `tape-handoff` tool returns {"output": "handoff created: ..."}
+            // Legacy tape-handoff returns {"output": "handoff created: ..."}
             || json
                 .get("output")
                 .and_then(|v| v.as_str())
@@ -804,9 +804,9 @@ fn build_runtime_contract_prompt(
         r#"{base_prompt}
 
 <context_contract>
-The `tape` tool is your persistent memory.
+The `tape-*` tools are your persistent memory.
 
-Actions: `anchor` (checkpoint + trim), `search`/`entries` (recall old context), `anchors` (list checkpoints), `checkout` (fork from a past anchor).
+`tape-anchor` (checkpoint + trim), `tape-search`/`tape-entries` (recall old context), `tape-anchors` (list checkpoints), `tape-checkout` (fork from a past anchor).
 
 MUST anchor when: context is long or [Context Usage Warning] appears, tool result exceeds ~2000 chars, user switches topic.
 SHOULD anchor when: completing a logical phase, processing multiple tool results.
@@ -1163,7 +1163,7 @@ pub(crate) async fn run_agent_loop(
             messages.push(llm::Message::user(
                 "[Recall Verification] The user is asking about a precise fact that may come from \
                  earlier context. If you don't have clear evidence in your current context, you \
-                 MUST use tape.search to verify before answering.",
+                 MUST use tape-search to verify before answering.",
             ));
         }
 
@@ -1171,8 +1171,8 @@ pub(crate) async fn run_agent_loop(
         if needs_anchor_reminder {
             messages.push(llm::Message::user(
                 "[Large Tool Output] You just processed a large tool result that significantly \
-                 bloats context. Before continuing, use tape with action:\"anchor\" to create a \
-                 handoff with summary and next_steps. Use tape.search later for older details.",
+                 bloats context. Before continuing, use tape-anchor to create a handoff with \
+                 summary and next_steps. Use tape-search later for older details.",
             ));
             needs_anchor_reminder = false;
         }
@@ -2355,8 +2355,8 @@ pub(crate) async fn run_agent_loop(
                 ContextPressure::Critical { usage_ratio, .. } => {
                     context_pressure_warning = Some(format!(
                         "[Context Usage Critical] Current context ~{} tokens ({:.0}%), context \
-                         window capacity {} tokens. You MUST immediately create a tape anchor \
-                         with summary and next_steps.",
+                         window capacity {} tokens. You MUST immediately call tape-anchor with \
+                         summary and next_steps.",
                         tape_info.estimated_context_tokens,
                         usage_ratio * 100.0,
                         capabilities.context_window_tokens,
@@ -2365,7 +2365,7 @@ pub(crate) async fn run_agent_loop(
                 ContextPressure::Warning { usage_ratio, .. } => {
                     context_pressure_warning = Some(format!(
                         "[Context Usage Warning] Current context ~{} tokens ({:.0}%), context \
-                         window capacity {} tokens. You SHOULD consider creating a tape anchor.",
+                         window capacity {} tokens. You SHOULD consider calling tape-anchor.",
                         tape_info.estimated_context_tokens,
                         usage_ratio * 100.0,
                         capabilities.context_window_tokens,
@@ -2385,8 +2385,8 @@ pub(crate) async fn run_agent_loop(
         {
             context_pressure_warning = Some(format!(
                 "[Session Length Warning] This session has had {user_turns_since_anchor} user \
-                 turns since the last anchor. If the topic has shifted, you MUST create a tape \
-                 anchor now with summary and next_steps.",
+                 turns since the last anchor. If the topic has shifted, you MUST call tape-anchor \
+                 now with summary and next_steps.",
             ));
             session_length_warned = true;
         }
@@ -2552,9 +2552,9 @@ mod tests {
     fn runtime_contract_prompt_includes_tape_and_delegation_rules() {
         let prompt = build_runtime_contract_prompt("base", true, None);
         assert!(prompt.contains("<context_contract>"));
-        assert!(prompt.contains("`tape`"));
-        assert!(prompt.contains("`anchor` (checkpoint + trim)"));
-        assert!(prompt.contains("`search`/`entries` (recall old context)"));
+        assert!(prompt.contains("`tape-*`"));
+        assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
+        assert!(prompt.contains("`tape-search`/`tape-entries` (recall old context)"));
         assert!(prompt.contains("you need exact details from earlier"));
         assert!(prompt.contains("`summary` and `next_steps` in anchors"));
         assert!(prompt.contains("<delegation_contract>"));

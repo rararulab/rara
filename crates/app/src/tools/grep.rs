@@ -67,9 +67,7 @@ pub struct GrepResult {
 #[derive(ToolDef)]
 #[tool(
     name = "grep",
-    description = "Search file contents using a regex pattern. Supports file type filtering with \
-                   glob patterns, context lines, and case-insensitive search. Respects \
-                   .gitignore. Output is truncated to 50KB / 100 matches."
+    description = "Search file contents by regex with glob filtering; respects .gitignore."
 )]
 pub struct GrepTool;
 

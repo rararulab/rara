@@ -37,7 +37,8 @@ use crate::{
     description = "Spawn a background agent for a long-running task. Provide `input` (task \
                    instruction), `description` (short status label), and `system_prompt` (agent \
                    behavior). Optional: `name`, `tools`, `model`, `max_iterations`. The agent \
-                   runs independently and results are delivered when complete."
+                   runs independently and results are delivered when complete.",
+    tier = "deferred"
 )]
 pub struct SpawnBackgroundTool {
     handle:      KernelHandle,
