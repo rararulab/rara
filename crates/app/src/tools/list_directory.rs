@@ -52,8 +52,7 @@ pub struct ListDirectoryResult {
 #[derive(ToolDef)]
 #[tool(
     name = "list-directory",
-    description = "List the contents of a directory. Returns each entry's name, type \
-                   (file/dir/symlink), and size in bytes (for files). Maximum 1000 entries."
+    description = "List directory contents with name, type, and size per entry."
 )]
 pub struct ListDirectoryTool;
 impl ListDirectoryTool {

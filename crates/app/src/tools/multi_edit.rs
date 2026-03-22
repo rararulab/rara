@@ -72,7 +72,8 @@ pub struct MultiEditResult {
     description = "Apply multiple exact-string replacements across one or more files in a single \
                    call. Edits targeting the same file are applied sequentially in order. Partial \
                    failures are reported per-edit without rolling back successful ones. Use this \
-                   instead of repeated edit-file calls."
+                   instead of repeated edit-file calls.",
+    tier = "deferred"
 )]
 pub struct MultiEditTool;
 

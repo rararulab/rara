@@ -70,9 +70,8 @@ pub struct BashResult {
 #[derive(ToolDef)]
 #[tool(
     name = "bash",
-    description = "Execute a shell command via /bin/bash -c. Returns exit code, combined \
-                   stdout/stderr, and whether the command timed out. Output is truncated to 50KB \
-                   / 2000 lines.",
+    description = "Execute a shell command via /bin/bash -c; returns exit code, stdout/stderr \
+                   (truncated to 50KB).",
     timeout_secs = 150
 )]
 pub struct BashTool;

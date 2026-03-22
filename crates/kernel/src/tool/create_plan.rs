@@ -31,7 +31,8 @@ use crate::plan::{ExecutionMode, Plan, PlanStatus, PlanStep};
 #[tool(
     name = "create-plan",
     description = "Create a structured execution plan for complex tasks. The plan will be \
-                   executed step by step with independent context per step."
+                   executed step by step with independent context per step.",
+    tier = "deferred"
 )]
 pub struct CreatePlanTool;
 

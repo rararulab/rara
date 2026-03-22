@@ -43,9 +43,8 @@ pub struct EditFileResult {
 #[derive(ToolDef)]
 #[tool(
     name = "edit-file",
-    description = "Edit a file by replacing an exact string with a new string. By default, the \
-                   old_string must appear exactly once in the file. Use replace_all=true to \
-                   replace all occurrences."
+    description = "Replace an exact string in a file; use replace_all=true for multiple \
+                   occurrences."
 )]
 pub struct EditFileTool;
 impl EditFileTool {

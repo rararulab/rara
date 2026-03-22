@@ -53,7 +53,8 @@ pub struct UserNoteResult {
                    context for future conversations with this user.\n\nCategories:\n- preference: \
                    User preferences (language, style, tools they like)\n- fact: Important facts \
                    about the user (name, role, projects)\n- todo: Tasks or reminders for the \
-                   user\n- general: Anything else worth remembering"
+                   user\n- general: Anything else worth remembering",
+    tier = "deferred"
 )]
 pub struct UserNoteTool {
     tape_service: TapeService,

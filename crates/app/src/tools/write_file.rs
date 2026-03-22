@@ -39,8 +39,7 @@ pub struct WriteFileResult {
 #[derive(ToolDef)]
 #[tool(
     name = "write-file",
-    description = "Write content to a file on the filesystem. Automatically creates parent \
-                   directories if they do not exist. Overwrites the file if it already exists."
+    description = "Write content to a file, creating parent directories as needed."
 )]
 pub struct WriteFileTool;
 impl WriteFileTool {
