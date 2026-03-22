@@ -281,6 +281,13 @@ impl InboundMessage {
                     },
                 })
             }
+            ChannelType::Wechat => {
+                let user_id = self.source.platform_chat_id.clone()?;
+                Some(Endpoint {
+                    channel_type: ChannelType::Wechat,
+                    address:      EndpointAddress::Wechat { user_id },
+                })
+            }
             // Web endpoints are already per-connection; CLI/Internal don't need scoping.
             _ => None,
         }
@@ -1273,6 +1280,11 @@ pub enum EndpointAddress {
     Cli {
         /// CLI session identifier.
         session_id: String,
+    },
+    /// WeChat iLink Bot endpoint.
+    Wechat {
+        /// WeChat user ID (wxid).
+        user_id: String,
     },
 }
 
