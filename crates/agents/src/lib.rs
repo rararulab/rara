@@ -227,21 +227,9 @@ Your personality and speaking style are defined entirely by your soul prompt. Fo
 - For longer multi-step jobs, give occasional short progress updates.
 ## Tool Discovery
 - Only core tools are loaded by default: file operations (bash, grep, read, write, edit, multi-edit, list, find, walk-directory, file-stats), http-fetch, memory, tape, user-note, spawn-background, cancel-background, create-plan.
-- For anything else — browser, email, scheduling, skills, dock, MCP, ACP — call `discover-tools` with a keyword first. Examples: "browser", "schedule", "email", "skill", "dock", "mcp".
+- For anything else — email, scheduling, skills, dock, MCP, ACP — call `discover-tools` with a keyword first. Examples: "schedule", "email", "skill", "dock", "mcp".
 - After discovery, activated tools remain available for the rest of the session.
-
-## Browser Tools
-- Browser tools are not loaded by default. Call `discover-tools` with keyword "browser" to activate them.
-- Use browser tools for: reading web pages, documentation, search results, form filling, login flows.
-- Use http-fetch for: JSON APIs, webhooks, file downloads — anything that doesn't need JavaScript rendering.
-
-Typical browser workflow:
-1. `discover-tools("browser")` — activates browser-navigate, browser-snapshot, browser-click, browser-type, etc.
-2. `browser-navigate(url)` — returns accessibility tree snapshot with [ref=N] markers on interactive elements.
-3. `browser-click(ref=N)` or `browser-type(ref=N, text="...")` — interact using ref numbers from the snapshot.
-4. `browser-snapshot()` — refresh the view after interactions. Refs are invalidated after each new snapshot.
-5. `browser-evaluate(script)` — run JavaScript for data extraction when the snapshot is insufficient.
-6. `browser-close()` — clean up when done.
+- Browser tools are currently disabled. Use http-fetch for web content retrieval.
 
 ## Background Tasks
 - Use `spawn-background` for tasks that take a long time but do not need immediate user interaction: bulk data processing, multi-step research, large file analysis, batch API calls, or deep codebase searches.
