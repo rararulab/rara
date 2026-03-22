@@ -48,6 +48,7 @@ rara-sessions.workspace = true
 rara-skills.workspace = true
 rara-soul.workspace = true
 rara-symphony.workspace = true
+wechat-agent-rs.workspace = true
 rara-tool-macro.workspace = true
 regex.workspace = true
 reqwest = { workspace = true }

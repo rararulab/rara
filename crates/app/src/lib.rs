@@ -321,6 +321,21 @@ pub async fn start_with_options(
         }
     };
 
+    let wechat_adapter = match try_build_wechat(&backend.settings_svc).await {
+        Ok(Some(adapter)) => {
+            info!("WeChat adapter built");
+            Some(adapter)
+        }
+        Ok(None) => {
+            info!("WeChat not configured (account_id unset in settings), skipping");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to build WeChat adapter, skipping");
+            None
+        }
+    };
+
     // Build IOSubsystem with all adapters before passing to Kernel.
     let notification_channel_id = settings_provider
         .get(rara_domain_shared::settings::keys::TELEGRAM_NOTIFICATION_CHANNEL_ID)
@@ -334,6 +349,9 @@ pub async fn start_with_options(
     );
     if let Some(ref tg) = telegram_adapter {
         io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
+    }
+    if let Some(ref wc) = wechat_adapter {
+        io.register_adapter(ChannelType::Wechat, wc.clone() as Arc<dyn ChannelAdapter>);
     }
     io.register_adapter(
         ChannelType::Web,
@@ -685,6 +703,30 @@ async fn try_build_telegram(
             cfg.group_policy = new_group_policy;
         }
     });
+
+    Ok(Some(adapter))
+}
+
+async fn try_build_wechat(
+    settings_svc: &rara_backend_admin::settings::SettingsSvc,
+) -> Result<Option<Arc<rara_channels::wechat::WechatAdapter>>, Whatever> {
+    use rara_domain_shared::settings::{SettingsProvider, keys};
+
+    let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
+    let account_id = match settings.get(keys::WECHAT_ACCOUNT_ID).await {
+        Some(id) if !id.is_empty() => id,
+        _ => return Ok(None),
+    };
+
+    let base_url = settings
+        .get(keys::WECHAT_BASE_URL)
+        .await
+        .unwrap_or_else(|| wechat_agent_rs::storage::DEFAULT_BASE_URL.to_string());
+
+    let adapter = Arc::new(
+        rara_channels::wechat::WechatAdapter::new(account_id, base_url)
+            .whatever_context("failed to build wechat adapter")?,
+    );
 
     Ok(Some(adapter))
 }
