@@ -50,9 +50,16 @@ pub fn body_from_item_list(item_list: &[Value]) -> String {
     for item in item_list {
         let item_type = item["type"].as_u64().unwrap_or(0);
         match item_type {
+            // Legacy format: type 0 with top-level "body" field.
             0 => {
                 if let Some(body) = item["body"].as_str() {
                     parts.push(body.to_string());
+                }
+            }
+            // Current iLink API format: type 1 with nested "text_item.text".
+            1 => {
+                if let Some(text) = item["text_item"]["text"].as_str() {
+                    parts.push(text.to_string());
                 }
             }
             5 => {
@@ -160,10 +167,17 @@ mod tests {
     // -- body_from_item_list tests --
 
     #[test]
-    fn test_text_item() {
+    fn test_text_item_legacy() {
         let items = vec![serde_json::json!({"type": 0, "body": "hello world"})];
         let result = body_from_item_list(&items);
         assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_text_item_ilink_v2() {
+        let items = vec![serde_json::json!({"type": 1, "text_item": {"text": "深深的"}})];
+        let result = body_from_item_list(&items);
+        assert_eq!(result, "深深的");
     }
 
     #[test]
