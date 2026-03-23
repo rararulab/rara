@@ -103,6 +103,8 @@ impl WeixinApiClient {
             .await
             .context(HttpSnafu)?;
 
+        // Check both "errcode" (getupdates) and "ret" (sendmessage, sendtyping)
+        // error fields — different iLink endpoints use different conventions.
         if let Some(code) = resp.get("errcode").and_then(serde_json::Value::as_i64) {
             if code == SESSION_EXPIRED_ERRCODE {
                 return Err(SessionExpiredSnafu.build());
@@ -114,6 +116,21 @@ impl WeixinApiClient {
                     .unwrap_or("unknown error")
                     .to_string();
                 return Err(ApiSnafu { code, message: msg }.build());
+            }
+        }
+        if let Some(ret) = resp.get("ret").and_then(serde_json::Value::as_i64) {
+            if ret != 0 {
+                let msg = resp
+                    .get("errmsg")
+                    .or_else(|| resp.get("err_msg"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
+                    .to_string();
+                return Err(ApiSnafu {
+                    code:    ret,
+                    message: msg,
+                }
+                .build());
             }
         }
         Ok(resp)
@@ -196,19 +213,30 @@ impl WeixinApiClient {
     }
 
     /// Sends a plain-text message to `to_user_id`.
+    ///
+    /// The request body follows the iLink protocol: the message is wrapped
+    /// in a `msg` object with `from_user_id` (bot), `to_user_id` (recipient),
+    /// `message_type: 2` (bot message), and `message_state: 2` (finished).
     pub async fn send_text_message(
         &self,
+        from_user_id: &str,
         to_user_id: &str,
         context_token: &str,
         text: &str,
     ) -> Result<Value> {
         let body = serde_json::json!({
-            "to_user_id": to_user_id,
-            "context_token": context_token,
-            "item_list": [{
-                "type": 0,
-                "body": text
-            }]
+            "msg": {
+                "from_user_id": from_user_id,
+                "to_user_id": to_user_id,
+                "client_id": uuid::Uuid::new_v4().to_string(),
+                "message_type": 2,
+                "message_state": 2,
+                "item_list": [{
+                    "type": 1,
+                    "text_item": { "text": text }
+                }],
+                "context_token": context_token
+            }
         });
         self.post("ilink/bot/sendmessage", &body).await
     }

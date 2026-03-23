@@ -253,17 +253,17 @@ impl ChannelAdapter for WechatAdapter {
                     ),
                 })?;
                 let plain = markdown_to_plain_text(&content);
-                // Send to the bot's own account_id — the iLink API uses the
-                // context_token (not to_user_id) to route the reply to the
-                // actual human user.
+                // iLink protocol: from_user_id = bot, to_user_id = recipient.
+                // The context_token ties the reply to the conversation.
                 info!(
-                    to = %self.account_id,
+                    from = %self.bot_user_id,
+                    to = %user_id,
                     text_len = plain.len(),
                     "sending wechat reply"
                 );
                 let result = self
                     .send_client
-                    .send_text_message(&self.account_id, &token, &plain)
+                    .send_text_message(&self.bot_user_id, &user_id, &token, &plain)
                     .await;
                 info!(?result, "wechat send_text_message result");
                 result.map_err(|e| EgressError::DeliveryFailed {
