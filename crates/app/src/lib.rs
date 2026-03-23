@@ -722,25 +722,34 @@ async fn try_build_wechat(
 
     let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
 
-    // Try settings first, then fall back to auto-discovering saved credentials.
-    let account_id = match settings.get(keys::WECHAT_ACCOUNT_ID).await {
-        Some(id) if !id.is_empty() => id,
-        _ => match storage::get_account_ids() {
-            Ok(ids) if !ids.is_empty() => {
-                info!(
-                    account_id = %ids[0],
-                    "wechat account_id not in settings, auto-discovered from saved credentials"
-                );
-                ids.into_iter().next().expect("non-empty")
-            }
+    // Prefer filesystem credentials (written by login) over settings store.
+    let account_id = match storage::get_account_ids() {
+        Ok(ids) if !ids.is_empty() => {
+            info!(
+                account_id = %ids[0],
+                "wechat account_id resolved from saved credentials"
+            );
+            ids.into_iter().next().expect("non-empty")
+        }
+        _ => match settings.get(keys::WECHAT_ACCOUNT_ID).await {
+            Some(id) if !id.is_empty() => id,
             _ => return Ok(None),
         },
     };
 
-    let base_url = settings
-        .get(keys::WECHAT_BASE_URL)
-        .await
-        .unwrap_or_else(|| storage::DEFAULT_BASE_URL.to_string());
+    // Read base_url from the persisted AccountData first (login writes it there),
+    // then fall back to settings, then to the default.
+    let fs_base_url = storage::get_account_data(&account_id)
+        .ok()
+        .map(|d| d.base_url)
+        .filter(|u| !u.is_empty());
+    let base_url = match fs_base_url {
+        Some(url) => url,
+        None => settings
+            .get(keys::WECHAT_BASE_URL)
+            .await
+            .unwrap_or_else(|| storage::DEFAULT_BASE_URL.to_string()),
+    };
 
     let adapter = Arc::new(
         rara_channels::wechat::WechatAdapter::new(account_id, base_url)
