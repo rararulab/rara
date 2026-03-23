@@ -114,10 +114,6 @@ export default defineConfig({
           });
         },
       },
-      '/swagger-ui': {
-        target: 'http://localhost:25555',
-        changeOrigin: true,
-      },
     },
   },
   preview: {

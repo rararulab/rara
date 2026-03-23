@@ -23,6 +23,9 @@ regex = { workspace = true }
 # teloxide 0.17 is pinned to reqwest 0.12; Proxy / ClientBuilder types must
 # match, so we keep a renamed 0.12 dep for the telegram proxy builder.
 # Upgrade to workspace reqwest (0.13) once teloxide supports it.
+qrcode = "0.14"
+regex-lite = "0.1"
+reqwest = { workspace = true }
 reqwest012 = { package = "reqwest", version = "0.12", features = ["socks"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,9 +38,6 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 url = "2"
 uuid = { workspace = true }
-qrcode = "0.14"
-regex-lite = "0.1"
-reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

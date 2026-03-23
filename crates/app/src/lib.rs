@@ -440,10 +440,8 @@ pub async fn start_with_options(
 
     // Symphony status handle removed — symphony is now a standalone sync bridge.
 
-    let (domain_routes, openapi) =
+    let (domain_routes, _openapi) =
         backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
-    let swagger_ui =
-        utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
 
     let dock_store_path = rara_paths::data_dir().join("dock");
     let dock_state = rara_dock::DockRouterState {
@@ -459,7 +457,6 @@ pub async fn start_with_options(
         Box::new(move |router| {
             health_routes(router)
                 .merge(domain_routes.clone())
-                .merge(swagger_ui.clone())
                 .merge(dock_routes.clone())
                 .nest("/api/v1/kernel/chat", web_router.clone())
         });
