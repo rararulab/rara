@@ -963,6 +963,7 @@ pub(crate) async fn run_agent_loop(
     let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_message_id.to_string());
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
     let mut llm_error_recovery_used = false;
+    let mut empty_response_nudged = false;
     let mut context_window_recovery_used = false;
     let mut last_progress_at = Instant::now();
 
@@ -1537,6 +1538,28 @@ pub(crate) async fn run_agent_loop(
             {
                 warn!(error = %e, "failed to persist llm usage event");
             }
+        }
+
+        // Nudge: if the LLM stopped without producing any visible text but we
+        // already executed tool calls this turn, give it one more chance to
+        // respond instead of returning an empty message to the user.
+        if !has_tool_calls
+            && accumulated_text.is_empty()
+            && tool_calls_made > 0
+            && !llm_error_recovery_used
+            && !empty_response_nudged
+        {
+            warn!(
+                iteration,
+                tool_calls_made, "LLM returned empty text after tool calls, injecting nudge"
+            );
+            messages.push(llm::Message::user(
+                "You executed tool calls but produced no visible response. Please summarize the \
+                 results for the user."
+                    .to_string(),
+            ));
+            empty_response_nudged = true;
+            continue;
         }
 
         // Terminal response (no tool calls, or recovery iteration must exit)
