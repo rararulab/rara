@@ -256,12 +256,19 @@ impl ChannelAdapter for WechatAdapter {
                 // Send to the bot's own account_id — the iLink API uses the
                 // context_token (not to_user_id) to route the reply to the
                 // actual human user.
-                self.send_client
+                info!(
+                    to = %self.account_id,
+                    text_len = plain.len(),
+                    "sending wechat reply"
+                );
+                let result = self
+                    .send_client
                     .send_text_message(&self.account_id, &token, &plain)
-                    .await
-                    .map_err(|e| EgressError::DeliveryFailed {
-                        message: format!("wechat send_text_message failed: {e}"),
-                    })?;
+                    .await;
+                info!(?result, "wechat send_text_message result");
+                result.map_err(|e| EgressError::DeliveryFailed {
+                    message: format!("wechat send_text_message failed: {e}"),
+                })?;
             }
             // WeChat does not support streaming edits or progress messages.
             PlatformOutbound::StreamChunk { .. } | PlatformOutbound::Progress { .. } => {}
