@@ -38,6 +38,16 @@ Predefined agent manifest registry — declares built-in agent personalities (ra
 - Do NOT add `soul_prompt` content here — soul prompts live in `rara-soul` and are loaded at runtime.
 - Do NOT modify system prompts without testing with basic conversational inputs.
 
+## Prompt Fragment Convention
+
+System prompts use a modular fragment pattern for maintainability:
+
+- **Naming**: Each fragment is a `const &str` named `{AGENT}_{TOPIC}_FRAGMENT` (e.g., `RARA_TOOL_FRAGMENT`, `MITA_OBSERVATION_FRAGMENT`).
+- **Doc comments**: Every fragment has a `///` doc comment explaining its behavioral purpose.
+- **Composition**: Fragments are assembled by `{agent}_system_prompt() -> String` functions that concatenate them in order.
+- **Scope**: Rara and Mita use modular fragments (complex behavior). Worker and Nana use simple single-const prompts (appropriate for their simplicity).
+- **Adding rules**: When adding new behavioral rules, create a new fragment rather than expanding an existing one. This keeps each fragment focused and reviewable.
+
 ## Dependencies
 
 **Upstream:** `rara-kernel` (for `AgentManifest`, `AgentRole`, `Priority` types).
