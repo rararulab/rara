@@ -187,7 +187,7 @@ impl ToolExecute for SpawnBackgroundTool {
 
 /// Derive a short kebab-case slug from a human description for use as agent
 /// name when the caller omits `name`.
-fn slug_from_description(desc: &str) -> String {
+pub(crate) fn slug_from_description(desc: &str) -> String {
     let slug: String = desc
         .chars()
         .map(|c| {
