@@ -33,7 +33,7 @@ use rara_kernel::{
     io::{EgressError, Endpoint, EndpointAddress, PlatformOutbound, RawPlatformMessage},
 };
 use tokio::sync::{Mutex, watch};
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::{
     api::WeixinApiClient,
@@ -136,6 +136,7 @@ impl ChannelAdapter for WechatAdapter {
                         }
 
                         if let Some(messages) = resp["msg_list"].as_array() {
+                            debug!(count = messages.len(), "wechat poll returned messages");
                             for msg in messages {
                                 let item_list =
                                     msg["item_list"].as_array().cloned().unwrap_or_default();
@@ -159,8 +160,16 @@ impl ChannelAdapter for WechatAdapter {
 
                                 let body = body_from_item_list(&item_list);
                                 if body.is_empty() {
+                                    debug!(to_user_id, "skipping wechat message with empty body");
                                     continue;
                                 }
+
+                                debug!(
+                                    to_user_id,
+                                    body_len = body.len(),
+                                    body_preview = &body[..body.len().min(100)],
+                                    "received wechat message, ingesting"
+                                );
 
                                 let raw = RawPlatformMessage {
                                     channel_type:        ChannelType::Wechat,
