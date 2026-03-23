@@ -66,6 +66,23 @@ Rules:
 - When the task is complete, respond with a concise summary of what was done.
 - Respond in the same language as the task description.";
 
+/// System prompt for the explore task type.
+const EXPLORE_PROMPT: &str = "\
+You are a codebase exploration specialist. Research codebases and answer questions about code \
+                              architecture, patterns, and implementation details.
+
+Strategy — always follow this order:
+1. Use walk-directory to get the directory structure overview first.
+2. Use grep to search for keywords, patterns, and relevant code.
+3. Use find-files to locate files by name or glob pattern.
+4. Only use read-file for files already identified as relevant.
+5. Synthesize findings into a clear, structured answer.
+
+Rules:
+- Never read files speculatively. Use grep + find-files to locate targets first.
+- When multiple searches are independent, call them in parallel.
+- Respond in the same language as the task description.";
+
 static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
     let disallowed: Vec<String> = RECURSIVE_TOOL_DENYLIST
         .iter()
@@ -93,8 +110,22 @@ static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
                 tool_names::LIST_DIRECTORY.into(),
                 tool_names::GREP.into(),
             ],
-            disallowed_tools: disallowed,
+            disallowed_tools: disallowed.clone(),
             max_iterations:   15,
+        },
+        TaskTypeConfig {
+            name:             "explore",
+            description:      "Read-only codebase exploration and analysis specialist",
+            system_prompt:    EXPLORE_PROMPT,
+            allowed_tools:    vec![
+                tool_names::READ_FILE.into(),
+                tool_names::GREP.into(),
+                tool_names::FIND_FILES.into(),
+                tool_names::WALK_DIRECTORY.into(),
+                tool_names::LIST_DIRECTORY.into(),
+            ],
+            disallowed_tools: disallowed,
+            max_iterations:   20,
         },
     ]
 });
@@ -158,6 +189,36 @@ mod tests {
     }
 
     #[test]
+    fn lookup_explore_preset() {
+        let preset = get_preset("explore").expect("explore preset should exist");
+        assert_eq!(preset.name, "explore");
+        assert_eq!(preset.max_iterations, 20);
+        assert!(
+            preset.allowed_tools.contains(&"read-file".to_owned()),
+            "explore preset must include read-file"
+        );
+        assert!(
+            preset.allowed_tools.contains(&"grep".to_owned()),
+            "explore preset must include grep"
+        );
+        assert!(
+            preset.allowed_tools.contains(&"find-files".to_owned()),
+            "explore preset must include find-files"
+        );
+        assert!(
+            preset.allowed_tools.contains(&"walk-directory".to_owned()),
+            "explore preset must include walk-directory"
+        );
+        assert!(!preset.allowed_tools.contains(&"bash".to_owned()));
+        assert!(!preset.allowed_tools.contains(&"write-file".to_owned()));
+        assert!(!preset.allowed_tools.contains(&"edit-file".to_owned()));
+        assert!(
+            preset.disallowed_tools.contains(&"task".to_owned()),
+            "must disallow recursive task spawning"
+        );
+    }
+
+    #[test]
     fn lookup_unknown_returns_none() {
         assert!(
             get_preset("nonexistent").is_none(),
@@ -170,6 +231,7 @@ mod tests {
         let names = list_preset_names();
         assert!(names.contains(&"general-purpose"));
         assert!(names.contains(&"bash"));
-        assert_eq!(names.len(), 2, "should have exactly 2 presets");
+        assert!(names.contains(&"explore"));
+        assert_eq!(names.len(), 3, "should have exactly 3 presets");
     }
 }
