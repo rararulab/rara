@@ -19,6 +19,7 @@ pub(crate) mod fold_branch;
 pub(crate) mod schedule;
 pub(crate) mod spawn_background;
 pub(crate) mod tape;
+pub(crate) mod task;
 
 use std::{collections::HashMap, sync::Arc};
 
