@@ -21,10 +21,20 @@ pub(crate) mod spawn_background;
 pub(crate) mod tape;
 pub(crate) mod task;
 
+mod background_common;
+
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
+
+/// Tool names that background/child agents must never have access to,
+/// preventing recursive subagent spawning.
+pub(crate) const RECURSIVE_TOOL_DENYLIST: &[&str] = &[
+    crate::tool_names::TASK,
+    crate::tool_names::SPAWN_BACKGROUND,
+    crate::tool_names::CREATE_PLAN,
+];
 
 /// Typed tool execution trait.
 ///

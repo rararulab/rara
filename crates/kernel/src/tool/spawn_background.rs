@@ -16,14 +16,12 @@ use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use tracing::info;
 
 use crate::{
     agent::{AgentManifest, AgentRole, Priority},
     handle::KernelHandle,
-    io::{AgentEvent, StreamEvent},
-    session::{BackgroundTaskEntry, SessionKey},
-    tool::{ToolContext, ToolExecute},
+    session::SessionKey,
+    tool::{RECURSIVE_TOOL_DENYLIST, ToolContext, ToolExecute},
 };
 
 /// Builtin tool that spawns a background agent for long-running tasks.
@@ -94,95 +92,41 @@ impl ToolExecute for SpawnBackgroundTool {
             .name
             .unwrap_or_else(|| slug_from_description(&p.description));
 
+        let excluded_tools: Vec<String> = RECURSIVE_TOOL_DENYLIST
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+
         // Build manifest from flat params + sensible defaults.
-        let mut manifest = AgentManifest {
-            name:                   agent_name,
-            role:                   AgentRole::Worker,
-            description:            p.description.clone(),
-            model:                  p.model,
-            system_prompt:          p.system_prompt,
-            soul_prompt:            None,
-            provider_hint:          None,
-            max_iterations:         Some(p.max_iterations.unwrap_or(15)),
-            tools:                  p.tools,
-            excluded_tools:         vec![],
-            max_children:           Some(0),
-            max_context_tokens:     None,
-            priority:               Priority::default(),
-            metadata:               serde_json::Value::Null,
-            sandbox:                None,
+        let manifest = AgentManifest {
+            name: agent_name,
+            role: AgentRole::Worker,
+            description: p.description,
+            model: p.model,
+            system_prompt: p.system_prompt,
+            soul_prompt: None,
+            provider_hint: None,
+            max_iterations: Some(p.max_iterations.unwrap_or(15)),
+            tools: p.tools,
+            excluded_tools,
+            max_children: Some(0),
+            max_context_tokens: None,
+            priority: Priority::default(),
+            metadata: serde_json::Value::Null,
+            sandbox: None,
             default_execution_mode: None,
-            tool_call_limit:        None,
-            worker_timeout_secs:    None,
+            tool_call_limit: None,
+            worker_timeout_secs: None,
         };
 
-        // Append structured-output instructions so the background agent
-        // self-summarizes before returning results to the parent.
-        manifest
-            .system_prompt
-            .push_str(crate::agent::STRUCTURED_OUTPUT_SUFFIX);
-
-        // Resolve principal from parent session.
-        let principal = self
-            .handle
-            .process_table()
-            .with(&self.session_key, |proc| proc.principal.clone())
-            .ok_or_else(|| anyhow::anyhow!("parent session not found: {}", self.session_key))?;
-
-        info!(
-            parent = %self.session_key,
-            agent = %manifest.name,
-            description = %p.description,
-            "spawning background agent"
-        );
-
-        let agent_handle = self
-            .handle
-            .spawn_child(&self.session_key, &principal, manifest.clone(), p.input)
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
-
-        let child_key = agent_handle.session_key;
-
-        // Register as background task on parent session.
-        self.handle.register_background_task(
+        super::background_common::spawn_and_register_background(
+            &self.handle,
             &self.session_key,
-            BackgroundTaskEntry {
-                child_key,
-                agent_name: manifest.name.clone(),
-                description: p.description.clone(),
-                created_at: jiff::Timestamp::now(),
-                trigger_message_id: context.rara_message_id.clone(),
-            },
-        );
-
-        // Emit BackgroundTaskStarted to parent\'s active streams so clients
-        // can display an ongoing status indicator with elapsed timer.
-        self.handle.stream_hub().emit_to_session(
-            &self.session_key,
-            StreamEvent::BackgroundTaskStarted {
-                task_id:     child_key.to_string(),
-                agent_name:  manifest.name.clone(),
-                description: p.description.clone(),
-            },
-        );
-
-        // Spawn fire-and-forget watcher to drain result_rx.
-        tokio::spawn(async move {
-            let mut rx = agent_handle.result_rx;
-            while let Some(event) = rx.recv().await {
-                if matches!(event, AgentEvent::Done(_)) {
-                    break;
-                }
-            }
-        });
-
-        Ok(serde_json::json!({
-            "task_id": child_key.to_string(),
-            "agent_name": manifest.name,
-            "status": "spawned",
-            "message": "Background agent is now running. Results will be delivered when complete."
-        }))
+            manifest,
+            p.input,
+            context,
+        )
+        .await
     }
 }
 

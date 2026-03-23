@@ -20,8 +20,7 @@
 
 use std::sync::LazyLock;
 
-/// Tools that child agents must never invoke to prevent recursive spawning.
-const DISALLOWED_TOOLS: &[&str] = &["task", "spawn-background", "create-plan"];
+use crate::{tool::RECURSIVE_TOOL_DENYLIST, tool_names};
 
 /// Configuration for a predefined task type.
 ///
@@ -68,7 +67,10 @@ Rules:
 - Respond in the same language as the task description.";
 
 static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
-    let disallowed: Vec<String> = DISALLOWED_TOOLS.iter().map(|s| (*s).to_owned()).collect();
+    let disallowed: Vec<String> = RECURSIVE_TOOL_DENYLIST
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
 
     vec![
         TaskTypeConfig {
@@ -84,12 +86,12 @@ static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
             description:      "Shell/CLI specialist for command-line tasks",
             system_prompt:    BASH_PROMPT,
             allowed_tools:    vec![
-                "bash".into(),
-                "read-file".into(),
-                "write-file".into(),
-                "edit-file".into(),
-                "list-directory".into(),
-                "grep".into(),
+                tool_names::BASH.into(),
+                tool_names::READ_FILE.into(),
+                tool_names::WRITE_FILE.into(),
+                tool_names::EDIT_FILE.into(),
+                tool_names::LIST_DIRECTORY.into(),
+                tool_names::GREP.into(),
             ],
             disallowed_tools: disallowed,
             max_iterations:   15,

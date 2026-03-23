@@ -21,13 +21,11 @@ use async_trait::async_trait;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use tracing::info;
 
 use crate::{
     agent::{AgentManifest, AgentRole, Priority},
     handle::KernelHandle,
-    io::{AgentEvent, StreamEvent},
-    session::{BackgroundTaskEntry, SessionKey},
+    session::SessionKey,
     tool::{ToolContext, ToolExecute, spawn_background::slug_from_description},
 };
 
@@ -90,10 +88,10 @@ impl ToolExecute for TaskTool {
         let agent_name = slug_from_description(&p.description);
 
         // Build manifest from preset configuration.
-        let mut manifest = AgentManifest {
+        let manifest = AgentManifest {
             name:                   agent_name,
             role:                   AgentRole::Worker,
-            description:            p.description.clone(),
+            description:            p.description,
             model:                  None,
             system_prompt:          preset.system_prompt.to_owned(),
             soul_prompt:            None,
@@ -111,75 +109,24 @@ impl ToolExecute for TaskTool {
             worker_timeout_secs:    None,
         };
 
-        // Append structured-output instructions so the background agent
-        // self-summarizes before returning results to the parent.
-        manifest
-            .system_prompt
-            .push_str(crate::agent::STRUCTURED_OUTPUT_SUFFIX);
-
-        // Resolve principal from parent session.
-        let principal = self
-            .handle
-            .process_table()
-            .with(&self.session_key, |proc| proc.principal.clone())
-            .ok_or_else(|| anyhow::anyhow!("parent session not found: {}", self.session_key))?;
-
-        info!(
-            parent = %self.session_key,
-            agent = %manifest.name,
-            task_type = %p.task_type,
-            description = %p.description,
-            "spawning task agent"
-        );
-
-        let agent_handle = self
-            .handle
-            .spawn_child(&self.session_key, &principal, manifest.clone(), p.prompt)
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
-
-        let child_key = agent_handle.session_key;
-
-        // Register as background task on parent session.
-        self.handle.register_background_task(
+        let mut result = super::background_common::spawn_and_register_background(
+            &self.handle,
             &self.session_key,
-            BackgroundTaskEntry {
-                child_key,
-                agent_name: manifest.name.clone(),
-                description: p.description.clone(),
-                created_at: jiff::Timestamp::now(),
-                trigger_message_id: context.rara_message_id.clone(),
-            },
-        );
+            manifest,
+            p.prompt,
+            context,
+        )
+        .await?;
 
-        // Emit BackgroundTaskStarted to parent's active streams so clients
-        // can display an ongoing status indicator with elapsed timer.
-        self.handle.stream_hub().emit_to_session(
-            &self.session_key,
-            StreamEvent::BackgroundTaskStarted {
-                task_id:     child_key.to_string(),
-                agent_name:  manifest.name.clone(),
-                description: p.description.clone(),
-            },
-        );
+        // Merge task_type into the shared response payload.
+        if let serde_json::Value::Object(ref mut map) = result {
+            map.insert(
+                "task_type".to_string(),
+                serde_json::Value::String(p.task_type),
+            );
+        }
 
-        // Spawn fire-and-forget watcher to drain result_rx.
-        tokio::spawn(async move {
-            let mut rx = agent_handle.result_rx;
-            while let Some(event) = rx.recv().await {
-                if matches!(event, AgentEvent::Done(_)) {
-                    break;
-                }
-            }
-        });
-
-        Ok(serde_json::json!({
-            "task_id": child_key.to_string(),
-            "agent_name": manifest.name,
-            "task_type": p.task_type,
-            "status": "spawned",
-            "message": "Background agent is now running. Results will be delivered when complete."
-        }))
+        Ok(result)
     }
 }
 
