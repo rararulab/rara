@@ -2232,6 +2232,7 @@ impl Kernel {
                 let usr = user.clone();
                 let mid = msg_id.clone();
                 let oe = origin_endpoint.clone();
+                let cancel = turn_cancel.clone();
                 tokio::spawn(async move {
                     let oe = match oe {
                         Some(ep) => Some(ep),
@@ -2240,17 +2241,21 @@ impl Kernel {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
                     interval.tick().await; // skip the immediate first tick
                     loop {
-                        interval.tick().await;
-                        let _ = eq.try_push(KernelEventEnvelope::deliver(
-                            OutboundEnvelope::progress(
-                                mid.clone(),
-                                usr.clone(),
-                                sid.clone(),
-                                crate::io::stages::THINKING,
-                                None,
-                            )
-                            .with_origin(oe.clone()),
-                        ));
+                        tokio::select! {
+                            _ = cancel.cancelled() => break,
+                            _ = interval.tick() => {
+                                let _ = eq.try_push(KernelEventEnvelope::deliver(
+                                    OutboundEnvelope::progress(
+                                        mid.clone(),
+                                        usr.clone(),
+                                        sid.clone(),
+                                        crate::io::stages::THINKING,
+                                        None,
+                                    )
+                                    .with_origin(oe.clone()),
+                                ));
+                            }
+                        }
                     }
                 })
             };
