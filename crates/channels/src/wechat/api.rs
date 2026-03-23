@@ -119,17 +119,68 @@ impl WeixinApiClient {
         Ok(resp)
     }
 
+    /// Sends a form-encoded POST request and checks the `ret` error field.
+    ///
+    /// Login endpoints use form encoding + `ret`/`err_msg` instead of JSON +
+    /// `errcode`/`errmsg` used by messaging endpoints.
+    async fn post_form(&self, path: &str, params: &[(&str, &str)]) -> Result<Value> {
+        self.post_form_with_timeout(path, params, Duration::from_secs(30))
+            .await
+    }
+
+    /// Same as [`post_form`](Self::post_form) but with a custom timeout.
+    async fn post_form_with_timeout(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+        timeout: Duration,
+    ) -> Result<Value> {
+        let url = format!("{}/{}", self.base_url, path);
+        let resp = self
+            .client
+            .post(&url)
+            .headers(self.headers())
+            .form(params)
+            .timeout(timeout)
+            .send()
+            .await
+            .context(HttpSnafu)?
+            .json::<Value>()
+            .await
+            .context(HttpSnafu)?;
+
+        if let Some(ret) = resp.get("ret").and_then(Value::as_i64) {
+            if ret != 0 {
+                let msg = resp
+                    .get("err_msg")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
+                    .to_string();
+                return Err(ApiSnafu {
+                    code:    ret,
+                    message: msg,
+                }
+                .build());
+            }
+        }
+        Ok(resp)
+    }
+
     /// Requests a new login QR code from the API.
     pub async fn fetch_qr_code(&self) -> Result<Value> {
-        self.post("ilink/bot/get_bot_qrcode", &serde_json::json!({}))
+        self.post_form("ilink/bot/get_bot_qrcode", &[("bot_type", "3")])
             .await
     }
 
     /// Polls the current scan status for the given `qrcode_id`.
+    ///
+    /// Uses a longer timeout than the default because this endpoint
+    /// long-polls until the user scans the QR code.
     pub async fn get_qr_code_status(&self, qrcode_id: &str) -> Result<Value> {
-        self.post(
+        self.post_form_with_timeout(
             "ilink/bot/get_qrcode_status",
-            &serde_json::json!({ "qrcode_id": qrcode_id }),
+            &[("qrcode", qrcode_id), ("bot_type", "3")],
+            Duration::from_secs(60),
         )
         .await
     }
