@@ -149,18 +149,18 @@ impl ChannelAdapter for WechatAdapter {
                             let _ = storage::save_updates_buf(&account_id, new_buf);
                         }
 
-                        if let Some(messages) = resp["msg_list"].as_array() {
+                        if let Some(messages) = resp["msgs"].as_array() {
                             info!(count = messages.len(), "wechat poll returned messages");
                             for msg in messages {
                                 let item_list =
                                     msg["item_list"].as_array().cloned().unwrap_or_default();
 
-                                let Some(to_user_id) = msg["to_user_id"]
+                                let Some(from_user_id) = msg["from_user_id"]
                                     .as_str()
                                     .filter(|s| !s.is_empty())
                                     .map(String::from)
                                 else {
-                                    warn!("skipping wechat message with missing to_user_id");
+                                    warn!("skipping wechat message with missing from_user_id");
                                     continue;
                                 };
 
@@ -169,18 +169,18 @@ impl ChannelAdapter for WechatAdapter {
 
                                 // Cache the context token for outbound replies.
                                 if !context_token.is_empty() {
-                                    context_tokens.insert(to_user_id.clone(), context_token);
+                                    context_tokens.insert(from_user_id.clone(), context_token);
                                 }
 
                                 let body = body_from_item_list(&item_list);
                                 if body.is_empty() {
-                                    info!(to_user_id, "skipping wechat message with empty body");
+                                    info!(from_user_id, "skipping wechat message with empty body");
                                     continue;
                                 }
 
                                 info!(
                                     bot_user_id = %bot_user_id,
-                                    to_user_id,
+                                    from_user_id,
                                     body_len = body.len(),
                                     body_preview = &body[..body.len().min(100)],
                                     "received wechat message, ingesting"
@@ -189,8 +189,8 @@ impl ChannelAdapter for WechatAdapter {
                                 let raw = RawPlatformMessage {
                                     channel_type:        ChannelType::Wechat,
                                     platform_message_id: None,
-                                    platform_user_id:    to_user_id.clone(),
-                                    platform_chat_id:    Some(to_user_id),
+                                    platform_user_id:    from_user_id.clone(),
+                                    platform_chat_id:    Some(from_user_id),
                                     content:             MessageContent::Text(body),
                                     reply_context:       None,
                                     metadata:            HashMap::new(),
