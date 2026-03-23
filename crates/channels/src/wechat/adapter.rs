@@ -302,10 +302,29 @@ impl ChannelAdapter for WechatAdapter {
             .unwrap_or_default();
 
         // Best-effort — typing indicators are optional UX hooks.
-        // Send to account_id; context_token routes to the human user.
+        // iLink protocol requires a two-step flow:
+        // 1. getconfig to obtain a typing_ticket
+        // 2. sendtyping with that ticket
+        let config_resp = match self
+            .send_client
+            .get_config(session_key, &context_token)
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!(error = %e, "wechat getconfig failed for typing indicator");
+                return Ok(());
+            }
+        };
+
+        let typing_ticket = config_resp["typing_ticket"].as_str().unwrap_or_default();
+        if typing_ticket.is_empty() {
+            return Ok(());
+        }
+
         let _ = self
             .send_client
-            .send_typing(&self.account_id, &context_token)
+            .send_typing(session_key, typing_ticket, 1)
             .await;
         Ok(())
     }

@@ -234,11 +234,33 @@ impl WeixinApiClient {
         self.post("ilink/bot/sendmessage", &body).await
     }
 
-    /// Sends a typing indicator to `to_user_id`.
-    pub async fn send_typing(&self, to_user_id: &str, context_token: &str) -> Result<Value> {
+    /// Fetches a `typing_ticket` for the given user via the iLink `getconfig`
+    /// endpoint. The ticket is required by `send_typing`.
+    pub async fn get_config(&self, ilink_user_id: &str, context_token: &str) -> Result<Value> {
         let body = serde_json::json!({
-            "to_user_id": to_user_id,
+            "ilink_user_id": ilink_user_id,
             "context_token": context_token,
+            "base_info": {}
+        });
+        self.post("ilink/bot/getconfig", &body).await
+    }
+
+    /// Sends a typing indicator for the given user.
+    ///
+    /// Requires a `typing_ticket` obtained from
+    /// [`get_config`](Self::get_config). `status` should be `1` (typing) or
+    /// `2` (cancel).
+    pub async fn send_typing(
+        &self,
+        ilink_user_id: &str,
+        typing_ticket: &str,
+        status: u8,
+    ) -> Result<Value> {
+        let body = serde_json::json!({
+            "ilink_user_id": ilink_user_id,
+            "typing_ticket": typing_ticket,
+            "status": status,
+            "base_info": {}
         });
         self.post("ilink/bot/sendtyping", &body).await
     }
