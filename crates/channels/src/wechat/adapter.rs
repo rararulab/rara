@@ -253,8 +253,11 @@ impl ChannelAdapter for WechatAdapter {
                     ),
                 })?;
                 let plain = markdown_to_plain_text(&content);
+                // Send to the bot's own account_id — the iLink API uses the
+                // context_token (not to_user_id) to route the reply to the
+                // actual human user.
                 self.send_client
-                    .send_text_message(&user_id, &token, &plain)
+                    .send_text_message(&self.account_id, &token, &plain)
                     .await
                     .map_err(|e| EgressError::DeliveryFailed {
                         message: format!("wechat send_text_message failed: {e}"),
@@ -292,9 +295,10 @@ impl ChannelAdapter for WechatAdapter {
             .unwrap_or_default();
 
         // Best-effort — typing indicators are optional UX hooks.
+        // Send to account_id; context_token routes to the human user.
         let _ = self
             .send_client
-            .send_typing(session_key, &context_token)
+            .send_typing(&self.account_id, &context_token)
             .await;
         Ok(())
     }
