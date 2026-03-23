@@ -65,6 +65,8 @@ pub struct WechatAdapter {
     /// Maps `user_id` to the latest `context_token` received from that user.
     /// The iLink API requires a context token when sending replies.
     context_tokens: Arc<DashMap<String, String>>,
+    /// The bot's own WeChat user ID (ilink_user_id from login credentials).
+    bot_user_id:    String,
     /// Handle to the spawned polling task for graceful shutdown.
     poll_handle:    Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -86,6 +88,12 @@ impl WechatAdapter {
         let poll_client = WeixinApiClient::new(&base_url, &account_data.token, route_tag);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+        info!(
+            account_id = %account_id,
+            bot_user_id = %account_data.user_id,
+            "wechat adapter initialized"
+        );
+
         Ok(Self {
             send_client,
             poll_client: Arc::new(Mutex::new(poll_client)),
@@ -93,6 +101,7 @@ impl WechatAdapter {
             shutdown_tx,
             shutdown_rx,
             context_tokens: Arc::new(DashMap::new()),
+            bot_user_id: account_data.user_id,
             poll_handle: Mutex::new(None),
         })
     }
@@ -106,10 +115,15 @@ impl ChannelAdapter for WechatAdapter {
     async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
         let poll_client = Arc::clone(&self.poll_client);
         let account_id = self.account_id.clone();
+        let bot_user_id = self.bot_user_id.clone();
         let context_tokens = Arc::clone(&self.context_tokens);
         let shutdown_rx = self.shutdown_rx.clone();
 
-        info!(account_id = %account_id, "starting wechat long-polling loop");
+        info!(
+            account_id = %account_id,
+            bot_user_id = %bot_user_id,
+            "starting wechat long-polling loop"
+        );
 
         let join_handle = tokio::spawn(async move {
             let mut consecutive_errors: u32 = 0;
@@ -165,6 +179,7 @@ impl ChannelAdapter for WechatAdapter {
                                 }
 
                                 info!(
+                                    bot_user_id = %bot_user_id,
                                     to_user_id,
                                     body_len = body.len(),
                                     body_preview = &body[..body.len().min(100)],
