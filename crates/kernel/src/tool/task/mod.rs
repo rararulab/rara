@@ -37,10 +37,10 @@ use crate::{
 #[derive(ToolDef)]
 #[tool(
     name = "task",
-    description = "Launch a background task using a predefined agent type. Pick a task_type \
-                   ('general-purpose' for complex multi-step tasks, 'bash' for shell/CLI \
-                   operations) and provide the task prompt. The agent runs independently and \
-                   results are delivered when complete."
+    description = "Launch a background task using a predefined agent type. Pick a task_type: \
+                   'explore' for codebase analysis and research, 'bash' for shell/CLI operations, \
+                   'general-purpose' for complex multi-step tasks with full tool access. The \
+                   agent runs independently and results are delivered when complete."
 )]
 pub struct TaskTool {
     handle:      KernelHandle,

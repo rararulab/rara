@@ -89,6 +89,8 @@ pub mod tool_names {
     pub const EDIT_FILE: &str = "edit-file";
     pub const LIST_DIRECTORY: &str = "list-directory";
     pub const GREP: &str = "grep";
+    pub const FIND_FILES: &str = "find-files";
+    pub const WALK_DIRECTORY: &str = "walk-directory";
 
     // Browser tools
     pub const BROWSER_NAVIGATE: &str = "browser-navigate";
