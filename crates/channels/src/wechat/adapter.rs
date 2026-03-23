@@ -270,8 +270,21 @@ impl ChannelAdapter for WechatAdapter {
                     message: format!("wechat send_text_message failed: {e}"),
                 })?;
             }
-            // WeChat does not support streaming edits or progress messages.
-            PlatformOutbound::StreamChunk { .. } | PlatformOutbound::Progress { .. } => {}
+            PlatformOutbound::Progress { .. } => {
+                // Kernel sends Progress as typing indicator. Trigger the
+                // iLink two-step typing flow (getconfig → sendtyping).
+                let token = context_token.unwrap_or_default();
+                if !token.is_empty() {
+                    if let Ok(config_resp) = self.send_client.get_config(&user_id, &token).await {
+                        let ticket = config_resp["typing_ticket"].as_str().unwrap_or_default();
+                        if !ticket.is_empty() {
+                            let _ = self.send_client.send_typing(&user_id, ticket, 1).await;
+                        }
+                    }
+                }
+            }
+            // WeChat does not support streaming edits.
+            PlatformOutbound::StreamChunk { .. } => {}
         }
 
         Ok(())
