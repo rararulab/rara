@@ -318,6 +318,20 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Return sorted names of all Deferred tools (regardless of activation).
+    /// Used to inject the tool name list into the agent system prompt.
+    #[must_use]
+    pub fn deferred_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .tools
+            .values()
+            .filter(|tool| tool.tier() == ToolTier::Deferred)
+            .map(|tool| tool.name().to_string())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
     /// Return the names of all registered tools.
     #[must_use]
     pub fn tool_names(&self) -> Vec<String> { self.tools.keys().cloned().collect() }
@@ -718,6 +732,54 @@ mod tests {
         // Deferred catalog excludes activated tools
         let catalog = reg.deferred_catalog(&activated);
         assert!(catalog.is_empty());
+    }
+
+    #[test]
+    fn deferred_names_returns_sorted_names() {
+        struct CoreTool;
+        #[async_trait]
+        impl AgentTool for CoreTool {
+            fn name(&self) -> &str { "core-tool" }
+
+            fn description(&self) -> &str { "A core tool" }
+
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolContext,
+            ) -> anyhow::Result<ToolOutput> {
+                unimplemented!()
+            }
+        }
+
+        struct DeferredTool;
+        #[async_trait]
+        impl AgentTool for DeferredTool {
+            fn name(&self) -> &str { "deferred-tool" }
+
+            fn description(&self) -> &str { "A deferred tool" }
+
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolContext,
+            ) -> anyhow::Result<ToolOutput> {
+                unimplemented!()
+            }
+
+            fn tier(&self) -> ToolTier { ToolTier::Deferred }
+        }
+
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(DeferredTool));
+        reg.register(Arc::new(CoreTool));
+
+        let names = reg.deferred_names();
+        assert_eq!(names, vec!["deferred-tool"]);
     }
 
     #[test]
