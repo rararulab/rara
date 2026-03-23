@@ -786,11 +786,21 @@ fn build_runtime_contract_prompt(base_prompt: &str) -> String {
         r#"{base_prompt}
 
 <context_contract>
-`tape-anchor` (checkpoint + trim), `tape-search` (recall old context). Use `discover-tools` to find additional tape tools, memory, http-fetch, scheduling, browser, skills, and more.
+## Context Management
 
-MUST anchor when: context is long or [Context Usage Warning] appears, tool result exceeds ~2000 chars, user switches topic.
-MUST search when: question refers to content before an anchor, or you need exact details from earlier.
-Always include `summary` and `next_steps` in anchors.
+**Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
+**Discovery**: Use `discover-tools` to find additional tools — memory, http-fetch, scheduling, browser, skills, and more.
+
+**MUST anchor when:**
+- Context is long or [Context Usage Warning] appears
+- Tool result exceeds ~2000 chars (anchor the key findings, not the raw output)
+- User switches topic or starts a new task
+
+**MUST search when:**
+- Question refers to content before an anchor
+- You need exact details from earlier in the conversation
+
+Always include `summary` and `next_steps` in anchors — they are your future self's entry point.
 </context_contract>"#
     )
 }
