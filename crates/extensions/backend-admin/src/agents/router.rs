@@ -165,6 +165,7 @@ async fn create_agent(
         provider_hint:          req.provider_hint,
         max_iterations:         req.max_iterations,
         tools:                  req.tools,
+        excluded_tools:         vec![],
         max_children:           None,
         max_context_tokens:     None,
         priority:               Default::default(),

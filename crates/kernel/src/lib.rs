@@ -79,7 +79,16 @@ pub mod tool_names {
     pub const SCHEDULE_LIST: &str = "schedule-list";
     pub const SPAWN_BACKGROUND: &str = "spawn-background";
     pub const CANCEL_BACKGROUND: &str = "cancel-background";
+    pub const TASK: &str = "task";
     pub const FOLD_BRANCH: &str = "fold-branch";
+
+    // App-layer tools referenced by kernel presets
+    pub const BASH: &str = "bash";
+    pub const READ_FILE: &str = "read-file";
+    pub const WRITE_FILE: &str = "write-file";
+    pub const EDIT_FILE: &str = "edit-file";
+    pub const LIST_DIRECTORY: &str = "list-directory";
+    pub const GREP: &str = "grep";
 
     // Browser tools
     pub const BROWSER_NAVIGATE: &str = "browser-navigate";

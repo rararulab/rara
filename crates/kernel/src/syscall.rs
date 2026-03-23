@@ -347,6 +347,10 @@ impl SyscallDispatcher {
                             syscall_sender,
                         ),
                     ));
+                    registry.register(Arc::new(crate::tool::task::TaskTool::new(
+                        kernel_handle.clone(),
+                        syscall_sender,
+                    )));
                     registry.register(Arc::new(
                         crate::tool::cancel_background::CancelBackgroundTool::new(
                             kernel_handle.clone(),

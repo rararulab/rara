@@ -19,11 +19,22 @@ pub(crate) mod fold_branch;
 pub(crate) mod schedule;
 pub(crate) mod spawn_background;
 pub(crate) mod tape;
+pub(crate) mod task;
+
+mod background_common;
 
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
+
+/// Tool names that background/child agents must never have access to,
+/// preventing recursive subagent spawning.
+pub(crate) const RECURSIVE_TOOL_DENYLIST: &[&str] = &[
+    crate::tool_names::TASK,
+    crate::tool_names::SPAWN_BACKGROUND,
+    crate::tool_names::CREATE_PLAN,
+];
 
 /// Typed tool execution trait.
 ///
@@ -344,6 +355,19 @@ impl ToolRegistry {
         }
         new
     }
+
+    /// Create a new registry excluding the named tools.
+    #[must_use]
+    pub fn without(&self, excluded: &[String]) -> Self {
+        let deny: std::collections::HashSet<&str> = excluded.iter().map(String::as_str).collect();
+        let mut new = Self::new();
+        for (name, tool) in &self.tools {
+            if !deny.contains(name.as_str()) {
+                new.register(Arc::clone(tool));
+            }
+        }
+        new
+    }
 }
 
 impl Default for ToolRegistry {
@@ -543,6 +567,24 @@ mod tests {
         assert!(filtered.get("bash").is_some());
         assert!(filtered.get("read-file").is_some());
         assert!(filtered.get("http-fetch").is_none());
+    }
+
+    #[test]
+    fn without_excludes_named_tools() {
+        let reg = build_registry();
+        let filtered = reg.without(&["bash".to_string(), "http-fetch".to_string()]);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.get("bash").is_none());
+        assert!(filtered.get("http-fetch").is_none());
+        assert!(filtered.get("read-file").is_some());
+        assert!(filtered.get("write-file").is_some());
+    }
+
+    #[test]
+    fn without_empty_returns_all() {
+        let reg = build_registry();
+        let filtered = reg.without(&[]);
+        assert_eq!(filtered.len(), 4, "empty denylist should return all tools");
     }
 
     #[test]

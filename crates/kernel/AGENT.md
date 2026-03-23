@@ -234,6 +234,34 @@ Detects when the agent is stuck calling the same tool repeatedly without progres
 
 ---
 
+## Background Task Delegation
+
+Two tools for spawning background agents:
+
+- **`task`** (Core tier) — high-level preset-based delegation. LLM picks a
+  `task_type` (`general-purpose` or `bash`) and provides a prompt. System
+  prompt, tools, and limits are resolved from presets in
+  `tool/task/presets.rs`. This is the primary delegation interface.
+
+- **`spawn-background`** (Deferred tier) — low-level escape hatch. LLM
+  provides raw `system_prompt`, `tools`, `model`, and `max_iterations`.
+  Use only when presets don't fit.
+
+Both tools share the same underlying machinery: `spawn_child` +
+`register_background_task` + fire-and-forget result delivery via proactive
+turn.
+
+**Anti-nesting invariant:** Task presets set `excluded_tools` on the child
+`AgentManifest` to prevent recursive subagent spawning. The exclusion list
+includes `task`, `spawn-background`, and `create-plan`.
+
+### What NOT To Do
+
+- Do NOT add new task presets without setting `excluded_tools` — omitting the exclusion list allows the child agent to spawn its own children, leading to unbounded recursion
+- Do NOT bypass `presets.rs` by copying preset logic inline — all preset definitions must live in one place for auditability
+
+---
+
 - Do NOT publish TaskReport without going through the syscall — `exec_publish_report` enforces `source_session` and `tags` invariants
 - Do NOT use `UserId("system")` in synthetic messages for ProactiveTurn — always use the subscription owner's identity to prevent privilege escalation on session restore
 - Do NOT construct `TaskNotification` outside `handle_publish_task_report` — it builds the `TaskReportRef` and coordinates result persistence

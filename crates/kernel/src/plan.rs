@@ -1024,6 +1024,7 @@ async fn execute_worker_step(
         provider_hint:          None,
         max_iterations:         Some(WORKER_MAX_ITERATIONS),
         tools:                  vec!["*".to_string()], // inherit all tools
+        excluded_tools:         vec![],
         max_children:           None,
         max_context_tokens:     None,
         priority:               crate::agent::Priority::Normal,
