@@ -1546,7 +1546,6 @@ pub(crate) async fn run_agent_loop(
         if !has_tool_calls
             && accumulated_text.is_empty()
             && tool_calls_made > 0
-            && !llm_error_recovery_used
             && !empty_response_nudged
         {
             warn!(

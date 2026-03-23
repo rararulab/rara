@@ -2606,6 +2606,25 @@ impl Kernel {
                     metrics.record_llm_call();
                     metrics.record_tool_calls(turn.tool_calls as u64);
                 }
+
+                // Send fallback message so the user is not left without a reply.
+                if origin_endpoint.is_some() {
+                    let fallback_text = "I wasn't able to generate a response. Please try again.";
+                    let envelope = OutboundEnvelope::reply(
+                        in_reply_to,
+                        user.clone(),
+                        egress_session_key.clone(),
+                        crate::channel::types::MessageContent::Text(fallback_text.to_string()),
+                        vec![],
+                    )
+                    .with_origin(origin_endpoint.clone());
+                    if let Err(e) = &self
+                        .event_queue
+                        .try_push(KernelEventEnvelope::deliver(envelope))
+                    {
+                        error!(%e, "failed to push fallback Deliver event");
+                    }
+                }
             }
             Err(err_msg) => {
                 span.record("success", false);
