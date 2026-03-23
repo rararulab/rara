@@ -65,16 +65,16 @@ impl LoginSession {
         let client = WeixinApiClient::new(base_url, "", None);
 
         let qr_resp = client.fetch_qr_code().await?;
-        let qrcode_url = qr_resp["data"]["qrcode_url"]
+        let qrcode_url = qr_resp["qrcode_img_content"]
             .as_str()
             .context(LoginFailedSnafu {
-                reason: "no qrcode_url in response",
+                reason: "no qrcode_img_content in response",
             })?
             .to_string();
-        let qrcode_id = qr_resp["data"]["qrcode_id"]
+        let qrcode_id = qr_resp["qrcode"]
             .as_str()
             .context(LoginFailedSnafu {
-                reason: "no qrcode_id in response",
+                reason: "no qrcode in response",
             })?
             .to_string();
 
@@ -171,7 +171,11 @@ async fn poll_until_confirmed(
     loop {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let status_resp = client.get_qr_code_status(qrcode_id).await?;
-        let status = status_resp["data"]["status"].as_str().unwrap_or("unknown");
+        // Try top-level field first (v2 API), fall back to nested data.status (v1)
+        let status = status_resp["status"]
+            .as_str()
+            .or_else(|| status_resp["data"]["status"].as_str())
+            .unwrap_or("unknown");
 
         match status {
             "wait" => {}
@@ -182,7 +186,13 @@ async fn poll_until_confirmed(
                 return Err(QrCodeExpiredSnafu.build());
             }
             "confirmed" => {
-                return save_confirmed_credentials(&status_resp["data"], base_url);
+                // v2 API returns credentials at top level; v1 nests under data
+                let data = if status_resp.get("bot_token").is_some() {
+                    &status_resp
+                } else {
+                    &status_resp["data"]
+                };
+                return save_confirmed_credentials(data, base_url);
             }
             other => {
                 warn!("Unknown QR status: {other}");
