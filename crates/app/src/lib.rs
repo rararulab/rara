@@ -576,6 +576,13 @@ pub async fn start_with_options(
             Err(e) => warn!(error = %e, "Failed to start WebAdapter"),
         }
     }
+    if let Some(ref wc) = wechat_adapter {
+        use rara_kernel::channel::adapter::ChannelAdapter as _;
+        match wc.start(kernel_handle.clone()).await {
+            Ok(()) => info!("WeChat adapter started"),
+            Err(e) => warn!(error = %e, "Failed to start WeChat adapter"),
+        }
+    }
     info!("Kernel I/O subsystem running");
 
     // -- Symphony sync bridge -------------------------------------------------
