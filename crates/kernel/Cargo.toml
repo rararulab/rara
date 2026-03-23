@@ -41,10 +41,10 @@ rapidfuzz.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
 rara-soul.workspace = true
+rara-tool-macro.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rustix = { workspace = true, features = ["fs"] }
-rara-tool-macro.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
