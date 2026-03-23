@@ -1779,11 +1779,18 @@ impl IOSubsystem {
         };
         let targets = resolve_delivery_targets(candidates, &envelope.routing);
 
+        tracing::info!(
+            targets = targets.len(),
+            adapters = self.adapters.len(),
+            "deliver_to_endpoints"
+        );
+
         let futs = targets.into_iter().map(|endpoint| {
             let adapter = self.adapters.get(&endpoint.channel_type).cloned();
             let outbound = envelope.to_platform_outbound();
             async move {
                 if let Some(adapter) = adapter {
+                    tracing::info!(?endpoint, "delivering to adapter");
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(10),
                         adapter.send(&endpoint, outbound),
@@ -1791,6 +1798,7 @@ impl IOSubsystem {
                     .await
                     {
                         Ok(Ok(())) => {
+                            tracing::info!(?endpoint, "delivery succeeded");
                             crate::metrics::record_message_outbound(&format!(
                                 "{:?}",
                                 endpoint.channel_type
@@ -1803,6 +1811,8 @@ impl IOSubsystem {
                             tracing::warn!(?endpoint, "delivery timeout");
                         }
                     }
+                } else {
+                    tracing::warn!(?endpoint, "no adapter registered for channel type");
                 }
             }
         });
