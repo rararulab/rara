@@ -569,23 +569,6 @@ export default function Settings() {
                       <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                     </div>
                   </a>
-                  <a
-                    href="/swagger-ui/"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <p className="font-medium">API Reference</p>
-                          <p className="text-xs text-muted-foreground">Swagger UI</p>
-                        </div>
-                      </div>
-                      <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                    </div>
-                  </a>
                 </div>
               </CardContent>
             </Card>

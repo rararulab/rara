@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { BookOpen, Code2, ExternalLink, Sparkles } from "lucide-react";
+import { BookOpen, ExternalLink, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 interface DocsCardProps {
@@ -63,7 +63,7 @@ export default function Docs() {
         </div>
         <h1 className="text-2xl font-bold tracking-tight">Documentation</h1>
         <p className="mt-2 text-muted-foreground">
-          Open project guides or API reference in their dedicated pages.
+          Open project guides in their dedicated page.
         </p>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
@@ -73,13 +73,6 @@ export default function Docs() {
             href="/book/"
             icon={<BookOpen className="h-5 w-5" />}
             badge="mdBook"
-          />
-          <DocsCard
-            title="API Reference"
-            description="Open Swagger UI in a new tab to browse endpoints, inspect schemas, and test requests against the backend."
-            href="/swagger-ui/"
-            icon={<Code2 className="h-5 w-5" />}
-            badge="Swagger"
           />
         </div>
       </div>

@@ -62,7 +62,6 @@ teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-utoipa-swagger-ui = { workspace = true }
 uuid.workspace = true
 walkdir = "2.5.0"
 yunara-store = { workspace = true }
