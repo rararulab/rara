@@ -173,11 +173,14 @@ impl WeixinApiClient {
     }
 
     /// Polls the current scan status for the given `qrcode_id`.
+    ///
+    /// Uses a longer timeout than the default because this endpoint
+    /// long-polls until the user scans the QR code.
     pub async fn get_qr_code_status(&self, qrcode_id: &str) -> Result<Value> {
         self.post_form_with_timeout(
             "ilink/bot/get_qrcode_status",
             &[("qrcode", qrcode_id), ("bot_type", "3")],
-            Duration::from_secs(30),
+            Duration::from_secs(60),
         )
         .await
     }
