@@ -162,6 +162,7 @@ impl ToolExecute for FoldBranchTool {
             provider_hint: None,
             max_iterations: p.max_iterations,
             tools,
+            excluded_tools: vec![],
             max_children: Some(0),
             max_context_tokens: None,
             priority: Default::default(),

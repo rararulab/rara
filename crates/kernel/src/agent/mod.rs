@@ -227,6 +227,13 @@ pub struct AgentManifest {
     /// tools).
     #[serde(default)]
     pub tools:                  Vec<String>,
+    /// Tool names the agent is NOT allowed to use (denylist).
+    ///
+    /// Applied after `tools` allowlist filtering. If `tools` is empty (inherit
+    /// all), excluded tools are removed from the full set. If `tools` is
+    /// explicit, excluded tools are additionally removed.
+    #[serde(default)]
+    pub excluded_tools:         Vec<String>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
     pub max_children:           Option<usize>,
@@ -849,8 +856,13 @@ pub(crate) async fn run_agent_loop(
             message: format!("failed to get tool registry: {e}"),
         })?;
 
-    // Filter tools by manifest.tools whitelist.
+    // Filter tools by manifest allowlist, then remove excluded tools.
     let manifest_filtered = full_tools.filtered(&manifest.tools);
+    let manifest_filtered = if manifest.excluded_tools.is_empty() {
+        manifest_filtered
+    } else {
+        manifest_filtered.without(&manifest.excluded_tools)
+    };
     if manifest_filtered.len() < full_tools.len() {
         info!(
             agent = %manifest.name,

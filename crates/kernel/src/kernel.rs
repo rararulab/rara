@@ -1428,6 +1428,7 @@ impl Kernel {
             provider_hint:          None,
             max_iterations:         Some(15),
             tools:                  vec![],
+            excluded_tools:         vec![],
             max_children:           Some(0),
             max_context_tokens:     None,
             priority:               Priority::default(),

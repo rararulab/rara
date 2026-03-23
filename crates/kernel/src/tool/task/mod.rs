@@ -100,6 +100,7 @@ impl ToolExecute for TaskTool {
             provider_hint:          None,
             max_iterations:         Some(preset.max_iterations),
             tools:                  preset.allowed_tools.clone(),
+            excluded_tools:         preset.disallowed_tools.clone(),
             max_children:           Some(0),
             max_context_tokens:     None,
             priority:               Priority::default(),

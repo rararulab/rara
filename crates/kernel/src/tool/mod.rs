@@ -345,6 +345,19 @@ impl ToolRegistry {
         }
         new
     }
+
+    /// Create a new registry excluding the named tools.
+    #[must_use]
+    pub fn without(&self, excluded: &[String]) -> Self {
+        let deny: std::collections::HashSet<&str> = excluded.iter().map(String::as_str).collect();
+        let mut new = Self::new();
+        for (name, tool) in &self.tools {
+            if !deny.contains(name.as_str()) {
+                new.register(Arc::clone(tool));
+            }
+        }
+        new
+    }
 }
 
 impl Default for ToolRegistry {
@@ -544,6 +557,24 @@ mod tests {
         assert!(filtered.get("bash").is_some());
         assert!(filtered.get("read-file").is_some());
         assert!(filtered.get("http-fetch").is_none());
+    }
+
+    #[test]
+    fn without_excludes_named_tools() {
+        let reg = build_registry();
+        let filtered = reg.without(&["bash".to_string(), "http-fetch".to_string()]);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.get("bash").is_none());
+        assert!(filtered.get("http-fetch").is_none());
+        assert!(filtered.get("read-file").is_some());
+        assert!(filtered.get("write-file").is_some());
+    }
+
+    #[test]
+    fn without_empty_returns_all() {
+        let reg = build_registry();
+        let filtered = reg.without(&[]);
+        assert_eq!(filtered.len(), 4, "empty denylist should return all tools");
     }
 
     #[test]

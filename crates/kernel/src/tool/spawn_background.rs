@@ -105,6 +105,7 @@ impl ToolExecute for SpawnBackgroundTool {
             provider_hint:          None,
             max_iterations:         Some(p.max_iterations.unwrap_or(15)),
             tools:                  p.tools,
+            excluded_tools:         vec![],
             max_children:           Some(0),
             max_context_tokens:     None,
             priority:               Priority::default(),
