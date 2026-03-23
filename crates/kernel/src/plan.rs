@@ -264,13 +264,13 @@ pub(crate) async fn run_plan_loop(
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to get manifest for planning: {e}"),
             })?;
-    let (agent_prompt, _) = crate::agent::build_agent_system_prompt(&manifest);
     let full_tools = handle
         .session_tool_registry(session_key)
         .await
         .map_err(|e| KernelError::AgentExecution {
             message: format!("failed to get tool registry for planning: {e}"),
         })?;
+    let (agent_prompt, _) = crate::agent::build_agent_system_prompt(&manifest, &full_tools);
     let tools_for_plan = full_tools.filtered(&manifest.tools);
 
     let plan = create_plan_via_llm(

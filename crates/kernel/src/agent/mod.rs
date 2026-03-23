@@ -770,7 +770,10 @@ fn ensure_agent_md(path: &Path, agent_name: &str) {
 ///
 /// Returns `(prompt, has_soul)` so callers can avoid re-calling
 /// `resolve_soul_prompt`.
-pub(crate) fn build_agent_system_prompt(manifest: &AgentManifest) -> (String, bool) {
+pub(crate) fn build_agent_system_prompt(
+    manifest: &AgentManifest,
+    tool_registry: &crate::tool::ToolRegistry,
+) -> (String, bool) {
     // 1. Soul prompt: prepend soul text if available, otherwise use manifest prompt
     //    as-is.
     let (effective_prompt, has_soul) = match resolve_soul_prompt(&manifest.name) {
@@ -783,12 +786,21 @@ pub(crate) fn build_agent_system_prompt(manifest: &AgentManifest) -> (String, bo
     } else {
         effective_prompt
     };
-    // 3. Append runtime contract (tape actions, discover-tools hint).
-    let effective_prompt = build_runtime_contract_prompt(&effective_prompt);
+    // 3. Append runtime contract (tape actions, discoverable tool names).
+    let deferred_names = tool_registry.deferred_names();
+    let effective_prompt = build_runtime_contract_prompt(&effective_prompt, &deferred_names);
     (effective_prompt, has_soul)
 }
 
-fn build_runtime_contract_prompt(base_prompt: &str) -> String {
+fn build_runtime_contract_prompt(base_prompt: &str, deferred_names: &[String]) -> String {
+    let tool_list = if deferred_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n**Discoverable tools** (use `discover-tools` to activate): {}",
+            deferred_names.join(", ")
+        )
+    };
     format!(
         r#"{base_prompt}
 
@@ -796,7 +808,7 @@ fn build_runtime_contract_prompt(base_prompt: &str) -> String {
 ## Context Management
 
 **Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
-**Discovery**: Use `discover-tools` to find additional tools — memory, http-fetch, scheduling, browser, skills, and more.
+**Discovery**: Use `discover-tools` to find additional tools.{tool_list}
 
 **MUST anchor when:**
 - Context is long or [Context Usage Warning] appears
@@ -912,7 +924,7 @@ pub(crate) async fn run_agent_loop(
     let max_iterations = manifest
         .max_iterations
         .unwrap_or(handle.config().default_max_iterations);
-    let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest);
+    let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest, &full_tools);
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
@@ -2561,13 +2573,27 @@ mod tests {
 
     #[test]
     fn runtime_contract_prompt_includes_tape_and_discover_tools() {
-        let prompt = build_runtime_contract_prompt("base");
+        let prompt = build_runtime_contract_prompt("base", &[]);
         assert!(prompt.contains("<context_contract>"));
         assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
         assert!(prompt.contains("`tape-search` (recall old context)"));
         assert!(prompt.contains("`discover-tools`"));
         assert!(prompt.contains("exact details from earlier"));
         assert!(prompt.contains("`summary` and `next_steps` in anchors"));
+    }
+
+    #[test]
+    fn runtime_contract_lists_deferred_tool_names() {
+        let names = vec!["http-fetch".to_string(), "system-paths".to_string()];
+        let prompt = build_runtime_contract_prompt("base", &names);
+        assert!(prompt.contains("http-fetch, system-paths"));
+        assert!(prompt.contains("Discoverable tools"));
+    }
+
+    #[test]
+    fn runtime_contract_omits_discoverable_section_when_no_deferred_tools() {
+        let prompt = build_runtime_contract_prompt("base", &[]);
+        assert!(!prompt.contains("Discoverable tools"));
     }
 
     #[test]
@@ -2585,7 +2611,7 @@ mod tests {
 
     #[test]
     fn runtime_contract_includes_topic_switch_in_must_anchor() {
-        let prompt = build_runtime_contract_prompt("base");
+        let prompt = build_runtime_contract_prompt("base", &[]);
         assert!(prompt.contains("switches topic"));
     }
 
