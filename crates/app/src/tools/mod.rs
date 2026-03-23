@@ -51,6 +51,7 @@ mod session_info;
 mod set_avatar;
 mod settings;
 mod skill_tools;
+mod system_paths;
 mod user_note;
 mod walk_directory;
 mod wechat_login;
@@ -87,6 +88,7 @@ use session_info::SessionInfoTool;
 use set_avatar::SetAvatarTool;
 use settings::SettingsTool;
 use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
+use system_paths::SystemPathsTool;
 use user_note::UserNoteTool;
 use walk_directory::WalkDirectoryTool;
 use wechat_login::{WechatLoginConfirmTool, WechatLoginStartTool};
@@ -199,6 +201,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(UserNoteTool::new(deps.tape_service.clone())),
         // Session info
         Arc::new(SessionInfoTool::new(deps.session_index.clone())),
+        // System paths (directory layout discovery)
+        Arc::new(SystemPathsTool::new()),
         // Mita-exclusive tools
         list_sessions,
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
