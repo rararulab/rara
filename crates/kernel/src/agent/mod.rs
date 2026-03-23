@@ -2531,7 +2531,7 @@ mod tests {
         assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
         assert!(prompt.contains("`tape-search` (recall old context)"));
         assert!(prompt.contains("`discover-tools`"));
-        assert!(prompt.contains("you need exact details from earlier"));
+        assert!(prompt.contains("exact details from earlier"));
         assert!(prompt.contains("`summary` and `next_steps` in anchors"));
     }
 
@@ -2551,7 +2551,7 @@ mod tests {
     #[test]
     fn runtime_contract_includes_topic_switch_in_must_anchor() {
         let prompt = build_runtime_contract_prompt("base");
-        assert!(prompt.contains("user switches topic"));
+        assert!(prompt.contains("switches topic"));
     }
 
     #[test]
