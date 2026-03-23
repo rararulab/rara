@@ -3255,10 +3255,16 @@ fn spawn_stream_forwarder(
                     }
 
                     // Flush throttled progress updates.
-                    // Also refresh when tools are still running so the elapsed
-                    // timer keeps ticking even without new stream events.
-                    let has_running = progress.tools.iter().any(|t| !t.finished);
-                    if (progress_dirty || has_running) && (!progress.tools.is_empty() || progress.thinking) {
+                    let should_refresh = if progress.message_id.is_some() {
+                        // Once a progress message exists, always refresh the elapsed
+                        // timer — even after thinking ends and before tools start
+                        // (e.g. during LLM API wait or pure text generation).
+                        true
+                    } else {
+                        // No message yet — only create one if there's content to show.
+                        progress_dirty && (!progress.tools.is_empty() || progress.thinking)
+                    };
+                    if should_refresh {
                         let text = progress.render_text();
                         match progress.message_id {
                             Some(mid) => {
