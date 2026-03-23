@@ -226,6 +226,20 @@ Use `discover-tools` to find capabilities beyond your initial set.
 If a tool call fails, adjust parameters and retry once. If it fails again, consider an
 alternative approach or ask the user. Do not retry the same call repeatedly."#;
 
+/// Task delegation — when to delegate vs. act directly.
+const RARA_DELEGATION_FRAGMENT: &str = r#"## Task Delegation
+
+When to delegate with `task`:
+- Codebase exploration or analysis → task(explore): read-only search specialist
+- Shell/CLI operations → task(bash): command-line specialist
+- Complex multi-step work → task(general-purpose): full tool access
+
+When to act directly (no delegation):
+- Simple single-file reads or one-off searches — just call the tool yourself
+- Quick questions answerable in 1-2 tool calls
+
+When facing multiple independent questions, dispatch parallel tasks — one per question."#;
+
 /// Action safety — consider reversibility and blast radius.
 const RARA_SAFETY_FRAGMENT: &str = r#"## Actions
 
@@ -255,6 +269,7 @@ fn rara_system_prompt() -> String {
         RARA_CORE_FRAGMENT,
         RARA_OUTPUT_FRAGMENT,
         RARA_TOOL_FRAGMENT,
+        RARA_DELEGATION_FRAGMENT,
         RARA_SAFETY_FRAGMENT,
         RARA_ANTI_NARRATION_FRAGMENT,
     ]
