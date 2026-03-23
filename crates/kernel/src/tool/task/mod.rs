@@ -182,3 +182,75 @@ impl ToolExecute for TaskTool {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_params_deserializes_valid_json() {
+        let json = serde_json::json!({
+            "description": "test task",
+            "prompt": "Do something",
+            "task_type": "general-purpose"
+        });
+        let params: TaskParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.description, "test task");
+        assert_eq!(params.prompt, "Do something");
+        assert_eq!(params.task_type, "general-purpose");
+    }
+
+    #[test]
+    fn task_params_rejects_missing_fields() {
+        let json = serde_json::json!({
+            "description": "test task"
+            // missing prompt and task_type
+        });
+        assert!(serde_json::from_value::<TaskParams>(json).is_err());
+    }
+
+    #[test]
+    fn preset_builds_valid_manifest() {
+        let preset = presets::get_preset("general-purpose").unwrap();
+        let manifest = AgentManifest {
+            name:                   "test-agent".to_string(),
+            role:                   AgentRole::Worker,
+            description:            "test".to_string(),
+            model:                  None,
+            system_prompt:          preset.system_prompt.to_string(),
+            soul_prompt:            None,
+            provider_hint:          None,
+            max_iterations:         Some(preset.max_iterations),
+            tools:                  preset.allowed_tools.clone(),
+            excluded_tools:         preset.disallowed_tools.clone(),
+            max_children:           Some(0),
+            max_context_tokens:     None,
+            priority:               Priority::default(),
+            metadata:               serde_json::Value::Null,
+            sandbox:                None,
+            default_execution_mode: None,
+            tool_call_limit:        None,
+            worker_timeout_secs:    None,
+        };
+        assert_eq!(manifest.role, AgentRole::Worker);
+        assert_eq!(manifest.max_children, Some(0));
+        assert!(manifest.excluded_tools.contains(&"task".to_string()));
+        assert!(
+            manifest
+                .excluded_tools
+                .contains(&"spawn-background".to_string())
+        );
+        // general-purpose inherits all tools
+        assert!(manifest.tools.is_empty());
+    }
+
+    #[test]
+    fn bash_preset_has_explicit_tools() {
+        let preset = presets::get_preset("bash").unwrap();
+        let manifest_tools = &preset.allowed_tools;
+        assert!(manifest_tools.contains(&"bash".to_string()));
+        assert!(manifest_tools.contains(&"read-file".to_string()));
+        // bash preset should NOT include task
+        assert!(!manifest_tools.contains(&"task".to_string()));
+    }
+}
