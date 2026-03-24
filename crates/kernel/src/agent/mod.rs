@@ -786,16 +786,27 @@ pub(crate) fn build_agent_system_prompt(
     } else {
         effective_prompt
     };
-    // 3. Append runtime contract (tape actions, discoverable tool catalog).
+    // 3. Append runtime contract (tape actions, discoverable tool catalog, system
+    //    paths).
     let empty = std::collections::HashSet::new();
     let deferred_catalog = tool_registry.deferred_catalog(&empty);
-    let effective_prompt = build_runtime_contract_prompt(&effective_prompt, &deferred_catalog);
+    let system_paths = format!(
+        "\n**System Paths** (use these instead of guessing):\n- Home: {}\n- Config: {}\n- Data: \
+         {}\n- Workspace: {}",
+        rara_paths::home_dir().display(),
+        rara_paths::config_dir().display(),
+        rara_paths::data_dir().display(),
+        rara_paths::workspace_dir().display(),
+    );
+    let effective_prompt =
+        build_runtime_contract_prompt(&effective_prompt, &deferred_catalog, &system_paths);
     (effective_prompt, has_soul)
 }
 
 fn build_runtime_contract_prompt(
     base_prompt: &str,
     deferred_catalog: &[(String, String)],
+    system_paths: &str,
 ) -> String {
     let tool_list = if deferred_catalog.is_empty() {
         String::new()
@@ -824,7 +835,12 @@ fn build_runtime_contract_prompt(
 ## Context Management
 
 **Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
-**Discovery**: Use `discover-tools` to find additional tools.{tool_list}
+
+**Deferred tool activation**: The tools listed below are NOT yet available. To use one, you MUST \
+first CALL `discover-tools` with a keyword (e.g. `discover-tools({{"query":"marketplace"}})`). \
+After calling, matched tools are activated and you can call them directly. \
+Do NOT read source code or config files to learn about a tool — call `discover-tools` instead.{tool_list}
+{system_paths}
 
 **MUST anchor when:**
 - Context is long or [Context Usage Warning] appears
@@ -2588,7 +2604,7 @@ mod tests {
 
     #[test]
     fn runtime_contract_prompt_includes_tape_and_discover_tools() {
-        let prompt = build_runtime_contract_prompt("base", &[]);
+        let prompt = build_runtime_contract_prompt("base", &[], "");
         assert!(prompt.contains("<context_contract>"));
         assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
         assert!(prompt.contains("`tape-search` (recall old context)"));
@@ -2609,7 +2625,7 @@ mod tests {
                 "Show system paths. Extra detail here.".to_string(),
             ),
         ];
-        let prompt = build_runtime_contract_prompt("base", &catalog);
+        let prompt = build_runtime_contract_prompt("base", &catalog, "");
         assert!(prompt.contains("`http-fetch` — Fetch HTTP resources."));
         assert!(prompt.contains("`system-paths` — Show system paths."));
         assert!(prompt.contains("Discoverable tools"));
@@ -2617,7 +2633,7 @@ mod tests {
 
     #[test]
     fn runtime_contract_omits_discoverable_section_when_no_deferred_tools() {
-        let prompt = build_runtime_contract_prompt("base", &[]);
+        let prompt = build_runtime_contract_prompt("base", &[], "");
         assert!(!prompt.contains("Discoverable tools"));
     }
 
@@ -2636,8 +2652,20 @@ mod tests {
 
     #[test]
     fn runtime_contract_includes_topic_switch_in_must_anchor() {
-        let prompt = build_runtime_contract_prompt("base", &[]);
+        let prompt = build_runtime_contract_prompt("base", &[], "");
         assert!(prompt.contains("switches topic"));
+    }
+
+    #[test]
+    fn runtime_contract_includes_system_paths() {
+        let paths = "\n**System Paths** (use these instead of guessing):\n- Home: /test/home\n- \
+                     Config: /test/config\n- Data: /test/data\n- Workspace: /test/workspace";
+        let prompt = build_runtime_contract_prompt("base", &[], paths);
+        assert!(prompt.contains("**System Paths**"));
+        assert!(prompt.contains("Home: /test/home"));
+        assert!(prompt.contains("Config: /test/config"));
+        assert!(prompt.contains("Data: /test/data"));
+        assert!(prompt.contains("Workspace: /test/workspace"));
     }
 
     #[test]
