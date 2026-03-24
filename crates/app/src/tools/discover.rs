@@ -93,6 +93,7 @@ impl ToolExecute for DiscoverToolsTool {
             .map(|(name, desc)| DiscoveredToolEntry {
                 name:        name.to_string(),
                 description: desc.to_string(),
+                parameters:  String::new(),
             })
             .collect();
 

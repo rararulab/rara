@@ -148,6 +148,40 @@ pub struct DiscoveredToolEntry {
     /// One-line description of the tool.
     #[serde(default)]
     pub description: String,
+    /// Compact parameter summary (e.g. `"query (string, required), source
+    /// (string)"`). Empty when schema is unavailable.
+    #[serde(default)]
+    pub parameters:  String,
+}
+
+/// Convert a JSON Schema `parameters_schema` value into a compact one-line
+/// summary suitable for LLM consumption.
+///
+/// Example output: `query (string, required), source (string), limit (integer)`
+pub fn summarize_parameters(schema: &serde_json::Value) -> String {
+    let properties = match schema.get("properties").and_then(|p| p.as_object()) {
+        Some(props) => props,
+        None => return String::new(),
+    };
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let mut parts: Vec<String> = properties
+        .iter()
+        .map(|(name, prop)| {
+            let ty = prop.get("type").and_then(|t| t.as_str()).unwrap_or("any");
+            if required.contains(&name.as_str()) {
+                format!("{name} ({ty}, required)")
+            } else {
+                format!("{name} ({ty})")
+            }
+        })
+        .collect();
+    parts.sort();
+    parts.join(", ")
 }
 
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).
