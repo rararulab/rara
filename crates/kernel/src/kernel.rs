@@ -462,25 +462,16 @@ impl Kernel {
         loop {
             // Compute next wake time for the unified scheduler (processor 0 only).
             let scheduler_sleep = if id == 0 {
-                let next_job_instant = self
-                    .syscall
-                    .job_wheel()
-                    .lock()
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "job_wheel mutex poisoned, recovering inner data");
-                        e.into_inner()
-                    })
-                    .next_deadline()
-                    .map(|ts| {
-                        let now_ts = jiff::Timestamp::now();
-                        let delta = ts.duration_since(now_ts);
-                        let clamped = if delta.is_negative() {
-                            std::time::Duration::ZERO
-                        } else {
-                            delta.unsigned_abs()
-                        };
-                        tokio::time::Instant::now() + clamped
-                    });
+                let next_job_instant = self.syscall.job_wheel().lock().next_deadline().map(|ts| {
+                    let now_ts = jiff::Timestamp::now();
+                    let delta = ts.duration_since(now_ts);
+                    let clamped = if delta.is_negative() {
+                        std::time::Duration::ZERO
+                    } else {
+                        delta.unsigned_abs()
+                    };
+                    tokio::time::Instant::now() + clamped
+                });
 
                 // Find the earliest deadline among: mita heartbeat, next scheduled job.
                 let earliest = [next_mita, next_job_instant]
@@ -541,10 +532,6 @@ impl Kernel {
                         self.syscall
                             .job_wheel()
                             .lock()
-                            .unwrap_or_else(|e| {
-                                warn!(error = %e, "job_wheel mutex poisoned during shutdown, recovering");
-                                e.into_inner()
-                            })
                             .persist();
                     }
                     for event in queue.drain(1024) {
@@ -577,13 +564,7 @@ impl Kernel {
         let wheel_ref = self.syscall.job_wheel().clone();
         let expired = tokio::task::spawn_blocking(move || {
             let now = jiff::Timestamp::now();
-            let mut wheel = match wheel_ref.lock() {
-                Ok(w) => w,
-                Err(e) => {
-                    warn!(error = %e, "failed to lock job wheel for drain");
-                    return vec![];
-                }
-            };
+            let mut wheel = wheel_ref.lock();
 
             // Re-fire any in-flight jobs from a previous run (only returns
             // entries on the first call; subsequent calls return empty).
@@ -1118,14 +1099,7 @@ impl Kernel {
                 {
                     if let Ok(uuid) = uuid::Uuid::parse_str(job_id_str) {
                         let job_id = crate::schedule::JobId(uuid);
-                        self.syscall
-                            .job_wheel()
-                            .lock()
-                            .unwrap_or_else(|e| {
-                                warn!(error = %e, "job_wheel mutex poisoned, recovering");
-                                e.into_inner()
-                            })
-                            .complete_in_flight(&job_id);
+                        self.syscall.job_wheel().lock().complete_in_flight(&job_id);
                     }
                 }
             }

@@ -29,6 +29,7 @@ ignore = "0.4"
 jiff.workspace = true
 lettre.workspace = true
 notify = { workspace = true }
+parking_lot.workspace = true
 rand.workspace = true
 rara-acp.workspace = true
 rara-agents.workspace = true

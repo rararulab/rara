@@ -75,7 +75,7 @@ pub(crate) struct SyscallDispatcher {
     /// Optional provider of dynamically discovered tools (e.g. MCP servers).
     dynamic_tool_provider: Option<DynamicToolProviderRef>,
     /// Scheduled task wheel for job scheduling.
-    job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    job_wheel:             Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
     /// Append-only store for job execution results.
     job_result_store:      Arc<crate::schedule::JobResultStore>,
     /// Tag-based subscription registry for task notifications.
@@ -97,7 +97,7 @@ impl SyscallDispatcher {
         let scheduler_dir = rara_paths::workspace_dir().join("scheduler");
         let jobs_path = scheduler_dir.join("jobs.json");
         let subs_path = scheduler_dir.join("subscriptions.json");
-        let job_wheel = Arc::new(std::sync::Mutex::new(crate::schedule::JobWheel::load(
+        let job_wheel = Arc::new(parking_lot::Mutex::new(crate::schedule::JobWheel::load(
             jobs_path,
         )));
         let results_dir = scheduler_dir.join("results");
@@ -128,7 +128,9 @@ impl SyscallDispatcher {
     pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
 
     /// Access the job wheel (for tick-based drain in the event loop).
-    pub fn job_wheel(&self) -> &Arc<std::sync::Mutex<crate::schedule::JobWheel>> { &self.job_wheel }
+    pub fn job_wheel(&self) -> &Arc<parking_lot::Mutex<crate::schedule::JobWheel>> {
+        &self.job_wheel
+    }
 
     // -- Dispatch -----------------------------------------------------------
 
@@ -428,7 +430,7 @@ impl SyscallDispatcher {
                         let id = entry.id.clone();
                         let wheel_ref = self.job_wheel.clone();
                         tokio::task::spawn_blocking(move || {
-                            let mut wheel = wheel_ref.lock().unwrap();
+                            let mut wheel = wheel_ref.lock();
                             wheel.add(entry);
                             wheel.persist();
                         })
@@ -449,7 +451,7 @@ impl SyscallDispatcher {
                 let wheel_ref = self.job_wheel.clone();
                 let job_id_clone = job_id.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    let mut wheel = wheel_ref.lock().unwrap();
+                    let mut wheel = wheel_ref.lock();
                     match wheel.remove(&job_id_clone) {
                         Some(_) => {
                             wheel.persist();
@@ -474,7 +476,7 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(result);
             }
             Syscall::ListJobs { reply_tx } => {
-                let wheel = self.job_wheel.lock().unwrap();
+                let wheel = self.job_wheel.lock();
                 let jobs = wheel.list(None);
                 let _ = reply_tx.send(Ok(jobs));
             }
@@ -1303,11 +1305,9 @@ fn parse_session_key(s: &str) -> anyhow::Result<SessionKey> {
 fn parse_scope(scope: &str) -> anyhow::Result<KvScope> {
     match scope {
         "global" => Ok(KvScope::Global),
-        s if s.starts_with("team:") => {
-            Ok(KvScope::Team(s.strip_prefix("team:").unwrap().to_string()))
-        }
+        s if s.starts_with("team:") => Ok(KvScope::Team(s["team:".len()..].to_string())),
         s if s.starts_with("agent:") => {
-            let uuid_str = s.strip_prefix("agent:").unwrap();
+            let uuid_str = &s["agent:".len()..];
             let uuid = uuid::Uuid::parse_str(uuid_str)
                 .map_err(|e| anyhow::anyhow!("invalid agent UUID in scope: {e}"))?;
             Ok(KvScope::Agent(uuid))

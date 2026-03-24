@@ -94,7 +94,7 @@ pub struct KernelHandle {
     /// Execution trace service for persisting turn-level traces.
     trace_service:         crate::trace::TraceService,
     /// Shared job wheel for querying scheduled tasks.
-    job_wheel:             Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+    job_wheel:             Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: SkillPromptProvider,
 }
@@ -116,7 +116,7 @@ impl KernelHandle {
         started_at: Timestamp,
         tape: crate::memory::TapeService,
         trace_service: crate::trace::TraceService,
-        job_wheel: Arc<std::sync::Mutex<crate::schedule::JobWheel>>,
+        job_wheel: Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
         skill_prompt_provider: SkillPromptProvider,
     ) -> Self {
         Self {
@@ -324,10 +324,7 @@ impl KernelHandle {
 
     /// List scheduled jobs, optionally filtered by session key.
     pub fn list_jobs(&self, session_key: Option<&SessionKey>) -> Vec<crate::schedule::JobEntry> {
-        self.job_wheel
-            .lock()
-            .map(|wheel| wheel.list(session_key))
-            .unwrap_or_default()
+        self.job_wheel.lock().list(session_key)
     }
 
     /// Generate the skills prompt block for injection into the agent system

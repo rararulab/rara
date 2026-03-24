@@ -33,10 +33,10 @@ pub struct UpdateNotifier {
     /// Number of times the agent has been (re)started.
     agent_generation: AtomicU32,
     /// Wall-clock time of the most recent agent launch.
-    agent_started_at: std::sync::Mutex<Option<chrono::DateTime<chrono::Local>>>,
+    agent_started_at: parking_lot::Mutex<Option<chrono::DateTime<chrono::Local>>>,
     /// Version/revision of the currently running agent binary.
     /// Initially same as gateway version; updated after each successful update.
-    agent_version:    std::sync::Mutex<String>,
+    agent_version:    parking_lot::Mutex<String>,
     /// Repository URL for building commit links (e.g. "<https://github.com/rararulab/rara>").
     repo_url:         String,
 }
@@ -51,8 +51,8 @@ impl UpdateNotifier {
             bot,
             channel_id,
             agent_generation: AtomicU32::new(0),
-            agent_started_at: std::sync::Mutex::new(None),
-            agent_version: std::sync::Mutex::new(version.to_owned()),
+            agent_started_at: parking_lot::Mutex::new(None),
+            agent_version: parking_lot::Mutex::new(version.to_owned()),
             repo_url: repo_url.to_owned(),
         }
     }
@@ -69,7 +69,7 @@ impl UpdateNotifier {
 
     pub async fn agent_healthy(&self) {
         self.agent_generation.fetch_add(1, Ordering::Relaxed);
-        *self.agent_started_at.lock().unwrap() = Some(chrono::Local::now());
+        *self.agent_started_at.lock() = Some(chrono::Local::now());
         self.send(&format!(
             "✅ <b>Agent started and healthy</b>\n{}",
             self.status_block(),
@@ -95,7 +95,7 @@ impl UpdateNotifier {
     }
 
     pub async fn update_success(&self, new_rev: &str, build_duration: std::time::Duration) {
-        *self.agent_version.lock().unwrap() = new_rev.to_owned();
+        *self.agent_version.lock() = new_rev.to_owned();
         self.send(&format!(
             "✅ <b>Auto-update: updated, restarting agent</b>\nnew rev: {}\n⏱ build: {}\n{}",
             self.commit_link(new_rev),
@@ -170,11 +170,10 @@ impl UpdateNotifier {
         let agent_since = self
             .agent_started_at
             .lock()
-            .unwrap()
             .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "—".into());
 
-        let agent_ver = self.agent_version.lock().unwrap().clone();
+        let agent_ver = self.agent_version.lock().clone();
 
         format!(
             "\n🤖 agent: {}\n🔄 generation: {}\n🕐 since: {}",
