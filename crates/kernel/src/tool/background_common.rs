@@ -17,12 +17,14 @@
 //! Used by both `TaskTool` and `SpawnBackgroundTool` to avoid duplicating
 //! the post-manifest spawn sequence.
 
-use tracing::info;
+use std::time::Duration;
+
+use tracing::{info, warn};
 
 use crate::{
     agent::AgentManifest,
     handle::KernelHandle,
-    io::{AgentEvent, StreamEvent},
+    io::{AgentEvent, BackgroundTaskStatus, StreamEvent},
     session::{BackgroundTaskEntry, SessionKey},
     tool::ToolContext,
 };
@@ -88,13 +90,33 @@ pub(crate) async fn spawn_and_register_background(
         },
     );
 
-    // Spawn fire-and-forget watcher to drain result_rx.
+    // Spawn watcher to drain result_rx with a timeout so it cannot hang forever.
+    let watcher_timeout = Duration::from_secs(manifest.worker_timeout_secs.unwrap_or(600) + 60);
+    let stream_hub = handle.stream_hub().clone();
+    let parent_key = *session_key;
     tokio::spawn(async move {
         let mut rx = agent_handle.result_rx;
-        while let Some(event) = rx.recv().await {
-            if matches!(event, AgentEvent::Done(_)) {
-                break;
+        let result = tokio::time::timeout(watcher_timeout, async {
+            while let Some(event) = rx.recv().await {
+                if matches!(event, AgentEvent::Done(_)) {
+                    break;
+                }
             }
+        })
+        .await;
+        if result.is_err() {
+            warn!(
+                child = %child_key,
+                timeout_secs = watcher_timeout.as_secs(),
+                "background agent watcher timed out — child may still be running"
+            );
+            stream_hub.emit_to_session(
+                &parent_key,
+                StreamEvent::BackgroundTaskDone {
+                    task_id: child_key.to_string(),
+                    status:  BackgroundTaskStatus::Failed,
+                },
+            );
         }
     });
 

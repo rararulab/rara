@@ -106,7 +106,7 @@ impl ToolExecute for TaskTool {
             sandbox:                None,
             default_execution_mode: None,
             tool_call_limit:        None,
-            worker_timeout_secs:    None,
+            worker_timeout_secs:    Some(preset.max_iterations as u64 * 60),
         };
 
         let mut result = super::background_common::spawn_and_register_background(
@@ -177,7 +177,7 @@ mod tests {
             sandbox:                None,
             default_execution_mode: None,
             tool_call_limit:        None,
-            worker_timeout_secs:    None,
+            worker_timeout_secs:    Some(preset.max_iterations as u64 * 60),
         };
         assert_eq!(manifest.role, AgentRole::Worker);
         assert_eq!(manifest.max_children, Some(0));

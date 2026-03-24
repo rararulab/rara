@@ -116,7 +116,7 @@ impl ToolExecute for SpawnBackgroundTool {
             sandbox: None,
             default_execution_mode: None,
             tool_call_limit: None,
-            worker_timeout_secs: None,
+            worker_timeout_secs: Some(p.max_iterations.unwrap_or(15) as u64 * 60),
         };
 
         super::background_common::spawn_and_register_background(
