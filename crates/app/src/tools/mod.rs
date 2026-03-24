@@ -70,7 +70,10 @@ use find_files::FindFilesTool;
 use grep::GrepTool;
 use http_fetch::HttpFetchTool;
 use list_directory::ListDirectoryTool;
-use marketplace::MarketplaceTool;
+use marketplace::{
+    MarketplaceAddSourceTool, MarketplaceBrowseTool, MarketplaceInstallTool,
+    MarketplaceRefreshTool, MarketplaceSearchTool, MarketplaceUninstallTool,
+};
 use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
 pub use mita_dispatch_rara::DispatchRaraTool;
 use mita_distill_user_notes::DistillUserNotesTool;
@@ -187,10 +190,25 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(CreateSkillTool::new(deps.skill_registry.clone())),
         Arc::new(DeleteSkillTool::new(deps.skill_registry)),
         // Marketplace
-        Arc::new(MarketplaceTool::new(
-            deps.marketplace_service,
+        Arc::new(MarketplaceBrowseTool::new(
+            deps.marketplace_service.clone(),
+            deps.clawhub_client.clone(),
+        )),
+        Arc::new(MarketplaceSearchTool::new(
+            deps.marketplace_service.clone(),
+            deps.clawhub_client.clone(),
+        )),
+        Arc::new(MarketplaceInstallTool::new(
+            deps.marketplace_service.clone(),
             deps.clawhub_client,
         )),
+        Arc::new(MarketplaceUninstallTool::new(
+            deps.marketplace_service.clone(),
+        )),
+        Arc::new(MarketplaceAddSourceTool::new(
+            deps.marketplace_service.clone(),
+        )),
+        Arc::new(MarketplaceRefreshTool::new(deps.marketplace_service)),
         // MCP management tools
         Arc::new(InstallMcpServerTool::new(deps.mcp_manager.clone())),
         Arc::new(ListMcpServersTool::new(deps.mcp_manager.clone())),
@@ -260,7 +278,12 @@ mod tests {
         // Verify deferred tools are NOT in the core list.
         for deferred in [
             "kernel",
-            "marketplace",
+            "marketplace-browse",
+            "marketplace-search",
+            "marketplace-install",
+            "marketplace-uninstall",
+            "marketplace-add-source",
+            "marketplace-refresh",
             "schedule-once",
             "send-email",
             "memory",

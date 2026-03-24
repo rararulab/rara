@@ -7,9 +7,15 @@
 ClawHub is an external skill marketplace at `clawhub.ai`. The integration follows a **client + tool** split:
 
 - `crates/skills/src/clawhub.rs` — `ClawhubClient` (HTTP client, retry logic, zip extraction, manifest registration)
-- `crates/app/src/tools/marketplace.rs` — `MarketplaceTool` (wires `clawhub_search`, `clawhub_browse`, `clawhub_install` actions to the client)
+- `crates/app/src/tools/marketplace/` — 6 individual tools that each wire one action to the client:
+  - `MarketplaceBrowseTool` (`marketplace-browse`)
+  - `MarketplaceSearchTool` (`marketplace-search`)
+  - `MarketplaceInstallTool` (`marketplace-install`)
+  - `MarketplaceUninstallTool` (`marketplace-uninstall`) — calls `uninstall_plugin()`
+  - `MarketplaceAddSourceTool` (`marketplace-add-source`)
+  - `MarketplaceRefreshTool` (`marketplace-refresh`)
 
-`ClawhubClient` is constructed once at boot (`boot.rs`), wrapped in `Arc`, and injected into `MarketplaceTool` via `ToolDeps`.
+`ClawhubClient` is constructed once at boot (`boot.rs`), wrapped in `Arc`, and injected into each marketplace tool via `ToolDeps`.
 
 ### Security Invariants (DO NOT WEAKEN)
 
@@ -32,14 +38,14 @@ Do NOT:
 - Remove the symlink skip or symlink overwrite guard
 - Use `.ok()` to silently ignore directory creation failures in zip extraction (use `.context(IoSnafu)?`)
 
-#### 2. Trust Policy: `trusted: false, enabled: false`
+#### 2. Trust Policy: `trusted: false`
 
-All skills installed from ClawHub are marked `trusted: false, enabled: false` in the manifest. This matches the GitHub install behavior in `install.rs`.
+All skills installed from ClawHub are marked `trusted: false` in the manifest. This matches the GitHub install behavior in `install.rs`.
 
-**Why**: External marketplace content must not be auto-trusted. Users must explicitly enable skills after reviewing them.
+**Why**: External marketplace content must not be auto-trusted. Users must explicitly trust skills after reviewing them.
 
 Do NOT:
-- Set `trusted: true` or `enabled: true` for ClawHub-sourced skills
+- Set `trusted: true` for ClawHub-sourced skills
 - Add an "auto-trust" flag that bypasses this without explicit user confirmation
 
 #### 3. Install Order: Conflict Check → Validate → Download → Cleanup on Failure
@@ -69,7 +75,7 @@ All errors use **snafu context** with the appropriate `SkillError` variant:
 
 Do NOT use `InvalidInput` as a catch-all for network/IO/archive errors — it prevents callers from distinguishing retriable vs fatal failures.
 
-In `marketplace.rs`, errors are converted with `.map_err(anyhow::Error::from)` to preserve the source chain. Do NOT use `.map_err(|e| anyhow::anyhow!("{e}"))` which discards the error type.
+In the marketplace tools, errors are converted with `.map_err(anyhow::Error::from)` to preserve the source chain. Do NOT use `.map_err(|e| anyhow::anyhow!("{e}"))` which discards the error type.
 
 ### URL Construction
 
@@ -105,7 +111,7 @@ Do NOT unify these into a single struct — the API shapes are genuinely differe
 
 Used by:
 - `install.rs` — tarball download and commit SHA lookup
-- `marketplace.rs` — GitHub Contents API for marketplace.json / plugin.json
+- `marketplace/` tools — GitHub Contents API for marketplace.json / plugin.json
 
 The retry logic mirrors `ClawhubClient::get_with_retry()`: exponential backoff with `Retry-After` header support.
 

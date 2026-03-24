@@ -79,7 +79,6 @@ pub struct PluginInfo {
     pub category:    Option<String>,
     pub marketplace: String,
     pub installed:   bool,
-    pub enabled:     bool,
 }
 
 /// Result of a plugin installation.
@@ -108,7 +107,7 @@ pub struct MarketplaceService {
     /// In-memory index cache, keyed by repo string.
     cache:        RwLock<HashMap<String, MarketplaceIndex>>,
     /// Optional live skill registry for immediate updates on
-    /// install/enable/disable.
+    /// install/uninstall.
     registry:     Option<crate::registry::InMemoryRegistry>,
 }
 
@@ -128,7 +127,7 @@ impl MarketplaceService {
         }
     }
 
-    /// Attach a skill registry for live updates on install/enable/disable.
+    /// Attach a skill registry for live updates on install/uninstall.
     #[must_use]
     pub fn with_registry(mut self, registry: crate::registry::InMemoryRegistry) -> Self {
         self.registry = Some(registry);
@@ -276,8 +275,7 @@ impl MarketplaceService {
                 }
             };
             for plugin in &index.plugins {
-                let (installed, enabled) =
-                    self.plugin_local_status(&manifest, &src.repo, &plugin.name);
+                let installed = self.plugin_local_status(&manifest, &src.repo, &plugin.name);
                 results.push(PluginInfo {
                     name: plugin.name.clone(),
                     description: plugin.description.clone().unwrap_or_default(),
@@ -285,7 +283,6 @@ impl MarketplaceService {
                     category: plugin.category.clone(),
                     marketplace: src.name.clone(),
                     installed,
-                    enabled,
                 });
             }
         }
@@ -417,56 +414,45 @@ impl MarketplaceService {
         })
     }
 
-    /// Enable a previously installed plugin.
-    pub fn enable_plugin(&self, plugin_name: &str) -> Result<()> {
-        self.set_plugin_state(plugin_name, true)
-    }
-
-    /// Disable a plugin without uninstalling.
-    pub fn disable_plugin(&self, plugin_name: &str) -> Result<()> {
-        self.set_plugin_state(plugin_name, false)
-    }
-
-    fn set_plugin_state(&self, plugin_name: &str, enabled: bool) -> Result<()> {
+    /// Uninstall a plugin by removing its files and manifest entry.
+    pub async fn uninstall_plugin(&self, plugin_name: &str) -> Result<()> {
         let manifest_path = crate::manifest::ManifestStore::default_path()?;
         let store = crate::manifest::ManifestStore::new(manifest_path);
+        let install_dir = crate::install::default_install_dir()?;
 
-        let (affected_names, manifest_snapshot) = store.with_lock(|manifest| {
-            let plugin = plugin_name.to_string();
-            let mut found = false;
-            let mut affected = Vec::new();
-            for repo in &mut manifest.repos {
-                for skill in &mut repo.skills {
-                    if skill.name.starts_with(&format!("{plugin}:")) || skill.name == plugin {
-                        skill.enabled = enabled;
-                        if enabled {
-                            skill.trusted = true;
-                        }
-                        affected.push(skill.name.clone());
-                        found = true;
-                    }
+        // Find which repo owns this plugin and collect skill names.
+        let (source_repo, skill_names) = store.with_lock(|manifest| {
+            for repo in &manifest.repos {
+                let matching: Vec<String> = repo
+                    .skills
+                    .iter()
+                    .filter(|s| {
+                        s.name.starts_with(&format!("{plugin_name}:")) || s.name == plugin_name
+                    })
+                    .map(|s| s.name.clone())
+                    .collect();
+                if !matching.is_empty() {
+                    return Ok((repo.source.clone(), matching));
                 }
             }
-            if !found {
-                return Err(crate::error::SkillError::NotFound {
-                    name: format!("plugin '{plugin}' is not installed"),
-                });
-            }
-            Ok((affected, manifest.clone()))
+            Err(crate::error::SkillError::NotFound {
+                name: format!("plugin '{plugin_name}' is not installed"),
+            })
         })?;
 
-        // Update in-memory registry for immediate effect.
+        // Remove files from disk.
+        crate::install::remove_repo(&source_repo, &install_dir).await?;
+
+        // Remove from manifest.
+        store.with_lock(|manifest| {
+            manifest.repos.retain(|r| r.source != source_repo);
+            Ok(())
+        })?;
+
+        // Remove from in-memory registry.
         if let Some(ref registry) = self.registry {
-            if enabled {
-                // Re-discover and insert enabled skills.
-                for repo in &manifest_snapshot.repos {
-                    self.sync_repo_to_registry(&manifest_snapshot, &repo.source);
-                }
-            } else {
-                // Remove disabled skills from the registry.
-                for name in &affected_names {
-                    registry.remove(name);
-                }
+            for name in &skill_names {
+                registry.remove(name);
             }
         }
 
@@ -569,15 +555,15 @@ impl MarketplaceService {
         manifest: &crate::types::SkillsManifest,
         _repo: &str,
         plugin_name: &str,
-    ) -> (bool, bool) {
+    ) -> bool {
         for repo in &manifest.repos {
             for skill in &repo.skills {
                 if skill.name.starts_with(&format!("{plugin_name}:")) || skill.name == plugin_name {
-                    return (true, skill.enabled);
+                    return true;
                 }
             }
         }
-        (false, false)
+        false
     }
 }
 
