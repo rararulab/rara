@@ -1006,7 +1006,13 @@ pub(crate) async fn run_agent_loop(
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
     let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_message_id.to_string());
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
-    let mut llm_error_recovery_used = false;
+    /// Maximum number of LLM error recoveries (tools-disabled retries) allowed
+    /// per agent turn before the error becomes fatal.
+    const MAX_LLM_ERROR_RECOVERIES: u32 = 3;
+    let mut llm_error_recovery_count: u32 = 0;
+    // Snapshot of tool definitions before any recovery disables them, so we
+    // can restore tool access after a successful recovery iteration.
+    let original_tool_defs = tool_defs.clone();
     let mut empty_response_nudged = false;
     let mut context_window_recovery_used = false;
     let mut last_progress_at = Instant::now();
@@ -1014,6 +1020,9 @@ pub(crate) async fn run_agent_loop(
     let mut needs_anchor_reminder = false;
     let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
+    // True while the current iteration is a recovery attempt (tools disabled).
+    // Reset after the recovery iteration produces a successful response.
+    let mut in_llm_error_recovery = false;
     let mut loop_breaker =
         loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
     let mut loop_breaker_warning: Option<String> = None;
@@ -1510,19 +1519,24 @@ pub(crate) async fn run_agent_loop(
                 context_window_recovery_used = true;
             }
 
-            if !llm_error_recovery_used && crate::error::is_retryable_provider_error(e) {
+            if llm_error_recovery_count < MAX_LLM_ERROR_RECOVERIES
+                && crate::error::is_retryable_provider_error(e)
+            {
+                llm_error_recovery_count += 1;
                 warn!(
                     iteration,
                     model = model.as_str(),
                     error = %e,
+                    recovery_attempt = llm_error_recovery_count,
+                    max_recoveries = MAX_LLM_ERROR_RECOVERIES,
                     "LLM stream error, attempting recovery without tools"
                 );
-                llm_error_recovery_used = true;
                 llm_error_recovery_message = Some(format!(
                     "[System] The previous request encountered a server error ({e}). Please reply \
                      to the user's question directly without using tools."
                 ));
                 tool_defs = vec![];
+                in_llm_error_recovery = true;
                 continue;
             }
 
@@ -1537,6 +1551,20 @@ pub(crate) async fn run_agent_loop(
             });
         }
         // driver_result is None when repetition_aborted — skip error path above.
+
+        // After a successful LLM response, restore tool definitions if we were
+        // in a recovery iteration (tools disabled).  This allows the agent to
+        // resume normal tool-using behaviour on subsequent iterations instead
+        // of being permanently degraded after a transient provider error.
+        if in_llm_error_recovery {
+            info!(
+                iteration,
+                recovery_count = llm_error_recovery_count,
+                "LLM error recovery succeeded, restoring tool definitions"
+            );
+            tool_defs = original_tool_defs.clone();
+            in_llm_error_recovery = false;
+        }
 
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
         iter_span.record("has_tools", has_tool_calls);
@@ -1605,8 +1633,11 @@ pub(crate) async fn run_agent_loop(
             continue;
         }
 
-        // Terminal response (no tool calls, or recovery iteration must exit)
-        if !has_tool_calls || llm_error_recovery_used {
+        // Terminal response: exit when the LLM produced no tool calls.
+        // Recovery iterations always land here because tools were disabled,
+        // but subsequent iterations (after tool restoration) can resume
+        // normal tool-calling flow.
+        if !has_tool_calls {
             // Persist final assistant message to tape.
             let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
                 rara_message_id: rara_message_id.to_string(),
