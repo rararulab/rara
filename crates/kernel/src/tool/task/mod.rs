@@ -106,7 +106,7 @@ impl ToolExecute for TaskTool {
             sandbox:                None,
             default_execution_mode: None,
             tool_call_limit:        None,
-            worker_timeout_secs:    None,
+            worker_timeout_secs:    Some(preset.max_iterations as u64 * 60),
         };
 
         let mut result = super::background_common::spawn_and_register_background(

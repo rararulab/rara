@@ -24,7 +24,7 @@ use tracing::{info, warn};
 use crate::{
     agent::AgentManifest,
     handle::KernelHandle,
-    io::{AgentEvent, StreamEvent},
+    io::{AgentEvent, BackgroundTaskStatus, StreamEvent},
     session::{BackgroundTaskEntry, SessionKey},
     tool::ToolContext,
 };
@@ -92,7 +92,8 @@ pub(crate) async fn spawn_and_register_background(
 
     // Spawn watcher to drain result_rx with a timeout so it cannot hang forever.
     let watcher_timeout = Duration::from_secs(manifest.worker_timeout_secs.unwrap_or(600) + 60);
-    let child_key_for_log = child_key;
+    let stream_hub = handle.stream_hub().clone();
+    let parent_key = *session_key;
     tokio::spawn(async move {
         let mut rx = agent_handle.result_rx;
         let result = tokio::time::timeout(watcher_timeout, async {
@@ -105,9 +106,16 @@ pub(crate) async fn spawn_and_register_background(
         .await;
         if result.is_err() {
             warn!(
-                child = %child_key_for_log,
+                child = %child_key,
                 timeout_secs = watcher_timeout.as_secs(),
                 "background agent watcher timed out — child may still be running"
+            );
+            stream_hub.emit_to_session(
+                &parent_key,
+                StreamEvent::BackgroundTaskDone {
+                    task_id: child_key.to_string(),
+                    status:  BackgroundTaskStatus::Failed,
+                },
             );
         }
     });
