@@ -45,6 +45,13 @@ pub trait LlmDriver: Send + Sync {
         request: CompletionRequest,
         tx: mpsc::Sender<StreamDelta>,
     ) -> Result<CompletionResponse>;
+
+    /// Return the context window size (in tokens) for the given model, if
+    /// the provider exposes this metadata (e.g., via `/models` endpoint).
+    ///
+    /// The default implementation returns `None`, meaning the caller should
+    /// fall back to a conservative default.
+    async fn model_context_length(&self, _model: &str) -> Option<usize> { None }
 }
 
 /// Shared reference to an [`LlmDriver`].

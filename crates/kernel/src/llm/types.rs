@@ -331,25 +331,33 @@ pub struct ModelCapabilities {
     pub context_window_tokens:        usize,
 }
 
+/// Conservative fallback context window size used when the provider API
+/// does not report `context_length` and no manifest override is set.
+pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+
 impl ModelCapabilities {
-    /// Override the context window size (e.g., from agent manifest config).
+    /// Override the context window size (e.g., from agent manifest config or
+    /// runtime model metadata).
     #[must_use]
     pub fn with_context_window(mut self, tokens: usize) -> Self {
         self.context_window_tokens = tokens;
         self
     }
 
+    /// Detect model capabilities from provider hint and model name.
+    ///
+    /// The `context_window_tokens` field is set to
+    /// [`DEFAULT_CONTEXT_WINDOW_TOKENS`] and should be overridden at runtime
+    /// via the priority chain: manifest override > provider API > default.
     #[must_use]
     pub fn detect(provider_hint: Option<&str>, model_name: &str) -> Self {
         let provider = detect_provider_family(provider_hint, model_name);
-        let canonical = canonical_model_name(model_name);
+        let lower = model_name.to_ascii_lowercase();
 
         // Ollama serves many raw models whose chat templates/tool-calling support
         // varies. Keep the deny-list small and explicit so unsupported models
         // degrade gracefully without breaking tool-capable ones.
-        let context_window_tokens = estimate_context_window(&canonical);
-
-        if matches!(provider, LlmProviderFamily::Ollama) && canonical.starts_with("deepseek-r1") {
+        if matches!(provider, LlmProviderFamily::Ollama) && lower.contains("deepseek-r1") {
             return Self {
                 provider,
                 supports_tools: false,
@@ -357,7 +365,7 @@ impl ModelCapabilities {
                 tools_disabled_reason: Some(
                     "ollama deepseek-r1 variants do not support function/tool calling",
                 ),
-                context_window_tokens,
+                context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
             };
         }
 
@@ -366,7 +374,7 @@ impl ModelCapabilities {
             supports_tools: true,
             supports_parallel_tool_calls: !matches!(provider, LlmProviderFamily::Ollama),
             tools_disabled_reason: None,
-            context_window_tokens,
+            context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
         }
     }
 }
@@ -402,59 +410,6 @@ fn detect_provider_family(provider_hint: Option<&str>, model_name: &str) -> LlmP
     }
 
     LlmProviderFamily::Unknown
-}
-
-/// Best-effort context window estimate based on the canonical model name.
-fn estimate_context_window(canonical: &str) -> usize {
-    // Gemini models: 1M-2M context
-    if canonical.contains("gemini") {
-        return 1_000_000;
-    }
-    // Claude models: 200K context
-    if canonical.contains("claude") {
-        return 200_000;
-    }
-    // GPT-4o / GPT-4o-mini: 128K context
-    if canonical.contains("gpt-4o") {
-        return 128_000;
-    }
-    // GPT-4-turbo / GPT-4.1: 128K context
-    if canonical.contains("gpt-4-turbo") || canonical.contains("gpt-4-1") {
-        return 128_000;
-    }
-    // GPT-4 (non-turbo): 8K context
-    if canonical.contains("gpt-4")
-        && !canonical.contains("gpt-4o")
-        && !canonical.contains("gpt-4-turbo")
-        && !canonical.contains("gpt-4-1")
-    {
-        return 8_192;
-    }
-    // o1/o3/o4 reasoning models: 200K context
-    if canonical.starts_with("o1") || canonical.starts_with("o3") || canonical.starts_with("o4") {
-        return 200_000;
-    }
-    // DeepSeek models: 64K context
-    if canonical.contains("deepseek") {
-        return 64_000;
-    }
-    // Qwen models: 32K-128K, use 32K as safe default
-    if canonical.contains("qwen") {
-        return 32_768;
-    }
-    // Llama models: 128K for llama3+, 8K for older
-    if canonical.contains("llama") {
-        if canonical.contains("llama-3") || canonical.contains("llama3") {
-            return 128_000;
-        }
-        return 8_192;
-    }
-    // Mistral/Mixtral: 32K-128K
-    if canonical.contains("mistral") || canonical.contains("mixtral") {
-        return 32_768;
-    }
-    // Conservative default for unknown models
-    128_000
 }
 
 // ---------------------------------------------------------------------------
@@ -494,15 +449,28 @@ pub struct EmbeddingResponse {
     pub usage:      Option<Usage>,
 }
 
-// ---------------------------------------------------------------------------
-// Helper functions (migrated from model.rs)
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn canonical_model_name(model_name: &str) -> String {
-    let trimmed = model_name.trim().to_ascii_lowercase();
-    trimmed
-        .rsplit('/')
-        .next()
-        .unwrap_or(trimmed.as_str())
-        .to_owned()
+    #[test]
+    fn detect_defaults_to_128k_context_window() {
+        let caps = ModelCapabilities::detect(None, "some-unknown-model");
+        assert_eq!(caps.context_window_tokens, DEFAULT_CONTEXT_WINDOW_TOKENS);
+        assert!(caps.supports_tools);
+    }
+
+    #[test]
+    fn detect_ollama_deepseek_r1_disables_tools() {
+        let caps = ModelCapabilities::detect(Some("ollama"), "deepseek-r1:latest");
+        assert!(!caps.supports_tools);
+        assert_eq!(caps.provider, LlmProviderFamily::Ollama);
+        assert_eq!(caps.context_window_tokens, DEFAULT_CONTEXT_WINDOW_TOKENS);
+    }
+
+    #[test]
+    fn with_context_window_overrides_default() {
+        let caps = ModelCapabilities::detect(None, "gpt-4o").with_context_window(200_000);
+        assert_eq!(caps.context_window_tokens, 200_000);
+    }
 }

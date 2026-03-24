@@ -969,12 +969,14 @@ pub(crate) async fn run_agent_loop(
 
     tracing::Span::current().record("model", model.as_str());
 
-    let capabilities = ModelCapabilities::detect(provider_hint, &model);
-    // Allow the agent manifest to override the estimated context window.
-    let capabilities = match manifest.max_context_tokens {
-        Some(tokens) => capabilities.with_context_window(tokens),
-        None => capabilities,
-    };
+    let mut capabilities = ModelCapabilities::detect(provider_hint, &model);
+
+    // Context window priority: manifest override > provider API > default.
+    if let Some(t) = manifest.max_context_tokens {
+        capabilities = capabilities.with_context_window(t);
+    } else if let Some(api_len) = driver.model_context_length(&model).await {
+        capabilities = capabilities.with_context_window(api_len);
+    }
     tool_context.context_window_tokens = capabilities.context_window_tokens;
     // Provide the live registry (with dynamic MCP tools) so discover-tools
     // can query the full catalog at runtime, not a boot-time snapshot.
