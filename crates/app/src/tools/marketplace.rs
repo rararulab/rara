@@ -146,25 +146,15 @@ impl ToolExecute for MarketplaceTool {
                     .map_err(anyhow::Error::from)?;
                 Ok(json!(result))
             }
-            "enable" => {
-                let name = params
-                    .plugin_name
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("'enable' requires 'plugin_name' parameter"))?;
+            "uninstall" => {
+                let name = params.plugin_name.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("'uninstall' requires 'plugin_name' parameter")
+                })?;
                 self.service
-                    .enable_plugin(name)
+                    .uninstall_plugin(name)
+                    .await
                     .map_err(anyhow::Error::from)?;
-                Ok(json!({"enabled": name}))
-            }
-            "disable" => {
-                let name = params
-                    .plugin_name
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("'disable' requires 'plugin_name' parameter"))?;
-                self.service
-                    .disable_plugin(name)
-                    .map_err(anyhow::Error::from)?;
-                Ok(json!({"disabled": name}))
+                Ok(json!({"uninstalled": name}))
             }
             "add_source" => {
                 let source = params
