@@ -169,31 +169,22 @@ pub fn summarize_parameters(schema: &serde_json::Value) -> String {
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
 
-    let (mut req_parts, mut opt_parts): (Vec<String>, Vec<String>) = properties
+    let (mut req_parts, mut opt_parts): (Vec<_>, Vec<_>) = properties
         .iter()
         .map(|(name, prop)| {
             let ty = prop.get("type").and_then(|t| t.as_str()).unwrap_or("any");
-            (
-                name.clone(),
-                format!("{name} ({ty})"),
-                required.contains(&name.as_str()),
-            )
+            if required.contains(&name.as_str()) {
+                (format!("{name} ({ty}) [required]"), true)
+            } else {
+                (format!("{name} ({ty})"), false)
+            }
         })
-        .fold(
-            (vec![], vec![]),
-            |(mut req, mut opt), (_name, formatted, is_required)| {
-                if is_required {
-                    req.push(format!("{formatted} [required]"));
-                } else {
-                    opt.push(formatted);
-                }
-                (req, opt)
-            },
-        );
+        .partition(|(_, is_req)| *is_req);
     req_parts.sort();
     opt_parts.sort();
-    req_parts.extend(opt_parts);
-    req_parts.join(", ")
+    let mut labels: Vec<&str> = req_parts.iter().map(|(l, _)| l.as_str()).collect();
+    labels.extend(opt_parts.iter().map(|(l, _)| l.as_str()));
+    labels.join(", ")
 }
 
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).
