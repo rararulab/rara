@@ -1006,8 +1006,8 @@ pub(crate) async fn run_agent_loop(
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
     let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_message_id.to_string());
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
-    /// Maximum number of LLM error recoveries (tools-disabled retries) allowed
-    /// per agent turn before the error becomes fatal.
+    // Maximum number of LLM error recoveries (tools-disabled retries) allowed
+    // per agent turn before the error becomes fatal.
     const MAX_LLM_ERROR_RECOVERIES: u32 = 3;
     let mut llm_error_recovery_count: u32 = 0;
     // Snapshot of tool definitions before any recovery disables them, so we
