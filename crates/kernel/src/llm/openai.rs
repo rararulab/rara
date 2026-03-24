@@ -80,9 +80,11 @@ const RATE_LIMIT_INITIAL_DELAY: Duration = Duration::from_secs(5);
 const RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
 
 impl OpenAiDriver {
-    /// Default SSE idle timeout (45 s). If no SSE event arrives within this
+    /// Default SSE idle timeout (90 s). If no SSE event arrives within this
     /// duration the stream is aborted and a retryable error returned.
-    pub const DEFAULT_SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+    /// Set to 90 s to accommodate reasoning models (o1, o3, deepseek-r1) that
+    /// may take 60+ seconds before emitting the first token.
+    pub const DEFAULT_SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
     /// Build a reqwest client for non-streaming requests (5-minute total
     /// timeout).

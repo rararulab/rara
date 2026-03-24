@@ -332,6 +332,13 @@ pub struct ModelCapabilities {
 }
 
 impl ModelCapabilities {
+    /// Override the context window size (e.g., from agent manifest config).
+    #[must_use]
+    pub fn with_context_window(mut self, tokens: usize) -> Self {
+        self.context_window_tokens = tokens;
+        self
+    }
+
     #[must_use]
     pub fn detect(provider_hint: Option<&str>, model_name: &str) -> Self {
         let provider = detect_provider_family(provider_hint, model_name);
@@ -399,13 +406,55 @@ fn detect_provider_family(provider_hint: Option<&str>, model_name: &str) -> LlmP
 
 /// Best-effort context window estimate based on the canonical model name.
 fn estimate_context_window(canonical: &str) -> usize {
+    // Gemini models: 1M-2M context
     if canonical.contains("gemini") {
-        1_000_000
-    } else if canonical.contains("claude") {
-        200_000
-    } else {
-        128_000
+        return 1_000_000;
     }
+    // Claude models: 200K context
+    if canonical.contains("claude") {
+        return 200_000;
+    }
+    // GPT-4o / GPT-4o-mini: 128K context
+    if canonical.contains("gpt-4o") {
+        return 128_000;
+    }
+    // GPT-4-turbo / GPT-4.1: 128K context
+    if canonical.contains("gpt-4-turbo") || canonical.contains("gpt-4-1") {
+        return 128_000;
+    }
+    // GPT-4 (non-turbo): 8K context
+    if canonical.contains("gpt-4")
+        && !canonical.contains("gpt-4o")
+        && !canonical.contains("gpt-4-turbo")
+        && !canonical.contains("gpt-4-1")
+    {
+        return 8_192;
+    }
+    // o1/o3/o4 reasoning models: 200K context
+    if canonical.starts_with("o1") || canonical.starts_with("o3") || canonical.starts_with("o4") {
+        return 200_000;
+    }
+    // DeepSeek models: 64K context
+    if canonical.contains("deepseek") {
+        return 64_000;
+    }
+    // Qwen models: 32K-128K, use 32K as safe default
+    if canonical.contains("qwen") {
+        return 32_768;
+    }
+    // Llama models: 128K for llama3+, 8K for older
+    if canonical.contains("llama") {
+        if canonical.contains("llama-3") || canonical.contains("llama3") {
+            return 128_000;
+        }
+        return 8_192;
+    }
+    // Mistral/Mixtral: 32K-128K
+    if canonical.contains("mistral") || canonical.contains("mixtral") {
+        return 32_768;
+    }
+    // Conservative default for unknown models
+    128_000
 }
 
 // ---------------------------------------------------------------------------
