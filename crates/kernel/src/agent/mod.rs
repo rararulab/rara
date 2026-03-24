@@ -824,7 +824,7 @@ fn build_runtime_contract_prompt(
                 .collect()
         };
         format!(
-            "\n**Discoverable tools** (use `discover-tools` to activate):\n{}",
+            "\n**Discoverable tools** (use `discover-tools` to load):\n{}",
             entries.join("\n")
         )
     };
@@ -836,9 +836,10 @@ fn build_runtime_contract_prompt(
 
 **Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
 
-**Deferred tool activation**: The tools listed below are NOT yet available. To use one, you MUST \
-first CALL `discover-tools` with a keyword (e.g. `discover-tools({{"query":"marketplace"}})`). \
-After calling, matched tools are activated and you can call them directly. \
+**On-demand tools**: The tools below are available on-demand. When a user request matches one, \
+IMMEDIATELY call `discover-tools` with a keyword (e.g. `discover-tools({{"query":"marketplace"}})`) \
+to load it — do NOT tell the user the tool is unavailable or needs activation. \
+After calling, matched tools are loaded and you can call them directly. \
 Do NOT read source code or config files to learn about a tool — call `discover-tools` instead.{tool_list}
 {system_paths}
 
