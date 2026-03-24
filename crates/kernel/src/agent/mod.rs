@@ -786,19 +786,35 @@ pub(crate) fn build_agent_system_prompt(
     } else {
         effective_prompt
     };
-    // 3. Append runtime contract (tape actions, discoverable tool names).
-    let deferred_names = tool_registry.deferred_names();
-    let effective_prompt = build_runtime_contract_prompt(&effective_prompt, &deferred_names);
+    // 3. Append runtime contract (tape actions, discoverable tool catalog).
+    let empty = std::collections::HashSet::new();
+    let deferred_catalog = tool_registry.deferred_catalog(&empty);
+    let effective_prompt = build_runtime_contract_prompt(&effective_prompt, &deferred_catalog);
     (effective_prompt, has_soul)
 }
 
-fn build_runtime_contract_prompt(base_prompt: &str, deferred_names: &[String]) -> String {
-    let tool_list = if deferred_names.is_empty() {
+fn build_runtime_contract_prompt(
+    base_prompt: &str,
+    deferred_catalog: &[(String, String)],
+) -> String {
+    let tool_list = if deferred_catalog.is_empty() {
         String::new()
     } else {
+        let entries: Vec<String> = {
+            let mut catalog = deferred_catalog.to_vec();
+            catalog.sort_by(|a, b| a.0.cmp(&b.0));
+            catalog
+                .iter()
+                .map(|(name, desc)| {
+                    // Truncate description to first sentence for brevity.
+                    let short = desc.find(". ").map_or(desc.as_str(), |pos| &desc[..=pos]);
+                    format!("  - `{name}` — {short}")
+                })
+                .collect()
+        };
         format!(
-            "\n**Discoverable tools** (use `discover-tools` to activate): {}",
-            deferred_names.join(", ")
+            "\n**Discoverable tools** (use `discover-tools` to activate):\n{}",
+            entries.join("\n")
         )
     };
     format!(
@@ -2582,10 +2598,20 @@ mod tests {
     }
 
     #[test]
-    fn runtime_contract_lists_deferred_tool_names() {
-        let names = vec!["http-fetch".to_string(), "system-paths".to_string()];
-        let prompt = build_runtime_contract_prompt("base", &names);
-        assert!(prompt.contains("http-fetch, system-paths"));
+    fn runtime_contract_lists_deferred_tool_catalog() {
+        let catalog = vec![
+            (
+                "http-fetch".to_string(),
+                "Fetch HTTP resources.".to_string(),
+            ),
+            (
+                "system-paths".to_string(),
+                "Show system paths. Extra detail here.".to_string(),
+            ),
+        ];
+        let prompt = build_runtime_contract_prompt("base", &catalog);
+        assert!(prompt.contains("`http-fetch` — Fetch HTTP resources."));
+        assert!(prompt.contains("`system-paths` — Show system paths."));
         assert!(prompt.contains("Discoverable tools"));
     }
 
