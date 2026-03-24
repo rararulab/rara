@@ -449,7 +449,9 @@ pub async fn start_with_options(
         tape_service:  Some(rara.tape_service.clone()),
         kernel_handle: Some(kernel_handle.clone()),
         mutation_sink: rara.dock_mutation_sink.clone(),
-        in_flight:     std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        in_flight:     std::sync::Arc::new(parking_lot::Mutex::new(
+            std::collections::HashSet::new(),
+        )),
     };
     let dock_routes = rara_dock::dock_router(dock_state);
 

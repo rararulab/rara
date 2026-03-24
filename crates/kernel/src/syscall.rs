@@ -1303,18 +1303,18 @@ fn parse_session_key(s: &str) -> anyhow::Result<SessionKey> {
 }
 
 fn parse_scope(scope: &str) -> anyhow::Result<KvScope> {
-    match scope {
-        "global" => Ok(KvScope::Global),
-        s if s.starts_with("team:") => Ok(KvScope::Team(s["team:".len()..].to_string())),
-        s if s.starts_with("agent:") => {
-            let uuid_str = &s["agent:".len()..];
-            let uuid = uuid::Uuid::parse_str(uuid_str)
-                .map_err(|e| anyhow::anyhow!("invalid agent UUID in scope: {e}"))?;
-            Ok(KvScope::Agent(uuid))
-        }
-        _ => Err(anyhow::anyhow!(
+    if scope == "global" {
+        Ok(KvScope::Global)
+    } else if let Some(rest) = scope.strip_prefix("team:") {
+        Ok(KvScope::Team(rest.to_string()))
+    } else if let Some(rest) = scope.strip_prefix("agent:") {
+        let uuid = uuid::Uuid::parse_str(rest)
+            .map_err(|e| anyhow::anyhow!("invalid agent UUID in scope: {e}"))?;
+        Ok(KvScope::Agent(uuid))
+    } else {
+        Err(anyhow::anyhow!(
             "invalid scope '{scope}'. Expected 'global', 'team:<name>', or 'agent:<uuid>'"
-        )),
+        ))
     }
 }
 
