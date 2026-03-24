@@ -824,7 +824,7 @@ fn build_runtime_contract_prompt(
                 .collect()
         };
         format!(
-            "\n**Discoverable tools** (use `discover-tools` to activate):\n{}",
+            "\n**Discoverable tools** (use `discover-tools` to load):\n{}",
             entries.join("\n")
         )
     };
