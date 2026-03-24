@@ -20,7 +20,7 @@
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -34,6 +34,7 @@ use axum::{
     },
     routing::{get, patch, post},
 };
+use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, warn};
@@ -380,13 +381,12 @@ async fn turn_handler(
     struct InFlightGuard(Arc<Mutex<HashSet<String>>>, String);
     impl Drop for InFlightGuard {
         fn drop(&mut self) {
-            if let Ok(mut guard) = self.0.lock() {
-                guard.remove(&self.1);
-            }
+            let mut guard = self.0.lock();
+            guard.remove(&self.1);
         }
     }
     let in_flight_guard = {
-        let mut guard = state.in_flight.lock().expect("in_flight lock poisoned");
+        let mut guard = state.in_flight.lock();
         if !guard.insert(body.session_id.clone()) {
             return Err(crate::DockError::Kernel {
                 message: "a turn is already in progress for this session".into(),
