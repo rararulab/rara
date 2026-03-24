@@ -169,19 +169,31 @@ pub fn summarize_parameters(schema: &serde_json::Value) -> String {
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
 
-    let mut parts: Vec<String> = properties
+    let (mut req_parts, mut opt_parts): (Vec<String>, Vec<String>) = properties
         .iter()
         .map(|(name, prop)| {
             let ty = prop.get("type").and_then(|t| t.as_str()).unwrap_or("any");
-            if required.contains(&name.as_str()) {
-                format!("{name} ({ty}, required)")
-            } else {
-                format!("{name} ({ty})")
-            }
+            (
+                name.clone(),
+                format!("{name} ({ty})"),
+                required.contains(&name.as_str()),
+            )
         })
-        .collect();
-    parts.sort();
-    parts.join(", ")
+        .fold(
+            (vec![], vec![]),
+            |(mut req, mut opt), (_name, formatted, is_required)| {
+                if is_required {
+                    req.push(format!("{formatted} [required]"));
+                } else {
+                    opt.push(formatted);
+                }
+                (req, opt)
+            },
+        );
+    req_parts.sort();
+    opt_parts.sort();
+    req_parts.extend(opt_parts);
+    req_parts.join(", ")
 }
 
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).
@@ -866,12 +878,23 @@ mod tests {
             "required": ["query"]
         });
         let result = summarize_parameters(&schema);
-        assert!(result.contains("query (string, required)"), "got: {result}");
+        // Required params come first with [required] marker.
+        assert!(
+            result.contains("query (string) [required]"),
+            "got: {result}"
+        );
         assert!(result.contains("source (string)"), "got: {result}");
         assert!(result.contains("limit (integer)"), "got: {result}");
-        // Required params should not appear without the marker
+        // Required params should appear before optional ones.
+        let req_pos = result.find("query").expect("missing query");
+        let opt_pos = result.find("limit").expect("missing limit");
         assert!(
-            !result.contains("source (string, required)"),
+            req_pos < opt_pos,
+            "required should come first, got: {result}"
+        );
+        // Optional params should not have [required] marker.
+        assert!(
+            !result.contains("source (string) [required]"),
             "got: {result}"
         );
     }
