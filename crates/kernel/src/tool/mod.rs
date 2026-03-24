@@ -851,4 +851,39 @@ mod tests {
         let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
         assert!(result.tools.is_empty());
     }
+
+    #[test]
+    fn summarize_parameters_extracts_compact_summary() {
+        use super::summarize_parameters;
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "source": {"type": "string"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"]
+        });
+        let result = summarize_parameters(&schema);
+        assert!(result.contains("query (string, required)"), "got: {result}");
+        assert!(result.contains("source (string)"), "got: {result}");
+        assert!(result.contains("limit (integer)"), "got: {result}");
+        // Required params should not appear without the marker
+        assert!(
+            !result.contains("source (string, required)"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn summarize_parameters_handles_empty_schema() {
+        use super::summarize_parameters;
+
+        let empty = serde_json::json!({"type": "object"});
+        assert_eq!(summarize_parameters(&empty), "");
+
+        let null = serde_json::Value::Null;
+        assert_eq!(summarize_parameters(&null), "");
+    }
 }
