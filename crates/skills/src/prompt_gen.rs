@@ -85,7 +85,7 @@ pub fn generate_skills_prompt(skills: &[SkillMetadata]) -> String {
     out.push('\n');
     out.push_str(
         "To use a skill, use `discover-tools` to find it and read its SKILL.md for full \
-         instructions.\nUse YOUR actual tools (http_fetch, bash, read_file, etc.) — not tool \
+         instructions.\nUse YOUR actual tools (http-fetch, bash, read-file, etc.) — not tool \
          names from skills written for other environments.\n\n",
     );
     out

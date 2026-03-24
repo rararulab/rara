@@ -819,12 +819,13 @@ fn build_runtime_contract_prompt(
                 .map(|(name, desc)| {
                     // Truncate description to first sentence for brevity.
                     let short = desc.find(". ").map_or(desc.as_str(), |pos| &desc[..=pos]);
-                    format!("  - `{name}` — {short}")
+                    format!("  - {name}: {short}")
                 })
                 .collect()
         };
         format!(
-            "\n**Discoverable tools** (use `discover-tools` to load):\n{}",
+            "\n**Discoverable tools** (these are keywords, NOT callable tool names — you MUST \
+             call `discover-tools` first to load them):\n{}",
             entries.join("\n")
         )
     };
@@ -836,11 +837,11 @@ fn build_runtime_contract_prompt(
 
 **Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
 
-**On-demand tools**: The tools below are available on-demand. When a user request matches one, \
-IMMEDIATELY call `discover-tools` with a keyword (e.g. `discover-tools({{"query":"marketplace"}})`) \
-to load it — do NOT tell the user the tool is unavailable or needs activation. \
-After calling, matched tools are loaded and you can call them directly. \
-Do NOT read source code or config files to learn about a tool — call `discover-tools` instead.{tool_list}
+**MANDATORY: On-demand tool activation**: You MUST call `discover-tools` BEFORE using any tool \
+from the list below. These names are search keywords, NOT callable tools. \
+Example: `discover-tools({{"query":"marketplace"}})` — this loads the real tools so you can call them. \
+NEVER call a listed name directly. NEVER tell the user a tool is unavailable — \
+call `discover-tools` to load it first.{tool_list}
 {system_paths}
 
 **MUST anchor when:**
@@ -912,7 +913,7 @@ pub(crate) async fn run_agent_loop(
         })?;
 
     // Filter tools by manifest allowlist, then remove excluded tools.
-    let manifest_filtered = full_tools.filtered(&manifest.tools);
+    let manifest_filtered = full_tools.filtered_for_manifest(&manifest.tools);
     let manifest_filtered = if manifest.excluded_tools.is_empty() {
         manifest_filtered
     } else {
@@ -957,7 +958,7 @@ pub(crate) async fn run_agent_loop(
     let max_iterations = manifest
         .max_iterations
         .unwrap_or(handle.config().default_max_iterations);
-    let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest, &full_tools);
+    let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest, tools.as_ref());
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
@@ -2627,9 +2628,11 @@ mod tests {
             ),
         ];
         let prompt = build_runtime_contract_prompt("base", &catalog, "");
-        assert!(prompt.contains("`http-fetch` — Fetch HTTP resources."));
-        assert!(prompt.contains("`system-paths` — Show system paths."));
+        assert!(prompt.contains("http-fetch: Fetch HTTP resources."));
+        assert!(prompt.contains("system-paths: Show system paths."));
         assert!(prompt.contains("Discoverable tools"));
+        assert!(prompt.contains("NOT callable tool names"));
+        assert!(!prompt.contains("`http-fetch`"));
     }
 
     #[test]

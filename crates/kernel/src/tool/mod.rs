@@ -407,6 +407,29 @@ impl ToolRegistry {
         new
     }
 
+    /// Create a manifest-scoped registry.
+    ///
+    /// Behaves like [`Self::filtered`], with one deferred-tools exception:
+    /// if the manifest allowlist includes `discover-tools`, all deferred tools
+    /// are retained so they can be discovered and activated at runtime.
+    #[must_use]
+    pub fn filtered_for_manifest(&self, tool_names: &[String]) -> Self {
+        if tool_names.is_empty() || tool_names.iter().any(|n| n == "*") {
+            return self.clone();
+        }
+        let allow: std::collections::HashSet<&str> =
+            tool_names.iter().map(String::as_str).collect();
+        let keep_deferred = allow.contains("discover-tools");
+        let mut new = Self::new();
+        for (name, tool) in &self.tools {
+            if allow.contains(name.as_str()) || (keep_deferred && tool.tier() == ToolTier::Deferred)
+            {
+                new.register(Arc::clone(tool));
+            }
+        }
+        new
+    }
+
     /// Create a new registry excluding the named tools.
     #[must_use]
     pub fn without(&self, excluded: &[String]) -> Self {
