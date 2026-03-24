@@ -20,6 +20,7 @@
 
 use rara_kernel::tool::{
     DiscoverToolsResult, DiscoveredSkillEntry, DiscoveredToolEntry, ToolContext, ToolExecute,
+    summarize_parameters,
 };
 use rara_skills::registry::InMemoryRegistry;
 use rara_tool_macro::ToolDef;
@@ -90,9 +91,18 @@ impl ToolExecute for DiscoverToolsTool {
             .filter(|(name, desc)| {
                 name.to_lowercase().contains(&query) || desc.to_lowercase().contains(&query)
             })
-            .map(|(name, desc)| DiscoveredToolEntry {
-                name:        name.to_string(),
-                description: desc.to_string(),
+            .map(|(name, desc)| {
+                let parameters = context
+                    .tool_registry
+                    .as_ref()
+                    .and_then(|reg| reg.get(name))
+                    .map(|tool| summarize_parameters(&tool.parameters_schema()))
+                    .unwrap_or_default();
+                DiscoveredToolEntry {
+                    name: name.to_string(),
+                    description: desc.to_string(),
+                    parameters,
+                }
             })
             .collect();
 
@@ -135,7 +145,10 @@ impl ToolExecute for DiscoverToolsTool {
 
         let mut parts = Vec::new();
         if tool_count > 0 {
-            parts.push(format!("{tool_count} tool(s) activated"));
+            parts.push(format!(
+                "{tool_count} tool(s) activated — call them directly now using the parameters \
+                 shown"
+            ));
         }
         if skill_count > 0 {
             parts.push(format!(

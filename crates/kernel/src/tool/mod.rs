@@ -148,6 +148,43 @@ pub struct DiscoveredToolEntry {
     /// One-line description of the tool.
     #[serde(default)]
     pub description: String,
+    /// Compact parameter summary (e.g. `"query (string, required), source
+    /// (string)"`). Empty when schema is unavailable.
+    #[serde(default)]
+    pub parameters:  String,
+}
+
+/// Convert a JSON Schema `parameters_schema` value into a compact one-line
+/// summary suitable for LLM consumption.
+///
+/// Example output: `query (string, required), source (string), limit (integer)`
+pub fn summarize_parameters(schema: &serde_json::Value) -> String {
+    let properties = match schema.get("properties").and_then(|p| p.as_object()) {
+        Some(props) => props,
+        None => return String::new(),
+    };
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let (mut req_parts, mut opt_parts): (Vec<_>, Vec<_>) = properties
+        .iter()
+        .map(|(name, prop)| {
+            let ty = prop.get("type").and_then(|t| t.as_str()).unwrap_or("any");
+            if required.contains(&name.as_str()) {
+                (format!("{name} ({ty}) [required]"), true)
+            } else {
+                (format!("{name} ({ty})"), false)
+            }
+        })
+        .partition(|(_, is_req)| *is_req);
+    req_parts.sort();
+    opt_parts.sort();
+    let mut labels: Vec<&str> = req_parts.iter().map(|(l, _)| l.as_str()).collect();
+    labels.extend(opt_parts.iter().map(|(l, _)| l.as_str()));
+    labels.join(", ")
 }
 
 /// Provider of tools that are discovered at runtime (e.g. MCP servers).
@@ -816,5 +853,51 @@ mod tests {
         let json = serde_json::json!({"status": "no_matches", "message": "nothing"});
         let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
         assert!(result.tools.is_empty());
+    }
+
+    #[test]
+    fn summarize_parameters_extracts_compact_summary() {
+        use super::summarize_parameters;
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "source": {"type": "string"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"]
+        });
+        let result = summarize_parameters(&schema);
+        // Required params come first with [required] marker.
+        assert!(
+            result.contains("query (string) [required]"),
+            "got: {result}"
+        );
+        assert!(result.contains("source (string)"), "got: {result}");
+        assert!(result.contains("limit (integer)"), "got: {result}");
+        // Required params should appear before optional ones.
+        let req_pos = result.find("query").expect("missing query");
+        let opt_pos = result.find("limit").expect("missing limit");
+        assert!(
+            req_pos < opt_pos,
+            "required should come first, got: {result}"
+        );
+        // Optional params should not have [required] marker.
+        assert!(
+            !result.contains("source (string) [required]"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn summarize_parameters_handles_empty_schema() {
+        use super::summarize_parameters;
+
+        let empty = serde_json::json!({"type": "object"});
+        assert_eq!(summarize_parameters(&empty), "");
+
+        let null = serde_json::Value::Null;
+        assert_eq!(summarize_parameters(&null), "");
     }
 }
