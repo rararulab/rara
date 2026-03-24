@@ -54,8 +54,10 @@ pub struct OpenAiDriver {
     /// [`Self::DEFAULT_SSE_IDLE_TIMEOUT`].
     sse_idle_timeout: Duration,
     /// Lazily populated cache of model_id → context_length from the
-    /// provider's `/models` endpoint.
-    models_cache:     tokio::sync::RwLock<HashMap<String, usize>>,
+    /// provider's `/models` endpoint.  Initialised at most once via
+    /// [`tokio::sync::OnceCell`] to avoid duplicate fetches under
+    /// concurrent access.
+    models_cache:     tokio::sync::OnceCell<HashMap<String, usize>>,
 }
 
 enum OpenAiDriverConfigSource {
@@ -88,6 +90,9 @@ impl OpenAiDriver {
     /// Set to 90 s to accommodate reasoning models (o1, o3, deepseek-r1) that
     /// may take 60+ seconds before emitting the first token.
     pub const DEFAULT_SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+    /// Timeout for the metadata-only `/models` request.  Kept short so a
+    /// slow or unreachable provider does not block agent loop startup.
+    const MODELS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Build a reqwest client for non-streaming requests (5-minute total
     /// timeout).
@@ -130,7 +135,7 @@ impl OpenAiDriver {
                 api_key:  api_key.into(),
             },
             sse_idle_timeout,
-            models_cache: tokio::sync::RwLock::new(HashMap::new()),
+            models_cache: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -152,7 +157,7 @@ impl OpenAiDriver {
                 provider_name: provider_name.into(),
             },
             sse_idle_timeout,
-            models_cache: tokio::sync::RwLock::new(HashMap::new()),
+            models_cache: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -327,62 +332,68 @@ impl OpenAiDriver {
     }
 
     /// Fetch context lengths for all models from the provider's `/models`
-    /// endpoint and populate the internal cache.
+    /// endpoint.  Returns a map of `model_id → context_length`.
     ///
-    /// Returns the context length for the requested model if found.
     /// Errors are logged and swallowed — callers fall back to the default.
-    async fn fetch_and_cache_context_lengths(&self, model: &str) -> Option<usize> {
-        let config = self.resolve_config().await.ok()?;
+    async fn fetch_context_lengths(&self) -> HashMap<String, usize> {
+        let config = match self.resolve_config().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(error = %e, "failed to resolve config for /models fetch");
+                return HashMap::new();
+            }
+        };
         let url = format!("{}/models", config.base_url);
 
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(&config.api_key)
-            .send()
-            .await
-            .map_err(|e| {
+        let result = tokio::time::timeout(
+            Self::MODELS_FETCH_TIMEOUT,
+            self.client.get(&url).bearer_auth(&config.api_key).send(),
+        )
+        .await;
+
+        let response = match result {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
                 tracing::debug!(error = %e, "failed to fetch /models for context length cache");
-                e
-            })
-            .ok()?;
+                return HashMap::new();
+            }
+            Err(_) => {
+                tracing::debug!(
+                    timeout_secs = Self::MODELS_FETCH_TIMEOUT.as_secs(),
+                    "timed out fetching /models for context length cache"
+                );
+                return HashMap::new();
+            }
+        };
 
         if !response.status().is_success() {
             tracing::debug!(
                 status = %response.status(),
                 "non-success response from /models endpoint"
             );
-            return None;
+            return HashMap::new();
         }
 
-        let raw: RawModelsWithContextResponse = response
-            .json()
-            .await
-            .map_err(|e| {
+        let raw: RawModelsResponse = match response.json().await {
+            Ok(r) => r,
+            Err(e) => {
                 tracing::debug!(error = %e, "failed to parse /models response for context lengths");
-                e
-            })
-            .ok()?;
-
-        let mut cache = self.models_cache.write().await;
-        let mut result = None;
-        for entry in raw.data {
-            if let Some(ctx_len) = entry.context_length {
-                if entry.id == model {
-                    result = Some(ctx_len);
-                }
-                cache.insert(entry.id, ctx_len);
+                return HashMap::new();
             }
-        }
+        };
+
+        let cache: HashMap<String, usize> = raw
+            .data
+            .into_iter()
+            .filter_map(|e| e.context_length.map(|len| (e.id, len)))
+            .collect();
 
         tracing::debug!(
             cached_models = cache.len(),
-            model,
-            context_length = ?result,
             "populated model context length cache from /models"
         );
 
-        result
+        cache
     }
 }
 
@@ -490,20 +501,11 @@ impl LlmDriver for OpenAiDriver {
     }
 
     async fn model_context_length(&self, model: &str) -> Option<usize> {
-        // Fast path: check cache under a read lock.
-        {
-            let cache = self.models_cache.read().await;
-            if let Some(&len) = cache.get(model) {
-                return Some(len);
-            }
-            // If the cache is already populated (from a prior fetch) but the
-            // model isn't in it, the provider doesn't know about this model.
-            if !cache.is_empty() {
-                return None;
-            }
-        }
-        // Slow path: fetch from the provider and populate cache.
-        self.fetch_and_cache_context_lengths(model).await
+        let cache = self
+            .models_cache
+            .get_or_init(|| self.fetch_context_lengths())
+            .await;
+        cache.get(model).copied()
     }
 }
 
@@ -1131,26 +1133,15 @@ struct RawModelsResponse {
 
 #[derive(Deserialize)]
 struct RawModelEntry {
-    id:       String,
-    #[serde(default)]
-    owned_by: Option<String>,
-    #[serde(default)]
-    created:  Option<u64>,
-}
-
-/// Extended model entry that includes `context_length` when the provider
-/// supports it (e.g., OpenRouter returns this field).
-#[derive(Deserialize)]
-struct RawModelEntryWithContext {
     id:             String,
     #[serde(default)]
+    owned_by:       Option<String>,
+    #[serde(default)]
+    created:        Option<u64>,
+    /// Context window size in tokens.  Returned by providers like
+    /// OpenRouter but absent from the standard OpenAI response.
+    #[serde(default)]
     context_length: Option<usize>,
-}
-
-/// Response from `/models` parsed with optional `context_length` per model.
-#[derive(Deserialize)]
-struct RawModelsWithContextResponse {
-    data: Vec<RawModelEntryWithContext>,
 }
 
 // ---------------------------------------------------------------------------
