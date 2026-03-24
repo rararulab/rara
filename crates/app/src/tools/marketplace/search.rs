@@ -40,9 +40,9 @@ pub struct MarketplaceSearchParams {
 #[derive(ToolDef)]
 #[tool(
     name = "marketplace-search",
-    description = "Search for plugins by keyword in GitHub marketplace indexes or clawhub.ai. Use \
-                   `source: \"clawhub\"` to search clawhub.ai (supports `limit`), or omit \
-                   `source` to search GitHub marketplace indexes.",
+    description = "Search for plugins and skills by keyword in GitHub marketplace indexes or \
+                   clawhub.ai. Use `source: \"clawhub\"` to search clawhub.ai (supports `limit`), \
+                   or omit `source` to search GitHub marketplace indexes.",
     tier = "deferred"
 )]
 pub struct MarketplaceSearchTool {

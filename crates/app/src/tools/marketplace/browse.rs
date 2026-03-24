@@ -46,9 +46,9 @@ pub struct MarketplaceBrowseParams {
 #[derive(ToolDef)]
 #[tool(
     name = "marketplace-browse",
-    description = "List available plugins from GitHub marketplace sources or clawhub.ai. Use \
-                   `source: \"clawhub\"` to browse clawhub.ai skills (supports `sort` and \
-                   `limit`), or omit `source` to browse GitHub marketplace indexes.",
+    description = "List available plugins and skills from GitHub marketplace sources or \
+                   clawhub.ai. Use `source: \"clawhub\"` to browse clawhub.ai skills (supports \
+                   `sort` and `limit`), or omit `source` to browse GitHub marketplace indexes.",
     tier = "deferred"
 )]
 pub struct MarketplaceBrowseTool {

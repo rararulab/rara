@@ -35,8 +35,8 @@ pub struct MarketplaceUninstallParams {
 #[derive(ToolDef)]
 #[tool(
     name = "marketplace-uninstall",
-    description = "Uninstall a previously installed plugin by name. The plugin files are removed \
-                   from the local installation directory.",
+    description = "Uninstall a previously installed plugin or skill by name. Removes files from \
+                   the local installation directory and cleans up the registry.",
     tier = "deferred"
 )]
 pub struct MarketplaceUninstallTool {
