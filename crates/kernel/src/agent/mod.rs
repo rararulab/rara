@@ -836,10 +836,10 @@ fn build_runtime_contract_prompt(
 
 **Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
 
-**Deferred tool activation**: The tools listed below are NOT yet available. To use one, you MUST \
-first CALL `discover-tools` with a keyword (e.g. `discover-tools({{"query":"marketplace"}})`). \
-After calling, matched tools are activated and you can call them directly. \
-Do NOT read source code or config files to learn about a tool — call `discover-tools` instead.{tool_list}
+**On-demand tools** (available via `discover-tools`): The tools below are ready to activate. \
+To use one, CALL `discover-tools` with a keyword (e.g. `discover-tools({{"query":"marketplace"}})`). \
+Matched tools are activated immediately and you can call them directly. \
+Do NOT tell the user a tool is unavailable — call `discover-tools` to activate it first.{tool_list}
 {system_paths}
 
 **MUST anchor when:**
