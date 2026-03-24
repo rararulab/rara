@@ -29,32 +29,54 @@ use serde_json::{Value, json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MarketplaceParams {
-    /// The operation to perform.
+    /// Which operation to perform. Valid actions and their required parameters:
+    ///
+    /// - `browse` — list all available plugins (optional: `marketplace`)
+    /// - `search` — search plugins by keyword (required: `query`)
+    /// - `install` — install a single plugin from a marketplace (required:
+    ///   `plugin_name`, optional: `marketplace`)
+    /// - `install_repo` — install all skills from a GitHub repo (required:
+    ///   `source` as "owner/repo")
+    /// - `enable` — enable an installed plugin (required: `plugin_name`)
+    /// - `disable` — disable an installed plugin (required: `plugin_name`)
+    /// - `add_source` — register a new marketplace source (required: `source`
+    ///   as "owner/repo")
+    /// - `refresh` — re-fetch marketplace indexes (optional: `marketplace`)
+    /// - `clawhub_search` — search skills on clawhub.ai (required: `query`,
+    ///   optional: `limit`)
+    /// - `clawhub_browse` — browse skills on clawhub.ai (optional: `sort`,
+    ///   `limit`)
+    /// - `clawhub_install` — install a skill from clawhub.ai (required: `slug`)
     action:      String,
-    /// Search query (for 'search' action).
+    /// Search keyword. Required for `search` and `clawhub_search` actions.
     query:       Option<String>,
-    /// Plugin name (for install/enable/disable).
+    /// Plugin name. Required for `install`, `enable`, and `disable` actions.
     plugin_name: Option<String>,
-    /// GitHub owner/repo (for 'add_source' action).
+    /// GitHub owner/repo (e.g. "anthropics/skills"). Required for
+    /// `install_repo` and `add_source` actions.
     source:      Option<String>,
-    /// Limit operation to a specific marketplace.
+    /// Limit operation to a specific marketplace name. Optional for `browse`,
+    /// `install`, and `refresh`.
     marketplace: Option<String>,
-    /// Sort order for clawhub_browse.
+    /// Sort order for `clawhub_browse`: "trending" (default), "updated",
+    /// "downloads", or "stars".
     sort:        Option<String>,
-    /// Max results for clawhub_search/clawhub_browse.
+    /// Maximum number of results. Optional for `clawhub_search` and
+    /// `clawhub_browse` (default: 20).
     limit:       Option<u64>,
-    /// Skill slug for clawhub_install.
+    /// Skill identifier on clawhub.ai. Required for `clawhub_install`.
     slug:        Option<String>,
 }
 
 #[derive(ToolDef)]
 #[tool(
     name = "marketplace",
-    description = "Browse, search, and install skills and plugins. Use install_repo to install a \
-                   skill repo from GitHub (owner/repo or full URL). Use install to install a \
-                   single plugin from a marketplace. Actions: browse, search, install, \
-                   install_repo, enable, disable, add_source, remove_source, refresh, \
-                   clawhub_search, clawhub_browse, clawhub_install.",
+    description = "Manage skills and plugins from GitHub marketplaces and clawhub.ai. Key \
+                   workflows: `browse` to see what is available, `search` by keyword, `install` a \
+                   plugin by name, `install_repo` from GitHub (owner/repo), `clawhub_browse` / \
+                   `clawhub_search` / `clawhub_install` for clawhub.ai. Also: `enable`, \
+                   `disable`, `add_source`, `refresh`. See the `action` parameter description for \
+                   full details.",
     tier = "deferred"
 )]
 pub struct MarketplaceTool {
