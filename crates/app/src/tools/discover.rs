@@ -79,11 +79,18 @@ impl ToolExecute for DiscoverToolsTool {
         // For now, always show the full catalog — harmless since re-activation is a
         // no-op.
         let empty = std::collections::HashSet::new();
+        let has_registry = context.tool_registry.is_some();
         let catalog = context
             .tool_registry
             .as_ref()
             .map(|registry| registry.deferred_catalog(&empty))
             .unwrap_or_default();
+        tracing::debug!(
+            %query,
+            has_registry,
+            catalog_size = catalog.len(),
+            "discover-tools: deferred catalog state"
+        );
 
         let tool_matches: Vec<DiscoveredToolEntry> = catalog
             .iter()
@@ -153,5 +160,102 @@ impl ToolExecute for DiscoverToolsTool {
             message: format!("{}.", parts.join("; ")),
         };
         serde_json::to_value(&result).map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rara_kernel::tool::{AgentTool, ToolContext, ToolOutput, ToolRegistry, ToolTier};
+
+    use super::*;
+
+    /// Minimal deferred tool for testing.
+    struct FakeDeferred;
+    #[async_trait::async_trait]
+    impl AgentTool for FakeDeferred {
+        fn name(&self) -> &str { "marketplace" }
+
+        fn description(&self) -> &str { "Manage skills from clawhub.ai." }
+
+        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+
+        async fn execute(
+            &self,
+            _: serde_json::Value,
+            _: &ToolContext,
+        ) -> anyhow::Result<ToolOutput> {
+            unimplemented!()
+        }
+
+        fn tier(&self) -> ToolTier { ToolTier::Deferred }
+    }
+
+    fn make_context_with_deferred() -> ToolContext {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(FakeDeferred));
+        let queue = rara_kernel::queue::ShardedEventQueue::new(
+            rara_kernel::queue::ShardedEventQueueConfig::default(),
+        );
+        ToolContext {
+            user_id:               "test".to_string(),
+            session_key:           rara_kernel::session::SessionKey::new(),
+            origin_endpoint:       None,
+            event_queue:           Arc::new(queue),
+            rara_message_id:       rara_kernel::io::MessageId::new(),
+            context_window_tokens: 0,
+            tool_registry:         Some(Arc::new(reg)),
+            stream_handle:         None,
+            tool_call_id:          None,
+        }
+    }
+
+    #[tokio::test]
+    async fn discover_finds_deferred_marketplace() {
+        let tool = DiscoverToolsTool::new(InMemoryRegistry::new());
+        let ctx = make_context_with_deferred();
+        let params = DiscoverToolsParams {
+            query: "marketplace".to_string(),
+        };
+        let result = tool.run(params, &ctx).await.unwrap();
+        let parsed: DiscoverToolsResult = serde_json::from_value(result).unwrap();
+        assert_eq!(
+            parsed.status, "activated",
+            "expected activated, got: {}",
+            parsed.status
+        );
+        assert!(
+            parsed.tools.iter().any(|t| t.name == "marketplace"),
+            "marketplace not found in: {:?}",
+            parsed.tools
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_empty_query_returns_all_deferred() {
+        let tool = DiscoverToolsTool::new(InMemoryRegistry::new());
+        let ctx = make_context_with_deferred();
+        let params = DiscoverToolsParams {
+            query: String::new(),
+        };
+        let result = tool.run(params, &ctx).await.unwrap();
+        let parsed: DiscoverToolsResult = serde_json::from_value(result).unwrap();
+        assert_eq!(parsed.status, "activated");
+        assert_eq!(parsed.tools.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn discover_no_registry_returns_no_tools() {
+        let tool = DiscoverToolsTool::new(InMemoryRegistry::new());
+        let mut ctx = make_context_with_deferred();
+        ctx.tool_registry = None;
+        let params = DiscoverToolsParams {
+            query: "marketplace".to_string(),
+        };
+        let result = tool.run(params, &ctx).await.unwrap();
+        let parsed: DiscoverToolsResult = serde_json::from_value(result).unwrap();
+        assert_eq!(parsed.status, "no_matches");
+        assert!(parsed.tools.is_empty());
     }
 }
