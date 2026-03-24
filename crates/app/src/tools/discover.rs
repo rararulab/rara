@@ -29,8 +29,10 @@ use serde::Deserialize;
 /// Parameters for the discover-tools meta tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DiscoverToolsParams {
-    /// Keyword to search for in tool/skill names and descriptions.
-    /// Examples: "email", "skill", "dock", "mcp", "browser"
+    /// Plain keyword to search for in tool/skill names and descriptions.
+    /// Must be a simple word — do NOT include JSON syntax or special
+    /// characters. Examples: "schedule", "email", "browser", "memory",
+    /// "skill"
     query: String,
 }
 
@@ -65,7 +67,12 @@ impl ToolExecute for DiscoverToolsTool {
         params: Self::Params,
         context: &ToolContext,
     ) -> anyhow::Result<Self::Output> {
-        let query = params.query.to_lowercase();
+        // Strip stray JSON syntax characters that LLMs sometimes leak into the
+        // query (e.g. "}schedule" instead of "schedule").
+        let query = params
+            .query
+            .trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+            .to_lowercase();
 
         // --- Search deferred tools ---
         // TODO: pass actual activation state so already-activated tools are excluded.
