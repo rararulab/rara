@@ -39,6 +39,7 @@ mod mita_distill_user_notes;
 mod mita_evolve_soul;
 mod mita_list_sessions;
 mod mita_read_tape;
+mod mita_update_proactive_config;
 mod mita_update_session_title;
 mod mita_update_soul_state;
 mod mita_write_user_note;
@@ -80,6 +81,7 @@ use mita_distill_user_notes::DistillUserNotesTool;
 use mita_evolve_soul::EvolveSoulTool;
 use mita_list_sessions::ListSessionsTool;
 use mita_read_tape::ReadTapeTool;
+use mita_update_proactive_config::UpdateProactiveConfigTool;
 use mita_update_session_title::UpdateSessionTitleTool;
 use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
@@ -232,6 +234,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // Mita soul evolution tools
         Arc::new(UpdateSoulStateTool::new()),
         Arc::new(EvolveSoulTool::new()),
+        // Mita proactive config tool
+        Arc::new(UpdateProactiveConfigTool::new()),
         // ACP delegation
         Arc::new(AcpDelegateTool::new(deps.acp_registry.clone())),
         // ACP management tools

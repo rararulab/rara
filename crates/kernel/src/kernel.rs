@@ -45,7 +45,7 @@ use futures::FutureExt;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::{
     KernelError,
@@ -128,6 +128,10 @@ pub struct KernelConfig {
     /// Mita heartbeat interval. `None` disables the heartbeat.
     #[default(_code = "None")]
     pub mita_heartbeat_interval: Option<Duration>,
+    /// Proactive signal filter configuration. `None` disables proactive
+    /// signals (heartbeat-only mode).
+    #[default(_code = "None")]
+    pub proactive:               Option<crate::proactive::ProactiveConfig>,
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
     pub event_queue:             ShardedEventQueueConfig,
@@ -196,6 +200,14 @@ pub struct Kernel {
     trace_service:         crate::trace::TraceService,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: crate::handle::SkillPromptProvider,
+    /// Optional proactive signal filter. `None` when proactive config is
+    /// absent, which disables all proactive signals.
+    /// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the lock
+    /// is held only for brief, non-async filter checks — no `.await` inside.
+    ///
+    /// SAFETY: MUST NOT hold this lock across `.await` points. The only call
+    /// site is `try_emit_proactive_signal` which is a synchronous function.
+    proactive_filter:      std::sync::Mutex<Option<crate::proactive::ProactiveFilter>>,
 }
 
 impl Kernel {
@@ -275,6 +287,13 @@ impl Kernel {
             dynamic_tool_provider,
         );
 
+        let proactive_filter = std::sync::Mutex::new(
+            config
+                .proactive
+                .as_ref()
+                .map(|c| crate::proactive::ProactiveFilter::new(c.clone())),
+        );
+
         Self {
             config,
             process_table: Arc::new(SessionTable::new()),
@@ -293,6 +312,7 @@ impl Kernel {
             guard_pipeline,
             trace_service,
             skill_prompt_provider,
+            proactive_filter,
         }
     }
 
@@ -459,6 +479,10 @@ impl Kernel {
         let mita_interval = self.config.mita_heartbeat_interval;
         let mut next_mita = mita_interval.map(|d| tokio::time::Instant::now() + d);
 
+        // Proactive time events (morning greeting / daily summary).
+        let mut next_proactive_time: Option<(tokio::time::Instant, bool)> =
+            self.compute_next_proactive_time_event();
+
         loop {
             // Compute next wake time for the unified scheduler (processor 0 only).
             let scheduler_sleep = if id == 0 {
@@ -473,8 +497,10 @@ impl Kernel {
                     tokio::time::Instant::now() + clamped
                 });
 
-                // Find the earliest deadline among: mita heartbeat, next scheduled job.
-                let earliest = [next_mita, next_job_instant]
+                // Find the earliest deadline among: mita heartbeat, next scheduled
+                // job, and next proactive time event.
+                let next_proactive_instant = next_proactive_time.map(|(inst, _)| inst);
+                let earliest = [next_mita, next_job_instant, next_proactive_instant]
                     .into_iter()
                     .flatten()
                     .min()
@@ -516,6 +542,19 @@ impl Kernel {
                                 error!(%e, "failed to push MitaHeartbeat");
                             }
                             next_mita = mita_interval.map(|d| now + d);
+                        }
+                    }
+
+                    // Check if a proactive time event is due.
+                    if let Some((proactive_at, is_morning)) = next_proactive_time {
+                        if now >= proactive_at {
+                            let signal = if is_morning {
+                                crate::proactive::ProactiveSignal::MorningGreeting
+                            } else {
+                                crate::proactive::ProactiveSignal::DailySummary
+                            };
+                            self.try_emit_proactive_signal(signal);
+                            next_proactive_time = self.compute_next_proactive_time_event();
                         }
                     }
 
@@ -684,10 +723,19 @@ impl Kernel {
             KernelEvent::MitaHeartbeat => {
                 self.handle_mita_heartbeat().await;
             }
+            KernelEvent::ProactiveSignal(signal) => {
+                self.handle_proactive_signal(signal).await;
+            }
+            KernelEvent::ReloadProactiveConfig => {
+                self.handle_reload_proactive_config();
+            }
             KernelEvent::IdleCheck => {
                 // Periodic idle check — handled by session table reaping.
                 self.process_table
                     .reap_terminal(std::time::Duration::from_secs(300));
+
+                // Emit SessionIdle signals for sessions idle beyond threshold.
+                self.emit_idle_signals();
             }
             KernelEvent::Shutdown => {
                 info!("shutdown event received");
@@ -1444,6 +1492,10 @@ impl Kernel {
                     error = %e,
                     "failed to spawn scheduled job agent"
                 );
+                // Emit TaskFailed proactive signal so Mita is aware.
+                self.try_emit_proactive_signal(crate::proactive::ProactiveSignal::TaskFailed {
+                    error: format!("job {job_id}: {e}"),
+                });
             }
         }
     }
@@ -1664,16 +1716,365 @@ impl Kernel {
             return;
         }
 
-        // Deliver heartbeat message to the existing Mita session.
+        // Deliver structured heartbeat context pack to the existing Mita session.
+        let active_count = self
+            .process_table
+            .list()
+            .iter()
+            .filter(|p| matches!(p.state, SessionState::Active | SessionState::Ready))
+            .count();
+        let mita_history = self.build_mita_history().await;
+        let mita_tools: Option<Vec<String>> =
+            self.agent_registry.get("mita").map(|m| m.tools.clone());
+        let tools_ref = mita_tools.as_deref();
+        let context = crate::proactive::build_heartbeat_context_pack(
+            active_count,
+            mita_history.as_ref(),
+            tools_ref,
+        );
         let msg = InboundMessage::synthetic(
-            "Heartbeat triggered. Analyze active sessions and determine if any proactive actions \
-             are needed. Review your previous tape entries to avoid repeating recent actions."
-                .to_string(),
+            context,
             crate::identity::UserId("system".to_string()),
             session_key,
         );
 
         self.deliver_to_session(session_key, msg).await;
+    }
+
+    /// Handle a proactive signal — build context pack and deliver to Mita.
+    ///
+    /// For session-scoped signals, looks up session info from the process
+    /// table to populate the context pack with session name, idle duration,
+    /// and last activity time.
+    async fn handle_proactive_signal(&self, signal: crate::proactive::ProactiveSignal) {
+        info!(kind = signal.kind_name(), "handling proactive signal");
+
+        let session_ctx = match &signal {
+            crate::proactive::ProactiveSignal::SessionIdle {
+                session_key,
+                idle_duration,
+            } => {
+                let last_msg = self.last_user_message_from_tape(session_key).await;
+                self.process_table
+                    .with(session_key, |p| crate::proactive::SessionContext {
+                        session_name:      Some(p.manifest.name.clone()),
+                        session_key:       session_key.to_string(),
+                        idle_since:        Some(format!("{}m ago", idle_duration.as_secs() / 60)),
+                        last_user_message: last_msg,
+                    })
+            }
+            crate::proactive::ProactiveSignal::SessionCompleted { session_key, .. } => {
+                let last_msg = self.last_user_message_from_tape(session_key).await;
+                self.process_table
+                    .with(session_key, |p| crate::proactive::SessionContext {
+                        session_name:      Some(p.manifest.name.clone()),
+                        session_key:       session_key.to_string(),
+                        idle_since:        None,
+                        last_user_message: last_msg,
+                    })
+            }
+            _ => None,
+        };
+
+        let mita_history = self.build_mita_history().await;
+        let mita_tools: Option<Vec<String>> =
+            self.agent_registry.get("mita").map(|m| m.tools.clone());
+        let tools_ref = mita_tools.as_deref();
+        let context = crate::proactive::build_context_pack(
+            &signal,
+            session_ctx.as_ref(),
+            mita_history.as_ref(),
+            tools_ref,
+        );
+
+        // Lightweight LLM judgment: is this signal worth a full Mita turn?
+        if let Some(model) = self
+            .config
+            .proactive
+            .as_ref()
+            .and_then(|c| c.judgment_model.as_deref())
+        {
+            match self
+                .syscall
+                .driver_registry()
+                .resolve("__proactive_judgment__", None, None)
+            {
+                Ok((driver, resolved_model)) => {
+                    let model_name = if model.is_empty() {
+                        &resolved_model
+                    } else {
+                        model
+                    };
+                    match crate::proactive::should_act(&driver, model_name, &context).await {
+                        crate::proactive::SignalJudgment::ShouldDrop { reason } => {
+                            info!(
+                                kind = signal.kind_name(),
+                                reason = %reason,
+                                "signal dropped by LLM judgment"
+                            );
+                            return;
+                        }
+                        crate::proactive::SignalJudgment::ShouldAct { reason } => {
+                            debug!(
+                                kind = signal.kind_name(),
+                                reason = %reason,
+                                "signal approved by LLM judgment"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!(error = %e, "signal judgment: driver not available, passing through");
+                }
+            }
+        }
+
+        self.deliver_proactive_to_mita(&context).await;
+    }
+
+    /// Extract recent Mita actions from the Mita tape.
+    async fn build_mita_history(&self) -> Option<crate::proactive::MitaHistory> {
+        let mita_tape = crate::session::SessionKey::deterministic("mita").to_string();
+        let entries = self
+            .tape_service
+            .from_last_anchor(&mita_tape, Some(&[crate::memory::TapEntryKind::ToolCall]))
+            .await
+            .ok()?;
+
+        // Take last 5 tool calls as recent actions.
+        let recent_actions: Vec<String> = entries
+            .iter()
+            .rev()
+            .take(5)
+            .filter_map(|entry| {
+                let payload = entry.payload.as_object()?;
+                let tool_name = payload.get("name")?.as_str()?;
+                let timestamp = entry.timestamp;
+                Some(format!("{}: called {}", timestamp, tool_name))
+            })
+            .collect();
+
+        if recent_actions.is_empty() {
+            None
+        } else {
+            Some(crate::proactive::MitaHistory { recent_actions })
+        }
+    }
+
+    /// Read the last user message from a session's tape.
+    async fn last_user_message_from_tape(
+        &self,
+        session_key: &crate::session::SessionKey,
+    ) -> Option<String> {
+        let tape_name = session_key.to_string();
+        let entries = self
+            .tape_service
+            .from_last_anchor(&tape_name, Some(&[crate::memory::TapEntryKind::Message]))
+            .await
+            .ok()?;
+
+        // Walk backwards to find the last user message.
+        entries.iter().rev().find_map(|entry| {
+            let payload = entry.payload.as_object()?;
+            let role = payload.get("role")?.as_str()?;
+            if role == "user" {
+                let content = payload.get("content")?.as_str()?;
+                Some(content.chars().take(200).collect())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Deliver a proactive context pack to the Mita session.
+    ///
+    /// Similar to `handle_mita_heartbeat` delivery but with structured
+    /// context pack text instead of a one-line instruction.
+    async fn deliver_proactive_to_mita(&self, context: &str) {
+        let session_key = crate::session::SessionKey::deterministic("mita");
+
+        if !self.process_table.contains(&session_key) {
+            // Mita session not running — the next heartbeat will bootstrap it.
+            // Drop this signal rather than spawning Mita just for one event.
+            info!("proactive signal dropped: Mita session not yet running");
+            return;
+        }
+
+        let msg = InboundMessage::synthetic(
+            context.to_string(),
+            crate::identity::UserId("system".to_string()),
+            session_key,
+        );
+
+        self.deliver_to_session(session_key, msg).await;
+    }
+
+    /// Compute the next proactive time event (morning greeting or daily
+    /// summary) based on the configured work hours and timezone.
+    ///
+    /// Returns `Some((instant, is_morning))` where `is_morning` is `true`
+    /// for a morning greeting and `false` for a daily summary. Returns
+    /// `None` when proactive config is absent or work hours are invalid.
+    fn compute_next_proactive_time_event(&self) -> Option<(tokio::time::Instant, bool)> {
+        let config = self.config.proactive.as_ref()?;
+        let tz = config.parsed_timezone()?;
+        let work_start = config.parsed_work_start()?;
+        let work_end = config.parsed_work_end()?;
+
+        let now = jiff::Timestamp::now();
+        let local_now = now.to_zoned(tz.clone());
+        let today = local_now.date();
+        let current_time = local_now.time();
+
+        // Determine the next event: whichever of morning/daily is soonest.
+        let (target_time, is_morning) = if current_time < work_start {
+            // Before work hours — next event is morning greeting today.
+            (work_start, true)
+        } else if current_time < work_end {
+            // During work hours — next event is daily summary today.
+            (work_end, false)
+        } else {
+            // After work hours — next event is morning greeting tomorrow.
+            (work_start, true)
+        };
+
+        // Build the target zoned datetime.
+        let target_date = if !is_morning || current_time < work_start {
+            today
+        } else {
+            // Tomorrow for morning greeting when we're past work_end.
+            today.tomorrow().ok()?
+        };
+
+        let target_dt = target_date
+            .to_zoned(tz)
+            .ok()
+            .and_then(|zdt| zdt.with().time(target_time).build().ok())?;
+        let target_ts = target_dt.timestamp();
+        let delta = target_ts.since(now).ok()?;
+        let delta_secs = delta.total(jiff::Unit::Second).ok()?;
+        if delta_secs <= 0.0 {
+            return None;
+        }
+
+        let instant = tokio::time::Instant::now() + Duration::from_secs_f64(delta_secs);
+        Some((instant, is_morning))
+    }
+
+    /// Reload the proactive filter from `config_dir()/mita/proactive.yaml`.
+    ///
+    /// Called when the `update-proactive-config` tool writes a new config
+    /// to disk. Reconstructs the in-memory `ProactiveFilter` so changes
+    /// take effect immediately without restarting rara.
+    fn handle_reload_proactive_config(&self) {
+        let path = rara_paths::config_dir().join("mita").join("proactive.yaml");
+        let config = match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                match serde_yaml::from_str::<crate::proactive::ProactiveConfig>(&contents) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(error = %e, path = %path.display(), "failed to parse proactive config");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, path = %path.display(), "failed to read proactive config");
+                return;
+            }
+        };
+
+        let new_filter = crate::proactive::ProactiveFilter::new(config);
+        let mut guard = self
+            .proactive_filter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = Some(new_filter);
+        info!("proactive filter reloaded from {}", path.display());
+    }
+
+    /// Emit `SessionIdle` signals for sessions that have been idle beyond
+    /// the configured threshold.
+    fn emit_idle_signals(&self) {
+        let proactive_config = match self.config.proactive.as_ref() {
+            Some(c) => c,
+            None => return, // Proactive disabled.
+        };
+        let completed_threshold = Duration::from_secs(proactive_config.session_completed_secs);
+        let idle_threshold = Duration::from_secs(proactive_config.idle_threshold_secs);
+        let now = jiff::Timestamp::now();
+        let mita_key = crate::session::SessionKey::deterministic("mita");
+
+        for stats in self.process_table.list() {
+            // Only check Ready sessions (Active means currently running).
+            if stats.state != SessionState::Ready {
+                continue;
+            }
+            // Skip the Mita session itself.
+            if stats.session_key == mita_key {
+                continue;
+            }
+
+            let idle_duration = stats
+                .last_activity
+                .and_then(|la| {
+                    now.since(la)
+                        .ok()
+                        .and_then(|s| s.total(jiff::Unit::Second).ok())
+                })
+                .map(|secs| Duration::from_secs_f64(secs))
+                .unwrap_or(Duration::ZERO);
+
+            // Emit at most one signal per session: SessionCompleted for the
+            // shorter window, SessionIdle for the longer one (not both).
+            if idle_duration >= idle_threshold {
+                let signal = crate::proactive::ProactiveSignal::SessionIdle {
+                    session_key: stats.session_key.clone(),
+                    idle_duration,
+                };
+                self.try_emit_proactive_signal(signal);
+            } else if idle_duration >= completed_threshold {
+                let summary = self
+                    .process_table
+                    .with(&stats.session_key, |p| p.manifest.name.clone())
+                    .unwrap_or_default();
+                let signal = crate::proactive::ProactiveSignal::SessionCompleted {
+                    session_key: stats.session_key.clone(),
+                    summary,
+                };
+                self.try_emit_proactive_signal(signal);
+            }
+        }
+    }
+
+    /// Try to emit a proactive signal through the filter.
+    ///
+    /// Checks the proactive filter; if the signal passes, pushes a
+    /// `ProactiveSignal` event into the kernel event queue and records
+    /// the fire. Session-scoped cooldowns use the session key embedded
+    /// in the signal variant.
+    fn try_emit_proactive_signal(&self, signal: crate::proactive::ProactiveSignal) {
+        let mut guard = self
+            .proactive_filter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let filter = match guard.as_mut() {
+            Some(f) => f,
+            None => return, // Proactive disabled.
+        };
+
+        if !filter.should_pass(&signal) {
+            return;
+        }
+        filter.record_fired(&signal);
+
+        if let Err(e) = self
+            .event_queue
+            .try_push(KernelEventEnvelope::proactive_signal(signal))
+        {
+            error!(%e, "failed to push ProactiveSignal event");
+        }
     }
 
     /// Deliver a message to a live process: buffer if the process is paused
@@ -2484,7 +2885,7 @@ impl Kernel {
 
         // Track whether the turn errored so we can choose the right terminal
         // state below (Completed vs Failed).
-        let mut _turn_failed = false;
+        let mut turn_failed = false;
 
         let agent_name = self
             .process_table
@@ -2607,8 +3008,8 @@ impl Kernel {
             }
             Err(err_msg) => {
                 span.record("success", false);
-                _turn_failed = !interrupted;
-                if _turn_failed {
+                turn_failed = !interrupted;
+                if turn_failed {
                     error!(session_key = %session_key, error = %err_msg, "turn failed");
                 } else {
                     info!(session_key = %session_key, "turn interrupted by user");
@@ -2619,7 +3020,7 @@ impl Kernel {
                 // already sent a confirmation message) and when
                 // origin_endpoint is None (same rationale as reply delivery
                 // above).
-                if _turn_failed && origin_endpoint.is_some() {
+                if turn_failed && origin_endpoint.is_some() {
                     let envelope = OutboundEnvelope::error(
                         in_reply_to,
                         user.clone(),
@@ -2659,7 +3060,7 @@ impl Kernel {
         // After each successful turn, spawn an async task to extract long-term
         // memories from the conversation tape. Failures are logged but never
         // block the main event loop.
-        if !_turn_failed {
+        if !turn_failed {
             let tape_service = self.tape_service.clone();
             let knowledge = Arc::clone(&self.knowledge);
             let driver_registry = Arc::clone(self.syscall.driver_registry());
@@ -2712,7 +3113,7 @@ impl Kernel {
         // After the first successful turn, spawn a task to auto-generate a
         // human-readable title for the session using LLM. Only fires when
         // the session has no title yet.
-        if !_turn_failed {
+        if !turn_failed {
             let session_index = Arc::clone(self.io.session_index());
             let needs_title = match session_index.get_session(&session_key).await {
                 Ok(Some(entry)) => entry.title.is_none(),

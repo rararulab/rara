@@ -265,3 +265,51 @@ includes `task`, `spawn-background`, and `create-plan`.
 - Do NOT publish TaskReport without going through the syscall — `exec_publish_report` enforces `source_session` and `tags` invariants
 - Do NOT use `UserId("system")` in synthetic messages for ProactiveTurn — always use the subscription owner's identity to prevent privilege escalation on session restore
 - Do NOT construct `TaskNotification` outside `handle_publish_task_report` — it builds the `TaskReportRef` and coordinates result persistence
+
+---
+
+## Proactive V2 — Event-Driven Proactive Signals
+
+### What
+
+Event-driven proactive signals that supplement the polling heartbeat. Internal kernel events (idle sessions, task failures, time triggers) emit `ProactiveSignal` variants, which pass through a pure rule-based `ProactiveFilter`, then an optional lightweight LLM judgment layer (`signal_judgment.rs`), before being delivered to Mita as structured context packs.
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `proactive/signal.rs` | `ProactiveSignal` enum (5 signal kinds) |
+| `proactive/config.rs` | `ProactiveConfig` — YAML-driven filter settings |
+| `proactive/filter.rs` | `ProactiveFilter` — quiet hours, cooldowns, rate limiting |
+| `proactive/context.rs` | `build_context_pack()` / `build_heartbeat_context_pack()` |
+| `proactive/judgment.rs` | Group-chat LLM judgment (pre-existing, unchanged) |
+| `proactive/signal_judgment.rs` | Lightweight LLM pre-filter for proactive signals |
+| `kernel.rs` | Signal emit points + `handle_proactive_signal` + scheduler time events |
+
+### Signal Flow
+
+```
+Kernel event (IdleCheck / TaskFailed / Scheduler)
+  → ProactiveSignal created
+  → ProactiveFilter::should_pass() (quiet hours → cooldown → rate limit)
+  → KernelEvent::ProactiveSignal pushed to event queue
+  → handle_proactive_signal() builds context pack
+  → signal_judgment (optional LLM pre-filter, lightweight model)
+  → deliver_proactive_to_mita() sends to Mita session
+```
+
+`SessionCompleted` is idle-based: fires after `session_completed_secs` (~10min) of inactivity, not on turn completion.
+
+### Critical Invariants
+
+- `ProactiveFilter` is behind `std::sync::Mutex<Option<...>>` in the Kernel — `None` when proactive config is absent, disabling all signals
+- `try_emit_proactive_signal()` is the single entry point for all signal emission — do NOT push `ProactiveSignal` events directly to the queue
+- `ProactiveConfig` does NOT derive `Default` — absence means "feature off"
+- Time events (MorningGreeting/DailySummary) are computed from `work_hours_start`/`work_hours_end` + timezone in the processor 0 scheduler
+
+### What NOT To Do
+
+- Do NOT push `KernelEventEnvelope::proactive_signal()` without going through `try_emit_proactive_signal()` — it enforces filter checks and records fire timestamps
+- Do NOT derive `Default` on `ProactiveConfig` — absence means feature off, and `judgment_model` absence means no LLM pre-filter
+- Do NOT add new signal kinds without adding a `kind_name()` match arm — cooldown keys depend on it
+- Do NOT bypass signal judgment by calling `deliver_proactive_to_mita` directly — always go through `handle_proactive_signal` which enforces the judgment layer

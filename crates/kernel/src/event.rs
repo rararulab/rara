@@ -362,7 +362,21 @@ pub enum KernelEvent {
     /// delivers a heartbeat message to it.
     MitaHeartbeat,
 
+    // === Proactive ===
+    /// Proactive signal for Mita orchestration.
+    ///
+    /// Emitted by internal event sources (idle check, task failure, time
+    /// triggers) after passing through the `ProactiveFilter`.
+    ProactiveSignal(crate::proactive::ProactiveSignal),
+
     // === System ===
+    /// Reload proactive filter configuration from disk.
+    ///
+    /// Emitted by the `update-proactive-config` tool after writing a new
+    /// config to `config_dir()/mita/proactive.yaml`. The kernel re-reads
+    /// the file and reconstructs the in-memory `ProactiveFilter`.
+    ReloadProactiveConfig,
+
     /// Periodic idle check — transitions Ready sessions to Suspended.
     IdleCheck,
 
@@ -389,6 +403,8 @@ impl KernelEvent {
             | Self::ScheduledTask { .. }
             | Self::MitaDirective { .. }
             | Self::MitaHeartbeat
+            | Self::ProactiveSignal(_)
+            | Self::ReloadProactiveConfig
             | Self::IdleCheck => EventPriority::Low,
         }
     }
@@ -592,11 +608,27 @@ impl KernelEventEnvelope {
         }
     }
 
+    /// Create a `ProactiveSignal` event.
+    pub fn proactive_signal(signal: crate::proactive::ProactiveSignal) -> Self {
+        Self {
+            base: EventBase::from(SessionKey::new()),
+            kind: KernelEvent::ProactiveSignal(signal),
+        }
+    }
+
     /// Create a `MitaHeartbeat` event.
     pub fn mita_heartbeat() -> Self {
         Self {
             base: EventBase::from(SessionKey::new()),
             kind: KernelEvent::MitaHeartbeat,
+        }
+    }
+
+    /// Create a `ReloadProactiveConfig` event.
+    pub fn reload_proactive_config() -> Self {
+        Self {
+            base: EventBase::from(SessionKey::new()),
+            kind: KernelEvent::ReloadProactiveConfig,
         }
     }
 
@@ -682,6 +714,10 @@ impl KernelEventEnvelope {
                 format!("mita directive for session {}", self.base.session_key)
             }
             KernelEvent::MitaHeartbeat => "periodic mita heartbeat".to_string(),
+            KernelEvent::ProactiveSignal(signal) => {
+                format!("proactive signal: {}", signal.kind_name())
+            }
+            KernelEvent::ReloadProactiveConfig => "reload proactive filter config".to_string(),
             KernelEvent::IdleCheck => "periodic idle check".to_string(),
             KernelEvent::Shutdown => "shutdown requested".to_string(),
         }
