@@ -259,19 +259,53 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatState) {
         draw_message_lines(&mut lines, message, width, state.spinner_frame);
     }
 
+    // Collapsed thinking summary from a just-completed thinking phase.
+    if let Some(duration_s) = state.thinking_duration_s {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  ⏵ ", theme::thinking_header_style()),
+            Span::styled(
+                format!("Thought for {duration_s}s"),
+                theme::thinking_header_style(),
+            ),
+        ]));
+    }
+
+    // Live thinking display.
+    if state.thinking {
+        let elapsed = state
+            .thinking_started
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        let spinner = theme::SPINNER_FRAMES[state.spinner_frame];
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {spinner} "), Style::default().fg(theme::CYAN)),
+            Span::styled("Thinking\u{2026}", theme::thinking_header_style()),
+            Span::styled(format!("  ({elapsed}s)"), theme::dim_style()),
+        ]));
+
+        // Show the last N lines of thinking content (dimmed italic).
+        let max_thinking_lines = 6;
+        let thinking_lines: Vec<&str> = state.streaming_thinking.lines().collect();
+        let start = thinking_lines.len().saturating_sub(max_thinking_lines);
+        for line in &thinking_lines[start..] {
+            for wrapped in wrap_text(line, width.saturating_sub(6)) {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(wrapped, theme::thinking_text_style()),
+                ]));
+            }
+        }
+    }
+
+    // Regular streaming text.
     if !state.streaming_text.is_empty() {
         lines.push(Line::from(""));
         for wrapped in wrap_text(&state.streaming_text, width.saturating_sub(4)) {
             lines.push(Line::from(vec![Span::raw("  "), Span::raw(wrapped)]));
         }
-    }
-
-    if state.thinking {
-        let spinner = theme::SPINNER_FRAMES[state.spinner_frame];
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {spinner} "), Style::default().fg(theme::CYAN)),
-            Span::styled(state.loading_hint.clone(), Style::default().fg(theme::DIM)),
-        ]));
     }
 
     if let Some(tool_name) = &state.active_tool {
@@ -363,6 +397,12 @@ fn draw_message_lines(
         }
         Role::Agent => {
             lines.push(Line::from(""));
+            if let Some(thinking) = &message.thinking {
+                lines.push(Line::from(vec![
+                    Span::styled("  ⏵ ", theme::thinking_header_style()),
+                    Span::styled(thinking.clone(), theme::thinking_header_style()),
+                ]));
+            }
             for wrapped in wrap_text(&message.text, width.saturating_sub(4)) {
                 lines.push(Line::from(vec![Span::raw("  "), Span::raw(wrapped)]));
             }

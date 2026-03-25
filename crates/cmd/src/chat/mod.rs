@@ -951,8 +951,8 @@ async fn send_cli_message(
     image_paths: Vec<String>,
 ) {
     state.is_streaming = true;
-    state.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
     state.thinking = true;
+    state.thinking_started = Some(std::time::Instant::now());
     state.streaming_chars = 0;
     state.last_tokens = None;
     state.last_cost_usd = None;

@@ -36,3 +36,13 @@ pub fn dim_style() -> Style { Style::default().fg(TEXT_SECONDARY) }
 pub fn input_style() -> Style { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) }
 
 pub fn hint_style() -> Style { Style::default().fg(TEXT_TERTIARY) }
+
+/// Style for the thinking section header ("Thinking…" / "Thought for Xs").
+pub fn thinking_header_style() -> Style { Style::default().fg(CYAN).add_modifier(Modifier::BOLD) }
+
+/// Style for thinking content text (dimmed italic).
+pub fn thinking_text_style() -> Style {
+    Style::default()
+        .fg(TEXT_TERTIARY)
+        .add_modifier(Modifier::ITALIC)
+}
