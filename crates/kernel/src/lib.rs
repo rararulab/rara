@@ -55,6 +55,7 @@ pub(crate) mod syscall;
 pub mod task_report;
 pub mod tool;
 pub mod trace;
+pub mod user_question;
 
 /// Tool name constants for kernel-provided tools.
 ///
@@ -106,6 +107,9 @@ pub mod tool_names {
 
     // ACP delegation
     pub const ACP_DELEGATE: &str = "acp-delegate";
+
+    // User interaction
+    pub const ASK_USER: &str = "ask-user";
 }
 
 pub use error::{KernelError, Result};
