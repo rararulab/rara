@@ -55,9 +55,12 @@ pub enum Role {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessage {
-    pub role: Role,
-    pub text: String,
-    pub tool: Option<ToolInfo>,
+    pub role:     Role,
+    pub text:     String,
+    pub tool:     Option<ToolInfo>,
+    /// Collapsed thinking summary for completed messages (e.g. "Thought for
+    /// 3s").
+    pub thinking: Option<String>,
 }
 
 pub struct ChatState {
@@ -81,9 +84,13 @@ pub struct ChatState {
     pub staged_queue:            Vec<(String, Vec<String>)>,
     pub staged_images:           Vec<String>,
     pub tool_input_buf:          String,
-    /// Cached loading hint, sampled once when entering thinking state to avoid
-    /// flicker on every render tick.
-    pub loading_hint:            String,
+    /// Accumulated thinking/reasoning content (separate from streaming_text).
+    pub streaming_thinking:      String,
+    /// When the current thinking phase started (for live duration display).
+    pub thinking_started:        Option<Instant>,
+    /// Duration of the last completed thinking phase (seconds), for the
+    /// collapsed "Thought for Xs" display in the streaming area.
+    pub thinking_duration_s:     Option<u64>,
     /// Cumulative input tokens for the current turn (latest iteration's context
     /// size).
     pub turn_input_tokens:       u32,
@@ -225,7 +232,9 @@ impl ChatState {
             staged_queue:            Vec::new(),
             staged_images:           Vec::new(),
             tool_input_buf:          String::new(),
-            loading_hint:            String::new(),
+            streaming_thinking:      String::new(),
+            thinking_started:        None,
+            thinking_duration_s:     None,
             turn_input_tokens:       0,
             turn_output_tokens:      0,
             turn_thinking_ms:        0,
@@ -258,7 +267,9 @@ impl ChatState {
         self.staged_queue.clear();
         self.staged_images.clear();
         self.tool_input_buf.clear();
-        self.loading_hint.clear();
+        self.streaming_thinking.clear();
+        self.thinking_started = None;
+        self.thinking_duration_s = None;
         self.turn_input_tokens = 0;
         self.turn_output_tokens = 0;
         self.turn_thinking_ms = 0;
@@ -287,15 +298,34 @@ impl ChatState {
             role,
             text,
             tool: None,
+            thinking: None,
         });
         self.scroll_offset = 0;
     }
 
     pub fn append_stream(&mut self, text: &str) {
-        self.thinking = false;
+        // Transition from thinking to text output.
+        if self.thinking {
+            self.finish_thinking();
+        }
         self.streaming_text.push_str(text);
         self.streaming_chars += text.len();
         self.scroll_offset = 0;
+    }
+
+    /// Transition from thinking phase to text output.
+    ///
+    /// Computes thinking duration and clears the thinking buffer so the UI
+    /// can render the collapsed summary.
+    fn finish_thinking(&mut self) {
+        let duration_s = self
+            .thinking_started
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        self.thinking = false;
+        self.thinking_duration_s = Some(duration_s);
+        self.streaming_thinking.clear();
+        self.thinking_started = None;
     }
 
     pub fn take_staged(&mut self) -> Option<(String, Vec<String>)> {
@@ -307,15 +337,33 @@ impl ChatState {
     }
 
     pub fn finalize_stream(&mut self) {
+        // If still thinking when stream ends, finish it.
+        if self.thinking {
+            self.finish_thinking();
+        }
+
+        let thinking = self
+            .thinking_duration_s
+            .map(|s| format!("Thought for {s}s"));
+
         if !self.streaming_text.is_empty() {
             let text = sanitize_function_tags(&std::mem::take(&mut self.streaming_text));
-            self.push_message(Role::Agent, text);
+            self.messages.push(ChatMessage {
+                role: Role::Agent,
+                text,
+                tool: None,
+                thinking,
+            });
         }
+
         self.is_streaming = false;
         self.thinking = false;
         self.active_tool = None;
         self.streaming_chars = 0;
         self.tool_input_buf.clear();
+        self.thinking_duration_s = None;
+        self.streaming_thinking.clear();
+        self.thinking_started = None;
     }
 
     pub fn tool_start(&mut self, name: &str) {
@@ -326,14 +374,15 @@ impl ChatState {
 
     pub fn tool_use_end(&mut self, name: &str, input: &str) {
         self.messages.push(ChatMessage {
-            role: Role::Tool,
-            text: name.to_owned(),
-            tool: Some(ToolInfo {
+            role:     Role::Tool,
+            text:     name.to_owned(),
+            tool:     Some(ToolInfo {
                 name:     name.to_owned(),
                 input:    input.to_owned(),
                 result:   String::new(),
                 is_error: false,
             }),
+            thinking: None,
         });
         self.active_tool = None;
         self.tool_input_buf.clear();
@@ -386,10 +435,11 @@ impl ChatState {
             CliEvent::ReasoningDelta { text } => {
                 self.is_streaming = true;
                 if !self.thinking {
-                    self.loading_hint = rara_kernel::io::loading_hints::random_hint().to_string();
+                    self.thinking_started = Some(Instant::now());
                 }
                 self.thinking = true;
-                self.append_stream(&text);
+                self.streaming_thinking.push_str(&text);
+                self.scroll_offset = 0;
             }
             CliEvent::ToolCallStart { name, summary } => {
                 if !self.streaming_text.is_empty() {
