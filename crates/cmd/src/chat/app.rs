@@ -19,6 +19,22 @@ use crate::chat::theme;
 
 pub const CHAT_BANNER: &str = "/help for commands • /exit to quit";
 
+/// Result of handling a slash command in the TUI.
+///
+/// Returned by [`handle_slash_command`](super::handle_slash_command) to tell
+/// the main loop whether to continue, exit, or rebind to a new session.
+pub enum HandleResult {
+    /// Keep the current session and continue the event loop.
+    Continue,
+    /// The user requested exit (`/exit` or `/quit`).
+    Exit,
+    /// The user switched to a different session (via `/new` or `/switch`).
+    SessionChanged {
+        /// The new session key string (CLI alias) to use.
+        new_key: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolInfo {
     pub name:     String,
