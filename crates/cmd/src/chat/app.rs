@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rara_channels::terminal::CliEvent;
 
@@ -95,6 +97,16 @@ pub struct ChatState {
     pub pending_question:        Option<PendingQuestion>,
     /// Tool call limit pause awaiting user decision (continue/stop).
     pub pending_tool_call_limit: Option<PendingToolCallLimit>,
+    /// Per-tool progress entries for the current turn.
+    pub tool_progress:           Vec<ToolProgressEntry>,
+    /// When the current turn started (reset each time user sends a message).
+    pub turn_started:            Option<Instant>,
+    /// Active plan goal description.
+    pub plan_goal:               Option<String>,
+    /// Steps in the active plan.
+    pub plan_steps:              Option<Vec<PlanStepInfo>>,
+    /// Index of the currently executing plan step (0-based).
+    pub plan_current_step:       Option<usize>,
 }
 
 /// A guard approval request pending user decision.
@@ -119,6 +131,45 @@ pub struct PendingToolCallLimit {
     pub session_key:     String,
     pub limit_id:        u64,
     pub tool_calls_made: usize,
+}
+
+/// Tracks an individual tool invocation's progress within a turn.
+#[derive(Debug, Clone)]
+pub struct ToolProgressEntry {
+    /// Display name of the tool.
+    pub name:       String,
+    /// Brief summary of what the tool is doing.
+    pub summary:    String,
+    /// When the tool started executing.
+    pub started_at: Instant,
+    /// Whether the tool has finished.
+    pub finished:   bool,
+    /// Whether the tool succeeded (only meaningful when `finished` is true).
+    pub success:    bool,
+    /// Elapsed duration (set when finished).
+    pub duration:   Option<Duration>,
+}
+
+/// Status of an individual plan step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanStepStatus {
+    /// Step has not started yet.
+    Pending,
+    /// Step is currently being executed.
+    Running,
+    /// Step completed successfully.
+    Done,
+    /// Step failed.
+    Failed,
+}
+
+/// Describes a single step within a plan.
+#[derive(Debug, Clone)]
+pub struct PlanStepInfo {
+    /// Human-readable description of this step.
+    pub description: String,
+    /// Current status of this step.
+    pub status:      PlanStepStatus,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -181,6 +232,11 @@ impl ChatState {
             pending_approval:        None,
             pending_question:        None,
             pending_tool_call_limit: None,
+            tool_progress:           Vec::new(),
+            turn_started:            None,
+            plan_goal:               None,
+            plan_steps:              None,
+            plan_current_step:       None,
         };
         state.push_message(Role::System, CHAT_BANNER.to_owned());
         state
@@ -209,6 +265,11 @@ impl ChatState {
         self.pending_approval = None;
         self.pending_question = None;
         self.pending_tool_call_limit = None;
+        self.tool_progress.clear();
+        self.turn_started = None;
+        self.plan_goal = None;
+        self.plan_steps = None;
+        self.plan_current_step = None;
     }
 
     /// Set a pending guard approval request for the user to decide on.
@@ -335,6 +396,14 @@ impl ChatState {
                     let text = std::mem::take(&mut self.streaming_text);
                     self.push_message(Role::Agent, text);
                 }
+                self.tool_progress.push(ToolProgressEntry {
+                    name:       name.clone(),
+                    summary:    summary.clone(),
+                    started_at: Instant::now(),
+                    finished:   false,
+                    success:    true,
+                    duration:   None,
+                });
                 self.tool_start(&name);
                 self.tool_use_end(&name, &summary);
             }
@@ -342,6 +411,12 @@ impl ChatState {
                 success,
                 result_preview,
             } => {
+                // Mark the last unfinished progress entry as completed.
+                if let Some(entry) = self.tool_progress.iter_mut().rev().find(|e| !e.finished) {
+                    entry.finished = true;
+                    entry.success = success;
+                    entry.duration = Some(entry.started_at.elapsed());
+                }
                 let tool_name = self.messages.iter().rev().find_map(|message| {
                     let tool = message.tool.as_ref()?;
                     if tool.result.is_empty() {
@@ -365,6 +440,84 @@ impl ChatState {
             }
             CliEvent::TurnRationale { text } => {
                 self.status_msg = Some(text);
+            }
+            CliEvent::PlanCreated {
+                goal,
+                total_steps,
+                step_descriptions,
+            } => {
+                self.plan_goal = Some(goal);
+                let steps = step_descriptions
+                    .into_iter()
+                    .take(total_steps as usize)
+                    .map(|desc| PlanStepInfo {
+                        description: desc,
+                        status:      PlanStepStatus::Pending,
+                    })
+                    .collect::<Vec<_>>();
+                // Mark the first step as running if there are any.
+                self.plan_current_step = if steps.is_empty() { None } else { Some(0) };
+                self.plan_steps = Some(steps);
+                if let Some(steps) = self.plan_steps.as_mut() {
+                    if let Some(first) = steps.first_mut() {
+                        first.status = PlanStepStatus::Running;
+                    }
+                }
+            }
+            CliEvent::PlanProgress {
+                current_step,
+                total_steps,
+                status_text,
+            } => {
+                let step_idx = current_step.saturating_sub(1) as usize;
+                // Lazily create step entries if PlanCreated wasn't received
+                // or had empty descriptions.
+                if self.plan_steps.is_none() {
+                    self.plan_steps = Some(
+                        (0..total_steps as usize)
+                            .map(|_| PlanStepInfo {
+                                description: String::new(),
+                                status:      PlanStepStatus::Pending,
+                            })
+                            .collect(),
+                    );
+                }
+                if let Some(steps) = self.plan_steps.as_mut() {
+                    // Ensure we have enough step entries.
+                    while steps.len() <= step_idx {
+                        steps.push(PlanStepInfo {
+                            description: String::new(),
+                            status:      PlanStepStatus::Pending,
+                        });
+                    }
+                    // Mark previous steps as done, current as running.
+                    for (i, step) in steps.iter_mut().enumerate() {
+                        if i < step_idx && step.status == PlanStepStatus::Running {
+                            step.status = PlanStepStatus::Done;
+                        } else if i == step_idx && step.status != PlanStepStatus::Failed {
+                            step.status = PlanStepStatus::Running;
+                            // Use status_text as step description if not set.
+                            if step.description.is_empty() {
+                                step.description = status_text.clone();
+                            }
+                        }
+                    }
+                }
+                self.plan_current_step = Some(step_idx);
+                self.status_msg = Some(status_text);
+            }
+            CliEvent::PlanCompleted { summary } => {
+                // Mark all remaining steps as done.
+                if let Some(steps) = self.plan_steps.as_mut() {
+                    for step in steps.iter_mut() {
+                        if step.status == PlanStepStatus::Running
+                            || step.status == PlanStepStatus::Pending
+                        {
+                            step.status = PlanStepStatus::Done;
+                        }
+                    }
+                }
+                self.status_msg = Some(format!("Plan completed: {summary}"));
             }
             CliEvent::ApprovalRequest {
                 id,
@@ -659,6 +812,16 @@ fn format_tokens(tokens: u64) -> String {
     }
 }
 
+/// Format a tool execution duration into a compact display string.
+pub fn format_tool_duration(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
 fn sanitize_function_tags(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -680,7 +843,8 @@ mod tests {
     use rara_channels::terminal::CliEvent;
 
     use super::{
-        ChatAction, ChatState, PendingApproval, PendingQuestion, PendingToolCallLimit, Role,
+        ChatAction, ChatState, PendingApproval, PendingQuestion, PendingToolCallLimit,
+        PlanStepStatus, Role, ToolProgressEntry,
     };
 
     #[test]
@@ -1288,6 +1452,218 @@ mod tests {
         assert_eq!(chat.turn_input_tokens, 0);
         assert_eq!(chat.turn_output_tokens, 0);
         assert_eq!(chat.turn_thinking_ms, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool progress tracking tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tool_call_start_creates_progress_entry() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::ToolCallStart {
+            name:    "read_file".into(),
+            summary: "README.md".into(),
+        });
+
+        assert_eq!(chat.tool_progress.len(), 1);
+        assert_eq!(chat.tool_progress[0].name, "read_file");
+        assert_eq!(chat.tool_progress[0].summary, "README.md");
+        assert!(!chat.tool_progress[0].finished);
+        assert!(chat.tool_progress[0].duration.is_none());
+    }
+
+    #[test]
+    fn tool_call_end_marks_progress_entry_finished() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::ToolCallStart {
+            name:    "bash".into(),
+            summary: "npm test".into(),
+        });
+        chat.handle_cli_event(CliEvent::ToolCallEnd {
+            success:        true,
+            result_preview: "ok".into(),
+        });
+
+        assert_eq!(chat.tool_progress.len(), 1);
+        assert!(chat.tool_progress[0].finished);
+        assert!(chat.tool_progress[0].success);
+        assert!(chat.tool_progress[0].duration.is_some());
+    }
+
+    #[test]
+    fn tool_call_end_marks_failure() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::ToolCallStart {
+            name:    "bash".into(),
+            summary: "failing cmd".into(),
+        });
+        chat.handle_cli_event(CliEvent::ToolCallEnd {
+            success:        false,
+            result_preview: "error".into(),
+        });
+
+        assert!(chat.tool_progress[0].finished);
+        assert!(!chat.tool_progress[0].success);
+    }
+
+    #[test]
+    fn multiple_tool_progress_entries_tracked() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::ToolCallStart {
+            name:    "read_file".into(),
+            summary: "a.rs".into(),
+        });
+        chat.handle_cli_event(CliEvent::ToolCallEnd {
+            success:        true,
+            result_preview: "ok".into(),
+        });
+        chat.handle_cli_event(CliEvent::ToolCallStart {
+            name:    "search_code".into(),
+            summary: "pattern".into(),
+        });
+
+        assert_eq!(chat.tool_progress.len(), 2);
+        assert!(chat.tool_progress[0].finished);
+        assert!(!chat.tool_progress[1].finished);
+    }
+
+    #[test]
+    fn reset_messages_clears_tool_progress() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.tool_progress.push(ToolProgressEntry {
+            name:       "test".into(),
+            summary:    "s".into(),
+            started_at: std::time::Instant::now(),
+            finished:   true,
+            success:    true,
+            duration:   Some(std::time::Duration::from_millis(100)),
+        });
+        chat.plan_goal = Some("goal".into());
+
+        chat.reset_messages();
+
+        assert!(chat.tool_progress.is_empty());
+        assert!(chat.plan_goal.is_none());
+        assert!(chat.plan_steps.is_none());
+        assert!(chat.turn_started.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Plan progress tracking tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn plan_created_sets_plan_state() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::PlanCreated {
+            goal:              "Implement auth".into(),
+            total_steps:       3,
+            step_descriptions: vec![
+                "Add model".into(),
+                "Add middleware".into(),
+                "Add tests".into(),
+            ],
+        });
+
+        assert_eq!(chat.plan_goal.as_deref(), Some("Implement auth"));
+        let steps = chat.plan_steps.as_ref().expect("steps");
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].status, PlanStepStatus::Running);
+        assert_eq!(steps[1].status, PlanStepStatus::Pending);
+        assert_eq!(steps[2].status, PlanStepStatus::Pending);
+        assert_eq!(steps[0].description, "Add model");
+    }
+
+    #[test]
+    fn plan_progress_advances_steps() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::PlanCreated {
+            goal:              "Build feature".into(),
+            total_steps:       2,
+            step_descriptions: vec!["Step A".into(), "Step B".into()],
+        });
+
+        // Advance to step 2 (1-based).
+        chat.handle_cli_event(CliEvent::PlanProgress {
+            current_step: 2,
+            total_steps:  2,
+            status_text:  "Working on B".into(),
+        });
+
+        let steps = chat.plan_steps.as_ref().expect("steps");
+        assert_eq!(steps[0].status, PlanStepStatus::Done);
+        assert_eq!(steps[1].status, PlanStepStatus::Running);
+    }
+
+    #[test]
+    fn plan_completed_marks_all_steps_done() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::PlanCreated {
+            goal:              "task".into(),
+            total_steps:       2,
+            step_descriptions: vec!["A".into(), "B".into()],
+        });
+        chat.handle_cli_event(CliEvent::PlanCompleted {
+            summary: "All done".into(),
+        });
+
+        let steps = chat.plan_steps.as_ref().expect("steps");
+        assert!(steps.iter().all(|s| s.status == PlanStepStatus::Done));
+        assert!(
+            chat.status_msg
+                .as_ref()
+                .expect("status")
+                .contains("All done")
+        );
+    }
+
+    #[test]
+    fn plan_progress_creates_steps_lazily() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        // No PlanCreated event — PlanProgress arrives directly.
+        chat.handle_cli_event(CliEvent::PlanProgress {
+            current_step: 1,
+            total_steps:  3,
+            status_text:  "First step".into(),
+        });
+
+        let steps = chat.plan_steps.as_ref().expect("steps");
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].status, PlanStepStatus::Running);
+        assert_eq!(steps[0].description, "First step");
+    }
+
+    // -----------------------------------------------------------------------
+    // format_tool_duration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_tool_duration_milliseconds() {
+        assert_eq!(
+            super::format_tool_duration(std::time::Duration::from_millis(50)),
+            "50ms"
+        );
+        assert_eq!(
+            super::format_tool_duration(std::time::Duration::from_millis(999)),
+            "999ms"
+        );
+    }
+
+    #[test]
+    fn format_tool_duration_seconds() {
+        assert_eq!(
+            super::format_tool_duration(std::time::Duration::from_millis(1000)),
+            "1.0s"
+        );
+        assert_eq!(
+            super::format_tool_duration(std::time::Duration::from_millis(1500)),
+            "1.5s"
+        );
+        assert_eq!(
+            super::format_tool_duration(std::time::Duration::from_millis(12345)),
+            "12.3s"
+        );
     }
 
     #[test]

@@ -68,6 +68,20 @@ pub enum CliEvent {
         limit_id:        u64,
         tool_calls_made: usize,
     },
+    /// Plan created with goal, total steps, and step descriptions.
+    PlanCreated {
+        goal:              String,
+        total_steps:       u32,
+        step_descriptions: Vec<String>,
+    },
+    /// Plan step progress update.
+    PlanProgress {
+        current_step: u32,
+        total_steps:  u32,
+        status_text:  String,
+    },
+    /// Plan completed with summary.
+    PlanCompleted { summary: String },
     /// Per-iteration token usage update (cumulative values from kernel).
     UsageUpdate {
         input_tokens:  u32,

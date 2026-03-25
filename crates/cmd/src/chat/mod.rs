@@ -822,16 +822,25 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             compact_summary,
             total_steps,
             ..
-        } => CliEvent::Progress {
-            text: format!("Plan ({total_steps} steps): {compact_summary}"),
+        } => CliEvent::PlanCreated {
+            goal:              compact_summary,
+            total_steps:       total_steps as u32,
+            step_descriptions: Vec::new(),
         },
-        StreamEvent::PlanProgress { status_text, .. } => CliEvent::Progress { text: status_text },
+        StreamEvent::PlanProgress {
+            current_step,
+            total_steps,
+            status_text,
+            ..
+        } => CliEvent::PlanProgress {
+            current_step: current_step as u32,
+            total_steps: total_steps as u32,
+            status_text,
+        },
         StreamEvent::PlanReplan { reason } => CliEvent::Progress {
             text: format!("Replanning: {reason}"),
         },
-        StreamEvent::PlanCompleted { summary } => CliEvent::Progress {
-            text: format!("Plan completed: {summary}"),
-        },
+        StreamEvent::PlanCompleted { summary } => CliEvent::PlanCompleted { summary },
         StreamEvent::UsageUpdate {
             input_tokens,
             output_tokens,
@@ -896,6 +905,12 @@ async fn send_cli_message(
     state.turn_input_tokens = 0;
     state.turn_output_tokens = 0;
     state.turn_thinking_ms = 0;
+    // Clear progress state from previous turn.
+    state.tool_progress.clear();
+    state.turn_started = Some(std::time::Instant::now());
+    state.plan_goal = None;
+    state.plan_steps = None;
+    state.plan_current_step = None;
 
     let attachments = match load_image_blocks(&image_paths).await {
         Ok(attachments) => attachments,

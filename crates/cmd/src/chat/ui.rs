@@ -21,7 +21,10 @@ use ratatui::{
 };
 
 use crate::chat::{
-    app::{ChatMessage, ChatState, PendingApproval, PendingQuestion, Role, ToolInfo},
+    app::{
+        ChatMessage, ChatState, PendingApproval, PendingQuestion, PlanStepStatus, Role, ToolInfo,
+        format_tool_duration,
+    },
     theme,
 };
 
@@ -48,8 +51,11 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
     let show_question = !show_approval && state.pending_question.is_some();
     let prompt_height = if show_approval || show_question { 5 } else { 0 };
 
+    let progress_height = compute_progress_height(state);
+
     let chunks = Layout::vertical([
         Constraint::Min(3),
+        Constraint::Length(progress_height),
         Constraint::Length(prompt_height),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -59,15 +65,19 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
 
     draw_messages(frame, chunks[0], state);
 
-    if let Some(approval) = &state.pending_approval {
-        draw_approval_prompt(frame, chunks[1], approval);
-    } else if let Some(question) = &state.pending_question {
-        draw_question_prompt(frame, chunks[1], question, &state.input);
+    if progress_height > 0 {
+        draw_progress_section(frame, chunks[1], state);
     }
 
-    let separator = Paragraph::new("─".repeat(chunks[2].width as usize))
+    if let Some(approval) = &state.pending_approval {
+        draw_approval_prompt(frame, chunks[2], approval);
+    } else if let Some(question) = &state.pending_question {
+        draw_question_prompt(frame, chunks[2], question, &state.input);
+    }
+
+    let separator = Paragraph::new("─".repeat(chunks[3].width as usize))
         .style(Style::default().fg(theme::BORDER));
-    frame.render_widget(separator, chunks[2]);
+    frame.render_widget(separator, chunks[3]);
 
     let input_line = if state.is_streaming {
         let mut spans = vec![
@@ -99,7 +109,7 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
             ),
         ]))
     };
-    frame.render_widget(input_line, chunks[3]);
+    frame.render_widget(input_line, chunks[4]);
 
     let hints = if state.pending_approval.is_some() {
         "    [y/Enter] Approve  [n/Esc] Deny"
@@ -114,8 +124,110 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(hints, theme::hint_style())])),
-        chunks[4],
+        chunks[5],
     );
+}
+
+/// Compute the height needed for the progress section (tool + plan progress).
+fn compute_progress_height(state: &ChatState) -> u16 {
+    if !state.is_streaming {
+        return 0;
+    }
+
+    let mut height: u16 = 0;
+
+    // Tool progress: show at most the last 5 entries.
+    let tool_count = state.tool_progress.len().min(5);
+    if tool_count > 0 {
+        height += tool_count as u16;
+    }
+
+    // Plan progress: header + steps.
+    if let Some(steps) = &state.plan_steps {
+        if !steps.is_empty() {
+            height += 1; // header line
+            height += steps.len() as u16;
+        }
+    }
+
+    height
+}
+
+/// Render the per-tool and plan progress section.
+fn draw_progress_section(frame: &mut Frame, area: Rect, state: &ChatState) {
+    let mut lines = Vec::new();
+
+    // Tool progress — show last 5 entries.
+    let tool_entries = if state.tool_progress.len() > 5 {
+        &state.tool_progress[state.tool_progress.len() - 5..]
+    } else {
+        &state.tool_progress
+    };
+
+    for entry in tool_entries {
+        let (icon, icon_color) = if !entry.finished {
+            let spinner = theme::SPINNER_FRAMES[state.spinner_frame];
+            (spinner.to_owned(), theme::CYAN)
+        } else if entry.success {
+            ("\u{2705}".to_owned(), theme::GREEN) // checkmark
+        } else {
+            ("\u{274c}".to_owned(), theme::RED) // cross
+        };
+
+        let duration_str = entry
+            .duration
+            .map(|d| format!(" ({})", format_tool_duration(d)))
+            .unwrap_or_default();
+
+        let summary_part = if !entry.finished && !entry.summary.is_empty() {
+            format!(" \u{2014} {}", entry.summary)
+        } else {
+            String::new()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {icon} "), Style::default().fg(icon_color)),
+            Span::styled(entry.name.clone(), Style::default().fg(theme::YELLOW)),
+            Span::styled(duration_str, Style::default().fg(theme::DIM)),
+            Span::styled(summary_part, Style::default().fg(theme::DIM)),
+        ]));
+    }
+
+    // Plan progress.
+    if let Some(steps) = &state.plan_steps {
+        if !steps.is_empty() {
+            let goal = state.plan_goal.as_deref().unwrap_or("Plan");
+            lines.push(Line::from(vec![Span::styled(
+                format!("  \u{1f4cb} {} ({} steps)", goal, steps.len()),
+                Style::default().fg(theme::CYAN),
+            )]));
+
+            for (i, step) in steps.iter().enumerate() {
+                let (icon, color) = match step.status {
+                    PlanStepStatus::Pending => ("\u{25fb}", theme::DIM), // white square
+                    PlanStepStatus::Running => ("\u{25b6}\u{fe0f}", theme::CYAN), // play
+                    PlanStepStatus::Done => ("\u{2705}", theme::GREEN),  // checkmark
+                    PlanStepStatus::Failed => ("\u{274c}", theme::RED),  // cross
+                };
+
+                let desc = if step.description.is_empty() {
+                    format!("Step {}", i + 1)
+                } else {
+                    step.description.clone()
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("    {icon} {}. ", i + 1),
+                        Style::default().fg(color),
+                    ),
+                    Span::raw(desc),
+                ]));
+            }
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatState) {
