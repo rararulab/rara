@@ -104,7 +104,7 @@ export default function DashboardLayout() {
 
       <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
         {/* Top bar */}
-        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
+        <div className="flex shrink-0 items-center justify-end gap-2 bg-transparent px-4 py-1.5">
           <Button
             variant="ghost"
             size="sm"

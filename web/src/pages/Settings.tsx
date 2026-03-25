@@ -241,7 +241,7 @@ function KvGroup({
   const hasChanges = fields.some((f) => (values[f.key] ?? "") !== (original[f.key] ?? ""));
 
   return (
-    <Card className="app-surface border-border/60">
+    <Card className="app-surface">
       <CardHeader className="pb-4">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
@@ -420,7 +420,7 @@ export default function Settings() {
       {/* Sidebar */}
       <aside className="data-panel h-fit xl:sticky xl:top-4">
         <div className="border-b border-border/70 px-4 py-4">
-          <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
+          <h1 className="text-headline">Settings</h1>
           <p className="mt-1 text-xs text-muted-foreground">
             Configure runtime credentials and workspace behavior.
           </p>
@@ -463,7 +463,7 @@ export default function Settings() {
       </aside>
 
       {/* Content */}
-      <div className="space-y-6">
+      <div className="space-y-6 animate-enter-stagger">
         {/* Toast */}
         {toast && (
           <div className={cn(
@@ -478,7 +478,7 @@ export default function Settings() {
         {activeCategory === "general" && (
           <>
             {/* Appearance */}
-            <Card className="app-surface border-border/60">
+            <Card className="app-surface">
               <CardHeader>
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
@@ -534,7 +534,7 @@ export default function Settings() {
             </Card>
 
             {/* Documentation */}
-            <Card className="app-surface border-border/60">
+            <Card className="app-surface">
               <CardHeader>
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
@@ -575,7 +575,7 @@ export default function Settings() {
         {activeCategory === "providers" && (
           <>
             {/* Global Defaults */}
-            <Card className="app-surface border-border/60">
+            <Card className="app-surface">
               <CardHeader className="pb-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
@@ -652,7 +652,7 @@ export default function Settings() {
               const hasChanges = allKeys.some((k) => (draft[k] ?? "") !== (original[k] ?? ""));
 
               return (
-                <Card key={provider.id} className="app-surface border-border/60">
+                <Card key={provider.id} className="app-surface">
                   <CardHeader className="pb-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -874,7 +874,7 @@ export default function Settings() {
             />
 
             {/* Current Status */}
-            <Card className="app-surface border-border/60">
+            <Card className="app-surface">
               <CardHeader className="pb-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
