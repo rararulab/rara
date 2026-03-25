@@ -69,6 +69,13 @@ pub struct EmptyParams {}
 /// Tools return hints via [`ToolOutput::hints`]; the agent loop inspects them
 /// after execution and acts accordingly. This keeps orchestration decisions
 /// in the loop while letting tools signal intent declaratively.
+///
+/// **Current limitation**: The `ToolDef` derive macro calls
+/// [`ToolOutput::from_serialize`] which always returns empty hints. Tools
+/// using the macro cannot set hints via `ToolExecute::run()`. The agent loop
+/// therefore uses tool-name detection as a pragmatic workaround for known
+/// hint-worthy tools (e.g. `marketplace-install` → `SuggestFold`). Once the
+/// macro supports hint propagation, tool-name checks should be replaced.
 #[derive(Debug, Clone)]
 pub enum ToolHint {
     /// Suggest that the agent loop should fold (compress) context after this

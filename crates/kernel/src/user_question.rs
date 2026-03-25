@@ -23,12 +23,13 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use snafu::Snafu;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 /// A question submitted by the agent to the user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UserQuestion {
     /// Unique identifier for this question.
     pub id:       Uuid,
@@ -37,21 +38,18 @@ pub struct UserQuestion {
 }
 
 /// Error from resolving a user question.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Snafu)]
+#[snafu(visibility(pub))]
 pub enum ResolveError {
     /// The question timed out before the user responded.
+    #[snafu(display("user question has timed out"))]
     TimedOut,
     /// The question ID was never seen.
-    NotFound(Uuid),
-}
-
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TimedOut => write!(f, "user question has timed out"),
-            Self::NotFound(id) => write!(f, "no pending user question: {id}"),
-        }
-    }
+    #[snafu(display("no pending user question: {id}"))]
+    NotFound {
+        /// The question ID that was not found.
+        id: Uuid,
+    },
 }
 
 /// Internal pending question holding the oneshot sender.
@@ -104,16 +102,23 @@ impl UserQuestionManager {
 
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        // Notify external listeners before blocking.
-        let _ = self.question_tx.send(uq.clone());
-
+        // Insert BEFORE broadcasting to avoid a race where a fast subscriber
+        // calls resolve() before the pending entry exists.
         self.pending.insert(
             id,
             PendingQuestion {
-                question: uq,
+                question: uq.clone(),
                 sender:   tx,
             },
         );
+
+        // Notify external listeners (e.g. Telegram adapter).
+        if self.question_tx.send(uq).is_err() {
+            warn!(
+                question_id = %id,
+                "no subscribers for user questions — question will hang until timeout"
+            );
+        }
 
         info!(question_id = %id, %question, "user question submitted, waiting for answer");
 
@@ -142,7 +147,7 @@ impl UserQuestionManager {
                 info!(question_id = %question_id, "user question resolved");
                 Ok(())
             }
-            None => Err(ResolveError::NotFound(question_id)),
+            None => Err(ResolveError::NotFound { id: question_id }),
         }
     }
 
