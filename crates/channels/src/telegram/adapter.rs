@@ -53,9 +53,20 @@ use uuid::Uuid;
 /// cancelled when the user resolves an approval before the timeout fires.
 static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::new(DashMap::new);
 
-/// Maps Telegram message IDs of sent user-question prompts to their question
-/// UUIDs and manager refs, so reply-to-question messages can resolve them.
-static PENDING_USER_QUESTIONS: LazyLock<DashMap<i32, (Uuid, UserQuestionManagerRef)>> =
+/// Pending user-question entry stored in [`PENDING_USER_QUESTIONS`].
+struct PendingUserQuestion {
+    question_id:   Uuid,
+    question_text: String,
+    manager:       UserQuestionManagerRef,
+}
+
+/// Maps `(chat_id, message_id)` of sent user-question prompts to their
+/// pending state, so reply-to-question messages can resolve them.
+///
+/// Entries are inserted by [`question_listener`] and removed either by
+/// `handle_update` (user replies) or by the timeout cleanup task spawned
+/// alongside each question.
+static PENDING_USER_QUESTIONS: LazyLock<DashMap<(i64, i32), PendingUserQuestion>> =
     LazyLock::new(DashMap::new);
 
 /// Matches complete tool-call XML blocks (open + close, possibly mismatched
@@ -2206,15 +2217,30 @@ async fn question_listener(
                     .await
                 {
                     Ok(sent_msg) => {
+                        let key = (chat_id, sent_msg.id.0);
                         PENDING_USER_QUESTIONS.insert(
-                            sent_msg.id.0,
-                            (question.id, Arc::clone(&mgr)),
+                            key,
+                            PendingUserQuestion {
+                                question_id:   question.id,
+                                question_text: question.question.clone(),
+                                manager:       Arc::clone(&mgr),
+                            },
                         );
                         info!(
                             question_id = %question.id,
                             message_id = sent_msg.id.0,
                             "telegram question listener: sent question to chat"
                         );
+
+                        // Spawn a cleanup task that removes the entry after
+                        // the ask-user timeout (5 min) plus a small grace
+                        // period, preventing unbounded map growth when
+                        // questions time out and the user never replies.
+                        let cleanup_key = key;
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(330)).await;
+                            PENDING_USER_QUESTIONS.remove(&cleanup_key);
+                        });
                     }
                     Err(e) => {
                         warn!(error = %e, "telegram question listener: failed to send question");
@@ -2409,9 +2435,22 @@ async fn handle_update(
     // normal message processing so the reply text isn't ingested as a new
     // conversation turn.
     if let Some(reply) = msg.reply_to_message() {
-        if let Some((_, (question_id, mgr))) = PENDING_USER_QUESTIONS.remove(&reply.id.0) {
-            let answer = msg.text().unwrap_or("").to_string();
-            match mgr.resolve(question_id, answer) {
+        let key = (chat_id, reply.id.0);
+        if let Some((_, pending)) = PENDING_USER_QUESTIONS.remove(&key) {
+            // Reject non-text replies — prompt user to reply with text.
+            let Some(answer_text) = msg.text() else {
+                // Re-insert so the user can try again with a text reply.
+                PENDING_USER_QUESTIONS.insert(key, pending);
+                let _ = bot
+                    .send_message(ChatId(chat_id), "⚠️ Please reply with a text message.")
+                    .reply_parameters(ReplyParameters::new(msg.id))
+                    .await;
+                return;
+            };
+
+            let answer = answer_text.to_string();
+            let question_id = pending.question_id;
+            match pending.manager.resolve(question_id, answer) {
                 Ok(()) => {
                     info!(
                         question_id = %question_id,
@@ -2420,13 +2459,7 @@ async fn handle_update(
                     // Edit the original question message to show it was answered.
                     let answered_text = format!(
                         "<b>✅ Answered</b>\n\n<s>{}</s>",
-                        guard_html_escape(
-                            &reply
-                                .text()
-                                .unwrap_or("(question)")
-                                .replace("<b>❓ Agent Question</b>\n\n", "")
-                                .replace("\n\n<i>Reply to this message to answer.</i>", ""),
-                        ),
+                        guard_html_escape(&pending.question_text),
                     );
                     let _ = bot
                         .edit_message_text(ChatId(chat_id), reply.id, answered_text)
