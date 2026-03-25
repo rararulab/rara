@@ -15,7 +15,7 @@
 //! `rara login` subcommand — provider authentication.
 
 use clap::{Args, Subcommand};
-use snafu::{FromString, Whatever};
+use snafu::{ResultExt as _, Whatever};
 
 /// Provider authentication commands.
 #[derive(Debug, Clone, Args)]
@@ -42,6 +42,7 @@ impl LoginCmd {
 
 async fn run_codex_login() -> Result<(), Whatever> {
     use rara_codex_oauth::*;
+    use snafu::whatever;
 
     println!("Starting Codex OAuth login...\n");
 
@@ -55,17 +56,17 @@ async fn run_codex_login() -> Result<(), Whatever> {
         state: state.clone(),
         code_verifier,
     })
-    .map_err(|e| Whatever::without_source(e.to_string()))?;
+    .whatever_context("failed to save pending oauth state")?;
 
     // Spin up the ephemeral callback server before sending the user to the
     // browser, so it is ready to receive the redirect.
     start_callback_server()
         .await
-        .map_err(|e| Whatever::without_source(e.to_string()))?;
+        .whatever_context("failed to start callback server")?;
 
     // Build the authorization URL with PKCE challenge.
-    let auth_url = build_auth_url(&state, &code_challenge)
-        .map_err(|e| Whatever::without_source(e.to_string()))?;
+    let auth_url =
+        build_auth_url(&state, &code_challenge).whatever_context("failed to build auth URL")?;
 
     // Try to open the browser automatically; fall back to printing the URL.
     if open::that(&auth_url).is_ok() {
@@ -91,18 +92,12 @@ async fn run_codex_login() -> Result<(), Whatever> {
     let tokens = loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if tokio::time::Instant::now() >= deadline {
-            return Err(Whatever::without_source(
-                "timed out waiting for OAuth callback (5 minutes). Please try again.".to_string(),
-            ));
+            whatever!("timed out waiting for OAuth callback (5 minutes). Please try again.");
         }
         match load_tokens().await {
             Ok(Some(tokens)) if tokens.expires_at_unix != previous_expiry => break tokens,
             Ok(Some(_) | None) => continue,
-            Err(e) => {
-                return Err(Whatever::without_source(format!(
-                    "failed to check tokens: {e}"
-                )));
-            }
+            Err(e) => whatever!("failed to check tokens: {e}"),
         }
     };
 
@@ -112,7 +107,8 @@ async fn run_codex_login() -> Result<(), Whatever> {
         println!("Token expires in {} minutes.", duration / 60);
     }
 
-    println!("\nTo use Codex as your LLM provider, add to your config.yaml:\n");
+    println!("\nTo use Codex as your LLM provider, add to your config.yaml:");
+    println!("  (typically at ~/.config/rara/config.yaml)\n");
     println!("  llm:");
     println!("    default_provider: codex");
     println!("    providers:");
