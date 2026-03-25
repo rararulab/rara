@@ -84,6 +84,8 @@ pub struct ChatState {
     pub loading_hint:     String,
     /// Guard approval request awaiting user decision (y/n).
     pub pending_approval: Option<PendingApproval>,
+    /// Agent question awaiting user answer (free-form text input).
+    pub pending_question: Option<PendingQuestion>,
 }
 
 /// A guard approval request pending user decision.
@@ -93,6 +95,13 @@ pub struct PendingApproval {
     pub tool_name:  String,
     pub summary:    String,
     pub risk_level: String,
+}
+
+/// A question from the agent pending user answer.
+#[derive(Debug, Clone)]
+pub struct PendingQuestion {
+    pub id:       String,
+    pub question: String,
 }
 
 pub enum ChatAction {
@@ -107,6 +116,11 @@ pub enum ChatAction {
     /// User denied a pending guard request.
     DenyGuard {
         id: String,
+    },
+    /// User answered a pending agent question.
+    AnswerQuestion {
+        id:     String,
+        answer: String,
     },
 }
 
@@ -136,6 +150,7 @@ impl ChatState {
             tool_input_buf:   String::new(),
             loading_hint:     String::new(),
             pending_approval: None,
+            pending_question: None,
         };
         state.push_message(Role::System, CHAT_BANNER.to_owned());
         state
@@ -159,11 +174,17 @@ impl ChatState {
         self.tool_input_buf.clear();
         self.loading_hint.clear();
         self.pending_approval = None;
+        self.pending_question = None;
     }
 
     /// Set a pending guard approval request for the user to decide on.
     pub fn set_pending_approval(&mut self, approval: PendingApproval) {
         self.pending_approval = Some(approval);
+    }
+
+    /// Set a pending agent question for the user to answer.
+    pub fn set_pending_question(&mut self, question: PendingQuestion) {
+        self.pending_question = Some(question);
     }
 
     pub fn push_message(&mut self, role: Role, text: String) {
@@ -324,6 +345,9 @@ impl ChatState {
                     risk_level,
                 });
             }
+            CliEvent::UserQuestion { id, question } => {
+                self.set_pending_question(PendingQuestion { id, question });
+            }
             CliEvent::Done => self.finalize_stream(),
         }
     }
@@ -334,7 +358,7 @@ impl ChatState {
             return ChatAction::Back;
         }
 
-        // Intercept y/n when a guard approval request is pending.
+        // Intercept y/n when a guard approval request is pending (highest priority).
         if let Some(approval) = &self.pending_approval {
             let id = approval.id.clone();
             return match key.code {
@@ -345,6 +369,47 @@ impl ChatState {
                 KeyCode::Char('n') | KeyCode::Esc => {
                     self.pending_approval = None;
                     ChatAction::DenyGuard { id }
+                }
+                _ => ChatAction::Continue,
+            };
+        }
+
+        // When a question is pending, user types an answer into self.input.
+        if let Some(question) = &self.pending_question {
+            let id = question.id.clone();
+            return match key.code {
+                KeyCode::Enter => {
+                    let answer = self.input.trim().to_owned();
+                    self.input.clear();
+                    if answer.is_empty() {
+                        return ChatAction::Continue;
+                    }
+                    self.pending_question = None;
+                    ChatAction::AnswerQuestion { id, answer }
+                }
+                KeyCode::Esc => {
+                    self.input.clear();
+                    self.pending_question = None;
+                    ChatAction::AnswerQuestion {
+                        id,
+                        answer: "(no answer)".to_owned(),
+                    }
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.input.clear();
+                    ChatAction::Continue
+                }
+                KeyCode::Char(ch)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.input.push(ch);
+                    ChatAction::Continue
+                }
+                KeyCode::Backspace => {
+                    self.input.pop();
+                    ChatAction::Continue
                 }
                 _ => ChatAction::Continue,
             };
@@ -481,7 +546,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rara_channels::terminal::CliEvent;
 
-    use super::{ChatAction, ChatState, PendingApproval, Role};
+    use super::{ChatAction, ChatState, PendingApproval, PendingQuestion, Role};
 
     #[test]
     fn new_chat_state_starts_with_openfang_banner() {
@@ -707,5 +772,111 @@ mod tests {
 
         let _ = chat.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(chat.scroll_offset, 10);
+    }
+
+    fn make_pending_question() -> PendingQuestion {
+        PendingQuestion {
+            id:       "660e8400-e29b-41d4-a716-446655440000".into(),
+            question: "What is the API key?".into(),
+        }
+    }
+
+    #[test]
+    fn user_question_event_sets_pending_question() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::UserQuestion {
+            id:       "660e8400-e29b-41d4-a716-446655440000".into(),
+            question: "What is the API key?".into(),
+        });
+
+        assert!(chat.pending_question.is_some());
+        let q = chat.pending_question.as_ref().expect("pending question");
+        assert_eq!(q.id, "660e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(q.question, "What is the API key?");
+    }
+
+    #[test]
+    fn enter_submits_answer_when_question_pending() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+        chat.input = "sk-12345".into();
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::AnswerQuestion { id, answer }
+                if id == "660e8400-e29b-41d4-a716-446655440000" && answer == "sk-12345"));
+        assert!(chat.pending_question.is_none());
+        assert!(chat.input.is_empty());
+    }
+
+    #[test]
+    fn empty_enter_does_not_submit_question() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::Continue));
+        assert!(chat.pending_question.is_some());
+    }
+
+    #[test]
+    fn esc_skips_question_with_no_answer() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::AnswerQuestion { id, answer }
+                if id == "660e8400-e29b-41d4-a716-446655440000" && answer == "(no answer)"));
+        assert!(chat.pending_question.is_none());
+    }
+
+    #[test]
+    fn typing_in_question_mode_appends_to_input() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+
+        let _ = chat.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let _ = chat.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+
+        assert_eq!(chat.input, "ab");
+        assert!(chat.pending_question.is_some());
+    }
+
+    #[test]
+    fn backspace_in_question_mode_removes_char() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+        chat.input = "abc".into();
+
+        let _ = chat.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(chat.input, "ab");
+    }
+
+    #[test]
+    fn approval_takes_priority_over_question() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+        chat.set_pending_question(make_pending_question());
+
+        // 'y' should trigger approval, not question input.
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::ApproveGuard { .. }));
+        assert!(chat.pending_approval.is_none());
+        // Question should still be pending.
+        assert!(chat.pending_question.is_some());
+    }
+
+    #[test]
+    fn reset_messages_clears_pending_question() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+
+        chat.reset_messages();
+
+        assert!(chat.pending_question.is_none());
     }
 }

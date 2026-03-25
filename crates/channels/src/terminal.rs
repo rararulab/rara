@@ -60,6 +60,8 @@ pub enum CliEvent {
         summary:    String,
         risk_level: String,
     },
+    /// Agent question requiring user answer.
+    UserQuestion { id: String, question: String },
     /// Stream completed.
     Done,
 }

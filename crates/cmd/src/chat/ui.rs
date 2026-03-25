@@ -21,7 +21,7 @@ use ratatui::{
 };
 
 use crate::chat::{
-    app::{ChatMessage, ChatState, PendingApproval, Role, ToolInfo},
+    app::{ChatMessage, ChatState, PendingApproval, PendingQuestion, Role, ToolInfo},
     theme,
 };
 
@@ -43,15 +43,14 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let approval_height = if state.pending_approval.is_some() {
-        5
-    } else {
-        0
-    };
+    // Approval takes priority over question when both are present.
+    let show_approval = state.pending_approval.is_some();
+    let show_question = !show_approval && state.pending_question.is_some();
+    let prompt_height = if show_approval || show_question { 5 } else { 0 };
 
     let chunks = Layout::vertical([
         Constraint::Min(3),
-        Constraint::Length(approval_height),
+        Constraint::Length(prompt_height),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -62,6 +61,8 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
 
     if let Some(approval) = &state.pending_approval {
         draw_approval_prompt(frame, chunks[1], approval);
+    } else if let Some(question) = &state.pending_question {
+        draw_question_prompt(frame, chunks[1], question, &state.input);
     }
 
     let separator = Paragraph::new("─".repeat(chunks[2].width as usize))
@@ -102,6 +103,8 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
 
     let hints = if state.pending_approval.is_some() {
         "    [y/Enter] Approve  [n/Esc] Deny"
+    } else if state.pending_question.is_some() {
+        "    [Enter] Submit answer  [Esc] Skip"
     } else if state.is_streaming {
         "    [Enter] Stage  [↑↓/PgUp/PgDn] Scroll  [Esc] Stop"
     } else {
@@ -380,6 +383,43 @@ fn draw_approval_prompt(frame: &mut Frame, area: Rect, approval: &PendingApprova
             "[y/Enter] Approve  [n/Esc] Deny",
             Style::default().fg(theme::YELLOW),
         )]),
+    ];
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Render a highlighted question prompt box for a pending agent question.
+fn draw_question_prompt(frame: &mut Frame, area: Rect, question: &PendingQuestion, input: &str) {
+    let border_style = Style::default().fg(theme::CYAN);
+    let block = Block::default()
+        .title(Span::styled(
+            " Agent Question ",
+            Style::default()
+                .fg(theme::CYAN)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(vec![Span::raw(question.question.clone())]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(theme::CYAN)),
+            Span::raw(input.to_owned()),
+            Span::styled(
+                "\u{2588}",
+                Style::default()
+                    .fg(theme::CYAN)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+            Span::raw("  "),
+            Span::styled("[Enter] Submit", Style::default().fg(theme::CYAN)),
+        ]),
     ];
 
     frame.render_widget(Paragraph::new(lines), inner);

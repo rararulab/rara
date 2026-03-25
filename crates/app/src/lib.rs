@@ -610,6 +610,7 @@ pub async fn start_with_options(
         cancellation_token: cancellation_token.clone(),
         kernel_handle: Some(kernel_handle),
         command_handlers,
+        user_question_manager: Some(rara.user_question_manager.clone()),
     };
 
     let running_clone = Arc::clone(&running);
@@ -785,14 +786,17 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:          Option<oneshot::Sender<()>>,
-    running:              Arc<AtomicBool>,
-    cancellation_token:   CancellationToken,
+    shutdown_tx:               Option<oneshot::Sender<()>>,
+    running:                   Arc<AtomicBool>,
+    cancellation_token:        CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:    Option<rara_kernel::handle::KernelHandle>,
+    pub kernel_handle:         Option<rara_kernel::handle::KernelHandle>,
     /// Command handlers shared across all channels (Telegram, CLI, etc.).
     pub command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
+    /// User question manager for the ask-user tool (CLI needs it to subscribe
+    /// and resolve agent questions).
+    pub user_question_manager: Option<rara_kernel::user_question::UserQuestionManagerRef>,
 }
 
 #[allow(dead_code)]

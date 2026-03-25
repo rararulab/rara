@@ -40,7 +40,7 @@ use rara_kernel::{
 use snafu::{ResultExt, Whatever, whatever};
 
 use crate::chat::{
-    app::{ChatAction, ChatState, HandleResult, PendingApproval, Role},
+    app::{ChatAction, ChatState, HandleResult, PendingApproval, PendingQuestion, Role},
     ui::render,
 };
 
@@ -121,6 +121,7 @@ impl ChatArgs {
         chat_state.model_label = default_model_label;
 
         let command_handlers = app_handle.command_handlers.clone();
+        let user_question_manager = app_handle.user_question_manager.clone();
 
         let result = run_chat_tui(
             &mut terminal,
@@ -131,6 +132,7 @@ impl ChatArgs {
             user_id,
             &command_handlers,
             session_tx,
+            user_question_manager,
         )
         .await;
 
@@ -198,9 +200,11 @@ async fn run_chat_tui(
     user_id: String,
     command_handlers: &[Arc<dyn CommandHandler>],
     session_tx: tokio::sync::watch::Sender<SessionKey>,
+    user_question_manager: Option<rara_kernel::user_question::UserQuestionManagerRef>,
 ) -> Result<(), Whatever> {
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     let mut approval_rx = kernel_handle.security().approval().subscribe_requests();
+    let mut question_rx = user_question_manager.as_ref().map(|mgr| mgr.subscribe());
 
     loop {
         terminal
@@ -218,6 +222,19 @@ async fn run_chat_tui(
                         tool_name: request.tool_name.clone(),
                         summary: request.summary.clone(),
                         risk_level: format!("{:?}", request.risk_level),
+                    });
+                }
+            }
+            result = async {
+                match question_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Ok(question) = result {
+                    state.set_pending_question(PendingQuestion {
+                        id: question.id.to_string(),
+                        question: question.question.clone(),
                     });
                 }
             }
@@ -245,6 +262,14 @@ async fn run_chat_tui(
                             );
                             state.pending_approval = None;
                             state.push_message(Role::System, format!("Guard denied: {id}"));
+                        }
+                        ChatAction::AnswerQuestion { id, answer } => {
+                            let uuid = uuid::Uuid::parse_str(&id).expect("valid question uuid");
+                            if let Some(ref mgr) = user_question_manager {
+                                let _ = mgr.resolve(uuid, answer.clone());
+                            }
+                            state.pending_question = None;
+                            state.push_message(Role::System, format!("Answered: {answer}"));
                         }
                         ChatAction::SlashCommand(command) => {
                             match handle_slash_command(
