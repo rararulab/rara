@@ -105,6 +105,8 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
         "    [y/Enter] Approve  [n/Esc] Deny"
     } else if state.pending_question.is_some() {
         "    [Enter] Submit answer  [Esc] Skip"
+    } else if state.pending_tool_call_limit.is_some() {
+        "    [c/Enter] Continue  [s/Esc] Stop"
     } else if state.is_streaming {
         "    [Enter] Stage  [↑↓/PgUp/PgDn] Scroll  [Esc] Stop"
     } else {

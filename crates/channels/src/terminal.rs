@@ -62,6 +62,12 @@ pub enum CliEvent {
     },
     /// Agent question requiring user answer.
     UserQuestion { id: String, question: String },
+    /// Agent paused on tool call limit — user must choose continue or stop.
+    ToolCallLimitPaused {
+        session_key:     String,
+        limit_id:        u64,
+        tool_calls_made: usize,
+    },
     /// Stream completed.
     Done,
 }

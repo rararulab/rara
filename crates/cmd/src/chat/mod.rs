@@ -271,6 +271,31 @@ async fn run_chat_tui(
                             state.pending_question = None;
                             state.push_message(Role::System, format!("Answered: {answer}"));
                         }
+                        ChatAction::ResolveToolCallLimit {
+                            session_key,
+                            limit_id,
+                            continued,
+                        } => {
+                            use rara_kernel::io::ToolCallLimitDecision;
+                            let decision = if continued {
+                                ToolCallLimitDecision::Continue
+                            } else {
+                                ToolCallLimitDecision::Stop
+                            };
+                            if let Ok(key) = SessionKey::try_from_raw(&session_key) {
+                                kernel_handle.resolve_tool_call_limit(
+                                    &key,
+                                    limit_id,
+                                    decision,
+                                );
+                            }
+                            state.pending_tool_call_limit = None;
+                            state.status_msg = Some(if continued {
+                                "Agent resumed.".to_owned()
+                            } else {
+                                "Agent stopped.".to_owned()
+                            });
+                        }
                         ChatAction::SlashCommand(command) => {
                             match handle_slash_command(
                                 state,
@@ -815,9 +840,14 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             text: format!("Dock turn complete: {session_id}"),
         },
         StreamEvent::ToolCallLimit {
-            tool_calls_made, ..
-        } => CliEvent::Progress {
-            text: format!("Agent paused after {tool_calls_made} tool calls (tool call limit)"),
+            session_key,
+            limit_id,
+            tool_calls_made,
+            ..
+        } => CliEvent::ToolCallLimitPaused {
+            session_key: session_key.to_string(),
+            limit_id,
+            tool_calls_made,
         },
         StreamEvent::ToolCallLimitResolved { continued, .. } => CliEvent::Progress {
             text: if continued {

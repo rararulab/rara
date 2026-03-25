@@ -59,33 +59,35 @@ pub struct ChatMessage {
 }
 
 pub struct ChatState {
-    pub agent_name:       String,
-    pub model_label:      String,
-    pub mode_label:       String,
-    pub session_label:    String,
-    pub user_label:       String,
-    pub messages:         Vec<ChatMessage>,
-    pub streaming_text:   String,
-    pub is_streaming:     bool,
-    pub thinking:         bool,
-    pub active_tool:      Option<String>,
-    pub spinner_frame:    usize,
-    pub input:            String,
-    pub scroll_offset:    u16,
-    pub last_tokens:      Option<(u64, u64)>,
-    pub last_cost_usd:    Option<f64>,
-    pub streaming_chars:  usize,
-    pub status_msg:       Option<String>,
-    pub staged_queue:     Vec<(String, Vec<String>)>,
-    pub staged_images:    Vec<String>,
-    pub tool_input_buf:   String,
+    pub agent_name:              String,
+    pub model_label:             String,
+    pub mode_label:              String,
+    pub session_label:           String,
+    pub user_label:              String,
+    pub messages:                Vec<ChatMessage>,
+    pub streaming_text:          String,
+    pub is_streaming:            bool,
+    pub thinking:                bool,
+    pub active_tool:             Option<String>,
+    pub spinner_frame:           usize,
+    pub input:                   String,
+    pub scroll_offset:           u16,
+    pub last_tokens:             Option<(u64, u64)>,
+    pub last_cost_usd:           Option<f64>,
+    pub streaming_chars:         usize,
+    pub status_msg:              Option<String>,
+    pub staged_queue:            Vec<(String, Vec<String>)>,
+    pub staged_images:           Vec<String>,
+    pub tool_input_buf:          String,
     /// Cached loading hint, sampled once when entering thinking state to avoid
     /// flicker on every render tick.
-    pub loading_hint:     String,
+    pub loading_hint:            String,
     /// Guard approval request awaiting user decision (y/n).
-    pub pending_approval: Option<PendingApproval>,
+    pub pending_approval:        Option<PendingApproval>,
     /// Agent question awaiting user answer (free-form text input).
-    pub pending_question: Option<PendingQuestion>,
+    pub pending_question:        Option<PendingQuestion>,
+    /// Tool call limit pause awaiting user decision (continue/stop).
+    pub pending_tool_call_limit: Option<PendingToolCallLimit>,
 }
 
 /// A guard approval request pending user decision.
@@ -102,6 +104,14 @@ pub struct PendingApproval {
 pub struct PendingQuestion {
     pub id:       String,
     pub question: String,
+}
+
+/// A tool call limit pause pending user decision.
+#[derive(Debug, Clone)]
+pub struct PendingToolCallLimit {
+    pub session_key:     String,
+    pub limit_id:        u64,
+    pub tool_calls_made: usize,
 }
 
 pub enum ChatAction {
@@ -122,35 +132,42 @@ pub enum ChatAction {
         id:     String,
         answer: String,
     },
+    /// User resolved the tool call limit pause.
+    ResolveToolCallLimit {
+        session_key: String,
+        limit_id:    u64,
+        continued:   bool,
+    },
 }
 
 impl ChatState {
     #[must_use]
     pub fn new(session: String, user_id: String) -> Self {
         let mut state = Self {
-            agent_name:       "rara".to_owned(),
-            model_label:      "default".to_owned(),
-            mode_label:       "in-process".to_owned(),
-            session_label:    session,
-            user_label:       user_id,
-            messages:         Vec::new(),
-            streaming_text:   String::new(),
-            is_streaming:     false,
-            thinking:         false,
-            active_tool:      None,
-            spinner_frame:    0,
-            input:            String::new(),
-            scroll_offset:    0,
-            last_tokens:      None,
-            last_cost_usd:    None,
-            streaming_chars:  0,
-            status_msg:       None,
-            staged_queue:     Vec::new(),
-            staged_images:    Vec::new(),
-            tool_input_buf:   String::new(),
-            loading_hint:     String::new(),
-            pending_approval: None,
-            pending_question: None,
+            agent_name:              "rara".to_owned(),
+            model_label:             "default".to_owned(),
+            mode_label:              "in-process".to_owned(),
+            session_label:           session,
+            user_label:              user_id,
+            messages:                Vec::new(),
+            streaming_text:          String::new(),
+            is_streaming:            false,
+            thinking:                false,
+            active_tool:             None,
+            spinner_frame:           0,
+            input:                   String::new(),
+            scroll_offset:           0,
+            last_tokens:             None,
+            last_cost_usd:           None,
+            streaming_chars:         0,
+            status_msg:              None,
+            staged_queue:            Vec::new(),
+            staged_images:           Vec::new(),
+            tool_input_buf:          String::new(),
+            loading_hint:            String::new(),
+            pending_approval:        None,
+            pending_question:        None,
+            pending_tool_call_limit: None,
         };
         state.push_message(Role::System, CHAT_BANNER.to_owned());
         state
@@ -175,6 +192,7 @@ impl ChatState {
         self.loading_hint.clear();
         self.pending_approval = None;
         self.pending_question = None;
+        self.pending_tool_call_limit = None;
     }
 
     /// Set a pending guard approval request for the user to decide on.
@@ -348,6 +366,20 @@ impl ChatState {
             CliEvent::UserQuestion { id, question } => {
                 self.set_pending_question(PendingQuestion { id, question });
             }
+            CliEvent::ToolCallLimitPaused {
+                session_key,
+                limit_id,
+                tool_calls_made,
+            } => {
+                self.pending_tool_call_limit = Some(PendingToolCallLimit {
+                    session_key,
+                    limit_id,
+                    tool_calls_made,
+                });
+                self.status_msg = Some(format!(
+                    "Agent paused after {tool_calls_made} tool calls. [c] Continue  [s] Stop"
+                ));
+            }
             CliEvent::Done => self.finalize_stream(),
         }
     }
@@ -410,6 +442,31 @@ impl ChatState {
                 KeyCode::Backspace => {
                     self.input.pop();
                     ChatAction::Continue
+                }
+                _ => ChatAction::Continue,
+            };
+        }
+
+        // Tool call limit pause: c/Enter → continue, s/Esc → stop.
+        if let Some(pending) = &self.pending_tool_call_limit {
+            let session_key = pending.session_key.clone();
+            let limit_id = pending.limit_id;
+            return match key.code {
+                KeyCode::Char('c') | KeyCode::Enter => {
+                    self.pending_tool_call_limit = None;
+                    ChatAction::ResolveToolCallLimit {
+                        session_key,
+                        limit_id,
+                        continued: true,
+                    }
+                }
+                KeyCode::Char('s') | KeyCode::Esc => {
+                    self.pending_tool_call_limit = None;
+                    ChatAction::ResolveToolCallLimit {
+                        session_key,
+                        limit_id,
+                        continued: false,
+                    }
                 }
                 _ => ChatAction::Continue,
             };
@@ -546,7 +603,9 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rara_channels::terminal::CliEvent;
 
-    use super::{ChatAction, ChatState, PendingApproval, PendingQuestion, Role};
+    use super::{
+        ChatAction, ChatState, PendingApproval, PendingQuestion, PendingToolCallLimit, Role,
+    };
 
     #[test]
     fn new_chat_state_starts_with_openfang_banner() {
@@ -878,5 +937,147 @@ mod tests {
         chat.reset_messages();
 
         assert!(chat.pending_question.is_none());
+    }
+
+    fn make_pending_tool_call_limit() -> PendingToolCallLimit {
+        PendingToolCallLimit {
+            session_key:     "550e8400-e29b-41d4-a716-446655440000".into(),
+            limit_id:        1,
+            tool_calls_made: 25,
+        }
+    }
+
+    #[test]
+    fn tool_call_limit_event_sets_pending_state() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.handle_cli_event(CliEvent::ToolCallLimitPaused {
+            session_key:     "550e8400-e29b-41d4-a716-446655440000".into(),
+            limit_id:        1,
+            tool_calls_made: 25,
+        });
+
+        assert!(chat.pending_tool_call_limit.is_some());
+        let p = chat.pending_tool_call_limit.as_ref().expect("pending");
+        assert_eq!(p.limit_id, 1);
+        assert_eq!(p.tool_calls_made, 25);
+        assert!(chat.status_msg.as_ref().expect("status").contains("25"));
+    }
+
+    #[test]
+    fn c_key_continues_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert!(matches!(
+            action,
+            ChatAction::ResolveToolCallLimit {
+                continued: true,
+                limit_id: 1,
+                ..
+            }
+        ));
+        assert!(chat.pending_tool_call_limit.is_none());
+    }
+
+    #[test]
+    fn enter_continues_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            action,
+            ChatAction::ResolveToolCallLimit {
+                continued: true,
+                limit_id: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn s_key_stops_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+
+        assert!(matches!(
+            action,
+            ChatAction::ResolveToolCallLimit {
+                continued: false,
+                limit_id: 1,
+                ..
+            }
+        ));
+        assert!(chat.pending_tool_call_limit.is_none());
+    }
+
+    #[test]
+    fn esc_stops_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(
+            action,
+            ChatAction::ResolveToolCallLimit {
+                continued: false,
+                limit_id: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn other_keys_ignored_when_tool_call_limit_pending() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::Continue));
+        assert!(chat.pending_tool_call_limit.is_some());
+    }
+
+    #[test]
+    fn approval_takes_priority_over_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::ApproveGuard { .. }));
+        // Tool call limit should still be pending.
+        assert!(chat.pending_tool_call_limit.is_some());
+    }
+
+    #[test]
+    fn question_takes_priority_over_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_question(make_pending_question());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+        chat.input = "answer".into();
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::AnswerQuestion { .. }));
+        // Tool call limit should still be pending.
+        assert!(chat.pending_tool_call_limit.is_some());
+    }
+
+    #[test]
+    fn reset_messages_clears_pending_tool_call_limit() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.pending_tool_call_limit = Some(make_pending_tool_call_limit());
+
+        chat.reset_messages();
+
+        assert!(chat.pending_tool_call_limit.is_none());
     }
 }
