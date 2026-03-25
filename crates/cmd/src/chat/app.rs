@@ -87,7 +87,7 @@ pub struct ChatState {
 }
 
 /// A guard approval request pending user decision.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct PendingApproval {
     pub id:         String,
     pub tool_name:  String,
@@ -311,18 +311,10 @@ impl ChatState {
             CliEvent::TurnRationale { text } => {
                 self.status_msg = Some(text);
             }
-            CliEvent::ApprovalRequest {
-                id,
-                tool_name,
-                summary,
-                risk_level,
-            } => {
-                self.set_pending_approval(PendingApproval {
-                    id,
-                    tool_name,
-                    summary,
-                    risk_level,
-                });
+            CliEvent::ApprovalRequest { .. } => {
+                // Approvals arrive via the dedicated `approval_rx` channel in
+                // mod.rs, not through CLI events. This arm exists only to
+                // satisfy the exhaustive match.
             }
             CliEvent::Done => self.finalize_stream(),
         }

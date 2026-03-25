@@ -26,6 +26,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64.workspace = true
+bon.workspace = true
 chrono.workspace = true
 clap = { workspace = true }
 common-telemetry.workspace = true

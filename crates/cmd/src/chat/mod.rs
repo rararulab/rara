@@ -213,12 +213,14 @@ async fn run_chat_tui(
             }
             result = approval_rx.recv() => {
                 if let Ok(request) = result {
-                    state.set_pending_approval(PendingApproval {
-                        id: request.id.to_string(),
-                        tool_name: request.tool_name.clone(),
-                        summary: request.summary.clone(),
-                        risk_level: format!("{:?}", request.risk_level),
-                    });
+                    state.set_pending_approval(
+                        PendingApproval::builder()
+                            .id(request.id.to_string())
+                            .tool_name(request.tool_name.clone())
+                            .summary(request.summary.clone())
+                            .risk_level(format!("{:?}", request.risk_level))
+                            .build(),
+                    );
                 }
             }
             maybe_event = poll_crossterm_event() => {
@@ -233,7 +235,6 @@ async fn run_chat_tui(
                                 ApprovalDecision::Approved,
                                 Some("cli-user".to_owned()),
                             );
-                            state.pending_approval = None;
                             state.push_message(Role::System, format!("Guard approved: {id}"));
                         }
                         ChatAction::DenyGuard { id } => {
@@ -243,7 +244,6 @@ async fn run_chat_tui(
                                 ApprovalDecision::Denied,
                                 Some("cli-user".to_owned()),
                             );
-                            state.pending_approval = None;
                             state.push_message(Role::System, format!("Guard denied: {id}"));
                         }
                         ChatAction::SlashCommand(command) => {
