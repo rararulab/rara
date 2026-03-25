@@ -18,15 +18,16 @@
 //! - OAuth URL construction and PKCE helpers
 //! - Authorization-code and refresh-token exchanges
 //! - Token persistence via file-based storage
-//! - Short-lived pending OAuth state persistence
 //! - Token-expiry/refresh policy
-//! - Ephemeral local callback server on port 1455
 //!
 //! The Codex public OAuth client (`app_EMoamEEZ73f0CkXaXp7hrann`) only
 //! accepts `http://localhost:1455/auth/callback` as its redirect URI.
-//! We therefore spin up a one-shot axum server on that port to capture
-//! the authorization code, exchange it for tokens, and redirect the
-//! browser to the frontend settings page.
+//! Rather than spinning up a local HTTP server (which breaks when the CLI
+//! runs on a remote machine), the CLI prompts the user to paste the full
+//! callback URL from their browser's address bar and exchanges the code
+//! locally via [`parse_callback_url`] + [`exchange_authorization_code`].
+
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -34,7 +35,6 @@ use rara_kernel::llm::{LlmCredential, LlmCredentialResolver};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
-use std::collections::HashMap;
 
 /// OpenAI authorization endpoint for Codex OAuth.
 pub const CODEX_AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
@@ -274,19 +274,13 @@ pub fn parse_callback_url(url: &str) -> Result<(String, String)> {
         .fail();
     }
 
-    let code = params
-        .get("code")
-        .cloned()
-        .context(OAuthValidationSnafu {
-            message: "missing authorization code in callback URL",
-        })?;
+    let code = params.get("code").cloned().context(OAuthValidationSnafu {
+        message: "missing authorization code in callback URL",
+    })?;
 
-    let state = params
-        .get("state")
-        .cloned()
-        .context(OAuthValidationSnafu {
-            message: "missing state in callback URL",
-        })?;
+    let state = params.get("state").cloned().context(OAuthValidationSnafu {
+        message: "missing state in callback URL",
+    })?;
 
     Ok((code, state))
 }
