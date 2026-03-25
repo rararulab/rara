@@ -375,8 +375,12 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
 /// summary, the summary is appended so the user can see *what* was called
 /// (e.g. file path, shell command, search query).
 fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
+    use crate::tool_display::truncate_summary;
+
+    // Truncate at 60 chars for Telegram's narrow viewport; the full text
+    // is preserved in the trace detail accessible via the "📊 详情" button.
     let suffix = if phase.count == 1 && !phase.first_summary.is_empty() {
-        format!(" — {}", phase.first_summary)
+        format!(" — {}", truncate_summary(&phase.first_summary, 60))
     } else {
         String::new()
     };
@@ -428,10 +432,6 @@ fn render_progress(
     // Aggregate consecutive tools with the same activity into phases.
     let phases = aggregate_phases(tools);
     let mut lines = Vec::new();
-
-    if let Some(ref rationale) = progress.turn_rationale {
-        lines.push(format!("\u{1f4ad} {rationale}"));
-    }
 
     // Count in-progress phases.
     let active = phases.iter().filter(|p| !p.all_finished).count();
@@ -514,10 +514,6 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         "\u{1f4cb} {plan_goal}\u{ff08}{total}\u{6b65}\u{ff09}"
     )];
     lines.push(String::new());
-
-    if let Some(ref rationale) = progress.turn_rationale {
-        lines.push(format!("\u{1f4ad} {rationale}"));
-    }
 
     for (i, step) in steps.iter().enumerate() {
         let (icon, suffix) = match &step.status {
@@ -608,6 +604,14 @@ fn render_compact_summary(trace: &ExecutionTrace) -> String {
 fn render_trace_detail(trace: &ExecutionTrace) -> String {
     let mut text = render_compact_summary(trace);
     text.push_str("\n\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
+
+    // Turn rationale (moved from live progress to trace detail)
+    if let Some(ref rationale) = trace.turn_rationale {
+        text.push_str(&format!(
+            "\n\u{1f4ad} <b>Rationale</b>\n<blockquote>{}</blockquote>\n",
+            trace_html_escape(rationale),
+        ));
+    }
 
     // Thinking section
     if !trace.thinking_preview.is_empty() {
@@ -1545,36 +1549,32 @@ async fn handle_guard_callback(
         .text(answer_text)
         .await;
 
-    // Edit the original message to show the decision (remove buttons).
+    // Collapse the full guard message into a compact one-liner after
+    // the decision so it no longer dominates the chat view.
     if let Some(msg) = &callback.message {
-        let (msg_id, chat_id, original_text) = match msg {
-            teloxide::types::MaybeInaccessibleMessage::Regular(m) => {
-                let text = m.text().unwrap_or("Guard decision").to_owned();
-                (m.id, m.chat.id, text)
-            }
-            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => {
-                (m.message_id, m.chat.id, "Guard decision".to_owned())
-            }
+        let (msg_id, chat_id) = match msg {
+            teloxide::types::MaybeInaccessibleMessage::Regular(m) => (m.id, m.chat.id),
+            teloxide::types::MaybeInaccessibleMessage::Inaccessible(m) => (m.message_id, m.chat.id),
         };
 
-        let status = match (&decision, &result) {
-            (ApprovalDecision::Approved, Ok(_)) => format!("✅ <b>Approved</b> by @{decided_by}"),
-            (ApprovalDecision::Denied, Ok(_)) => format!("❌ <b>Denied</b> by @{decided_by}"),
-            (_, Err(ResolveError::Expired)) => "⏰ <b>Expired</b> — request timed out".to_string(),
-            (_, Err(ResolveError::NotFound(_))) => {
-                "⏰ <b>Expired</b> — request already resolved or timed out".to_string()
+        let compact = match (&decision, &result) {
+            (ApprovalDecision::Approved, Ok(_)) => {
+                format!("🛡 <b>Guard</b> ✅ by @{decided_by}")
             }
-            // Future-proof: catch any new ResolveError variants.
+            (ApprovalDecision::Denied, Ok(_)) => {
+                format!("🛡 <b>Guard</b> ❌ by @{decided_by}")
+            }
+            (_, Err(ResolveError::Expired)) => "🛡 <b>Guard</b> ⏰ timed out".to_string(),
+            (_, Err(ResolveError::NotFound(_))) => "🛡 <b>Guard</b> ⏰ already resolved".to_string(),
             #[allow(unreachable_patterns)]
-            (_, Err(e)) => format!("⚠️ Failed: {}", guard_html_escape(&e.to_string())),
-            (_, Ok(_)) => "Done".to_string(),
+            (_, Err(e)) => {
+                format!("🛡 <b>Guard</b> ⚠️ {}", guard_html_escape(&e.to_string()))
+            }
+            (_, Ok(_)) => "🛡 <b>Guard</b> done".to_string(),
         };
 
-        // Preserve original message content, append the decision status,
-        // and remove the inline keyboard so buttons cannot be clicked again.
-        let new_text = format!("{}\n\n{}", guard_html_escape(&original_text), status);
         let _ = bot
-            .edit_message_text(chat_id, msg_id, new_text)
+            .edit_message_text(chat_id, msg_id, compact)
             .parse_mode(ParseMode::Html)
             .reply_markup(InlineKeyboardMarkup::new(
                 Vec::<Vec<InlineKeyboardButton>>::new(),
@@ -2022,7 +2022,8 @@ async fn approval_listener(
                     continue;
                 };
 
-                let (_display, args_summary) = tool_display_info(&req.tool_name, &req.tool_args);
+                let (_display, args_summary_raw) = tool_display_info(&req.tool_name, &req.tool_args);
+                let args_summary = crate::tool_display::truncate_summary(&args_summary_raw, 80);
                 let mut text = format!(
                     "<b>🛡 Guard Blocked Tool Call</b>\n\n\
                      <b>Tool:</b> <code>{tool}</code>\n",
@@ -2086,20 +2087,14 @@ async fn approval_listener(
                         let expiry_msg_id = sent_msg.id;
                         let timeout_secs = req.timeout_secs;
                         let request_id = req.id;
-                        let expires_display = expires_str.to_string();
-                        let info_text = text.clone();
-
                         let handle = tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
 
                             // Remove our own entry from the map.
                             GUARD_EXPIRY_HANDLES.remove(&request_id);
 
-                            // Edit message: remove keyboard and show expiry status.
-                            let expired_text = format!(
-                                "{}\n\n⏰ <b>Expired</b> — timed out at {}",
-                                info_text, expires_display,
-                            );
+                            // Collapse to compact one-liner on expiry.
+                            let expired_text = "🛡 <b>Guard</b> ⏰ timed out".to_string();
                             let _ = expiry_bot
                                 .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
                                 .parse_mode(ParseMode::Html)
@@ -3152,6 +3147,7 @@ fn spawn_stream_forwarder(
                                     output_tokens:    progress.output_tokens,
                                     thinking_ms:      progress.thinking_ms,
                                     thinking_preview: std::mem::take(&mut progress.reasoning_preview),
+                                    turn_rationale:   progress.turn_rationale.take(),
                                     plan_steps,
                                     tools:            progress.tools.iter().map(|t| ToolTraceEntry {
                                         name:        t.name.clone(),
@@ -3809,13 +3805,15 @@ mod render_progress_tests {
     }
 
     #[test]
-    fn render_progress_includes_rationale_when_present() {
+    fn render_progress_omits_rationale_from_live_progress() {
+        // Turn rationale is now shown only in the trace detail, not in live
+        // progress — verify it does not appear.
         let pm = test_progress(Some("Reading config files"));
         let tools = vec![finished_tool("read_file")];
         let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
         assert!(
-            output.contains("Reading config files"),
-            "expected rationale in output, got: {output}"
+            !output.contains("Reading config files"),
+            "rationale should not appear in live progress, got: {output}"
         );
     }
 
