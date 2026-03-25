@@ -11,7 +11,7 @@ OpenAI Codex OAuth integration — handles the full PKCE OAuth flow for obtainin
 - `src/lib.rs` — The entire crate. Contains:
   - OAuth URL construction (`build_auth_url`) with PKCE challenge.
   - Authorization code exchange and token refresh (`exchange_authorization_code`, `refresh_tokens`).
-  - Token persistence via file I/O (`load_tokens`, `save_tokens`, `clear_tokens`) — tokens stored at `<data_dir>/codex_tokens.json`.
+  - Token persistence via file I/O (`load_tokens`, `save_tokens`, `clear_tokens`) — tokens stored at `<config_dir>/codex_tokens.json`.
   - In-process pending OAuth state (`PendingCodexOAuth`) stored in a `LazyLock<Mutex>`.
   - Ephemeral callback server on `localhost:1455` (`start_callback_server`) that captures the OAuth callback, exchanges tokens, and redirects to the frontend.
   - `CodexCredentialResolver` — implements `LlmCredentialResolver` from `rara-kernel`. On each call, loads tokens from disk, refreshes if expired, and returns a fresh `LlmCredential`.
@@ -27,7 +27,7 @@ OpenAI Codex OAuth integration — handles the full PKCE OAuth flow for obtainin
 
 - Client ID: `app_EMoamEEZ73f0CkXaXp7hrann` (overridable via `RARA_CODEX_CLIENT_ID` env var).
 - Redirect URI: `http://localhost:1455/auth/callback` (fixed, registered with OpenAI).
-- Token file: `<data_dir>/codex_tokens.json` (via `rara_paths::data_dir()`).
+- Token file: `<config_dir>/codex_tokens.json` (via `rara_paths::data_dir()`).
 
 ## Critical Invariants
 

@@ -88,7 +88,7 @@ struct TokenResponse {
 }
 
 /// Path to the Codex OAuth token file.
-fn token_file_path() -> std::path::PathBuf { rara_paths::data_dir().join(CODEX_TOKEN_FILENAME) }
+fn token_file_path() -> std::path::PathBuf { rara_paths::config_dir().join(CODEX_TOKEN_FILENAME) }
 
 /// Construct the full authorization URL for redirecting the user.
 ///
