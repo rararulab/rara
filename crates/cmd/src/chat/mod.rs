@@ -243,6 +243,14 @@ async fn run_chat_tui(
                     match state.handle_key(key) {
                         ChatAction::Continue => {}
                         ChatAction::Back => break,
+                        ChatAction::Interrupt => {
+                            let resolved = session_tx.borrow().clone();
+                            let _ = kernel_handle.send_signal(
+                                resolved,
+                                rara_kernel::session::Signal::Interrupt,
+                            );
+                            state.status_msg = Some("Interrupting...".to_owned());
+                        }
                         ChatAction::ApproveGuard { id } => {
                             let uuid = uuid::Uuid::parse_str(&id).expect("valid approval uuid");
                             let _ = kernel_handle.security().approval().resolve(

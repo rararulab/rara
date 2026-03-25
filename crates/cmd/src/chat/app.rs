@@ -121,10 +121,13 @@ pub struct PendingToolCallLimit {
     pub tool_calls_made: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum ChatAction {
     Continue,
     SendMessage(String),
     Back,
+    /// Interrupt the agent's current streaming turn (Ctrl+C while streaming).
+    Interrupt,
     SlashCommand(String),
     /// User approved a pending guard request.
     ApproveGuard {
@@ -435,6 +438,9 @@ impl ChatState {
     #[must_use]
     pub fn handle_key(&mut self, key: KeyEvent) -> ChatAction {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if self.is_streaming {
+                return ChatAction::Interrupt;
+            }
             return ChatAction::Back;
         }
 
@@ -1282,5 +1288,23 @@ mod tests {
         assert_eq!(chat.turn_input_tokens, 0);
         assert_eq!(chat.turn_output_tokens, 0);
         assert_eq!(chat.turn_thinking_ms, 0);
+    }
+
+    #[test]
+    fn ctrl_c_returns_interrupt_when_streaming() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.is_streaming = true;
+
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(chat.handle_key(key), ChatAction::Interrupt);
+    }
+
+    #[test]
+    fn ctrl_c_returns_back_when_idle() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.is_streaming = false;
+
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(chat.handle_key(key), ChatAction::Back);
     }
 }
