@@ -28,6 +28,7 @@ use rara_kernel::{
 use super::{
     anchor_dot,
     client::{BotServiceClient, CheckoutResult},
+    session::extract_channel_info,
 };
 
 /// Handles tape visualization and anchor-based forking.
@@ -71,8 +72,12 @@ impl CommandHandler for TapeCommandHandler {
 
 impl TapeCommandHandler {
     async fn handle_anchors(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let chat_id = super::extract_chat_id(&context.metadata)?;
-        let session_key = match self.client.get_channel_session("telegram", &chat_id).await {
+        let (channel_type, chat_id) = extract_channel_info(context);
+        let session_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => return Ok(CommandResult::Text("No active session.".to_owned())),
             Err(e) => {
@@ -116,8 +121,12 @@ impl TapeCommandHandler {
         args: &str,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let chat_id = super::extract_chat_id(&context.metadata)?;
-        let session_key = match self.client.get_channel_session("telegram", &chat_id).await {
+        let (channel_type, chat_id) = extract_channel_info(context);
+        let session_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id)
+            .await
+        {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => return Ok(CommandResult::Text("No active session.".to_owned())),
             Err(e) => {

@@ -685,30 +685,55 @@ fn short_session_key(key: &SessionKey) -> String {
 }
 
 /// Render a [`CmdResult`] into the TUI chat state.
+/// Render a [`CmdResult`] from a kernel command handler into the chat
+/// display. HTML is converted to terminal-friendly plain text; inline
+/// keyboards are silently dropped since terminal cannot render buttons.
 fn render_command_result(state: &mut ChatState, result: CmdResult) {
     match result {
         CmdResult::Text(s) => state.push_message(Role::System, s),
         CmdResult::Html(s) => {
-            // Strip basic HTML tags for terminal display.
-            state.push_message(Role::System, strip_html_tags(&s));
+            state.push_message(Role::System, html_to_terminal(&s));
         }
         CmdResult::HtmlWithKeyboard { html, .. } => {
-            // Show text portion; inline keyboards are not supported in TUI.
-            state.push_message(Role::System, strip_html_tags(&html));
+            // Inline keyboards are not renderable in the terminal; show the
+            // text portion only.
+            state.push_message(Role::System, html_to_terminal(&html));
         }
         CmdResult::Photo { caption, .. } => {
-            let text = caption.unwrap_or_else(|| "[Photo]".to_string());
+            // Terminal cannot display images — show caption with a marker.
+            let text = caption
+                .map(|c| format!("[Image] {c}"))
+                .unwrap_or_else(|| "[Image]".to_string());
             state.push_message(Role::System, text);
         }
         CmdResult::None => {}
     }
 }
 
-/// Minimal HTML tag stripper for terminal display.
-fn strip_html_tags(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Convert HTML (as produced by Telegram-oriented command handlers) into
+/// terminal-friendly plain text.
+///
+/// Handles the common tags used by command handlers (`<b>`, `<i>`, `<code>`,
+/// `<pre>`, `<br>`) and HTML entities. Remaining unknown tags are stripped.
+fn html_to_terminal(s: &str) -> String {
+    // Phase 1: replace known tags with terminal-friendly markers.
+    let result = s
+        .replace("<b>", "")
+        .replace("</b>", "")
+        .replace("<i>", "")
+        .replace("</i>", "")
+        .replace("<code>", "`")
+        .replace("</code>", "`")
+        .replace("<pre>", "```\n")
+        .replace("</pre>", "\n```")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+
+    // Phase 2: strip any remaining HTML tags.
+    let mut out = String::with_capacity(result.len());
     let mut in_tag = false;
-    for ch in s.chars() {
+    for ch in result.chars() {
         match ch {
             '<' => in_tag = true,
             '>' if in_tag => in_tag = false,
@@ -716,10 +741,13 @@ fn strip_html_tags(s: &str) -> String {
             _ => {}
         }
     }
-    // Unescape common HTML entities.
+
+    // Phase 3: unescape common HTML entities.
     out.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
 }
 
 fn default_model_label(config: &AppConfig) -> String {
@@ -1154,5 +1182,122 @@ mod tests {
 
         state.reset_messages();
         assert!(state.messages.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // html_to_terminal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn html_to_terminal_strips_bold_and_italic() {
+        assert_eq!(
+            super::html_to_terminal("<b>bold</b> and <i>italic</i>"),
+            "bold and italic"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_converts_code_to_backticks() {
+        assert_eq!(
+            super::html_to_terminal("use <code>foo</code> here"),
+            "use `foo` here"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_converts_pre_to_fenced_block() {
+        assert_eq!(
+            super::html_to_terminal("<pre>line1\nline2</pre>"),
+            "```\nline1\nline2\n```"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_converts_br_to_newline() {
+        assert_eq!(super::html_to_terminal("a<br>b<br/>c<br />d"), "a\nb\nc\nd");
+    }
+
+    #[test]
+    fn html_to_terminal_unescapes_entities() {
+        assert_eq!(
+            super::html_to_terminal("&amp; &lt; &gt; &quot; &#39;"),
+            "& < > \" '"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_strips_unknown_tags() {
+        assert_eq!(
+            super::html_to_terminal("<div>hello <span>world</span></div>"),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_handles_mcp_status_output() {
+        let html = "<b>MCP Servers</b> (2)\n\n\u{25CF} <b>context-mode</b> \u{2014} connected \
+                    (interceptor: \u{2713})\n\u{25CB} <b>other</b> \u{2014} disconnected\n\n1/2 \
+                    connected";
+        let result = super::html_to_terminal(html);
+        assert!(result.contains("MCP Servers (2)"));
+        assert!(result.contains("context-mode"));
+        assert!(!result.contains('<'));
+    }
+
+    // -----------------------------------------------------------------------
+    // render_command_result
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_photo_shows_image_marker_with_caption() {
+        use rara_kernel::channel::command::CommandResult as CmdResult;
+
+        let mut state = ChatState::new("default".into(), "local".into());
+        super::render_command_result(
+            &mut state,
+            CmdResult::Photo {
+                data:    vec![],
+                caption: Some("Anchor tree (3 sessions)".to_owned()),
+            },
+        );
+        let last = state.messages.last().expect("message");
+        assert_eq!(last.text, "[Image] Anchor tree (3 sessions)");
+    }
+
+    #[test]
+    fn render_photo_without_caption_shows_placeholder() {
+        use rara_kernel::channel::command::CommandResult as CmdResult;
+
+        let mut state = ChatState::new("default".into(), "local".into());
+        super::render_command_result(
+            &mut state,
+            CmdResult::Photo {
+                data:    vec![],
+                caption: None,
+            },
+        );
+        let last = state.messages.last().expect("message");
+        assert_eq!(last.text, "[Image]");
+    }
+
+    #[test]
+    fn render_html_with_keyboard_drops_buttons() {
+        use rara_kernel::channel::{command::CommandResult as CmdResult, types::InlineButton};
+
+        let mut state = ChatState::new("default".into(), "local".into());
+        super::render_command_result(
+            &mut state,
+            CmdResult::HtmlWithKeyboard {
+                html:     "<b>Status</b>\nActive: 1".to_owned(),
+                keyboard: vec![vec![InlineButton {
+                    text:          "All jobs".to_owned(),
+                    callback_data: Some("status_jobs:abc".to_owned()),
+                    url:           None,
+                }]],
+            },
+        );
+        let last = state.messages.last().expect("message");
+        assert!(last.text.contains("Status"));
+        assert!(!last.text.contains("All jobs"));
     }
 }
