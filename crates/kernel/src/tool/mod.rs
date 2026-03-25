@@ -34,6 +34,7 @@ pub(crate) const RECURSIVE_TOOL_DENYLIST: &[&str] = &[
     crate::tool_names::TASK,
     crate::tool_names::SPAWN_BACKGROUND,
     crate::tool_names::CREATE_PLAN,
+    crate::tool_names::ASK_USER,
 ];
 
 /// Typed tool execution trait.
@@ -63,6 +64,23 @@ pub trait ToolExecute: Send + Sync {
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct EmptyParams {}
 
+/// Hint that a tool can attach to its output to influence agent loop behavior.
+///
+/// Tools return hints via [`ToolOutput::hints`]; the agent loop inspects them
+/// after execution and acts accordingly. This keeps orchestration decisions
+/// in the loop while letting tools signal intent declaratively.
+#[derive(Debug, Clone)]
+pub enum ToolHint {
+    /// Suggest that the agent loop should fold (compress) context after this
+    /// iteration completes. Useful when a tool produces large output that is
+    /// no longer needed verbatim in subsequent turns (e.g. plugin installation
+    /// logs).
+    SuggestFold {
+        /// Optional human-readable reason for logging/diagnostics.
+        reason: Option<String>,
+    },
+}
+
 /// A binary resource produced by a tool (e.g. a compressed screenshot).
 #[derive(Debug, Clone)]
 pub struct ResourceAttachment {
@@ -81,19 +99,29 @@ pub struct ToolOutput {
     pub json:      serde_json::Value,
     /// Binary resources to persist and inject as multimodal content.
     pub resources: Vec<ResourceAttachment>,
+    /// Hints for the agent loop (e.g. suggest context folding).
+    pub hints:     Vec<ToolHint>,
 }
 
 impl ToolOutput {
     /// Create a `ToolOutput` by serializing a typed result struct.
     ///
-    /// The resulting `ToolOutput` has an empty `resources` list. Tools that
-    /// need to attach binary resources (e.g. screenshots) should use
-    /// `execute_fn` and construct `ToolOutput` directly instead.
+    /// The resulting `ToolOutput` has empty `resources` and `hints` lists.
+    /// Tools that need to attach binary resources (e.g. screenshots) should
+    /// use `execute_fn` and construct `ToolOutput` directly instead.
     pub fn from_serialize<T: serde::Serialize>(val: &T) -> anyhow::Result<Self> {
         Ok(Self {
             json:      serde_json::to_value(val)?,
             resources: vec![],
+            hints:     vec![],
         })
+    }
+
+    /// Attach a hint to this output, returning `self` for chaining.
+    #[must_use]
+    pub fn with_hint(mut self, hint: ToolHint) -> Self {
+        self.hints.push(hint);
+        self
     }
 }
 
@@ -102,6 +130,7 @@ impl From<serde_json::Value> for ToolOutput {
         Self {
             json,
             resources: vec![],
+            hints: vec![],
         }
     }
 }

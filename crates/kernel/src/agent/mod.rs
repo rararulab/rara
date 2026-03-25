@@ -1089,6 +1089,8 @@ pub(crate) async fn run_agent_loop(
     let mut last_fold_entry_id: Option<u64> =
         fold::find_last_auto_fold_entry_id(&tape, tape_name).await;
     let mut fold_failed_this_turn = false;
+    // Set by ToolHint::SuggestFold — bypasses pressure threshold on next iteration.
+    let mut force_fold_next_iteration = false;
     let context_folder = if fold_config.enabled {
         let fold_model = fold_config
             .fold_model
@@ -1110,7 +1112,13 @@ pub(crate) async fn run_agent_loop(
                     let pressure = tape_info.estimated_context_tokens as f64
                         / capabilities.context_window_tokens as f64;
 
-                    if pressure > fold_config.fold_threshold {
+                    let should_fold =
+                        pressure > fold_config.fold_threshold || force_fold_next_iteration;
+                    if should_fold {
+                        if force_fold_next_iteration {
+                            info!("auto-fold: triggered by ToolHint::SuggestFold");
+                            force_fold_next_iteration = false;
+                        }
                         let entries_since_fold = match last_fold_entry_id {
                             Some(id) => tape
                                 .entries_after(tape_name, id)
@@ -2250,6 +2258,22 @@ pub(crate) async fn run_agent_loop(
                     s.activated_deferred = snapshot;
                 });
             }
+            // Check tool output hints (e.g. SuggestFold from marketplace-install).
+            // Pragmatic approach: check tool name rather than propagating hints
+            // through the ToolDef macro, since the macro calls from_serialize()
+            // which always returns empty hints.
+            for (_id, name, _args) in &valid_tool_calls {
+                if name == "marketplace-install" {
+                    // Successful marketplace installs produce large context that
+                    // is not needed verbatim — request fold on next iteration.
+                    force_fold_next_iteration = true;
+                    info!(
+                        tool = %name,
+                        "setting force_fold_next_iteration from marketplace-install"
+                    );
+                }
+            }
+
             // Reset session-length counter when the agent creates an anchor.
             // Detected via result payload rather than hardcoded tool names so
             // that new anchor-creating tools are automatically covered.

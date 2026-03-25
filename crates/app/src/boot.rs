@@ -33,17 +33,17 @@ use tracing::info;
 /// [`Kernel`](rara_kernel::kernel::Kernel).
 #[derive(Clone)]
 pub(crate) struct BootResult {
-    pub credential_store:     rara_keyring_store::KeyringStoreRef,
-    pub driver_registry:      Arc<rara_kernel::llm::DriverRegistry>,
-    pub tool_registry:        Arc<rara_kernel::tool::ToolRegistry>,
-    pub user_store:           Arc<dyn rara_kernel::identity::UserStore>,
-    pub session_index:        Arc<dyn rara_kernel::session::SessionIndex>,
-    pub tape_service:         rara_kernel::memory::TapeService,
-    pub skill_registry:       rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:          rara_mcp::manager::mgr::McpManager,
-    pub settings_provider:    Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    pub identity_resolver:    Arc<dyn rara_kernel::io::IdentityResolver>,
-    pub agent_registry:       Arc<rara_kernel::agent::AgentRegistry>,
+    pub credential_store:      rara_keyring_store::KeyringStoreRef,
+    pub driver_registry:       Arc<rara_kernel::llm::DriverRegistry>,
+    pub tool_registry:         Arc<rara_kernel::tool::ToolRegistry>,
+    pub user_store:            Arc<dyn rara_kernel::identity::UserStore>,
+    pub session_index:         Arc<dyn rara_kernel::session::SessionIndex>,
+    pub tape_service:          rara_kernel::memory::TapeService,
+    pub skill_registry:        rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:           rara_mcp::manager::mgr::McpManager,
+    pub settings_provider:     Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub identity_resolver:     Arc<dyn rara_kernel::io::IdentityResolver>,
+    pub agent_registry:        Arc<rara_kernel::agent::AgentRegistry>,
     /// Handle reference for `DispatchRaraTool` — must be wired with a
     /// `KernelHandle` after kernel startup.
     pub dispatch_rara_handle:
@@ -53,11 +53,14 @@ pub(crate) struct BootResult {
     pub list_sessions_handle:
         std::sync::Arc<tokio::sync::RwLock<Option<rara_kernel::handle::KernelHandle>>>,
     /// Knowledge layer service for long-term memory.
-    pub knowledge_service:    rara_kernel::memory::knowledge::KnowledgeServiceRef,
+    pub knowledge_service:     rara_kernel::memory::knowledge::KnowledgeServiceRef,
     /// Default provider's model lister for `/v1/models` queries.
-    pub model_lister:         rara_kernel::llm::LlmModelListerRef,
+    pub model_lister:          rara_kernel::llm::LlmModelListerRef,
     /// Shared mutation sink for dock tools — passed to both tools and routes.
-    pub dock_mutation_sink:   rara_dock::DockMutationSink,
+    pub dock_mutation_sink:    rara_dock::DockMutationSink,
+    /// User question manager for ask-user tool — adapters subscribe to render
+    /// questions and call `resolve()` with user answers.
+    pub user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
 }
 
 /// A user entry in the YAML configuration file.
@@ -173,6 +176,8 @@ pub(crate) async fn boot(
     // -- tools -------------------------------------------------------------
 
     let dock_mutation_sink = rara_dock::DockMutationSink::new();
+    let user_question_manager: rara_kernel::user_question::UserQuestionManagerRef =
+        std::sync::Arc::new(rara_kernel::user_question::UserQuestionManager::new());
 
     let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
     let tool_result = crate::tools::register_all(
@@ -188,6 +193,7 @@ pub(crate) async fn boot(
             clawhub_client: clawhub_client.clone(),
             dock_mutation_sink: dock_mutation_sink.clone(),
             acp_registry,
+            user_question_manager: user_question_manager.clone(),
         },
     );
 
@@ -274,6 +280,7 @@ pub(crate) async fn boot(
         knowledge_service,
         dock_mutation_sink,
         model_lister,
+        user_question_manager,
     })
 }
 

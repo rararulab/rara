@@ -20,6 +20,7 @@ use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
 mod acp_delegate;
 mod acp_tools;
+mod ask_user;
 mod bash;
 mod composio;
 mod create_directory;
@@ -59,6 +60,7 @@ mod write_file;
 
 use acp_delegate::AcpDelegateTool;
 use acp_tools::{InstallAcpAgentTool, ListAcpAgentsTool, RemoveAcpAgentTool};
+use ask_user::AskUserTool;
 use bash::BashTool;
 use create_directory::CreateDirectoryTool;
 use debug_trace::DebugTraceTool;
@@ -137,6 +139,7 @@ pub struct ToolDeps {
     pub clawhub_client:         std::sync::Arc<rara_skills::clawhub::ClawhubClient>,
     pub dock_mutation_sink:     rara_dock::DockMutationSink,
     pub acp_registry:           rara_acp::AcpRegistryRef,
+    pub user_question_manager:  rara_kernel::user_question::UserQuestionManagerRef,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -241,6 +244,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // WeChat login (two-step: start → confirm)
         Arc::new(WechatLoginStartTool::new()),
         Arc::new(WechatLoginConfirmTool::new()),
+        // User interaction
+        Arc::new(AskUserTool::new(deps.user_question_manager)),
     ];
 
     for tool in tools {
@@ -288,6 +293,7 @@ mod tests {
             "send-email",
             "memory",
             "http-fetch",
+            "ask-user",
         ] {
             assert!(
                 !names.iter().any(|n| n == deferred),
