@@ -804,10 +804,11 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             tool_calls,
             model,
             rara_message_id: _,
-        } => CliEvent::Progress {
-            text: format!(
-                "[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"
-            ),
+        } => CliEvent::TurnSummary {
+            duration_ms,
+            iterations: iterations as u32,
+            tool_calls: tool_calls as u32,
+            model,
         },
         StreamEvent::PlanCreated {
             compact_summary,
@@ -823,8 +824,14 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::PlanCompleted { summary } => CliEvent::Progress {
             text: format!("Plan completed: {summary}"),
         },
-        StreamEvent::UsageUpdate { .. } => CliEvent::Progress {
-            text: String::new(),
+        StreamEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            thinking_ms,
+        } => CliEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            thinking_ms,
         },
         StreamEvent::BackgroundTaskStarted {
             agent_name,
@@ -878,6 +885,9 @@ async fn send_cli_message(
     state.last_tokens = None;
     state.last_cost_usd = None;
     state.status_msg = None;
+    state.turn_input_tokens = 0;
+    state.turn_output_tokens = 0;
+    state.turn_thinking_ms = 0;
 
     let attachments = match load_image_blocks(&image_paths).await {
         Ok(attachments) => attachments,

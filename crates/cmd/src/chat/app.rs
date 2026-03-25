@@ -82,6 +82,13 @@ pub struct ChatState {
     /// Cached loading hint, sampled once when entering thinking state to avoid
     /// flicker on every render tick.
     pub loading_hint:            String,
+    /// Cumulative input tokens for the current turn (latest iteration's context
+    /// size).
+    pub turn_input_tokens:       u32,
+    /// Cumulative output tokens for the current turn.
+    pub turn_output_tokens:      u32,
+    /// Cumulative thinking time in milliseconds for the current turn.
+    pub turn_thinking_ms:        u64,
     /// Guard approval request awaiting user decision (y/n).
     pub pending_approval:        Option<PendingApproval>,
     /// Agent question awaiting user answer (free-form text input).
@@ -165,6 +172,9 @@ impl ChatState {
             staged_images:           Vec::new(),
             tool_input_buf:          String::new(),
             loading_hint:            String::new(),
+            turn_input_tokens:       0,
+            turn_output_tokens:      0,
+            turn_thinking_ms:        0,
             pending_approval:        None,
             pending_question:        None,
             pending_tool_call_limit: None,
@@ -190,6 +200,9 @@ impl ChatState {
         self.staged_images.clear();
         self.tool_input_buf.clear();
         self.loading_hint.clear();
+        self.turn_input_tokens = 0;
+        self.turn_output_tokens = 0;
+        self.turn_thinking_ms = 0;
         self.pending_approval = None;
         self.pending_question = None;
         self.pending_tool_call_limit = None;
@@ -379,6 +392,41 @@ impl ChatState {
                 self.status_msg = Some(format!(
                     "Agent paused after {tool_calls_made} tool calls. [c] Continue  [s] Stop"
                 ));
+            }
+            CliEvent::UsageUpdate {
+                input_tokens,
+                output_tokens,
+                thinking_ms,
+            } => {
+                // input_tokens = latest iteration's context size (overwrite).
+                // output_tokens = cumulative across iterations (overwrite).
+                // thinking_ms = cumulative (overwrite).
+                self.turn_input_tokens = input_tokens;
+                self.turn_output_tokens = output_tokens;
+                self.turn_thinking_ms = thinking_ms;
+            }
+            CliEvent::TurnSummary {
+                duration_ms,
+                iterations,
+                tool_calls,
+                model,
+            } => {
+                let duration = format_duration(duration_ms);
+                let in_tok = format_tokens(u64::from(self.turn_input_tokens));
+                let out_tok = format_tokens(u64::from(self.turn_output_tokens));
+                let thinking = if self.turn_thinking_ms > 0 {
+                    format!(" · thought {}s", self.turn_thinking_ms / 1000)
+                } else {
+                    String::new()
+                };
+                self.status_msg = Some(format!(
+                    "done {duration} · {iterations} iter · {tool_calls} tools · ↑{in_tok} \
+                     ↓{out_tok}{thinking} · {model}"
+                ));
+                // Reset for next turn.
+                self.turn_input_tokens = 0;
+                self.turn_output_tokens = 0;
+                self.turn_thinking_ms = 0;
             }
             CliEvent::Done => self.finalize_stream(),
         }
@@ -580,6 +628,28 @@ impl ChatState {
             }
             _ => ChatAction::Continue,
         }
+    }
+}
+
+/// Format a duration in milliseconds into a human-readable string.
+fn format_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        format!("{:.1}m", ms as f64 / 60_000.0)
+    }
+}
+
+/// Format a token count into a compact human-readable string (e.g. "1.2k").
+fn format_tokens(tokens: u64) -> String {
+    if tokens < 1000 {
+        format!("{tokens}")
+    } else if tokens < 1_000_000 {
+        format!("{:.1}k", tokens as f64 / 1000.0)
+    } else {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
     }
 }
 
@@ -1079,5 +1149,138 @@ mod tests {
         chat.reset_messages();
 
         assert!(chat.pending_tool_call_limit.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Execution trace summary tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_duration_milliseconds() {
+        assert_eq!(super::format_duration(0), "0ms");
+        assert_eq!(super::format_duration(500), "500ms");
+        assert_eq!(super::format_duration(999), "999ms");
+    }
+
+    #[test]
+    fn format_duration_seconds() {
+        assert_eq!(super::format_duration(1000), "1.0s");
+        assert_eq!(super::format_duration(1500), "1.5s");
+        assert_eq!(super::format_duration(59_999), "60.0s");
+    }
+
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(super::format_duration(60_000), "1.0m");
+        assert_eq!(super::format_duration(90_000), "1.5m");
+    }
+
+    #[test]
+    fn format_tokens_plain() {
+        assert_eq!(super::format_tokens(0), "0");
+        assert_eq!(super::format_tokens(999), "999");
+    }
+
+    #[test]
+    fn format_tokens_kilo() {
+        assert_eq!(super::format_tokens(1000), "1.0k");
+        assert_eq!(super::format_tokens(1500), "1.5k");
+        assert_eq!(super::format_tokens(999_999), "1000.0k");
+    }
+
+    #[test]
+    fn format_tokens_mega() {
+        assert_eq!(super::format_tokens(1_000_000), "1.0M");
+        assert_eq!(super::format_tokens(2_500_000), "2.5M");
+    }
+
+    #[test]
+    fn usage_update_accumulates_in_state() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+
+        // First iteration.
+        chat.handle_cli_event(CliEvent::UsageUpdate {
+            input_tokens:  1000,
+            output_tokens: 200,
+            thinking_ms:   500,
+        });
+        assert_eq!(chat.turn_input_tokens, 1000);
+        assert_eq!(chat.turn_output_tokens, 200);
+        assert_eq!(chat.turn_thinking_ms, 500);
+
+        // Second iteration — values are cumulative, so overwrite.
+        chat.handle_cli_event(CliEvent::UsageUpdate {
+            input_tokens:  2000,
+            output_tokens: 450,
+            thinking_ms:   800,
+        });
+        assert_eq!(chat.turn_input_tokens, 2000);
+        assert_eq!(chat.turn_output_tokens, 450);
+        assert_eq!(chat.turn_thinking_ms, 800);
+    }
+
+    #[test]
+    fn turn_summary_sets_status_and_resets_counters() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+
+        // Simulate usage accumulation.
+        chat.handle_cli_event(CliEvent::UsageUpdate {
+            input_tokens:  5000,
+            output_tokens: 1200,
+            thinking_ms:   3000,
+        });
+
+        chat.handle_cli_event(CliEvent::TurnSummary {
+            duration_ms: 4500,
+            iterations:  3,
+            tool_calls:  2,
+            model:       "gpt-4".into(),
+        });
+
+        let status = chat.status_msg.as_ref().expect("status should be set");
+        assert!(status.contains("4.5s"), "should contain formatted duration");
+        assert!(status.contains("3 iter"), "should contain iteration count");
+        assert!(status.contains("2 tools"), "should contain tool count");
+        assert!(status.contains("5.0k"), "should contain input tokens");
+        assert!(status.contains("1.2k"), "should contain output tokens");
+        assert!(
+            status.contains("thought 3s"),
+            "should contain thinking time"
+        );
+        assert!(status.contains("gpt-4"), "should contain model name");
+
+        // Counters should be reset.
+        assert_eq!(chat.turn_input_tokens, 0);
+        assert_eq!(chat.turn_output_tokens, 0);
+        assert_eq!(chat.turn_thinking_ms, 0);
+    }
+
+    #[test]
+    fn turn_summary_omits_thinking_when_zero() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+
+        chat.handle_cli_event(CliEvent::TurnSummary {
+            duration_ms: 1000,
+            iterations:  1,
+            tool_calls:  0,
+            model:       "claude".into(),
+        });
+
+        let status = chat.status_msg.as_ref().expect("status should be set");
+        assert!(!status.contains("thought"), "should not contain thinking");
+    }
+
+    #[test]
+    fn reset_messages_clears_turn_metrics() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.turn_input_tokens = 100;
+        chat.turn_output_tokens = 200;
+        chat.turn_thinking_ms = 300;
+
+        chat.reset_messages();
+
+        assert_eq!(chat.turn_input_tokens, 0);
+        assert_eq!(chat.turn_output_tokens, 0);
+        assert_eq!(chat.turn_thinking_ms, 0);
     }
 }

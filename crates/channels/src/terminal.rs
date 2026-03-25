@@ -68,6 +68,19 @@ pub enum CliEvent {
         limit_id:        u64,
         tool_calls_made: usize,
     },
+    /// Per-iteration token usage update (cumulative values from kernel).
+    UsageUpdate {
+        input_tokens:  u32,
+        output_tokens: u32,
+        thinking_ms:   u64,
+    },
+    /// End-of-turn metrics summary.
+    TurnSummary {
+        duration_ms: u64,
+        iterations:  u32,
+        tool_calls:  u32,
+        model:       String,
+    },
     /// Stream completed.
     Done,
 }
