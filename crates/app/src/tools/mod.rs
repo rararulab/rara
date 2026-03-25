@@ -42,6 +42,7 @@ mod mita_list_sessions;
 mod mita_read_tape;
 mod mita_update_session_title;
 mod mita_update_soul_state;
+mod mita_write_skill_draft;
 mod mita_write_user_note;
 mod multi_edit;
 mod notify;
@@ -84,6 +85,7 @@ use mita_list_sessions::ListSessionsTool;
 use mita_read_tape::ReadTapeTool;
 use mita_update_session_title::UpdateSessionTitleTool;
 use mita_update_soul_state::UpdateSoulStateTool;
+use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
 use read_file::ReadFileTool;
@@ -229,6 +231,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
         Arc::new(MitaWriteUserNoteTool::new(deps.tape_service.clone())),
         Arc::new(DistillUserNotesTool::new(deps.tape_service)),
+        // Mita skill-draft tool
+        Arc::new(WriteSkillDraftTool::new()),
         dispatch_rara,
         // Mita session management tools
         Arc::new(UpdateSessionTitleTool::new(deps.session_index.clone())),
