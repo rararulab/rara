@@ -42,7 +42,6 @@ impl LoginCmd {
 
 async fn run_codex_login() -> Result<(), Whatever> {
     use rara_codex_oauth::*;
-    use snafu::whatever;
 
     println!("Starting Codex OAuth login...\n");
 
@@ -50,19 +49,6 @@ async fn run_codex_login() -> Result<(), Whatever> {
     let state = generate_nonce();
     let code_verifier = generate_code_verifier();
     let code_challenge = generate_code_challenge(&code_verifier);
-
-    // Persist pending state so the callback server can validate later.
-    save_pending_oauth(&PendingCodexOAuth {
-        state: state.clone(),
-        code_verifier,
-    })
-    .whatever_context("failed to save pending oauth state")?;
-
-    // Spin up the ephemeral callback server before sending the user to the
-    // browser, so it is ready to receive the redirect.
-    start_callback_server()
-        .await
-        .whatever_context("failed to start callback server")?;
 
     // Build the authorization URL with PKCE challenge.
     let auth_url =
@@ -77,29 +63,39 @@ async fn run_codex_login() -> Result<(), Whatever> {
     }
     println!("  {auth_url}\n");
 
-    println!("Waiting for authorization (timeout: 5 minutes)...");
+    // The OAuth provider redirects the browser to localhost:1455/auth/callback,
+    // which fails when the browser runs on a different machine or behind a proxy
+    // that intercepts localhost traffic. Instead of relying on a local HTTP
+    // server, ask the user to copy the full redirect URL from their browser's
+    // address bar — we parse the code out and complete the exchange locally.
+    println!("After authorizing, your browser will redirect to:");
+    println!("  http://localhost:1455/auth/callback?code=...&state=...\n");
+    println!("The page will show a connection error — that is expected.");
+    println!("Copy the full URL from your browser's address bar and paste it below.\n");
 
-    // Remember the existing token timestamp so we can detect a fresh exchange.
-    let previous_expiry = load_tokens()
+    let callback_url = read_stdin_line("Callback URL: ")
         .await
-        .ok()
-        .flatten()
-        .and_then(|t| t.expires_at_unix);
+        .whatever_context("failed to read callback URL")?;
 
-    // Poll for tokens with a 5-minute timeout to avoid hanging forever if the
-    // user closes the browser or cancels the flow.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
-    let tokens = loop {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        if tokio::time::Instant::now() >= deadline {
-            whatever!("timed out waiting for OAuth callback (5 minutes). Please try again.");
-        }
-        match load_tokens().await {
-            Ok(Some(tokens)) if tokens.expires_at_unix != previous_expiry => break tokens,
-            Ok(Some(_) | None) => continue,
-            Err(e) => whatever!("failed to check tokens: {e}"),
-        }
-    };
+    if callback_url.is_empty() {
+        snafu::whatever!("no callback URL provided");
+    }
+
+    let (code, returned_state) =
+        parse_callback_url(&callback_url).whatever_context("failed to parse callback URL")?;
+
+    validate_state(&state, Some(&returned_state))
+        .whatever_context("OAuth state mismatch — please retry the login")?;
+
+    println!("\nExchanging authorization code for tokens...");
+
+    let tokens = exchange_authorization_code(&code, &code_verifier)
+        .await
+        .whatever_context("failed to exchange authorization code")?;
+
+    save_tokens(&tokens)
+        .await
+        .whatever_context("failed to save tokens")?;
 
     println!("\nLogin successful!");
     if let Some(expires_at) = tokens.expires_at_unix {
@@ -117,4 +113,22 @@ async fn run_codex_login() -> Result<(), Whatever> {
     println!("\nThen restart rara.");
 
     Ok(())
+}
+
+/// Read one line from stdin without blocking the tokio executor.
+async fn read_stdin_line(prompt: &str) -> Result<String, Whatever> {
+    use std::io::Write as _;
+    print!("{prompt}");
+    std::io::stdout()
+        .flush()
+        .whatever_context("failed to flush stdout")?;
+    tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .whatever_context("failed to read from stdin")?;
+        Ok(line.trim().to_owned())
+    })
+    .await
+    .whatever_context("stdin reader panicked")?
 }
