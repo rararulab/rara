@@ -167,7 +167,7 @@ function DockDiffView({ original, modified, onDismiss }: DockDiffViewProps) {
         {modLines.map((line, i) => (
           <div
             key={`add-${i}`}
-            className="rounded px-2 py-0.5 bg-green-500/10 text-green-700 dark:text-green-400"
+            className="rounded px-2 py-0.5 bg-green-500/10 text-green-700"
           >
             + {line}
           </div>
@@ -194,7 +194,7 @@ export default function DockBlockRenderer({
         <DockChart data={chartData} />
       ) : (
         <div
-          className="prose prose-sm dark:prose-invert max-w-none"
+          className="prose prose-sm max-w-none"
           dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html) }}
         />
       )}

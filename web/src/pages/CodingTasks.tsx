@@ -52,13 +52,13 @@ import {
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<CodingTaskStatus, { label: string; variant: string; emoji: string }> = {
-  Pending:     { label: 'Pending',      variant: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',   emoji: '\u23F3' },
-  Cloning:     { label: 'Cloning',      variant: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',   emoji: '\uD83D\uDCE6' },
-  Running:     { label: 'Running',      variant: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300', emoji: '\uD83C\uDFC3' },
-  Completed:   { label: 'Completed',    variant: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300', emoji: '\u2705' },
-  Failed:      { label: 'Failed',       variant: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',       emoji: '\u274C' },
-  Merged:      { label: 'Merged',       variant: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300', emoji: '\uD83C\uDF89' },
-  MergeFailed: { label: 'Merge Failed', variant: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300', emoji: '\u26A0\uFE0F' },
+  Pending:     { label: 'Pending',      variant: 'bg-gray-100 text-gray-700',   emoji: '\u23F3' },
+  Cloning:     { label: 'Cloning',      variant: 'bg-blue-100 text-blue-700',   emoji: '\uD83D\uDCE6' },
+  Running:     { label: 'Running',      variant: 'bg-yellow-100 text-yellow-700', emoji: '\uD83C\uDFC3' },
+  Completed:   { label: 'Completed',    variant: 'bg-green-100 text-green-700', emoji: '\u2705' },
+  Failed:      { label: 'Failed',       variant: 'bg-red-100 text-red-700',       emoji: '\u274C' },
+  Merged:      { label: 'Merged',       variant: 'bg-purple-100 text-purple-700', emoji: '\uD83C\uDF89' },
+  MergeFailed: { label: 'Merge Failed', variant: 'bg-orange-100 text-orange-700', emoji: '\u26A0\uFE0F' },
 };
 
 function StatusBadge({ status }: { status: CodingTaskStatus }) {
@@ -270,7 +270,7 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
       {task.error && (
         <div>
           <span className="text-sm text-red-500 font-medium">Error:</span>
-          <pre className="mt-1 max-h-40 overflow-auto rounded-xl border border-destructive/20 bg-red-50 p-3 text-xs dark:bg-red-950">
+          <pre className="mt-1 max-h-40 overflow-auto rounded-xl border border-destructive/20 bg-red-50 p-3 text-xs">
             {task.error}
           </pre>
         </div>

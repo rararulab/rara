@@ -56,8 +56,6 @@ import {
   Sparkles,
   Users,
   Sun,
-  Moon,
-  Monitor,
   Palette,
 } from "lucide-react";
 
@@ -111,9 +109,7 @@ const KEYS = {
 } as const;
 
 const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; description: string }> = [
-  { key: "system", label: "System", icon: <Monitor className="h-4 w-4" />, description: "Follow OS appearance" },
   { key: "light", label: "Light", icon: <Sun className="h-4 w-4" />, description: "Bright workspace" },
-  { key: "dark", label: "Dark", icon: <Moon className="h-4 w-4" />, description: "Low-light friendly" },
 ];
 
 // Sensitive keys that should be masked by default
@@ -472,7 +468,7 @@ export default function Settings() {
         {toast && (
           <div className={cn(
             "rounded-lg border px-4 py-2 text-sm",
-            toast.kind === "success" ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300" : "border-destructive/30 bg-destructive/5 text-destructive"
+            toast.kind === "success" ? "border-green-200 bg-green-50 text-green-700" : "border-destructive/30 bg-destructive/5 text-destructive"
           )}>
             {toast.message}
           </div>
@@ -921,7 +917,7 @@ export default function Settings() {
                           <p className="text-xs font-medium text-muted-foreground">Allowed (Read/Write)</p>
                           <div className="flex flex-wrap gap-1.5">
                             {allowed.map((dir) => (
-                              <Badge key={dir} variant="outline" className="border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-950 dark:text-green-300">
+                              <Badge key={dir} variant="outline" className="border-green-300 bg-green-50 text-green-700">
                                 {dir}
                               </Badge>
                             ))}
@@ -933,7 +929,7 @@ export default function Settings() {
                           <p className="text-xs font-medium text-muted-foreground">Read-Only</p>
                           <div className="flex flex-wrap gap-1.5">
                             {readOnly.map((dir) => (
-                              <Badge key={dir} variant="outline" className="border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                              <Badge key={dir} variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
                                 {dir}
                               </Badge>
                             ))}
@@ -945,7 +941,7 @@ export default function Settings() {
                           <p className="text-xs font-medium text-muted-foreground">Denied</p>
                           <div className="flex flex-wrap gap-1.5">
                             {denied.map((dir) => (
-                              <Badge key={dir} variant="outline" className="border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300">
+                              <Badge key={dir} variant="outline" className="border-red-300 bg-red-50 text-red-700">
                                 {dir}
                               </Badge>
                             ))}
