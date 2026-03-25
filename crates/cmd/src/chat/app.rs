@@ -813,14 +813,7 @@ fn format_tokens(tokens: u64) -> String {
 }
 
 /// Format a tool execution duration into a compact display string.
-pub fn format_tool_duration(d: Duration) -> String {
-    let ms = d.as_millis();
-    if ms < 1000 {
-        format!("{ms}ms")
-    } else {
-        format!("{:.1}s", ms as f64 / 1000.0)
-    }
-}
+pub fn format_tool_duration(d: Duration) -> String { format_duration(d.as_millis() as u64) }
 
 fn sanitize_function_tags(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

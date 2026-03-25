@@ -156,12 +156,14 @@ fn spawn_stream_forwarder(
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         let mut active_streams = std::collections::HashSet::new();
-        let mut stream_abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
+        let mut stream_abort_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         let mut current_key = session_rx.borrow_and_update().clone();
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+                    // Prune finished stream tasks to prevent unbounded growth.
+                    stream_abort_handles.retain(|h| !h.is_finished());
                     let subscriptions = stream_hub.subscribe_session(&current_key);
                     for (stream_id, mut rx) in subscriptions {
                         if active_streams.contains(&stream_id) {
@@ -179,7 +181,7 @@ fn spawn_stream_forwarder(
                             }
                             let _ = adapter.send_cli_event(CliEvent::Done);
                         });
-                        stream_abort_handles.push(handle.abort_handle());
+                        stream_abort_handles.push(handle);
                     }
                 }
                 Ok(()) = session_rx.changed() => {
@@ -188,6 +190,7 @@ fn spawn_stream_forwarder(
                     for handle in &stream_abort_handles {
                         handle.abort();
                     }
+                    // Drop finished JoinHandles immediately.
                     stream_abort_handles.clear();
                     current_key = session_rx.borrow_and_update().clone();
                     active_streams.clear();
@@ -258,7 +261,10 @@ async fn run_chat_tui(
                             state.status_msg = Some("Interrupting...".to_owned());
                         }
                         ChatAction::ApproveGuard { id } => {
-                            let uuid = uuid::Uuid::parse_str(&id).expect("valid approval uuid");
+                            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                                state.push_message(Role::System, format!("Invalid approval ID: {id}"));
+                                continue;
+                            };
                             let _ = kernel_handle.security().approval().resolve(
                                 uuid,
                                 ApprovalDecision::Approved,
@@ -268,7 +274,10 @@ async fn run_chat_tui(
                             state.push_message(Role::System, format!("Guard approved: {id}"));
                         }
                         ChatAction::DenyGuard { id } => {
-                            let uuid = uuid::Uuid::parse_str(&id).expect("valid approval uuid");
+                            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                                state.push_message(Role::System, format!("Invalid approval ID: {id}"));
+                                continue;
+                            };
                             let _ = kernel_handle.security().approval().resolve(
                                 uuid,
                                 ApprovalDecision::Denied,
@@ -278,7 +287,10 @@ async fn run_chat_tui(
                             state.push_message(Role::System, format!("Guard denied: {id}"));
                         }
                         ChatAction::AnswerQuestion { id, answer } => {
-                            let uuid = uuid::Uuid::parse_str(&id).expect("valid question uuid");
+                            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                                state.push_message(Role::System, format!("Invalid question ID: {id}"));
+                                continue;
+                            };
                             if let Some(ref mgr) = user_question_manager {
                                 let _ = mgr.resolve(uuid, answer.clone());
                             }
@@ -690,7 +702,6 @@ fn short_session_key(key: &SessionKey) -> String {
     full.chars().take(8).collect()
 }
 
-/// Render a [`CmdResult`] into the TUI chat state.
 /// Render a [`CmdResult`] from a kernel command handler into the chat
 /// display. HTML is converted to terminal-friendly plain text; inline
 /// keyboards are silently dropped since terminal cannot render buttons.
