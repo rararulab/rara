@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "dev-skills@rara-skills": true
+  },
+  "extraKnownMarketplaces": {
+    "rara-skills": {
+      "source": {
+        "source": "github",
+        "repo": "rararulab/rara-skills"
+      }
+    }
+  }
+}
