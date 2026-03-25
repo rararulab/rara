@@ -153,6 +153,7 @@ fn spawn_stream_forwarder(
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         let mut active_streams = std::collections::HashSet::new();
+        let mut stream_abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
         let mut current_key = session_rx.borrow_and_update().clone();
 
         loop {
@@ -169,17 +170,22 @@ fn spawn_stream_forwarder(
 
                         active_streams.insert(stream_id.clone());
                         let adapter = adapter.clone();
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             while let Ok(event) = rx.recv().await {
                                 let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
                             }
                             let _ = adapter.send_cli_event(CliEvent::Done);
                         });
+                        stream_abort_handles.push(handle.abort_handle());
                     }
                 }
                 Ok(()) = session_rx.changed() => {
-                    // Session switched — reset tracked streams so the
-                    // forwarder picks up subscriptions for the new session.
+                    // Session switched — abort all running stream tasks from
+                    // the old session to prevent stale events being forwarded.
+                    for handle in &stream_abort_handles {
+                        handle.abort();
+                    }
+                    stream_abort_handles.clear();
                     current_key = session_rx.borrow_and_update().clone();
                     active_streams.clear();
                 }
@@ -1006,7 +1012,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_new_creates_session_and_returns_changed() {
+    async fn session_index_tracks_created_sessions_and_bindings() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let index = std::sync::Arc::new(FileSessionIndex::new(tmp.path()).await.expect("index"));
 
