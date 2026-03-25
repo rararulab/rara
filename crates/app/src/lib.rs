@@ -306,20 +306,21 @@ pub async fn start_with_options(
     ));
     let web_router = web_adapter.router();
 
-    let telegram_adapter = match try_build_telegram(&backend.settings_svc).await {
-        Ok(Some(adapter)) => {
-            info!("Telegram adapter built");
-            Some(adapter)
-        }
-        Ok(None) => {
-            info!("Telegram not configured (bot_token unset in settings), skipping");
-            None
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to build Telegram adapter, skipping");
-            None
-        }
-    };
+    let telegram_adapter =
+        match try_build_telegram(&backend.settings_svc, rara.user_question_manager.clone()).await {
+            Ok(Some(adapter)) => {
+                info!("Telegram adapter built");
+                Some(adapter)
+            }
+            Ok(None) => {
+                info!("Telegram not configured (bot_token unset in settings), skipping");
+                None
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to build Telegram adapter, skipping");
+                None
+            }
+        };
 
     let wechat_adapter = match try_build_wechat(&backend.settings_svc).await {
         Ok(Some(adapter)) => {
@@ -641,6 +642,7 @@ pub async fn start_with_options(
 
 async fn try_build_telegram(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
+    user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
 
@@ -686,7 +688,8 @@ async fn try_build_telegram(
     let adapter = Arc::new(
         rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
             .whatever_context("failed to build telegram adapter")?
-            .with_config(tg_config),
+            .with_config(tg_config)
+            .with_user_question_manager(user_question_manager),
     );
 
     let config_handle = adapter.config_handle();

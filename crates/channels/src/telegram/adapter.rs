@@ -53,6 +53,11 @@ use uuid::Uuid;
 /// cancelled when the user resolves an approval before the timeout fires.
 static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::new(DashMap::new);
 
+/// Maps Telegram message IDs of sent user-question prompts to their question
+/// UUIDs and manager refs, so reply-to-question messages can resolve them.
+static PENDING_USER_QUESTIONS: LazyLock<DashMap<i32, (Uuid, UserQuestionManagerRef)>> =
+    LazyLock::new(DashMap::new);
+
 /// Matches complete tool-call XML blocks (open + close, possibly mismatched
 /// names).
 static TOOL_CALL_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -101,6 +106,7 @@ use rara_kernel::{
         RawPlatformMessage, ReplyContext, StreamHubRef,
     },
     security::{ApprovalDecision, ApprovalRequest, ResolveError},
+    user_question::{UserQuestion, UserQuestionManagerRef},
 };
 use teloxide::{
     payloads::{
@@ -865,24 +871,27 @@ impl Default for TelegramConfig {
 /// 3. Call [`stop`](ChannelAdapter::stop) to signal the polling loop to exit
 ///    gracefully.
 pub struct TelegramAdapter {
-    bot:               teloxide::Bot,
-    allowed_chat_ids:  Vec<i64>,
-    polling_timeout:   u32,
-    shutdown_tx:       watch::Sender<bool>,
-    shutdown_rx:       watch::Receiver<bool>,
+    bot:                   teloxide::Bot,
+    allowed_chat_ids:      Vec<i64>,
+    polling_timeout:       u32,
+    shutdown_tx:           watch::Sender<bool>,
+    shutdown_rx:           watch::Receiver<bool>,
     /// Bot username from getMe (set during start).
-    bot_username:      Arc<RwLock<Option<String>>>,
+    bot_username:          Arc<RwLock<Option<String>>>,
     /// Registered command handlers for slash commands.
-    command_handlers:  StdRwLock<Vec<Arc<dyn CommandHandler>>>,
+    command_handlers:      StdRwLock<Vec<Arc<dyn CommandHandler>>>,
     /// Registered callback handlers for interactive elements.
-    callback_handlers: StdRwLock<Vec<Arc<dyn CallbackHandler>>>,
+    callback_handlers:     StdRwLock<Vec<Arc<dyn CallbackHandler>>>,
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
     /// ID).
-    config:            Arc<StdRwLock<TelegramConfig>>,
+    config:                Arc<StdRwLock<TelegramConfig>>,
     /// StreamHub for subscribing to real-time token deltas.
-    stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
+    stream_hub:            Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
-    active_streams:    Arc<DashMap<i64, StreamingMessage>>,
+    active_streams:        Arc<DashMap<i64, StreamingMessage>>,
+    /// User question manager for the ask-user tool — when set, the adapter
+    /// subscribes to new questions and resolves them via reply-to messages.
+    user_question_manager: Option<UserQuestionManagerRef>,
 }
 
 impl TelegramAdapter {
@@ -907,6 +916,7 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
+            user_question_manager: None,
         }
     }
 
@@ -1008,6 +1018,15 @@ impl TelegramAdapter {
             let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
             *cfg = config;
         }
+        self
+    }
+
+    /// Attach a [`UserQuestionManager`](rara_kernel::user_question::UserQuestionManager)
+    /// so the adapter can render agent questions and resolve them via
+    /// reply-to messages.
+    #[must_use]
+    pub fn with_user_question_manager(mut self, mgr: UserQuestionManagerRef) -> Self {
+        self.user_question_manager = Some(mgr);
         self
     }
 
@@ -1294,6 +1313,27 @@ impl ChannelAdapter for TelegramAdapter {
                     approval_rx,
                     approval_config,
                     &mut approval_shutdown,
+                )
+                .await;
+            });
+        }
+
+        // Spawn user-question listener — sends question messages to primary chat.
+        // User replies to these messages are intercepted in `handle_update` and
+        // routed to `UserQuestionManager::resolve()`.
+        if let Some(ref mgr) = self.user_question_manager {
+            let question_rx = mgr.subscribe();
+            let question_bot = self.bot.clone();
+            let question_config = Arc::clone(&self.config);
+            let question_mgr = Arc::clone(mgr);
+            let mut question_shutdown = self.shutdown_rx.clone();
+            tokio::spawn(async move {
+                question_listener(
+                    question_bot,
+                    question_rx,
+                    question_config,
+                    question_mgr,
+                    &mut question_shutdown,
                 )
                 .await;
             });
@@ -2120,6 +2160,71 @@ async fn approval_listener(
     }
 }
 
+/// Listens for new user questions from the ask-user tool and sends them as
+/// messages to the primary Telegram chat. The sent message ID is tracked in
+/// [`PENDING_USER_QUESTIONS`] so that reply-to messages can resolve them.
+async fn question_listener(
+    bot: teloxide::Bot,
+    mut rx: tokio::sync::broadcast::Receiver<UserQuestion>,
+    config: Arc<StdRwLock<TelegramConfig>>,
+    mgr: UserQuestionManagerRef,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                info!("telegram question listener: shutting down");
+                return;
+            }
+            result = rx.recv() => {
+                let question = match result {
+                    Ok(q) => q,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "telegram question listener: {n} questions lost due to lag");
+                        continue;
+                    }
+                };
+
+                let chat_id = {
+                    let cfg = config.read().unwrap_or_else(|e| e.into_inner());
+                    cfg.primary_chat_id
+                };
+                let Some(chat_id) = chat_id else {
+                    warn!("telegram question listener: no primary_chat_id configured");
+                    continue;
+                };
+
+                let text = format!(
+                    "<b>❓ Agent Question</b>\n\n{}\n\n<i>Reply to this message to answer.</i>",
+                    guard_html_escape(&question.question),
+                );
+
+                match bot
+                    .send_message(ChatId(chat_id), &text)
+                    .parse_mode(ParseMode::Html)
+                    .await
+                {
+                    Ok(sent_msg) => {
+                        PENDING_USER_QUESTIONS.insert(
+                            sent_msg.id.0,
+                            (question.id, Arc::clone(&mgr)),
+                        );
+                        info!(
+                            question_id = %question.id,
+                            message_id = sent_msg.id.0,
+                            "telegram question listener: sent question to chat"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "telegram question listener: failed to send question");
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn handle_update(
     update: Update,
     handle: &KernelHandle,
@@ -2297,6 +2402,43 @@ async fn handle_update(
             "telegram adapter: dropping message from unauthorized chat"
         );
         return;
+    }
+
+    // --- Reply-to-question interception ---
+    // If the user replies to a pending question message, resolve it and skip
+    // normal message processing so the reply text isn't ingested as a new
+    // conversation turn.
+    if let Some(reply) = msg.reply_to_message() {
+        if let Some((_, (question_id, mgr))) = PENDING_USER_QUESTIONS.remove(&reply.id.0) {
+            let answer = msg.text().unwrap_or("").to_string();
+            match mgr.resolve(question_id, answer) {
+                Ok(()) => {
+                    info!(
+                        question_id = %question_id,
+                        "telegram: resolved user question via reply"
+                    );
+                    // Edit the original question message to show it was answered.
+                    let answered_text = format!(
+                        "<b>✅ Answered</b>\n\n<s>{}</s>",
+                        guard_html_escape(
+                            &reply
+                                .text()
+                                .unwrap_or("(question)")
+                                .replace("<b>❓ Agent Question</b>\n\n", "")
+                                .replace("\n\n<i>Reply to this message to answer.</i>", ""),
+                        ),
+                    );
+                    let _ = bot
+                        .edit_message_text(ChatId(chat_id), reply.id, answered_text)
+                        .parse_mode(ParseMode::Html)
+                        .await;
+                }
+                Err(e) => {
+                    warn!(error = %e, question_id = %question_id, "telegram: failed to resolve question");
+                }
+            }
+            return;
+        }
     }
 
     // --- Group chat authorization ---
