@@ -34,12 +34,13 @@ use rara_kernel::{
         Endpoint, EndpointAddress, InteractionType, RawPlatformMessage,
         ReplyContext as IoReplyContext, StreamEvent,
     },
+    security::ApprovalDecision,
     session::{ChannelBinding, SessionEntry, SessionIndex, SessionKey},
 };
 use snafu::{ResultExt, Whatever, whatever};
 
 use crate::chat::{
-    app::{ChatAction, ChatState, HandleResult, Role},
+    app::{ChatAction, ChatState, HandleResult, PendingApproval, Role},
     ui::render,
 };
 
@@ -199,6 +200,7 @@ async fn run_chat_tui(
     session_tx: tokio::sync::watch::Sender<SessionKey>,
 ) -> Result<(), Whatever> {
     let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut approval_rx = kernel_handle.security().approval().subscribe_requests();
 
     loop {
         terminal
@@ -209,11 +211,41 @@ async fn run_chat_tui(
             _ = tick.tick() => {
                 state.tick();
             }
+            result = approval_rx.recv() => {
+                if let Ok(request) = result {
+                    state.set_pending_approval(PendingApproval {
+                        id: request.id.to_string(),
+                        tool_name: request.tool_name.clone(),
+                        summary: request.summary.clone(),
+                        risk_level: format!("{:?}", request.risk_level),
+                    });
+                }
+            }
             maybe_event = poll_crossterm_event() => {
                 if let Some(Event::Key(key)) = maybe_event {
                     match state.handle_key(key) {
                         ChatAction::Continue => {}
                         ChatAction::Back => break,
+                        ChatAction::ApproveGuard { id } => {
+                            let uuid = uuid::Uuid::parse_str(&id).expect("valid approval uuid");
+                            let _ = kernel_handle.security().approval().resolve(
+                                uuid,
+                                ApprovalDecision::Approved,
+                                Some("cli-user".to_owned()),
+                            );
+                            state.pending_approval = None;
+                            state.push_message(Role::System, format!("Guard approved: {id}"));
+                        }
+                        ChatAction::DenyGuard { id } => {
+                            let uuid = uuid::Uuid::parse_str(&id).expect("valid approval uuid");
+                            let _ = kernel_handle.security().approval().resolve(
+                                uuid,
+                                ApprovalDecision::Denied,
+                                Some("cli-user".to_owned()),
+                            );
+                            state.pending_approval = None;
+                            state.push_message(Role::System, format!("Guard denied: {id}"));
+                        }
                         ChatAction::SlashCommand(command) => {
                             match handle_slash_command(
                                 state,

@@ -59,29 +59,40 @@ pub struct ChatMessage {
 }
 
 pub struct ChatState {
-    pub agent_name:      String,
-    pub model_label:     String,
-    pub mode_label:      String,
-    pub session_label:   String,
-    pub user_label:      String,
-    pub messages:        Vec<ChatMessage>,
-    pub streaming_text:  String,
-    pub is_streaming:    bool,
-    pub thinking:        bool,
-    pub active_tool:     Option<String>,
-    pub spinner_frame:   usize,
-    pub input:           String,
-    pub scroll_offset:   u16,
-    pub last_tokens:     Option<(u64, u64)>,
-    pub last_cost_usd:   Option<f64>,
-    pub streaming_chars: usize,
-    pub status_msg:      Option<String>,
-    pub staged_queue:    Vec<(String, Vec<String>)>,
-    pub staged_images:   Vec<String>,
-    pub tool_input_buf:  String,
+    pub agent_name:       String,
+    pub model_label:      String,
+    pub mode_label:       String,
+    pub session_label:    String,
+    pub user_label:       String,
+    pub messages:         Vec<ChatMessage>,
+    pub streaming_text:   String,
+    pub is_streaming:     bool,
+    pub thinking:         bool,
+    pub active_tool:      Option<String>,
+    pub spinner_frame:    usize,
+    pub input:            String,
+    pub scroll_offset:    u16,
+    pub last_tokens:      Option<(u64, u64)>,
+    pub last_cost_usd:    Option<f64>,
+    pub streaming_chars:  usize,
+    pub status_msg:       Option<String>,
+    pub staged_queue:     Vec<(String, Vec<String>)>,
+    pub staged_images:    Vec<String>,
+    pub tool_input_buf:   String,
     /// Cached loading hint, sampled once when entering thinking state to avoid
     /// flicker on every render tick.
-    pub loading_hint:    String,
+    pub loading_hint:     String,
+    /// Guard approval request awaiting user decision (y/n).
+    pub pending_approval: Option<PendingApproval>,
+}
+
+/// A guard approval request pending user decision.
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    pub id:         String,
+    pub tool_name:  String,
+    pub summary:    String,
+    pub risk_level: String,
 }
 
 pub enum ChatAction {
@@ -89,33 +100,42 @@ pub enum ChatAction {
     SendMessage(String),
     Back,
     SlashCommand(String),
+    /// User approved a pending guard request.
+    ApproveGuard {
+        id: String,
+    },
+    /// User denied a pending guard request.
+    DenyGuard {
+        id: String,
+    },
 }
 
 impl ChatState {
     #[must_use]
     pub fn new(session: String, user_id: String) -> Self {
         let mut state = Self {
-            agent_name:      "rara".to_owned(),
-            model_label:     "default".to_owned(),
-            mode_label:      "in-process".to_owned(),
-            session_label:   session,
-            user_label:      user_id,
-            messages:        Vec::new(),
-            streaming_text:  String::new(),
-            is_streaming:    false,
-            thinking:        false,
-            active_tool:     None,
-            spinner_frame:   0,
-            input:           String::new(),
-            scroll_offset:   0,
-            last_tokens:     None,
-            last_cost_usd:   None,
-            streaming_chars: 0,
-            status_msg:      None,
-            staged_queue:    Vec::new(),
-            staged_images:   Vec::new(),
-            tool_input_buf:  String::new(),
-            loading_hint:    String::new(),
+            agent_name:       "rara".to_owned(),
+            model_label:      "default".to_owned(),
+            mode_label:       "in-process".to_owned(),
+            session_label:    session,
+            user_label:       user_id,
+            messages:         Vec::new(),
+            streaming_text:   String::new(),
+            is_streaming:     false,
+            thinking:         false,
+            active_tool:      None,
+            spinner_frame:    0,
+            input:            String::new(),
+            scroll_offset:    0,
+            last_tokens:      None,
+            last_cost_usd:    None,
+            streaming_chars:  0,
+            status_msg:       None,
+            staged_queue:     Vec::new(),
+            staged_images:    Vec::new(),
+            tool_input_buf:   String::new(),
+            loading_hint:     String::new(),
+            pending_approval: None,
         };
         state.push_message(Role::System, CHAT_BANNER.to_owned());
         state
@@ -138,6 +158,12 @@ impl ChatState {
         self.staged_images.clear();
         self.tool_input_buf.clear();
         self.loading_hint.clear();
+        self.pending_approval = None;
+    }
+
+    /// Set a pending guard approval request for the user to decide on.
+    pub fn set_pending_approval(&mut self, approval: PendingApproval) {
+        self.pending_approval = Some(approval);
     }
 
     pub fn push_message(&mut self, role: Role, text: String) {
@@ -285,6 +311,19 @@ impl ChatState {
             CliEvent::TurnRationale { text } => {
                 self.status_msg = Some(text);
             }
+            CliEvent::ApprovalRequest {
+                id,
+                tool_name,
+                summary,
+                risk_level,
+            } => {
+                self.set_pending_approval(PendingApproval {
+                    id,
+                    tool_name,
+                    summary,
+                    risk_level,
+                });
+            }
             CliEvent::Done => self.finalize_stream(),
         }
     }
@@ -293,6 +332,22 @@ impl ChatState {
     pub fn handle_key(&mut self, key: KeyEvent) -> ChatAction {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return ChatAction::Back;
+        }
+
+        // Intercept y/n when a guard approval request is pending.
+        if let Some(approval) = &self.pending_approval {
+            let id = approval.id.clone();
+            return match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    self.pending_approval = None;
+                    ChatAction::ApproveGuard { id }
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.pending_approval = None;
+                    ChatAction::DenyGuard { id }
+                }
+                _ => ChatAction::Continue,
+            };
         }
 
         if self.is_streaming {
@@ -426,7 +481,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rara_channels::terminal::CliEvent;
 
-    use super::{ChatAction, ChatState, Role};
+    use super::{ChatAction, ChatState, PendingApproval, Role};
 
     #[test]
     fn new_chat_state_starts_with_openfang_banner() {
@@ -568,6 +623,76 @@ mod tests {
         let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(matches!(action, ChatAction::SlashCommand(cmd) if cmd == "/images"));
+    }
+
+    fn make_pending_approval() -> PendingApproval {
+        PendingApproval {
+            id:         "550e8400-e29b-41d4-a716-446655440000".into(),
+            tool_name:  "bash".into(),
+            summary:    "rm -rf /tmp/old".into(),
+            risk_level: "Critical".into(),
+        }
+    }
+
+    #[test]
+    fn y_key_approves_pending_guard_request() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(
+            matches!(action, ChatAction::ApproveGuard { id } if id == "550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert!(chat.pending_approval.is_none());
+    }
+
+    #[test]
+    fn enter_approves_pending_guard_request() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(
+            matches!(action, ChatAction::ApproveGuard { id } if id == "550e8400-e29b-41d4-a716-446655440000")
+        );
+    }
+
+    #[test]
+    fn n_key_denies_pending_guard_request() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+        assert!(
+            matches!(action, ChatAction::DenyGuard { id } if id == "550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert!(chat.pending_approval.is_none());
+    }
+
+    #[test]
+    fn esc_denies_pending_guard_request() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(action, ChatAction::DenyGuard { id } if id == "550e8400-e29b-41d4-a716-446655440000")
+        );
+    }
+
+    #[test]
+    fn other_keys_ignored_when_approval_pending() {
+        let mut chat = ChatState::new("default".into(), "local".into());
+        chat.set_pending_approval(make_pending_approval());
+
+        let action = chat.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert!(matches!(action, ChatAction::Continue));
+        assert!(chat.pending_approval.is_some());
     }
 
     #[test]

@@ -53,6 +53,13 @@ pub enum CliEvent {
     Progress { text: String },
     /// Error notification.
     Error { message: String },
+    /// Guard approval request — tool blocked by security policy.
+    ApprovalRequest {
+        id:         String,
+        tool_name:  String,
+        summary:    String,
+        risk_level: String,
+    },
     /// Stream completed.
     Done,
 }

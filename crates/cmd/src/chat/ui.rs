@@ -21,7 +21,7 @@ use ratatui::{
 };
 
 use crate::chat::{
-    app::{ChatMessage, ChatState, Role, ToolInfo},
+    app::{ChatMessage, ChatState, PendingApproval, Role, ToolInfo},
     theme,
 };
 
@@ -43,8 +43,15 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let approval_height = if state.pending_approval.is_some() {
+        5
+    } else {
+        0
+    };
+
     let chunks = Layout::vertical([
         Constraint::Min(3),
+        Constraint::Length(approval_height),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -53,9 +60,13 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
 
     draw_messages(frame, chunks[0], state);
 
-    let separator = Paragraph::new("─".repeat(chunks[1].width as usize))
+    if let Some(approval) = &state.pending_approval {
+        draw_approval_prompt(frame, chunks[1], approval);
+    }
+
+    let separator = Paragraph::new("─".repeat(chunks[2].width as usize))
         .style(Style::default().fg(theme::BORDER));
-    frame.render_widget(separator, chunks[1]);
+    frame.render_widget(separator, chunks[2]);
 
     let input_line = if state.is_streaming {
         let mut spans = vec![
@@ -87,16 +98,18 @@ pub fn render(frame: &mut Frame, state: &ChatState, area: Rect) {
             ),
         ]))
     };
-    frame.render_widget(input_line, chunks[2]);
+    frame.render_widget(input_line, chunks[3]);
 
-    let hints = if state.is_streaming {
+    let hints = if state.pending_approval.is_some() {
+        "    [y/Enter] Approve  [n/Esc] Deny"
+    } else if state.is_streaming {
         "    [Enter] Stage  [↑↓/PgUp/PgDn] Scroll  [Esc] Stop"
     } else {
         "    [Enter] Send  [/help] Commands  [↑↓/PgUp/PgDn] Scroll  [Esc] Back"
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(hints, theme::hint_style())])),
-        chunks[3],
+        chunks[4],
     );
 }
 
@@ -327,6 +340,49 @@ fn draw_tool_lines(
         format!("  └{footer}"),
         Style::default().fg(border_color),
     )]));
+}
+
+/// Render a highlighted approval prompt box for a pending guard request.
+fn draw_approval_prompt(frame: &mut Frame, area: Rect, approval: &PendingApproval) {
+    let border_style = Style::default().fg(theme::YELLOW);
+    let block = Block::default()
+        .title(Span::styled(
+            " Guard Approval Required ",
+            Style::default()
+                .fg(theme::YELLOW)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Tool: ", theme::dim_style()),
+            Span::styled(
+                approval.tool_name.clone(),
+                Style::default()
+                    .fg(theme::YELLOW)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled("Risk: ", theme::dim_style()),
+            Span::styled(approval.risk_level.clone(), Style::default().fg(theme::RED)),
+        ]),
+        Line::from(vec![
+            Span::styled("Action: ", theme::dim_style()),
+            Span::raw(approval.summary.clone()),
+        ]),
+        Line::from(vec![Span::styled(
+            "[y/Enter] Approve  [n/Esc] Deny",
+            Style::default().fg(theme::YELLOW),
+        )]),
+    ];
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
