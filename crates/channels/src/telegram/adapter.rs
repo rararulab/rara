@@ -1559,25 +1559,18 @@ async fn handle_guard_callback(
 
         let compact = match (&decision, &result) {
             (ApprovalDecision::Approved, Ok(_)) => {
-                format!("\u{1f6e1} <b>Guard</b> \u{2714} by @{decided_by}")
+                format!("🛡 <b>Guard</b> ✅ by @{decided_by}")
             }
             (ApprovalDecision::Denied, Ok(_)) => {
-                format!("\u{1f6e1} <b>Guard</b> \u{2718} by @{decided_by}")
+                format!("🛡 <b>Guard</b> ❌ by @{decided_by}")
             }
-            (_, Err(ResolveError::Expired)) => {
-                "\u{1f6e1} <b>Guard</b> \u{23f0} timed out".to_string()
-            }
-            (_, Err(ResolveError::NotFound(_))) => {
-                "\u{1f6e1} <b>Guard</b> \u{23f0} already resolved".to_string()
-            }
+            (_, Err(ResolveError::Expired)) => "🛡 <b>Guard</b> ⏰ timed out".to_string(),
+            (_, Err(ResolveError::NotFound(_))) => "🛡 <b>Guard</b> ⏰ already resolved".to_string(),
             #[allow(unreachable_patterns)]
             (_, Err(e)) => {
-                format!(
-                    "\u{1f6e1} <b>Guard</b> \u{26a0} {}",
-                    guard_html_escape(&e.to_string())
-                )
+                format!("🛡 <b>Guard</b> ⚠️ {}", guard_html_escape(&e.to_string()))
             }
-            (_, Ok(_)) => "\u{1f6e1} <b>Guard</b> done".to_string(),
+            (_, Ok(_)) => "🛡 <b>Guard</b> done".to_string(),
         };
 
         let _ = bot
@@ -2029,7 +2022,8 @@ async fn approval_listener(
                     continue;
                 };
 
-                let (_display, args_summary) = tool_display_info(&req.tool_name, &req.tool_args);
+                let (_display, args_summary_raw) = tool_display_info(&req.tool_name, &req.tool_args);
+                let args_summary = crate::tool_display::truncate_summary(&args_summary_raw, 80);
                 let mut text = format!(
                     "<b>🛡 Guard Blocked Tool Call</b>\n\n\
                      <b>Tool:</b> <code>{tool}</code>\n",
@@ -2100,8 +2094,7 @@ async fn approval_listener(
                             GUARD_EXPIRY_HANDLES.remove(&request_id);
 
                             // Collapse to compact one-liner on expiry.
-                            let expired_text =
-                                "\u{1f6e1} <b>Guard</b> \u{23f0} timed out".to_string();
+                            let expired_text = "🛡 <b>Guard</b> ⏰ timed out".to_string();
                             let _ = expiry_bot
                                 .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
                                 .parse_mode(ParseMode::Html)
@@ -3812,13 +3805,15 @@ mod render_progress_tests {
     }
 
     #[test]
-    fn render_progress_includes_rationale_when_present() {
+    fn render_progress_omits_rationale_from_live_progress() {
+        // Turn rationale is now shown only in the trace detail, not in live
+        // progress — verify it does not appear.
         let pm = test_progress(Some("Reading config files"));
         let tools = vec![finished_tool("read_file")];
         let output = render_progress(&tools, std::time::Duration::from_secs(1), &pm);
         assert!(
-            output.contains("Reading config files"),
-            "expected rationale in output, got: {output}"
+            !output.contains("Reading config files"),
+            "rationale should not appear in live progress, got: {output}"
         );
     }
 

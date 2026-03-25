@@ -304,13 +304,13 @@ fn first_string_value(value: &serde_json::Value) -> Option<&str> {
 /// Take only the first line of `s`, truncating to `max_chars` with an ellipsis
 /// if needed.
 pub fn truncate_summary(s: &str, max_chars: usize) -> String {
-    let first_line = s.lines().next().unwrap_or(s);
-    let char_count = first_line.chars().count();
+    let line = first_line(s);
+    let char_count = line.chars().count();
     if char_count <= max_chars {
-        first_line.to_owned()
+        line.to_owned()
     } else {
-        let truncated: String = first_line.chars().take(max_chars).collect();
-        format!("{truncated}\u{2026}") // U+2026 = ...
+        let truncated: String = line.chars().take(max_chars).collect();
+        format!("{truncated}\u{2026}") // U+2026 = …
     }
 }
 
