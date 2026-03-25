@@ -79,6 +79,7 @@ impl ChatArgs {
             None,
         );
 
+        let config_users = config.users.clone();
         let (adapter, event_rx) = TerminalAdapter::new();
         let adapter = Arc::new(adapter);
         let mut app_handle = start_with_options(
@@ -98,7 +99,16 @@ impl ChatArgs {
         let stream_hub = kernel_handle.stream_hub().clone();
 
         let session_alias = self.session.clone();
-        let user_id = self.user_id.clone();
+        // When --user-id is not explicitly set, default to the first
+        // configured user so that identity resolution succeeds.
+        let user_id = if self.user_id == "local" {
+            config_users
+                .first()
+                .map(|u| u.name.clone())
+                .unwrap_or(self.user_id.clone())
+        } else {
+            self.user_id.clone()
+        };
         let resolved_user_id = cli_kernel_user_id(&user_id);
         let resolved_session_id =
             get_or_create_cli_session(kernel_handle.session_index().as_ref(), &session_alias)
