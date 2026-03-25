@@ -59,13 +59,13 @@ var layerMap = map[string]int{
 	"rara-vault":        1,
 	"rara-composio":     1,
 	"rara-keyring-store": 1,
-	"rara-codex-oauth":  1,
 	"rara-git":          1,
 
 	// Layer 2 — kernel
 	"rara-kernel": 2,
 
 	// Layer 3 — kernel extensions (depend on kernel)
+	"rara-codex-oauth":          3,
 	"rara-dock":                 3,
 	"rara-sessions":             3,
 	"rara-agents":               3,

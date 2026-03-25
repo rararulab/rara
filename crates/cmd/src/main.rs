@@ -17,6 +17,7 @@ use snafu::{ResultExt, Whatever, whatever};
 
 mod build_info;
 mod chat;
+mod login;
 mod top;
 mod wechat;
 
@@ -42,6 +43,7 @@ enum Commands {
     Top(top::TopCmd),
     Gateway(GatewayArgs),
     Symphony(SymphonyArgs),
+    Login(login::LoginCmd),
     Wechat(wechat::WechatCmd),
 }
 
@@ -372,6 +374,7 @@ async fn main() -> Result<(), Whatever> {
         Commands::Top(args) => args.run().await,
         Commands::Gateway(_) => GatewayArgs::run().await,
         Commands::Symphony(_) => SymphonyArgs::run().await,
+        Commands::Login(cmd) => cmd.run().await,
         Commands::Wechat(cmd) => cmd.run().await,
     }
 }

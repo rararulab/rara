@@ -77,3 +77,23 @@ pub type LlmModelListerRef = Arc<dyn LlmModelLister>;
 
 /// Reference-counted embedder.
 pub type LlmEmbedderRef = Arc<dyn LlmEmbedder>;
+
+/// Credential resolved by a [`LlmCredentialResolver`].
+#[derive(Debug, Clone)]
+pub struct LlmCredential {
+    /// Provider base URL (e.g. `https://api.openai.com/v1`).
+    pub base_url: String,
+    /// Bearer token or API key.
+    pub api_key:  String,
+}
+
+/// Dynamic credential resolver for LLM providers that need runtime
+/// token refresh (e.g. OAuth flows).
+#[async_trait]
+pub trait LlmCredentialResolver: Send + Sync {
+    /// Resolve the current credential, refreshing if necessary.
+    async fn resolve(&self) -> Result<LlmCredential>;
+}
+
+/// Shared reference to an [`LlmCredentialResolver`].
+pub type LlmCredentialResolverRef = Arc<dyn LlmCredentialResolver>;
