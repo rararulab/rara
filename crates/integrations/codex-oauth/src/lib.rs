@@ -27,8 +27,6 @@
 //! callback URL from their browser's address bar and exchanges the code
 //! locally via [`parse_callback_url`] + [`exchange_authorization_code`].
 
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rara_kernel::llm::{LlmCredential, LlmCredentialResolver};
@@ -265,20 +263,25 @@ pub fn parse_callback_url(url: &str) -> Result<(String, String)> {
             reason: e.to_string(),
         })?;
 
-    let params: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+    let find = |key: &str| {
+        parsed
+            .query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    };
 
-    if let Some(err) = params.get("error") {
+    if let Some(err) = find("error") {
         return OAuthValidationSnafu {
             message: format!("provider returned error: {err}"),
         }
         .fail();
     }
 
-    let code = params.get("code").cloned().context(OAuthValidationSnafu {
+    let code = find("code").context(OAuthValidationSnafu {
         message: "missing authorization code in callback URL",
     })?;
 
-    let state = params.get("state").cloned().context(OAuthValidationSnafu {
+    let state = find("state").context(OAuthValidationSnafu {
         message: "missing state in callback URL",
     })?;
 
@@ -304,13 +307,7 @@ pub fn generate_code_challenge(verifier: &str) -> String {
 }
 
 /// Validate callback state against expected state.
-pub fn validate_state(expected: &str, actual: Option<&str>) -> Result<()> {
-    let Some(actual) = actual else {
-        return OAuthValidationSnafu {
-            message: "missing oauth state",
-        }
-        .fail();
-    };
+pub fn validate_state(expected: &str, actual: &str) -> Result<()> {
     if expected.is_empty() {
         return OAuthValidationSnafu {
             message: "missing expected oauth state",

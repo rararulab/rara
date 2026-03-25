@@ -84,7 +84,7 @@ async fn run_codex_login() -> Result<(), Whatever> {
     let (code, returned_state) =
         parse_callback_url(&callback_url).whatever_context("failed to parse callback URL")?;
 
-    validate_state(&state, Some(&returned_state))
+    validate_state(&state, &returned_state)
         .whatever_context("OAuth state mismatch — please retry the login")?;
 
     println!("\nExchanging authorization code for tokens...");
