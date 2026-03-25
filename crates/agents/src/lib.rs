@@ -540,10 +540,14 @@ When dispatching to Rara, include:
 
 /// Compose the full Mita system prompt from fragments at runtime.
 fn mita_system_prompt() -> String {
-    format!(
-        "{MITA_BASE_PROMPT}\n\n{MITA_DISTILLATION_FRAGMENT}\n\n{MITA_SOUL_EVOLUTION_FRAGMENT}\n\\
-         n{MITA_SKILL_DISCOVERY_FRAGMENT}\n\n{MITA_CLOSING_PROMPT}"
-    )
+    [
+        MITA_BASE_PROMPT,
+        MITA_DISTILLATION_FRAGMENT,
+        MITA_SOUL_EVOLUTION_FRAGMENT,
+        MITA_SKILL_DISCOVERY_FRAGMENT,
+        MITA_CLOSING_PROMPT,
+    ]
+    .join("\n\n")
 }
 
 // ---------------------------------------------------------------------------

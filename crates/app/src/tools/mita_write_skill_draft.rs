@@ -121,10 +121,11 @@ impl ToolExecute for WriteSkillDraftTool {
             ),
         );
 
+        let message = format!("Skill draft written to {path_str}");
         Ok(WriteSkillDraftResult {
-            status:  "ok".to_owned(),
-            path:    path_str.clone(),
-            message: format!("Skill draft written to {path_str}"),
+            status: "ok".to_owned(),
+            path: path_str,
+            message,
         })
     }
 }
