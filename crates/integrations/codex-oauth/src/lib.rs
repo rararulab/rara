@@ -34,6 +34,7 @@ use rara_kernel::llm::{LlmCredential, LlmCredentialResolver};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
+use std::collections::HashMap;
 
 /// OpenAI authorization endpoint for Codex OAuth.
 pub const CODEX_AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
@@ -48,22 +49,10 @@ pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const CODEX_SCOPES: &str = "openid profile email offline_access";
 /// The **only** redirect URI accepted by the Codex public OAuth client.
 pub const CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-/// Local port that the ephemeral callback server binds to.
-pub const CODEX_CALLBACK_PORT: u16 = 1455;
-/// Environment variable for the frontend base URL used for post-OAuth
-/// redirects. Falls back to `http://localhost:5173`.
-pub const FRONTEND_BASE_URL_ENV: &str = "RARA_FRONTEND_URL";
 /// Environment variable used to override OAuth client id.
 pub const CODEX_CLIENT_ID_ENV: &str = "RARA_CODEX_CLIENT_ID";
 const REFRESH_SKEW_SECS: u64 = 60;
 const CODEX_TOKEN_FILENAME: &str = "codex_tokens.json";
-static PENDING_OAUTH: std::sync::LazyLock<std::sync::Mutex<Option<PendingCodexOAuth>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
-/// Shutdown handle for the previous ephemeral callback server (if any).
-static CALLBACK_SHUTDOWN: std::sync::LazyLock<
-    std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
-
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -122,10 +111,6 @@ pub enum CodexOauthError {
     #[snafu(display("failed to serialize tokens: {source}"))]
     TokenSerialize { source: serde_json::Error },
 
-    /// The pending OAuth mutex is poisoned.
-    #[snafu(display("pending oauth lock poisoned"))]
-    LockPoisoned,
-
     /// OAuth flow validation error (state mismatch, missing fields, etc.).
     #[snafu(display("{message}"))]
     OAuthValidation { message: String },
@@ -156,12 +141,9 @@ pub enum CodexOauthError {
     #[snafu(display("failed to encode {context} payload: {reason}"))]
     TokenRequestEncode { context: String, reason: String },
 
-    /// Failed to bind the ephemeral callback server to the local address.
-    #[snafu(display("failed to bind callback server on {addr}: {source}"))]
-    CallbackBind {
-        addr:   String,
-        source: std::io::Error,
-    },
+    /// Failed to parse the callback URL pasted by the user.
+    #[snafu(display("failed to parse callback URL: {reason}"))]
+    CallbackUrlParse { reason: String },
 }
 
 /// Crate-level result alias.
@@ -178,13 +160,6 @@ pub struct StoredCodexTokens {
     pub refresh_token:   Option<String>,
     pub id_token:        Option<String>,
     pub expires_at_unix: Option<u64>,
-}
-
-/// Temporary OAuth state stored between `/start` and `/callback`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingCodexOAuth {
-    pub state:         String,
-    pub code_verifier: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,30 +251,44 @@ pub async fn clear_tokens() -> Result<()> {
     }
 }
 
-/// Load pending OAuth state from in-process temporary storage.
-pub fn load_pending_oauth() -> Result<Option<PendingCodexOAuth>> {
-    let guard = PENDING_OAUTH
-        .lock()
-        .map_err(|_| CodexOauthError::LockPoisoned)?;
-    Ok(guard.clone())
-}
+/// Extract `code` and `state` query parameters from a callback URL pasted by
+/// the user.
+///
+/// The callback URL is the full URL the browser was redirected to after
+/// authorization (e.g. `http://localhost:1455/auth/callback?code=...&state=...`).
+/// The browser redirect may have failed — the user copies the URL from the
+/// address bar and pastes it into the CLI, which then completes the exchange
+/// locally without needing a running HTTP server.
+pub fn parse_callback_url(url: &str) -> Result<(String, String)> {
+    let parsed =
+        reqwest::Url::parse(url.trim()).map_err(|e| CodexOauthError::CallbackUrlParse {
+            reason: e.to_string(),
+        })?;
 
-/// Save pending OAuth state to in-process temporary storage.
-pub fn save_pending_oauth(pending: &PendingCodexOAuth) -> Result<()> {
-    let mut guard = PENDING_OAUTH
-        .lock()
-        .map_err(|_| CodexOauthError::LockPoisoned)?;
-    *guard = Some(pending.clone());
-    Ok(())
-}
+    let params: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
-/// Clear pending OAuth state from in-process temporary storage.
-pub fn clear_pending_oauth() -> Result<()> {
-    let mut guard = PENDING_OAUTH
-        .lock()
-        .map_err(|_| CodexOauthError::LockPoisoned)?;
-    *guard = None;
-    Ok(())
+    if let Some(err) = params.get("error") {
+        return OAuthValidationSnafu {
+            message: format!("provider returned error: {err}"),
+        }
+        .fail();
+    }
+
+    let code = params
+        .get("code")
+        .cloned()
+        .context(OAuthValidationSnafu {
+            message: "missing authorization code in callback URL",
+        })?;
+
+    let state = params
+        .get("state")
+        .cloned()
+        .context(OAuthValidationSnafu {
+            message: "missing state in callback URL",
+        })?;
+
+    Ok((code, state))
 }
 
 /// Generate a cryptographically random OAuth state value.
@@ -413,16 +402,6 @@ pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTo
     })
 }
 
-/// Build the frontend base URL used for post-OAuth redirects.
-///
-/// Priority: `RARA_FRONTEND_URL` > `http://localhost:5173`
-pub fn frontend_base_url() -> String {
-    std::env::var(FRONTEND_BASE_URL_ENV)
-        .unwrap_or_else(|_| "http://localhost:5173".into())
-        .trim_end_matches('/')
-        .to_owned()
-}
-
 // ---------------------------------------------------------------------------
 // CodexCredentialResolver
 // ---------------------------------------------------------------------------
@@ -467,122 +446,6 @@ impl LlmCredentialResolver for CodexCredentialResolver {
             api_key:  tokens.access_token,
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// Ephemeral callback server
-// ---------------------------------------------------------------------------
-
-/// Start a one-shot HTTP server on `localhost:1455` that waits for the OAuth
-/// callback, exchanges the code for tokens, saves them, and redirects the
-/// browser to the frontend settings page.
-///
-/// If a previous callback server is still running it is shut down first so
-/// that the port is freed. This makes repeated `/start` calls safe.
-pub async fn start_callback_server() -> Result<()> {
-    // Shut down any previous callback server.
-    let old_cancel = CALLBACK_SHUTDOWN.lock().ok().and_then(|mut g| g.take());
-    if let Some(old) = old_cancel {
-        old.cancel();
-        // Give the old server a moment to release the socket.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let cancel_for_handler = cancel.clone();
-
-    let app = axum::Router::new().route(
-        "/auth/callback",
-        axum::routing::get({
-            let cancel = cancel_for_handler;
-            move |query: axum::extract::Query<CallbackQuery>| {
-                let cancel = cancel.clone();
-                async move { handle_callback(query, cancel).await }
-            }
-        }),
-    );
-
-    let addr: std::net::SocketAddr = ([127, 0, 0, 1], CODEX_CALLBACK_PORT).into();
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .context(CallbackBindSnafu {
-            addr: addr.to_string(),
-        })?;
-
-    tracing::info!("codex oauth callback server listening on {addr}");
-
-    let cancel_for_shutdown = cancel.clone();
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                cancel_for_shutdown.cancelled().await;
-                tracing::info!("codex oauth callback server shutting down");
-            })
-            .await
-            .ok();
-    });
-
-    // Store the cancel token so the next call can shut us down.
-    if let Ok(mut guard) = CALLBACK_SHUTDOWN.lock() {
-        *guard = Some(cancel);
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct CallbackQuery {
-    code:  Option<String>,
-    state: Option<String>,
-    error: Option<String>,
-}
-
-async fn handle_callback(
-    axum::extract::Query(query): axum::extract::Query<CallbackQuery>,
-    cancel: tokio_util::sync::CancellationToken,
-) -> axum::response::Redirect {
-    let frontend = frontend_base_url();
-    let err_url = format!("{frontend}/settings?section=providers&codex_oauth=error");
-    let ok_url = format!("{frontend}/settings?section=providers&codex_oauth=success");
-
-    let redirect_url = match handle_callback_inner(&query).await {
-        Ok(()) => ok_url,
-        Err(e) => {
-            tracing::warn!(error = %e, "codex oauth callback failed");
-            err_url
-        }
-    };
-
-    // Signal the server to shut down after responding.
-    cancel.cancel();
-
-    axum::response::Redirect::to(&redirect_url)
-}
-
-async fn handle_callback_inner(query: &CallbackQuery) -> Result<()> {
-    if let Some(ref oauth_err) = query.error {
-        return OAuthValidationSnafu {
-            message: format!("provider returned error: {oauth_err}"),
-        }
-        .fail();
-    }
-
-    let pending = load_pending_oauth()?.context(OAuthValidationSnafu {
-        message: "no pending oauth state found",
-    })?;
-
-    validate_state(&pending.state, query.state.as_deref())?;
-
-    let code = query.code.as_deref().context(OAuthValidationSnafu {
-        message: "missing authorization code",
-    })?;
-
-    let tokens = exchange_authorization_code(code, &pending.code_verifier).await?;
-    save_tokens(&tokens).await?;
-    clear_pending_oauth()?;
-
-    tracing::info!("codex oauth tokens saved successfully");
-    Ok(())
 }
 
 fn codex_client_id() -> String {
