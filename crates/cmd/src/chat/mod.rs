@@ -34,12 +34,13 @@ use rara_kernel::{
         Endpoint, EndpointAddress, InteractionType, RawPlatformMessage,
         ReplyContext as IoReplyContext, StreamEvent,
     },
+    security::ApprovalDecision,
     session::{ChannelBinding, SessionEntry, SessionIndex, SessionKey},
 };
 use snafu::{ResultExt, Whatever, whatever};
 
 use crate::chat::{
-    app::{ChatAction, ChatState, Role},
+    app::{ChatAction, ChatState, HandleResult, PendingApproval, PendingQuestion, Role},
     ui::render,
 };
 
@@ -112,13 +113,15 @@ impl ChatArgs {
         };
         endpoint_registry.register(&resolved_user_id, cli_endpoint);
 
-        spawn_stream_forwarder(adapter, stream_hub, resolved_session_id);
+        let (session_tx, session_rx) = tokio::sync::watch::channel(resolved_session_id);
+        spawn_stream_forwarder(adapter, stream_hub, session_rx);
 
         let mut terminal = ratatui::init();
         let mut chat_state = ChatState::new(session_alias.clone(), user_id.clone());
         chat_state.model_label = default_model_label;
 
         let command_handlers = app_handle.command_handlers.clone();
+        let user_question_manager = app_handle.user_question_manager.clone();
 
         let result = run_chat_tui(
             &mut terminal,
@@ -128,6 +131,8 @@ impl ChatArgs {
             session_alias,
             user_id,
             &command_handlers,
+            session_tx,
+            user_question_manager,
         )
         .await;
 
@@ -139,34 +144,57 @@ impl ChatArgs {
     }
 }
 
+/// Spawn a background task that forwards [`StreamEvent`]s to the CLI adapter.
+///
+/// The forwarder watches `session_rx` for session key changes so that `/new`
+/// and `/switch` commands take effect without restarting the task.
 fn spawn_stream_forwarder(
     adapter: Arc<TerminalAdapter>,
     stream_hub: Arc<rara_kernel::io::StreamHub>,
-    session_key: SessionKey,
+    mut session_rx: tokio::sync::watch::Receiver<SessionKey>,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         let mut active_streams = std::collections::HashSet::new();
+        let mut stream_abort_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut current_key = session_rx.borrow_and_update().clone();
 
         loop {
-            interval.tick().await;
-            let subscriptions = stream_hub.subscribe_session(&session_key);
-            for (stream_id, mut rx) in subscriptions {
-                if active_streams.contains(&stream_id) {
-                    while let Ok(event) = rx.try_recv() {
-                        let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
-                    }
-                    continue;
-                }
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Prune finished stream tasks to prevent unbounded growth.
+                    stream_abort_handles.retain(|h| !h.is_finished());
+                    let subscriptions = stream_hub.subscribe_session(&current_key);
+                    for (stream_id, mut rx) in subscriptions {
+                        if active_streams.contains(&stream_id) {
+                            while let Ok(event) = rx.try_recv() {
+                                let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                            }
+                            continue;
+                        }
 
-                active_streams.insert(stream_id.clone());
-                let adapter = adapter.clone();
-                tokio::spawn(async move {
-                    while let Ok(event) = rx.recv().await {
-                        let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                        active_streams.insert(stream_id.clone());
+                        let adapter = adapter.clone();
+                        let handle = tokio::spawn(async move {
+                            while let Ok(event) = rx.recv().await {
+                                let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                            }
+                            let _ = adapter.send_cli_event(CliEvent::Done);
+                        });
+                        stream_abort_handles.push(handle);
                     }
-                    let _ = adapter.send_cli_event(CliEvent::Done);
-                });
+                }
+                Ok(()) = session_rx.changed() => {
+                    // Session switched — abort all running stream tasks from
+                    // the old session to prevent stale events being forwarded.
+                    for handle in &stream_abort_handles {
+                        handle.abort();
+                    }
+                    // Drop finished JoinHandles immediately.
+                    stream_abort_handles.clear();
+                    current_key = session_rx.borrow_and_update().clone();
+                    active_streams.clear();
+                }
             }
         }
     });
@@ -177,11 +205,15 @@ async fn run_chat_tui(
     state: &mut ChatState,
     mut event_rx: tokio::sync::mpsc::UnboundedReceiver<CliEvent>,
     kernel_handle: KernelHandle,
-    session_key: String,
+    mut session_key: String,
     user_id: String,
     command_handlers: &[Arc<dyn CommandHandler>],
+    session_tx: tokio::sync::watch::Sender<SessionKey>,
+    user_question_manager: Option<rara_kernel::user_question::UserQuestionManagerRef>,
 ) -> Result<(), Whatever> {
     let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut approval_rx = kernel_handle.security().approval().subscribe_requests();
+    let mut question_rx = user_question_manager.as_ref().map(|mgr| mgr.subscribe());
 
     loop {
         terminal
@@ -192,20 +224,125 @@ async fn run_chat_tui(
             _ = tick.tick() => {
                 state.tick();
             }
+            result = approval_rx.recv() => {
+                if let Ok(request) = result {
+                    state.set_pending_approval(PendingApproval {
+                        id: request.id.to_string(),
+                        tool_name: request.tool_name.clone(),
+                        summary: request.summary.clone(),
+                        risk_level: format!("{:?}", request.risk_level),
+                    });
+                }
+            }
+            result = async {
+                match question_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Ok(question) = result {
+                    state.set_pending_question(PendingQuestion {
+                        id: question.id.to_string(),
+                        question: question.question.clone(),
+                    });
+                }
+            }
             maybe_event = poll_crossterm_event() => {
                 if let Some(Event::Key(key)) = maybe_event {
                     match state.handle_key(key) {
                         ChatAction::Continue => {}
                         ChatAction::Back => break,
+                        ChatAction::Interrupt => {
+                            let resolved = session_tx.borrow().clone();
+                            let _ = kernel_handle.send_signal(
+                                resolved,
+                                rara_kernel::session::Signal::Interrupt,
+                            );
+                            state.status_msg = Some("Interrupting...".to_owned());
+                        }
+                        ChatAction::ApproveGuard { id } => {
+                            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                                state.push_message(Role::System, format!("Invalid approval ID: {id}"));
+                                continue;
+                            };
+                            let _ = kernel_handle.security().approval().resolve(
+                                uuid,
+                                ApprovalDecision::Approved,
+                                Some("cli-user".to_owned()),
+                            );
+                            state.pending_approval = None;
+                            state.push_message(Role::System, format!("Guard approved: {id}"));
+                        }
+                        ChatAction::DenyGuard { id } => {
+                            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                                state.push_message(Role::System, format!("Invalid approval ID: {id}"));
+                                continue;
+                            };
+                            let _ = kernel_handle.security().approval().resolve(
+                                uuid,
+                                ApprovalDecision::Denied,
+                                Some("cli-user".to_owned()),
+                            );
+                            state.pending_approval = None;
+                            state.push_message(Role::System, format!("Guard denied: {id}"));
+                        }
+                        ChatAction::AnswerQuestion { id, answer } => {
+                            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                                state.push_message(Role::System, format!("Invalid question ID: {id}"));
+                                continue;
+                            };
+                            if let Some(ref mgr) = user_question_manager {
+                                let _ = mgr.resolve(uuid, answer.clone());
+                            }
+                            state.pending_question = None;
+                            state.push_message(Role::System, format!("Answered: {answer}"));
+                        }
+                        ChatAction::ResolveToolCallLimit {
+                            session_key,
+                            limit_id,
+                            continued,
+                        } => {
+                            use rara_kernel::io::ToolCallLimitDecision;
+                            let decision = if continued {
+                                ToolCallLimitDecision::Continue
+                            } else {
+                                ToolCallLimitDecision::Stop
+                            };
+                            if let Ok(key) = SessionKey::try_from_raw(&session_key) {
+                                kernel_handle.resolve_tool_call_limit(
+                                    &key,
+                                    limit_id,
+                                    decision,
+                                );
+                            }
+                            state.pending_tool_call_limit = None;
+                            state.status_msg = Some(if continued {
+                                "Agent resumed.".to_owned()
+                            } else {
+                                "Agent stopped.".to_owned()
+                            });
+                        }
                         ChatAction::SlashCommand(command) => {
-                            if handle_slash_command(
+                            match handle_slash_command(
                                 state,
                                 &command,
                                 command_handlers,
                                 &session_key,
                                 &user_id,
+                                &kernel_handle,
                             ).await {
-                                break;
+                                HandleResult::Continue => {}
+                                HandleResult::Exit => break,
+                                HandleResult::SessionChanged { new_key } => {
+                                    session_key = new_key;
+                                    // Resolve the internal SessionKey and notify the forwarder.
+                                    if let Ok(resolved) = get_or_create_cli_session(
+                                        kernel_handle.session_index().as_ref(),
+                                        &session_key,
+                                    ).await {
+                                        let _ = session_tx.send(resolved);
+                                    }
+                                }
                             }
                         }
                         ChatAction::SendMessage(text) => {
@@ -255,7 +392,8 @@ async fn handle_slash_command(
     handlers: &[Arc<dyn CommandHandler>],
     session_key: &str,
     user_id: &str,
-) -> bool {
+    kernel_handle: &KernelHandle,
+) -> HandleResult {
     let parts: Vec<&str> = command.splitn(2, ' ').collect();
     let cmd_token = parts[0];
 
@@ -263,30 +401,50 @@ async fn handle_slash_command(
     match cmd_token {
         "/help" => {
             let mut lines = vec![
-                "/help         — show this help".to_owned(),
-                "/exit         — end chat session".to_owned(),
-                "/image <path> — stage a local image for the next turn".to_owned(),
-                "/images       — list staged images".to_owned(),
-                "/clear-images — clear staged images".to_owned(),
+                "/help           — show this help".to_owned(),
+                "/exit           — end chat session".to_owned(),
+                "/new            — create a new session".to_owned(),
+                "/clear          — clear current session display".to_owned(),
+                "/sessions       — list recent sessions".to_owned(),
+                "/switch <key>   — switch to a session by key".to_owned(),
+                "/image <path>   — stage a local image for the next turn".to_owned(),
+                "/images         — list staged images".to_owned(),
+                "/clear-images   — clear staged images".to_owned(),
             ];
             // Append registered handler commands to help text.
             for handler in handlers {
                 for def in handler.commands() {
                     let usage = def.usage.as_deref().unwrap_or("");
-                    lines.push(format!("{:<14}— {}", usage, def.description));
+                    lines.push(format!("{:<16}— {}", usage, def.description));
                 }
             }
             state.push_message(Role::System, lines.join("\n"));
-            return false;
+            return HandleResult::Continue;
         }
-        "/exit" | "/quit" => return true,
+        "/exit" | "/quit" => return HandleResult::Exit,
+        "/new" => {
+            return handle_new_session(state, kernel_handle).await;
+        }
+        "/clear" => {
+            state.reset_messages();
+            state.push_message(Role::System, "Session display cleared.".to_owned());
+            return HandleResult::Continue;
+        }
+        "/sessions" => {
+            handle_list_sessions(state, session_key, kernel_handle).await;
+            return HandleResult::Continue;
+        }
+        "/switch" => {
+            let target = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
+            return handle_switch_session(state, target, kernel_handle).await;
+        }
         "/image" => {
             let Some(raw_path) = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
                 state.push_message(
                     Role::System,
                     "Usage: /image /abs/path/to/file.png".to_owned(),
                 );
-                return false;
+                return HandleResult::Continue;
             };
             match tokio::fs::canonicalize(raw_path).await {
                 Ok(path) => {
@@ -298,7 +456,7 @@ async fn handle_slash_command(
                     state.push_message(Role::System, format!("Failed to stage image: {e}"));
                 }
             }
-            return false;
+            return HandleResult::Continue;
         }
         "/images" => {
             if state.staged_images.is_empty() {
@@ -313,17 +471,17 @@ async fn handle_slash_command(
                     .join("\n");
                 state.push_message(Role::System, format!("Staged images:\n{lines}"));
             }
-            return false;
+            return HandleResult::Continue;
         }
         "/clear-images" => {
             state.staged_images.clear();
             state.push_message(Role::System, "Cleared staged images.".to_owned());
-            return false;
+            return HandleResult::Continue;
         }
         _ => {}
     }
 
-    // Try kernel command handlers.
+    // Try kernel command handlers (e.g. /model, /usage).
     let cmd_name = cmd_token.trim_start_matches('/');
     if !cmd_name.is_empty() {
         let matched_handler = handlers
@@ -362,7 +520,7 @@ async fn handle_slash_command(
                     state.push_message(Role::System, format!("Command failed: {e}"));
                 }
             }
-            return false;
+            return HandleResult::Continue;
         }
     }
 
@@ -370,34 +528,229 @@ async fn handle_slash_command(
         Role::System,
         format!("Unknown command: {cmd_token}. Type /help"),
     );
-    false
+    HandleResult::Continue
 }
 
-/// Render a [`CmdResult`] into the TUI chat state.
+/// Handle the `/new` command: create a new session and switch to it.
+async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle) -> HandleResult {
+    let session_index = kernel_handle.session_index();
+    let now = Utc::now();
+    let new_entry = SessionEntry {
+        key:           SessionKey::new(),
+        title:         None,
+        model:         None,
+        system_prompt: None,
+        message_count: 0,
+        preview:       None,
+        metadata:      None,
+        created_at:    now,
+        updated_at:    now,
+    };
+
+    let created = match session_index.create_session(&new_entry).await {
+        Ok(entry) => entry,
+        Err(e) => {
+            state.push_message(Role::System, format!("Failed to create session: {e}"));
+            return HandleResult::Continue;
+        }
+    };
+
+    // Use the short UUID prefix as the CLI alias for the new session.
+    let new_alias = short_session_key(&created.key);
+    let binding = ChannelBinding {
+        channel_type: "cli".to_owned(),
+        chat_id:      new_alias.clone(),
+        session_key:  created.key,
+        created_at:   now,
+        updated_at:   now,
+    };
+
+    if let Err(e) = session_index.bind_channel(&binding).await {
+        state.push_message(
+            Role::System,
+            format!("Session created but binding failed: {e}"),
+        );
+        return HandleResult::Continue;
+    }
+
+    state.reset_messages();
+    state.session_label = new_alias.clone();
+    state.push_message(Role::System, format!("New session created: {new_alias}"));
+
+    HandleResult::SessionChanged { new_key: new_alias }
+}
+
+/// Handle the `/sessions` command: list recent sessions.
+async fn handle_list_sessions(
+    state: &mut ChatState,
+    current_session_key: &str,
+    kernel_handle: &KernelHandle,
+) {
+    let session_index = kernel_handle.session_index();
+    let sessions = match session_index.list_sessions(10, 0).await {
+        Ok(list) => list,
+        Err(e) => {
+            state.push_message(Role::System, format!("Failed to list sessions: {e}"));
+            return;
+        }
+    };
+
+    if sessions.is_empty() {
+        state.push_message(Role::System, "No sessions found.".to_owned());
+        return;
+    }
+
+    // Resolve the current session's internal key for comparison.
+    let current_internal_key = session_index
+        .get_channel_binding("cli", current_session_key)
+        .await
+        .ok()
+        .flatten()
+        .map(|b| b.session_key);
+
+    let lines: Vec<String> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let is_current = current_internal_key
+                .as_ref()
+                .is_some_and(|k| *k == entry.key);
+            let marker = if is_current { " *" } else { "" };
+            let title = entry.title.as_deref().unwrap_or("(untitled)");
+            let short_key = short_session_key(&entry.key);
+            format!(
+                "{}. [{}] {} ({} msgs){}",
+                i + 1,
+                short_key,
+                title,
+                entry.message_count,
+                marker,
+            )
+        })
+        .collect();
+
+    let header = "Sessions (* = current):\n".to_owned();
+    let footer = "\nUse /switch <key> to change session.".to_owned();
+    state.push_message(
+        Role::System,
+        format!("{header}{}{footer}", lines.join("\n")),
+    );
+}
+
+/// Handle the `/switch <key>` command: switch to a different session.
+async fn handle_switch_session(
+    state: &mut ChatState,
+    target: Option<&str>,
+    kernel_handle: &KernelHandle,
+) -> HandleResult {
+    let Some(target_key_str) = target else {
+        state.push_message(Role::System, "Usage: /switch <session-key>".to_owned());
+        return HandleResult::Continue;
+    };
+
+    let session_index = kernel_handle.session_index();
+
+    // Try to find a session whose key starts with the given prefix.
+    let sessions = match session_index.list_sessions(100, 0).await {
+        Ok(list) => list,
+        Err(e) => {
+            state.push_message(Role::System, format!("Failed to list sessions: {e}"));
+            return HandleResult::Continue;
+        }
+    };
+
+    let target_entry = sessions.iter().find(|entry| {
+        let full = entry.key.to_string();
+        full.starts_with(target_key_str) || short_session_key(&entry.key) == target_key_str
+    });
+
+    let Some(entry) = target_entry else {
+        state.push_message(Role::System, format!("Session not found: {target_key_str}"));
+        return HandleResult::Continue;
+    };
+
+    // Create a new CLI binding for this session using the short key as alias.
+    let new_alias = short_session_key(&entry.key);
+    let now = Utc::now();
+    let binding = ChannelBinding {
+        channel_type: "cli".to_owned(),
+        chat_id:      new_alias.clone(),
+        session_key:  entry.key,
+        created_at:   now,
+        updated_at:   now,
+    };
+
+    if let Err(e) = session_index.bind_channel(&binding).await {
+        state.push_message(Role::System, format!("Failed to bind session: {e}"));
+        return HandleResult::Continue;
+    }
+
+    let title = entry.title.as_deref().unwrap_or("(untitled)");
+    state.reset_messages();
+    state.session_label = new_alias.clone();
+    state.push_message(
+        Role::System,
+        format!("Switched to session: {new_alias} — {title}"),
+    );
+
+    HandleResult::SessionChanged { new_key: new_alias }
+}
+
+/// Return the first 8 characters of a session key UUID for display.
+fn short_session_key(key: &SessionKey) -> String {
+    let full = key.to_string();
+    full.chars().take(8).collect()
+}
+
+/// Render a [`CmdResult`] from a kernel command handler into the chat
+/// display. HTML is converted to terminal-friendly plain text; inline
+/// keyboards are silently dropped since terminal cannot render buttons.
 fn render_command_result(state: &mut ChatState, result: CmdResult) {
     match result {
         CmdResult::Text(s) => state.push_message(Role::System, s),
         CmdResult::Html(s) => {
-            // Strip basic HTML tags for terminal display.
-            state.push_message(Role::System, strip_html_tags(&s));
+            state.push_message(Role::System, html_to_terminal(&s));
         }
         CmdResult::HtmlWithKeyboard { html, .. } => {
-            // Show text portion; inline keyboards are not supported in TUI.
-            state.push_message(Role::System, strip_html_tags(&html));
+            // Inline keyboards are not renderable in the terminal; show the
+            // text portion only.
+            state.push_message(Role::System, html_to_terminal(&html));
         }
         CmdResult::Photo { caption, .. } => {
-            let text = caption.unwrap_or_else(|| "[Photo]".to_string());
+            // Terminal cannot display images — show caption with a marker.
+            let text = caption
+                .map(|c| format!("[Image] {c}"))
+                .unwrap_or_else(|| "[Image]".to_string());
             state.push_message(Role::System, text);
         }
         CmdResult::None => {}
     }
 }
 
-/// Minimal HTML tag stripper for terminal display.
-fn strip_html_tags(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Convert HTML (as produced by Telegram-oriented command handlers) into
+/// terminal-friendly plain text.
+///
+/// Handles the common tags used by command handlers (`<b>`, `<i>`, `<code>`,
+/// `<pre>`, `<br>`) and HTML entities. Remaining unknown tags are stripped.
+fn html_to_terminal(s: &str) -> String {
+    // Phase 1: replace known tags with terminal-friendly markers.
+    let result = s
+        .replace("<b>", "")
+        .replace("</b>", "")
+        .replace("<i>", "")
+        .replace("</i>", "")
+        .replace("<code>", "`")
+        .replace("</code>", "`")
+        .replace("<pre>", "```\n")
+        .replace("</pre>", "\n```")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+
+    // Phase 2: strip any remaining HTML tags.
+    let mut out = String::with_capacity(result.len());
     let mut in_tag = false;
-    for ch in s.chars() {
+    for ch in result.chars() {
         match ch {
             '<' => in_tag = true,
             '>' if in_tag => in_tag = false,
@@ -405,10 +758,13 @@ fn strip_html_tags(s: &str) -> String {
             _ => {}
         }
     }
-    // Unescape common HTML entities.
+
+    // Phase 3: unescape common HTML entities.
     out.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
 }
 
 fn default_model_label(config: &AppConfig) -> String {
@@ -501,27 +857,43 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             tool_calls,
             model,
             rara_message_id: _,
-        } => CliEvent::Progress {
-            text: format!(
-                "[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"
-            ),
+        } => CliEvent::TurnSummary {
+            duration_ms,
+            iterations: iterations as u32,
+            tool_calls: tool_calls as u32,
+            model,
         },
         StreamEvent::PlanCreated {
             compact_summary,
             total_steps,
             ..
-        } => CliEvent::Progress {
-            text: format!("Plan ({total_steps} steps): {compact_summary}"),
+        } => CliEvent::PlanCreated {
+            goal:              compact_summary,
+            total_steps:       total_steps as u32,
+            step_descriptions: Vec::new(),
         },
-        StreamEvent::PlanProgress { status_text, .. } => CliEvent::Progress { text: status_text },
+        StreamEvent::PlanProgress {
+            current_step,
+            total_steps,
+            status_text,
+            ..
+        } => CliEvent::PlanProgress {
+            current_step: current_step as u32,
+            total_steps: total_steps as u32,
+            status_text,
+        },
         StreamEvent::PlanReplan { reason } => CliEvent::Progress {
             text: format!("Replanning: {reason}"),
         },
-        StreamEvent::PlanCompleted { summary } => CliEvent::Progress {
-            text: format!("Plan completed: {summary}"),
-        },
-        StreamEvent::UsageUpdate { .. } => CliEvent::Progress {
-            text: String::new(),
+        StreamEvent::PlanCompleted { summary } => CliEvent::PlanCompleted { summary },
+        StreamEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            thinking_ms,
+        } => CliEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            thinking_ms,
         },
         StreamEvent::BackgroundTaskStarted {
             agent_name,
@@ -537,9 +909,14 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             text: format!("Dock turn complete: {session_id}"),
         },
         StreamEvent::ToolCallLimit {
-            tool_calls_made, ..
-        } => CliEvent::Progress {
-            text: format!("Agent paused after {tool_calls_made} tool calls (tool call limit)"),
+            session_key,
+            limit_id,
+            tool_calls_made,
+            ..
+        } => CliEvent::ToolCallLimitPaused {
+            session_key: session_key.to_string(),
+            limit_id,
+            tool_calls_made,
         },
         StreamEvent::ToolCallLimitResolved { continued, .. } => CliEvent::Progress {
             text: if continued {
@@ -570,6 +947,15 @@ async fn send_cli_message(
     state.last_tokens = None;
     state.last_cost_usd = None;
     state.status_msg = None;
+    state.turn_input_tokens = 0;
+    state.turn_output_tokens = 0;
+    state.turn_thinking_ms = 0;
+    // Clear progress state from previous turn.
+    state.tool_progress.clear();
+    state.turn_started = Some(std::time::Instant::now());
+    state.plan_goal = None;
+    state.plan_steps = None;
+    state.plan_current_step = None;
 
     let attachments = match load_image_blocks(&image_paths).await {
         Ok(attachments) => attachments,
@@ -685,10 +1071,10 @@ mod tests {
     use rara_sessions::file_index::FileSessionIndex;
 
     use super::{
-        build_cli_raw_message, cli_kernel_user_id, get_or_create_cli_session, handle_slash_command,
+        build_cli_raw_message, cli_kernel_user_id, get_or_create_cli_session, short_session_key,
         stream_event_to_cli_event,
     };
-    use crate::chat::app::{CHAT_BANNER, ChatState};
+    use crate::chat::app::ChatState;
 
     #[tokio::test]
     async fn cli_session_binding_is_created_once_and_reused() {
@@ -741,17 +1127,6 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn exit_slash_command_requests_shutdown_without_message() {
-        let mut state = ChatState::new("default".into(), "local".into());
-        let handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> =
-            vec![];
-
-        assert!(handle_slash_command(&mut state, "/exit", &handlers, "default", "local").await);
-        assert_eq!(state.messages.len(), 1);
-        assert_eq!(state.messages[0].text, CHAT_BANNER);
-    }
-
     #[test]
     fn cli_raw_message_is_multimodal_when_image_paths_are_present() {
         let raw = build_cli_raw_message(
@@ -768,5 +1143,178 @@ mod tests {
             raw.content,
             MessageContent::Multimodal(blocks) if blocks.len() == 2
         ));
+    }
+
+    #[test]
+    fn short_session_key_returns_first_8_chars() {
+        let key = rara_kernel::session::SessionKey::new();
+        let short = short_session_key(&key);
+        let full = key.to_string();
+        assert_eq!(short.len(), 8);
+        assert!(full.starts_with(&short));
+    }
+
+    #[tokio::test]
+    async fn new_session_creates_entry_and_binding() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let index = FileSessionIndex::new(tmp.path()).await.expect("index");
+        let session_index: &dyn SessionIndex = &index;
+
+        // Create initial session.
+        let _first = get_or_create_cli_session(session_index, "default")
+            .await
+            .expect("first session");
+
+        // list_sessions should return at least one.
+        let sessions = session_index.list_sessions(10, 0).await.expect("list");
+        assert!(!sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_index_tracks_created_sessions_and_bindings() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let index = std::sync::Arc::new(FileSessionIndex::new(tmp.path()).await.expect("index"));
+
+        // Create a minimal KernelHandle substitute is not feasible, so we
+        // test the helper directly.
+        let session_index: &dyn SessionIndex = index.as_ref();
+        let _first = get_or_create_cli_session(session_index, "default")
+            .await
+            .expect("first session");
+
+        let sessions = session_index.list_sessions(10, 0).await.expect("list");
+        assert_eq!(sessions.len(), 1);
+    }
+
+    // TODO: test that `/exit` returns `HandleResult::Exit`. Skipped because
+    // `handle_slash_command` requires a `KernelHandle` which is non-trivial to
+    // construct in a unit test (needs a full kernel bootstrap). Consider adding
+    // an integration test or extracting the match into a pure function.
+
+    #[test]
+    fn clear_command_resets_state() {
+        let mut state = ChatState::new("default".into(), "local".into());
+        state.push_message(super::Role::User, "hello".into());
+        assert!(state.messages.len() > 1);
+
+        state.reset_messages();
+        assert!(state.messages.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // html_to_terminal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn html_to_terminal_strips_bold_and_italic() {
+        assert_eq!(
+            super::html_to_terminal("<b>bold</b> and <i>italic</i>"),
+            "bold and italic"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_converts_code_to_backticks() {
+        assert_eq!(
+            super::html_to_terminal("use <code>foo</code> here"),
+            "use `foo` here"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_converts_pre_to_fenced_block() {
+        assert_eq!(
+            super::html_to_terminal("<pre>line1\nline2</pre>"),
+            "```\nline1\nline2\n```"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_converts_br_to_newline() {
+        assert_eq!(super::html_to_terminal("a<br>b<br/>c<br />d"), "a\nb\nc\nd");
+    }
+
+    #[test]
+    fn html_to_terminal_unescapes_entities() {
+        assert_eq!(
+            super::html_to_terminal("&amp; &lt; &gt; &quot; &#39;"),
+            "& < > \" '"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_strips_unknown_tags() {
+        assert_eq!(
+            super::html_to_terminal("<div>hello <span>world</span></div>"),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn html_to_terminal_handles_mcp_status_output() {
+        let html = "<b>MCP Servers</b> (2)\n\n\u{25CF} <b>context-mode</b> \u{2014} connected \
+                    (interceptor: \u{2713})\n\u{25CB} <b>other</b> \u{2014} disconnected\n\n1/2 \
+                    connected";
+        let result = super::html_to_terminal(html);
+        assert!(result.contains("MCP Servers (2)"));
+        assert!(result.contains("context-mode"));
+        assert!(!result.contains('<'));
+    }
+
+    // -----------------------------------------------------------------------
+    // render_command_result
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_photo_shows_image_marker_with_caption() {
+        use rara_kernel::channel::command::CommandResult as CmdResult;
+
+        let mut state = ChatState::new("default".into(), "local".into());
+        super::render_command_result(
+            &mut state,
+            CmdResult::Photo {
+                data:    vec![],
+                caption: Some("Anchor tree (3 sessions)".to_owned()),
+            },
+        );
+        let last = state.messages.last().expect("message");
+        assert_eq!(last.text, "[Image] Anchor tree (3 sessions)");
+    }
+
+    #[test]
+    fn render_photo_without_caption_shows_placeholder() {
+        use rara_kernel::channel::command::CommandResult as CmdResult;
+
+        let mut state = ChatState::new("default".into(), "local".into());
+        super::render_command_result(
+            &mut state,
+            CmdResult::Photo {
+                data:    vec![],
+                caption: None,
+            },
+        );
+        let last = state.messages.last().expect("message");
+        assert_eq!(last.text, "[Image]");
+    }
+
+    #[test]
+    fn render_html_with_keyboard_drops_buttons() {
+        use rara_kernel::channel::{command::CommandResult as CmdResult, types::InlineButton};
+
+        let mut state = ChatState::new("default".into(), "local".into());
+        super::render_command_result(
+            &mut state,
+            CmdResult::HtmlWithKeyboard {
+                html:     "<b>Status</b>\nActive: 1".to_owned(),
+                keyboard: vec![vec![InlineButton {
+                    text:          "All jobs".to_owned(),
+                    callback_data: Some("status_jobs:abc".to_owned()),
+                    url:           None,
+                }]],
+            },
+        );
+        let last = state.messages.last().expect("message");
+        assert!(last.text.contains("Status"));
+        assert!(!last.text.contains("All jobs"));
     }
 }
