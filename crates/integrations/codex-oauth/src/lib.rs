@@ -27,7 +27,6 @@
 //! callback URL from their browser's address bar and exchanges the code
 //! locally via [`parse_callback_url`] + [`exchange_authorization_code`].
 
-use std::collections::HashMap;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
