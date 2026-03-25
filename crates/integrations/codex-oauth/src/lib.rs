@@ -188,9 +188,7 @@ pub fn build_auth_url(state: &str, code_challenge: &str) -> Result<String> {
         .append_pair("scope", CODEX_SCOPES)
         .append_pair("code_challenge", code_challenge)
         .append_pair("code_challenge_method", "S256")
-        .append_pair("state", state)
-        .append_pair("id_token_add_organizations", "true")
-        .append_pair("codex_cli_simplified_flow", "true");
+        .append_pair("state", state);
     Ok(url.into())
 }
 
