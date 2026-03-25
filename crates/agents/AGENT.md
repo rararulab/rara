@@ -17,7 +17,7 @@ Predefined agent manifest registry — declares built-in agent personalities (ra
 | `rara()` | rara | Chat | Main user-facing assistant with full tool access |
 | `nana()` | nana | Chat | Friendly companion, chat-only (rara's sister) |
 | `worker()` | worker | Worker | Lightweight sub-agent for task execution |
-| `mita()` | mita | Worker | Background proactive agent with heartbeat observation |
+| `mita()` | mita | Worker | Background proactive agent with heartbeat observation, skill discovery, and soul evolution |
 | `scheduled_job(...)` | scheduled_job | Worker | Dynamically constructed per scheduled task |
 
 ### Key design decisions
@@ -47,6 +47,8 @@ System prompts use a modular fragment pattern for maintainability:
 - **Composition**: Fragments are assembled by `{agent}_system_prompt() -> String` functions that concatenate them in order.
 - **Scope**: Rara and Mita use modular fragments (complex behavior). Worker and Nana use simple single-const prompts (appropriate for their simplicity).
 - **Adding rules**: When adding new behavioral rules, create a new fragment rather than expanding an existing one. This keeps each fragment focused and reviewable.
+- **Current Rara fragments**: `RARA_CORE`, `RARA_OUTPUT`, `RARA_TOOL`, `RARA_DELEGATION`, `RARA_SAFETY`, `RARA_SKILL_MAINTENANCE`, `RARA_ANTI_NARRATION`.
+- **Current Mita fragments**: `MITA_BASE_PROMPT`, `MITA_DISTILLATION`, `MITA_SOUL_EVOLUTION`, `MITA_SKILL_DISCOVERY`, `MITA_CLOSING`.
 
 ## Dependencies
 

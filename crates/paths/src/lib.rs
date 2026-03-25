@@ -320,6 +320,18 @@ pub fn skills_dir() -> &'static PathBuf {
     SKILLS_DIR.get_or_init(|| config_dir().join("skills"))
 }
 
+/// Returns the path to the skill drafts directory.
+///
+/// Mita writes draft skill files here; Rara reads and archives them.
+/// Location: `<data_dir>/skill-drafts/`
+pub fn skill_drafts_dir() -> PathBuf { data_dir().join("skill-drafts") }
+
+/// Returns the path to the archived skill drafts directory.
+///
+/// Successfully created skills have their drafts moved here.
+/// Location: `<data_dir>/skill-drafts/archived/`
+pub fn skill_drafts_archived_dir() -> PathBuf { skill_drafts_dir().join("archived") }
+
 /// Returns the path to the resources directory for tool-produced artifacts.
 pub fn resources_dir() -> &'static PathBuf {
     static RESOURCES_DIR: OnceLock<PathBuf> = OnceLock::new();

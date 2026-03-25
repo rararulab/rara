@@ -24,7 +24,7 @@ use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const NOTE_CATEGORIES: &[&str] = &["preference", "fact", "todo", "general"];
+pub const NOTE_CATEGORIES: &[&str] = &["preference", "fact", "todo", "general", "procedure"];
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UserNoteParams {
@@ -53,7 +53,8 @@ pub struct UserNoteResult {
                    context for future conversations with this user.\n\nCategories:\n- preference: \
                    User preferences (language, style, tools they like)\n- fact: Important facts \
                    about the user (name, role, projects)\n- todo: Tasks or reminders for the \
-                   user\n- general: Anything else worth remembering",
+                   user\n- general: Anything else worth remembering\n- procedure: How-to \
+                   knowledge (commands, workflows, API patterns)",
     tier = "deferred"
 )]
 pub struct UserNoteTool {

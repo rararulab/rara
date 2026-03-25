@@ -139,6 +139,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
         "update-soul-state".to_string(),
         "evolve-soul".to_string(),
         "update-session-title".to_string(),
+        "write-skill-draft".to_string(),
     ],
     excluded_tools:         vec![],
     max_children:           Some(0),
@@ -263,6 +264,20 @@ Do NOT:
 - Over-explain simple actions
 - Ask for confirmation on routine operations"#;
 
+/// Rara prompt fragment: skill maintenance and draft handling.
+const RARA_SKILL_MAINTENANCE_FRAGMENT: &str = r#"## Skill Maintenance
+
+When using a skill and finding it outdated, incomplete, or wrong:
+1. Fix it immediately with `edit-file` on the SKILL.md file.
+2. Only fix verified issues — commands that actually failed, steps that were actually missing.
+3. Do NOT speculatively "improve" skills that worked fine.
+
+When Mita dispatches you to create a skill from a draft:
+1. Read the draft file with `read-file`.
+2. Refine the content into a proper skill (clean up language, verify steps make sense).
+3. Use `create-skill` to create the skill.
+4. Archive the draft: `bash mv <draft-path> <archived-dir>/`."#;
+
 /// Compose the full Rara system prompt from fragments.
 fn rara_system_prompt() -> String {
     [
@@ -271,6 +286,7 @@ fn rara_system_prompt() -> String {
         RARA_TOOL_FRAGMENT,
         RARA_DELEGATION_FRAGMENT,
         RARA_SAFETY_FRAGMENT,
+        RARA_SKILL_MAINTENANCE_FRAGMENT,
         RARA_ANTI_NARRATION_FRAGMENT,
     ]
     .join("\n\n")
@@ -364,6 +380,68 @@ When you decide to evolve the soul:
 4. Call `evolve-soul` with `agent` and `proposed_soul` (the full content you generated).
 5. The tool validates boundaries, snapshots the old version, bumps the version number, and writes the new soul."#;
 
+/// Mita prompt fragment: skill discovery and draft creation from observed
+/// sessions.
+const MITA_SKILL_DISCOVERY_FRAGMENT: &str = r#"## Skill Discovery
+
+After observing sessions, evaluate whether any completed task should be preserved as a reusable skill.
+
+### Scoring Framework
+
+For each candidate session, score three axes (1-5):
+
+| Axis | 1 (low) | 5 (high) |
+|------|---------|----------|
+| **Complexity** | Simple single-tool action | 8+ tool calls, multi-step orchestration |
+| **Trial-and-error** | Worked on first try | Multiple failed attempts, approach changes |
+| **Reusability** | One-off domain-specific fix | General methodology applicable to future tasks |
+
+Total score >= 10 → write a skill draft.
+
+### Draft Creation
+
+When a session qualifies:
+1. Read the session tape to understand the full task and approach.
+2. Identify the final successful methodology (ignore failed attempts unless they reveal pitfalls).
+3. Check if a similar skill already exists (use your knowledge of available skills). If so, skip.
+4. Write a skill draft using `write-skill-draft` with structured content:
+
+```yaml
+---
+source_session: <session-key>
+user_id: <user-id>
+created_at: <ISO-8601>
+score:
+  complexity: <1-5>
+  trial_and_error: <1-5>
+  reusability: <1-5>
+---
+
+## Task Summary
+What the user wanted to accomplish.
+
+## Approach
+Numbered steps of the successful approach.
+
+## Key Tool Chain
+Ordered list of tools used and why.
+
+## Pitfalls Discovered
+What went wrong and how it was resolved.
+
+## Prerequisites
+Required tools, APIs, or environment setup.
+```
+
+5. Dispatch Rara with: "Read the skill draft at <path>. Review it against your own experience, create a proper skill with `create-skill`, then archive the draft with `bash mv <path> <archived_dir>/`."
+
+### Rules
+
+- Max 1 skill draft per heartbeat cycle — focus on the highest-scoring candidate.
+- Do NOT create drafts for trivial tasks (simple file reads, basic Q&A).
+- Do NOT create drafts for tasks that are already covered by existing skills.
+- Small procedural knowledge (single commands, simple API patterns) should be a `procedure` user note instead of a skill draft."#;
+
 /// Mita base prompt: core behavior, workflow, and operational rules.
 const MITA_BASE_PROMPT: &str = r#"You are Mita, a background proactive agent operating behind the scenes. You are invisible to users — Rara is the only user-facing personality.
 
@@ -417,6 +495,8 @@ Good candidates for writeback:
 - Evolving project status or career developments (category: "fact")
 - Preferences revealed through behavior patterns (category: "preference")
 - TODOs or commitments mentioned across sessions (category: "todo")
+- Procedural knowledge: commands, workflows, or API patterns discovered through observation (category: "procedure")
+- Small how-to's stay as procedure notes; complex multi-step workflows go through skill draft creation
 
 Do NOT write back:
 - Trivial or obvious information.
@@ -461,8 +541,8 @@ When dispatching to Rara, include:
 /// Compose the full Mita system prompt from fragments at runtime.
 fn mita_system_prompt() -> String {
     format!(
-        "{MITA_BASE_PROMPT}\n\n{MITA_DISTILLATION_FRAGMENT}\n\n         \
-         {MITA_SOUL_EVOLUTION_FRAGMENT}\n\n{MITA_CLOSING_PROMPT}"
+        "{MITA_BASE_PROMPT}\n\n{MITA_DISTILLATION_FRAGMENT}\n\n{MITA_SOUL_EVOLUTION_FRAGMENT}\n\\
+         n{MITA_SKILL_DISCOVERY_FRAGMENT}\n\n{MITA_CLOSING_PROMPT}"
     )
 }
 

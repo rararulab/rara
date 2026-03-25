@@ -37,6 +37,7 @@ Application orchestration crate that wires all subsystems together, boots the ke
 - `rustls::crypto::ring::default_provider().install_default()` must be called in `main()` before this crate does any TLS work.
 - Migrations run from `crates/rara-model/migrations/` via `sqlx::migrate!` — never modify applied migrations.
 - `KernelHandle` is injected into `DispatchRaraTool` and `ListSessionsTool` after kernel start via `RwLock` slots — these tools will panic if invoked before wiring completes.
+- Mita-exclusive tools: `dispatch-rara`, `list-sessions`, `read-tape`, `write-user-note`, `distill-user-notes`, `update-soul-state`, `evolve-soul`, `update-session-title`, `write-skill-draft`. These are declared in Mita's manifest (`rara-agents`) and must not be added to Rara's tool set.
 
 ## What NOT To Do
 
