@@ -38,6 +38,9 @@ pub struct ExecutionTrace {
     pub thinking_preview: String,
     /// Plan steps with status.
     pub plan_steps:       Vec<String>,
+    /// High-level rationale the LLM stated for this turn (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_rationale:   Option<String>,
     /// Tool execution records.
     pub tools:            Vec<ToolTraceEntry>,
     /// Rara internal message ID for end-to-end correlation.

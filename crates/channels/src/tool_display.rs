@@ -207,12 +207,13 @@ pub fn tool_arguments_summary(tool_name: &str, arguments: &serde_json::Value) ->
     }
 }
 
-/// Return a `(display_name, summary)` pair with richer heuristics.
+/// Return a `(display_name, full_summary)` pair with richer heuristics.
 ///
 /// For `shell_execute` commands starting with `agent-browser`, the display name
 /// becomes `"browser"` and the summary shows only the sub-command.  Shell noise
-/// like trailing `2>&1` and pipe suffixes is stripped.  The summary is
-/// truncated to 60 characters (suitable for Telegram's narrower viewport).
+/// like trailing `2>&1` and pipe suffixes is stripped.  The summary is returned
+/// **untruncated** — callers are responsible for truncating at the display
+/// layer (e.g. via [`truncate_summary`]).
 pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (String, String) {
     if tool_name == "shell_execute" {
         if let Some(cmd) = arguments.get("command").and_then(|v| v.as_str()) {
@@ -221,9 +222,9 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
                 .strip_prefix("agent-browser ")
                 .or_else(|| cleaned.strip_prefix("agent-browser\t"))
             {
-                return ("browser".to_owned(), truncate_summary(rest.trim(), 60));
+                return ("browser".to_owned(), first_line(rest.trim()).to_owned());
             }
-            return ("shell".to_owned(), truncate_summary(&cleaned, 60));
+            return ("shell".to_owned(), first_line(&cleaned).to_owned());
         }
     }
 
@@ -257,13 +258,13 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
             .or_else(|| first_string_value(arguments)),
     };
 
-    let summary = match raw {
-        Some(s) => truncate_summary(s, 80),
-        None => String::new(),
-    };
+    let summary = raw.map(|s| first_line(s).to_owned()).unwrap_or_default();
 
     (name, summary)
 }
+
+/// Return the first line of `s` (everything before the first newline).
+fn first_line(s: &str) -> &str { s.lines().next().unwrap_or(s) }
 
 /// Strip common shell noise from a command string.
 ///
@@ -302,7 +303,7 @@ fn first_string_value(value: &serde_json::Value) -> Option<&str> {
 
 /// Take only the first line of `s`, truncating to `max_chars` with an ellipsis
 /// if needed.
-fn truncate_summary(s: &str, max_chars: usize) -> String {
+pub fn truncate_summary(s: &str, max_chars: usize) -> String {
     let first_line = s.lines().next().unwrap_or(s);
     let char_count = first_line.chars().count();
     if char_count <= max_chars {
