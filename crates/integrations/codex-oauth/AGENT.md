@@ -27,7 +27,7 @@ OpenAI Codex OAuth integration — handles the full PKCE OAuth flow for obtainin
 
 - Client ID: `app_EMoamEEZ73f0CkXaXp7hrann` (overridable via `RARA_CODEX_CLIENT_ID` env var).
 - Redirect URI: `http://localhost:1455/auth/callback` (fixed, registered with OpenAI).
-- Token file: `<config_dir>/codex_tokens.json` (via `rara_paths::data_dir()`).
+- Token file: `<config_dir>/codex_tokens.json` (via `rara_paths::config_dir()`).
 
 ## Critical Invariants
 
@@ -45,6 +45,6 @@ OpenAI Codex OAuth integration — handles the full PKCE OAuth flow for obtainin
 
 ## Dependencies
 
-**Upstream:** `rara-kernel` (LlmCredentialResolver trait), `rara-paths` (data directory), `reqwest` (HTTP token exchange), `axum` (callback server).
+**Upstream:** `rara-kernel` (LlmCredentialResolver trait), `rara-paths` (config directory), `reqwest` (HTTP token exchange), `axum` (callback server).
 
 **Downstream:** `rara-backend-admin` (exposes OAuth start/status/clear endpoints), `rara-app` (registers CodexCredentialResolver in boot).

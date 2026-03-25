@@ -67,10 +67,16 @@ async fn run_codex_login() -> Result<(), Whatever> {
     let auth_url = build_auth_url(&state, &code_challenge)
         .map_err(|e| Whatever::without_source(e.to_string()))?;
 
-    println!("Open this URL in your browser to authorize:\n");
+    // Try to open the browser automatically; fall back to printing the URL.
+    if open::that(&auth_url).is_ok() {
+        println!("Opened your browser for authorization.\n");
+        println!("If it didn't open, visit this URL manually:\n");
+    } else {
+        println!("Open this URL in your browser to authorize:\n");
+    }
     println!("  {auth_url}\n");
 
-    println!("Waiting for authorization...");
+    println!("Waiting for authorization (timeout: 5 minutes)...");
 
     // Remember the existing token timestamp so we can detect a fresh exchange.
     let previous_expiry = load_tokens()
@@ -79,9 +85,16 @@ async fn run_codex_login() -> Result<(), Whatever> {
         .flatten()
         .and_then(|t| t.expires_at_unix);
 
-    // Poll for tokens — the callback server saves them on successful exchange.
+    // Poll for tokens with a 5-minute timeout to avoid hanging forever if the
+    // user closes the browser or cancels the flow.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
     let tokens = loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Whatever::without_source(
+                "timed out waiting for OAuth callback (5 minutes). Please try again.".to_string(),
+            ));
+        }
         match load_tokens().await {
             Ok(Some(tokens)) if tokens.expires_at_unix != previous_expiry => break tokens,
             Ok(Some(_) | None) => continue,
