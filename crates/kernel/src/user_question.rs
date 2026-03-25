@@ -37,13 +37,19 @@ pub struct UserQuestion {
     pub question: String,
 }
 
-/// Error from resolving a user question.
+/// Error from user question operations.
 #[derive(Debug, Clone, Snafu)]
 #[snafu(visibility(pub))]
-pub enum ResolveError {
+pub enum UserQuestionError {
     /// The question timed out before the user responded.
-    #[snafu(display("user question has timed out"))]
-    TimedOut,
+    #[snafu(display("user question timed out after {timeout_secs}s"))]
+    TimedOut {
+        /// Timeout duration in seconds.
+        timeout_secs: u64,
+    },
+    /// No channel adapter is listening for user questions.
+    #[snafu(display("no channel adapter is subscribed to user questions"))]
+    NoSubscribers,
     /// The question ID was never seen.
     #[snafu(display("no pending user question: {id}"))]
     NotFound {
@@ -92,9 +98,15 @@ impl UserQuestionManager {
     /// Submit a question and block until the user responds or the timeout
     /// expires.
     ///
-    /// Returns the user's answer as a `String`, or `None` on timeout.
-    pub async fn ask(&self, question: String, timeout: std::time::Duration) -> Option<String> {
+    /// Fails immediately with [`NoSubscribersSnafu`] if no channel adapter is
+    /// listening, avoiding a silent 5-minute hang.
+    pub async fn ask(
+        &self,
+        question: String,
+        timeout: std::time::Duration,
+    ) -> std::result::Result<String, UserQuestionError> {
         let id = Uuid::new_v4();
+        let timeout_secs = timeout.as_secs();
         let uq = UserQuestion {
             id,
             question: question.clone(),
@@ -113,11 +125,10 @@ impl UserQuestionManager {
         );
 
         // Notify external listeners (e.g. Telegram adapter).
+        // Fail fast if nobody is listening — better than hanging for 5 minutes.
         if self.question_tx.send(uq).is_err() {
-            warn!(
-                question_id = %id,
-                "no subscribers for user questions — question will hang until timeout"
-            );
+            self.pending.remove(&id);
+            return Err(UserQuestionError::NoSubscribers);
         }
 
         info!(question_id = %id, %question, "user question submitted, waiting for answer");
@@ -125,12 +136,12 @@ impl UserQuestionManager {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(answer)) => {
                 info!(question_id = %id, "user question answered");
-                Some(answer)
+                Ok(answer)
             }
             _ => {
                 self.pending.remove(&id);
-                warn!(question_id = %id, "user question timed out");
-                None
+                warn!(question_id = %id, timeout_secs, "user question timed out");
+                Err(UserQuestionError::TimedOut { timeout_secs })
             }
         }
     }
@@ -140,14 +151,14 @@ impl UserQuestionManager {
         &self,
         question_id: Uuid,
         answer: String,
-    ) -> std::result::Result<(), ResolveError> {
+    ) -> std::result::Result<(), UserQuestionError> {
         match self.pending.remove(&question_id) {
             Some((_, pending)) => {
                 let _ = pending.sender.send(answer);
                 info!(question_id = %question_id, "user question resolved");
                 Ok(())
             }
-            None => Err(ResolveError::NotFound { id: question_id }),
+            None => Err(UserQuestionError::NotFound { id: question_id }),
         }
     }
 
@@ -198,23 +209,35 @@ mod tests {
             .expect("resolve should succeed");
 
         let answer = ask_handle.await.expect("task should complete");
-        assert_eq!(answer, Some("sk-12345".to_string()));
+        assert_eq!(answer.unwrap(), "sk-12345");
     }
 
     #[tokio::test]
     async fn ask_times_out() {
         let mgr = UserQuestionManager::new();
+        // Need a subscriber so ask() doesn't fail with NoSubscribers.
+        let _rx = mgr.subscribe();
         let result = mgr
             .ask("question".into(), std::time::Duration::from_millis(10))
             .await;
-        assert!(result.is_none());
+        assert!(matches!(result, Err(UserQuestionError::TimedOut { .. })));
         assert_eq!(mgr.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn ask_no_subscribers() {
+        let mgr = UserQuestionManager::new();
+        // No subscriber — should fail immediately.
+        let result = mgr
+            .ask("question".into(), std::time::Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(UserQuestionError::NoSubscribers)));
     }
 
     #[tokio::test]
     async fn resolve_unknown_id() {
         let mgr = UserQuestionManager::new();
         let result = mgr.resolve(Uuid::new_v4(), "answer".into());
-        assert!(result.is_err());
+        assert!(matches!(result, Err(UserQuestionError::NotFound { .. })));
     }
 }

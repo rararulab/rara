@@ -2258,19 +2258,29 @@ pub(crate) async fn run_agent_loop(
                     s.activated_deferred = snapshot;
                 });
             }
-            // Suggest fold after successful marketplace-install — the installation
-            // context is large but not needed verbatim in subsequent turns.
-            // Pragmatic: check tool name + success rather than propagating
-            // ToolHint through the ToolDef macro (which calls from_serialize()
-            // and always returns empty hints).
-            for ((success, _output, _err, _dur), (_id, name, _args)) in
+            // Check tool output hints for SuggestFold.
+            for ((success, output, _err, _dur), (_id, name, _args)) in
                 results.iter().zip(valid_tool_calls.iter())
             {
-                if *success && name == "marketplace-install" {
+                if !success {
+                    continue;
+                }
+                // Primary: read hints from ToolOutput (tools that bypass ToolDef
+                // or manually construct ToolOutput can set hints directly).
+                let has_suggest_fold = output
+                    .hints
+                    .iter()
+                    .any(|h| matches!(h, crate::tool::ToolHint::SuggestFold { .. }));
+                // Fallback: the ToolDef macro calls from_serialize() which always
+                // returns empty hints, so known heavy-context tools are matched
+                // by name until the macro supports hint propagation.
+                let is_known_heavy = name == "marketplace-install";
+                if has_suggest_fold || is_known_heavy {
                     force_fold_next_iteration = true;
                     info!(
                         tool = %name,
-                        "setting force_fold_next_iteration from marketplace-install"
+                        via_hint = has_suggest_fold,
+                        "setting force_fold_next_iteration"
                     );
                 }
             }

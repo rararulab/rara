@@ -68,10 +68,7 @@ impl ToolExecute for AskUserTool {
     #[tracing::instrument(skip_all)]
     async fn run(&self, params: AskUserParams, _context: &ToolContext) -> anyhow::Result<Value> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-
-        match self.manager.ask(params.question, timeout).await {
-            Some(answer) => Ok(serde_json::json!({ "answer": answer })),
-            None => Ok(serde_json::json!({ "error": "timed out waiting for user response" })),
-        }
+        let answer = self.manager.ask(params.question, timeout).await?;
+        Ok(serde_json::json!({ "answer": answer }))
     }
 }

@@ -77,6 +77,7 @@ pub struct EmptyParams {}
 /// hint-worthy tools (e.g. `marketplace-install` → `SuggestFold`). Once the
 /// macro supports hint propagation, tool-name checks should be replaced.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ToolHint {
     /// Suggest that the agent loop should fold (compress) context after this
     /// iteration completes. Useful when a tool produces large output that is
