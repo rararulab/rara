@@ -35,6 +35,7 @@ futures.workspace = true
 indexmap.workspace = true
 rara-app = { workspace = true }
 rara-channels = { workspace = true }
+rara-codex-oauth.workspace = true
 rara-kernel = { workspace = true }
 rara-paths.workspace = true
 rara-symphony.workspace = true
