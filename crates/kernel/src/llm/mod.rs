@@ -29,7 +29,8 @@ pub mod stream;
 pub mod types;
 
 pub use driver::{
-    LlmDriver, LlmDriverRef, LlmEmbedder, LlmEmbedderRef, LlmModelLister, LlmModelListerRef,
+    LlmCredential, LlmCredentialResolver, LlmCredentialResolverRef, LlmDriver, LlmDriverRef,
+    LlmEmbedder, LlmEmbedderRef, LlmModelLister, LlmModelListerRef,
 };
 pub use openai::OpenAiDriver;
 pub use registry::{DriverRegistry, DriverRegistryRef, ProviderModelConfig};

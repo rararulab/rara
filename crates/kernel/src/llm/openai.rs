@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::{
-    driver::{LlmDriver, LlmEmbedder, LlmModelLister},
+    driver::{LlmCredentialResolverRef, LlmDriver, LlmEmbedder, LlmModelLister},
     stream::StreamDelta,
     types::{
         CompletionRequest, CompletionResponse, ContentBlock, EmbeddingRequest, EmbeddingResponse,
@@ -68,6 +68,9 @@ enum OpenAiDriverConfigSource {
     SettingsBacked {
         settings:      Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         provider_name: String,
+    },
+    Dynamic {
+        resolver: LlmCredentialResolverRef,
     },
 }
 
@@ -161,6 +164,24 @@ impl OpenAiDriver {
         }
     }
 
+    /// Create a driver that resolves credentials dynamically via a
+    /// [`LlmCredentialResolver`](super::driver::LlmCredentialResolver) on every
+    /// request.
+    ///
+    /// Used for providers with expiring tokens (e.g. OAuth).
+    pub fn with_credential_resolver(
+        resolver: LlmCredentialResolverRef,
+        sse_idle_timeout: Duration,
+    ) -> Self {
+        Self {
+            client: Self::build_http_client(),
+            stream_client: Self::build_stream_client(),
+            config_source: OpenAiDriverConfigSource::Dynamic { resolver },
+            sse_idle_timeout,
+            models_cache: tokio::sync::OnceCell::new(),
+        }
+    }
+
     async fn resolve_config(&self) -> Result<ResolvedConfig> {
         match &self.config_source {
             OpenAiDriverConfigSource::Static { base_url, api_key } => Ok(ResolvedConfig {
@@ -196,6 +217,13 @@ impl OpenAiDriver {
                         })?;
 
                 Ok(ResolvedConfig { base_url, api_key })
+            }
+            OpenAiDriverConfigSource::Dynamic { resolver } => {
+                let cred = resolver.resolve().await?;
+                Ok(ResolvedConfig {
+                    base_url: cred.base_url,
+                    api_key:  cred.api_key,
+                })
             }
         }
     }

@@ -17,7 +17,7 @@
 //! This crate centralizes all provider-specific OAuth behavior:
 //! - OAuth URL construction and PKCE helpers
 //! - Authorization-code and refresh-token exchanges
-//! - Token persistence in keyring
+//! - Token persistence via file-based storage
 //! - Short-lived pending OAuth state persistence
 //! - Token-expiry/refresh policy
 //! - Ephemeral local callback server on port 1455
@@ -28,8 +28,9 @@
 //! the authorization code, exchange it for tokens, and redirect the
 //! browser to the frontend settings page.
 
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rara_keyring_store::{KeyringStore, KeyringStoreRef};
+use rara_kernel::llm::{LlmCredential, LlmCredentialResolver};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -54,8 +55,7 @@ pub const FRONTEND_BASE_URL_ENV: &str = "RARA_FRONTEND_URL";
 /// Environment variable used to override OAuth client id.
 pub const CODEX_CLIENT_ID_ENV: &str = "RARA_CODEX_CLIENT_ID";
 const REFRESH_SKEW_SECS: u64 = 60;
-const CODEX_KEYRING_SERVICE: &str = "rara-ai-codex";
-const CODEX_TOKEN_ACCOUNT: &str = "tokens";
+const CODEX_TOKEN_FILENAME: &str = "codex_tokens.json";
 static PENDING_OAUTH: std::sync::LazyLock<std::sync::Mutex<Option<PendingCodexOAuth>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 /// Shutdown handle for the previous ephemeral callback server (if any).
@@ -63,7 +63,7 @@ static CALLBACK_SHUTDOWN: std::sync::LazyLock<
     std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-/// Persisted Codex credentials (keyring-backed).
+/// Persisted Codex credentials (file-backed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredCodexTokens {
     pub access_token:    String,
@@ -87,6 +87,9 @@ struct TokenResponse {
     expires_in:    Option<u64>,
 }
 
+/// Path to the Codex OAuth token file.
+fn token_file_path() -> std::path::PathBuf { rara_paths::data_dir().join(CODEX_TOKEN_FILENAME) }
+
 /// Construct the full authorization URL for redirecting the user.
 ///
 /// Uses the fixed redirect URI `http://localhost:1455/auth/callback` that is
@@ -107,39 +110,40 @@ pub fn build_auth_url(state: &str, code_challenge: &str) -> Result<String, Strin
     Ok(url.into())
 }
 
-/// Load persisted Codex tokens from credential store.
-pub async fn load_tokens(store: &dyn KeyringStore) -> Result<Option<StoredCodexTokens>, String> {
-    let Some(raw) = store
-        .load(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT)
-        .await
-        .map_err(|e| format!("credential store load failed: {e}"))?
-    else {
-        return Ok(None);
-    };
-    serde_json::from_str(&raw)
-        .map(Some)
-        .map_err(|e| e.to_string())
+/// Load persisted Codex tokens from the token file.
+pub async fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
+    let path = token_file_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map(Some)
+            .map_err(|e| format!("failed to parse {}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("failed to read {}: {e}", path.display())),
+    }
 }
 
-/// Save Codex tokens to credential store.
-pub async fn save_tokens(
-    store: &dyn KeyringStore,
-    tokens: &StoredCodexTokens,
-) -> Result<(), String> {
-    let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
-    store
-        .save(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT, &raw)
+/// Save Codex tokens to the token file.
+pub async fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
+    let path = token_file_path();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("failed to create dir {}: {e}", parent.display()))?;
+    }
+    let raw = serde_json::to_string_pretty(tokens).map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, raw)
         .await
-        .map_err(|e| format!("credential store save failed: {e}"))
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
-/// Delete persisted Codex tokens from credential store.
-pub async fn clear_tokens(store: &dyn KeyringStore) -> Result<(), String> {
-    let _ = store
-        .delete(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT)
-        .await
-        .map_err(|e| format!("credential store delete failed: {e}"))?;
-    Ok(())
+/// Delete persisted Codex tokens.
+pub async fn clear_tokens() -> Result<(), String> {
+    let path = token_file_path();
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("failed to delete {}: {e}", path.display())),
+    }
 }
 
 /// Load pending OAuth state from in-process temporary storage.
@@ -279,6 +283,47 @@ pub fn frontend_base_url() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// CodexCredentialResolver
+// ---------------------------------------------------------------------------
+
+/// Dynamic credential resolver for OpenAI via Codex OAuth.
+///
+/// On each call to `resolve`, loads the current token from disk,
+/// refreshes it if expired, and returns a fresh `LlmCredential`.
+pub struct CodexCredentialResolver;
+
+#[async_trait]
+impl LlmCredentialResolver for CodexCredentialResolver {
+    async fn resolve(&self) -> rara_kernel::error::Result<LlmCredential> {
+        use snafu::OptionExt as _;
+
+        let mut tokens = load_tokens()
+            .await
+            .map_err(|e| rara_kernel::error::KernelError::Provider { message: e.into() })?
+            .context(rara_kernel::error::ProviderNotConfiguredSnafu)?;
+
+        if should_refresh_token(tokens.expires_at_unix) {
+            match refresh_tokens(&tokens).await {
+                Ok(refreshed) => {
+                    if let Err(e) = save_tokens(&refreshed).await {
+                        tracing::warn!("failed to persist refreshed codex tokens: {e}");
+                    }
+                    tokens = refreshed;
+                }
+                Err(e) => {
+                    tracing::warn!("codex token refresh failed, using existing token: {e}");
+                }
+            }
+        }
+
+        Ok(LlmCredential {
+            base_url: "https://api.openai.com/v1".to_owned(),
+            api_key:  tokens.access_token,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ephemeral callback server
 // ---------------------------------------------------------------------------
 
@@ -288,7 +333,7 @@ pub fn frontend_base_url() -> String {
 ///
 /// If a previous callback server is still running it is shut down first so
 /// that the port is freed. This makes repeated `/start` calls safe.
-pub async fn start_callback_server(store: KeyringStoreRef) -> Result<(), String> {
+pub async fn start_callback_server() -> Result<(), String> {
     // Shut down any previous callback server.
     let old_cancel = CALLBACK_SHUTDOWN.lock().ok().and_then(|mut g| g.take());
     if let Some(old) = old_cancel {
@@ -304,11 +349,9 @@ pub async fn start_callback_server(store: KeyringStoreRef) -> Result<(), String>
         "/auth/callback",
         axum::routing::get({
             let cancel = cancel_for_handler;
-            let store = store.clone();
             move |query: axum::extract::Query<CallbackQuery>| {
                 let cancel = cancel.clone();
-                let store = store.clone();
-                async move { handle_callback(query, cancel, store).await }
+                async move { handle_callback(query, cancel).await }
             }
         }),
     );
@@ -349,13 +392,12 @@ struct CallbackQuery {
 async fn handle_callback(
     axum::extract::Query(query): axum::extract::Query<CallbackQuery>,
     cancel: tokio_util::sync::CancellationToken,
-    store: KeyringStoreRef,
 ) -> axum::response::Redirect {
     let frontend = frontend_base_url();
     let err_url = format!("{frontend}/settings?section=providers&codex_oauth=error");
     let ok_url = format!("{frontend}/settings?section=providers&codex_oauth=success");
 
-    let redirect_url = match handle_callback_inner(&query, &*store).await {
+    let redirect_url = match handle_callback_inner(&query).await {
         Ok(()) => ok_url,
         Err(e) => {
             tracing::warn!(error = %e, "codex oauth callback failed");
@@ -369,10 +411,7 @@ async fn handle_callback(
     axum::response::Redirect::to(&redirect_url)
 }
 
-async fn handle_callback_inner(
-    query: &CallbackQuery,
-    store: &dyn KeyringStore,
-) -> Result<(), String> {
+async fn handle_callback_inner(query: &CallbackQuery) -> Result<(), String> {
     if let Some(ref oauth_err) = query.error {
         return Err(format!("provider returned error: {oauth_err}"));
     }
@@ -387,7 +426,7 @@ async fn handle_callback_inner(
         .ok_or_else(|| "missing authorization code".to_owned())?;
 
     let tokens = exchange_authorization_code(code, &pending.code_verifier).await?;
-    save_tokens(store, &tokens).await?;
+    save_tokens(&tokens).await?;
     clear_pending_oauth()?;
 
     tracing::info!("codex oauth tokens saved successfully");

@@ -97,18 +97,17 @@ pub(crate) async fn boot(
 
     // -- LLM driver registry -----------------------------------------------
 
-    let driver_registry = build_driver_registry(settings_provider.clone(), &*credential_store)
+    let driver_registry = build_driver_registry(settings_provider.clone())
         .await
         .whatever_context("Failed to initialize LLM driver registry")?;
 
     {
         let driver_registry_ref = driver_registry.clone();
         let settings_ref = settings_provider.clone();
-        let credential_store_ref = credential_store.clone();
         tokio::spawn(async move {
             let mut rx = settings_ref.subscribe();
             while rx.changed().await.is_ok() {
-                match build_driver_registry(settings_ref.clone(), &*credential_store_ref).await {
+                match build_driver_registry(settings_ref.clone()).await {
                     Ok(updated) => {
                         driver_registry_ref.update(updated.as_ref());
                         info!("LLM driver registry reloaded from settings");
@@ -285,7 +284,6 @@ pub(crate) async fn boot(
 /// runtime settings.
 async fn build_driver_registry(
     settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    credential_store: &dyn rara_keyring_store::KeyringStore,
 ) -> anyhow::Result<Arc<rara_kernel::llm::DriverRegistry>> {
     use rara_domain_shared::settings::keys;
     use rara_kernel::llm::{DriverRegistry, OpenAiDriver};
@@ -386,15 +384,15 @@ async fn build_driver_registry(
         }
     }
 
-    // -- codex (OpenAI via OAuth) — special-cased -----------------------------
+    // -- codex (OpenAI via OAuth) — dynamic credential resolution -------------
 
-    match rara_codex_oauth::load_tokens(credential_store).await {
-        Ok(Some(tokens)) => {
+    match rara_codex_oauth::load_tokens().await {
+        Ok(Some(_)) => {
             registry.register_driver(
                 "codex",
-                Arc::new(OpenAiDriver::new(
-                    "https://api.openai.com/v1",
-                    tokens.access_token,
+                Arc::new(OpenAiDriver::with_credential_resolver(
+                    Arc::new(rara_codex_oauth::CodexCredentialResolver),
+                    OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
                 )),
             );
         }
