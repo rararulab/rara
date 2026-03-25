@@ -169,6 +169,11 @@ impl OpenAiDriver {
     /// request.
     ///
     /// Used for providers with expiring tokens (e.g. OAuth).
+    ///
+    /// **Note:** `models_cache` is shared across all requests and never
+    /// invalidated. This assumes the resolver always returns the same
+    /// `base_url` — if a future resolver can switch providers, the cache
+    /// must be reconsidered.
     pub fn with_credential_resolver(
         resolver: LlmCredentialResolverRef,
         sse_idle_timeout: Duration,

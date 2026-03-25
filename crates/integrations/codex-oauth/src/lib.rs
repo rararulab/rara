@@ -133,7 +133,19 @@ pub async fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(tokens).map_err(|e| e.to_string())?;
     tokio::fs::write(&path, raw)
         .await
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+
+    // Restrict to owner-only read/write — tokens are sensitive credentials.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        tokio::fs::set_permissions(&path, perms)
+            .await
+            .map_err(|e| format!("failed to set permissions on {}: {e}", path.display()))?;
+    }
+
+    Ok(())
 }
 
 /// Delete persisted Codex tokens.
@@ -311,7 +323,10 @@ impl LlmCredentialResolver for CodexCredentialResolver {
                     tokens = refreshed;
                 }
                 Err(e) => {
-                    tracing::warn!("codex token refresh failed, using existing token: {e}");
+                    tracing::warn!(
+                        expires_at_unix = ?tokens.expires_at_unix,
+                        "codex token refresh failed, using existing token: {e}",
+                    );
                 }
             }
         }
