@@ -256,7 +256,11 @@ impl OpenAiDriver {
         }
 
         let response = builder.send().await.map_err(|e| KernelError::Provider {
-            message: format!("HTTP request to {path} failed: {e}").into(),
+            message: format!(
+                "HTTP request to {path} failed: {}",
+                crate::error::format_error_chain(&e)
+            )
+            .into(),
         })?;
 
         if response.status().is_success() {
@@ -308,7 +312,11 @@ impl OpenAiDriver {
                 .send()
                 .await
                 .map_err(|e| KernelError::Provider {
-                    message: format!("LLM provider request failed: {e}").into(),
+                    message: format!(
+                        "LLM provider request failed: {}",
+                        crate::error::format_error_chain(&e)
+                    )
+                    .into(),
                 })?;
 
             if response.status().is_success() {
@@ -505,7 +513,11 @@ impl LlmDriver for OpenAiDriver {
             match maybe_event {
                 Ok(Some(event_result)) => {
                     let event = event_result.map_err(|e| KernelError::Provider {
-                        message: format!("SSE stream error: {e}").into(),
+                        message: format!(
+                            "SSE stream error: {}",
+                            crate::error::format_error_chain(&e)
+                        )
+                        .into(),
                     })?;
                     if event.data == "[DONE]" {
                         break;
