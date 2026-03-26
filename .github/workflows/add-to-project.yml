@@ -1,5 +1,4 @@
 # Auto-add issues and PRs to org project board
-# Copy to: .github/workflows/add-to-project.yml
 name: Add to project
 
 on:
@@ -10,8 +9,11 @@ on:
 
 jobs:
   add-to-project:
-    uses: rararulab/workflows/.github/workflows/add-to-project.yml@main
-    with:
-      project-url: https://github.com/orgs/rararulab/projects/1
-    secrets:
-      ADD_TO_PROJECT_TOKEN: ${{ secrets.ADD_TO_PROJECT_TOKEN }}
+    name: Add to project board
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add to project
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/rararulab/projects/1
+          github-token: ${{ secrets.ADD_TO_PROJECT_TOKEN }}
