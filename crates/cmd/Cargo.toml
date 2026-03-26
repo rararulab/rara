@@ -33,9 +33,9 @@ crossterm.workspace = true
 eventsource-stream.workspace = true
 futures.workspace = true
 indexmap.workspace = true
+open.workspace = true
 rara-app = { workspace = true }
 rara-channels = { workspace = true }
-open.workspace = true
 rara-codex-oauth.workspace = true
 rara-kernel = { workspace = true }
 rara-paths.workspace = true
@@ -47,8 +47,8 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 shadow-rs = { workspace = true }
-sqlx.workspace = true
 snafu.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

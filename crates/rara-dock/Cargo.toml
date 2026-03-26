@@ -13,12 +13,12 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+parking_lot.workspace = true
 rara-kernel = { workspace = true }
 rara-tool-macro.workspace = true
 schemars.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
-parking_lot.workspace = true
 snafu = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
