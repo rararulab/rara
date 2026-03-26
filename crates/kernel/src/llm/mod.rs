@@ -32,7 +32,7 @@ pub use driver::{
     LlmCredential, LlmCredentialResolver, LlmCredentialResolverRef, LlmDriver, LlmDriverRef,
     LlmEmbedder, LlmEmbedderRef, LlmModelLister, LlmModelListerRef,
 };
-pub use openai::OpenAiDriver;
+pub use openai::{OpenAiDriver, is_local_url};
 pub use registry::{DriverRegistry, DriverRegistryRef, ProviderModelConfig};
 pub use stream::StreamDelta;
 pub use types::*;
