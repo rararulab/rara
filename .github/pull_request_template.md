@@ -19,7 +19,7 @@
 ## Component
 
 <!-- Add the component label that best matches the area you changed -->
-<!-- `core` · `backend` · `ui` · `extension` -->
+<!-- `core` · `backend` · `ui` · `extension` · `ci` -->
 
 ## Closes
 
