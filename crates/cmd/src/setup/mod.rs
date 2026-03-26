@@ -1,6 +1,7 @@
 //! Interactive configuration wizard for rara.
 
 mod db;
+mod llm;
 mod prompt;
 
 use clap::Args;
@@ -42,11 +43,10 @@ impl SetupCmd {
 
         let _db_result = db::setup_database(mode).await?;
 
-        // Suppress unused warnings until subsequent tasks wire these in.
-        drop(existing_config);
+        let _llm_result =
+            llm::setup_llm(existing_config.as_ref().and_then(|c| c.llm.as_ref()), mode).await?;
 
         // TODO: setup steps will be added in subsequent tasks
-        // llm::setup_llm(...)
         // telegram::setup_telegram(...)
         // user::setup_users(...)
         // stt::setup_stt(...)
