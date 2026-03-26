@@ -245,11 +245,18 @@ pub(crate) async fn boot(
             .await
             .unwrap_or_else(|| "openrouter".to_owned())
     };
+    let default_base_url_key = format!("llm.providers.{default_provider}.base_url");
+    let default_no_proxy = settings_provider
+        .get(&default_base_url_key)
+        .await
+        .as_deref()
+        .map_or(false, rara_kernel::llm::is_local_url);
     let default_driver: Arc<rara_kernel::llm::OpenAiDriver> =
         Arc::new(rara_kernel::llm::OpenAiDriver::from_settings(
             settings_provider.clone(),
             &default_provider,
             rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+            default_no_proxy,
         ));
     let model_lister: rara_kernel::llm::LlmModelListerRef = default_driver.clone();
     let embedder: rara_kernel::llm::LlmEmbedderRef = default_driver;
@@ -319,12 +326,17 @@ async fn build_driver_registry(
         .collect();
 
     for &name in &provider_names {
+        let base_url_key = format!("llm.providers.{name}.base_url");
+        let no_proxy = all_settings
+            .get(&base_url_key)
+            .map_or(false, |url| rara_kernel::llm::is_local_url(url));
         registry.register_driver(
             name,
             Arc::new(OpenAiDriver::from_settings(
                 settings.clone(),
                 name,
                 OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+                no_proxy,
             )),
         );
 

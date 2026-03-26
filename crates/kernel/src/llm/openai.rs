@@ -17,7 +17,7 @@
 //! Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 //! like `reasoning_content` that `async-openai` doesn't expose.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -80,6 +80,35 @@ struct ResolvedConfig {
     api_key:  String,
 }
 
+/// Check whether a URL points to a local/private-network address.
+///
+/// Returns `true` for loopback (`127.x.x.x`, `::1`), link-local, and
+/// RFC 1918 private ranges (`10.x`, `172.16-31.x`, `192.168.x`) as well as
+/// `localhost`.  Used to decide whether the reqwest client should bypass
+/// system proxy settings — proxies typically cannot route to these addresses.
+pub fn is_local_url(url: &str) -> bool {
+    let host = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url)
+        // Remove path
+        .split('/')
+        .next()
+        .unwrap_or("")
+        // Remove port
+        .rsplit_once(':')
+        .map_or(url, |(host, _)| host);
+
+    if host == "localhost" {
+        return true;
+    }
+
+    host.parse::<IpAddr>().is_ok_and(|ip| match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback(),
+    })
+}
+
 /// Maximum number of retries for rate-limited (429) requests.
 const RATE_LIMIT_MAX_RETRIES: u32 = 4;
 /// Initial backoff delay for rate-limited retries.
@@ -99,12 +128,18 @@ impl OpenAiDriver {
 
     /// Build a reqwest client for non-streaming requests (5-minute total
     /// timeout).
-    fn build_http_client() -> reqwest::Client {
-        reqwest::Client::builder()
+    ///
+    /// When `no_proxy` is true, system proxy settings are bypassed entirely.
+    /// This is needed for local/private-network providers where a configured
+    /// HTTP proxy would incorrectly intercept the request.
+    fn build_http_client(no_proxy: bool) -> reqwest::Client {
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(300))
-            .build()
-            .expect("failed to build HTTP client")
+            .timeout(Duration::from_secs(300));
+        if no_proxy {
+            builder = builder.no_proxy();
+        }
+        builder.build().expect("failed to build HTTP client")
     }
 
     /// Build a reqwest client for streaming requests.
@@ -112,16 +147,23 @@ impl OpenAiDriver {
     /// No total timeout — the per-event SSE idle timeout handles stall
     /// detection. A global timeout would incorrectly kill long-running
     /// streams with extended thinking or large context.
-    fn build_stream_client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
+    ///
+    /// When `no_proxy` is true, system proxy settings are bypassed entirely.
+    fn build_stream_client(no_proxy: bool) -> reqwest::Client {
+        let mut builder = reqwest::Client::builder().connect_timeout(Duration::from_secs(10));
+        if no_proxy {
+            builder = builder.no_proxy();
+        }
+        builder
             .build()
             .expect("failed to build streaming HTTP client")
     }
 
     /// Create a new driver targeting the given API base URL.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self::with_idle_timeout(base_url, api_key, Self::DEFAULT_SSE_IDLE_TIMEOUT)
+        let base_url = base_url.into();
+        let no_proxy = is_local_url(&base_url);
+        Self::with_idle_timeout_inner(base_url, api_key, Self::DEFAULT_SSE_IDLE_TIMEOUT, no_proxy)
     }
 
     /// Create a new driver with an explicit SSE idle timeout.
@@ -130,9 +172,20 @@ impl OpenAiDriver {
         api_key: impl Into<String>,
         sse_idle_timeout: Duration,
     ) -> Self {
+        let base_url = base_url.into();
+        let no_proxy = is_local_url(&base_url);
+        Self::with_idle_timeout_inner(base_url, api_key, sse_idle_timeout, no_proxy)
+    }
+
+    fn with_idle_timeout_inner(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        sse_idle_timeout: Duration,
+        no_proxy: bool,
+    ) -> Self {
         Self {
-            client: Self::build_http_client(),
-            stream_client: Self::build_stream_client(),
+            client: Self::build_http_client(no_proxy),
+            stream_client: Self::build_stream_client(no_proxy),
             config_source: OpenAiDriverConfigSource::Static {
                 base_url: base_url.into(),
                 api_key:  api_key.into(),
@@ -147,14 +200,18 @@ impl OpenAiDriver {
     ///
     /// Looks up `llm.providers.{provider_name}.base_url` and
     /// `llm.providers.{provider_name}.api_key` from the settings provider.
+    ///
+    /// `no_proxy` bypasses system proxy for local/private-network providers.
+    /// Use [`is_local_url`] on the provider's base URL to determine this.
     pub fn from_settings(
         settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         provider_name: impl Into<String>,
         sse_idle_timeout: Duration,
+        no_proxy: bool,
     ) -> Self {
         Self {
-            client: Self::build_http_client(),
-            stream_client: Self::build_stream_client(),
+            client: Self::build_http_client(no_proxy),
+            stream_client: Self::build_stream_client(no_proxy),
             config_source: OpenAiDriverConfigSource::SettingsBacked {
                 settings,
                 provider_name: provider_name.into(),
@@ -178,9 +235,10 @@ impl OpenAiDriver {
         resolver: LlmCredentialResolverRef,
         sse_idle_timeout: Duration,
     ) -> Self {
+        // Dynamic resolvers typically point to cloud providers, so proxy is fine.
         Self {
-            client: Self::build_http_client(),
-            stream_client: Self::build_stream_client(),
+            client: Self::build_http_client(false),
+            stream_client: Self::build_stream_client(false),
             config_source: OpenAiDriverConfigSource::Dynamic { resolver },
             sse_idle_timeout,
             models_cache: tokio::sync::OnceCell::new(),
