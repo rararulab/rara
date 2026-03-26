@@ -44,11 +44,11 @@ impl SttService {
     /// `"audio/mpeg"`). The file extension is inferred from the MIME type
     /// for the multipart form field.
     #[instrument(skip_all, fields(audio_len = audio_data.len(), mime_type))]
-    pub async fn transcribe(&self, audio_data: &[u8], mime_type: &str) -> anyhow::Result<String> {
+    pub async fn transcribe(&self, audio_data: Vec<u8>, mime_type: &str) -> anyhow::Result<String> {
         let ext = extension_from_mime(mime_type);
         let filename = format!("voice.{ext}");
 
-        let file_part = multipart::Part::bytes(audio_data.to_vec())
+        let file_part = multipart::Part::bytes(audio_data)
             .file_name(filename)
             .mime_str(mime_type)
             .context("invalid MIME type")?;

@@ -268,7 +268,7 @@ pub async fn start_with_options(
 
     // Validate STT config: if section is present, base_url must be non-empty.
     if let Some(ref stt) = config.stt {
-        assert!(
+        snafu::ensure_whatever!(
             !stt.base_url.trim().is_empty(),
             "stt.base_url is required when stt section is configured"
         );

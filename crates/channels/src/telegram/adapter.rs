@@ -2702,38 +2702,36 @@ async fn handle_update(
 
         if let (Some(file_id), Some(stt)) = (file_id, stt_service) {
             match download_voice_file(bot, file_id, mime_hint).await {
-                Ok((audio_data, mime_type)) => {
-                    match stt.transcribe(&audio_data, &mime_type).await {
-                        Ok(text) if !text.trim().is_empty() => {
-                            tracing::info!(len = text.len(), "voice message transcribed");
-                            let combined = match raw.content {
-                                MessageContent::Text(ref caption) if !caption.trim().is_empty() => {
-                                    format!("{caption}\n\n{text}")
-                                }
-                                _ => text,
-                            };
-                            RawPlatformMessage {
-                                content: MessageContent::Text(combined),
-                                ..raw
+                Ok((audio_data, mime_type)) => match stt.transcribe(audio_data, &mime_type).await {
+                    Ok(text) if !text.trim().is_empty() => {
+                        tracing::info!(len = text.len(), "voice message transcribed");
+                        let combined = match raw.content {
+                            MessageContent::Text(ref caption) if !caption.trim().is_empty() => {
+                                format!("{caption}\n\n{text}")
                             }
-                        }
-                        Ok(_) => {
-                            tracing::warn!("STT returned empty transcription, skipping");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "STT transcription failed, skipping voice message");
-                            return;
+                            _ => text,
+                        };
+                        RawPlatformMessage {
+                            content: MessageContent::Text(combined),
+                            ..raw
                         }
                     }
-                }
+                    Ok(_) => {
+                        tracing::warn!("STT returned empty transcription, skipping");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "STT transcription failed, skipping voice message");
+                        return;
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to download voice file, skipping");
                     return;
                 }
             }
         } else {
-            tracing::debug!("voice message received but no STT service configured, skipping");
+            tracing::warn!("voice message received but no STT service configured, skipping");
             return;
         }
     } else {
@@ -3838,6 +3836,10 @@ async fn download_and_compress_photo(
     Ok((media_type, b64, original_path, compressed_path))
 }
 
+/// Maximum voice file size (25 MB). Telegram limits normal users to 20 MB,
+/// but premium users can send larger files.
+const MAX_VOICE_FILE_SIZE: u32 = 25 * 1024 * 1024;
+
 /// Download a voice/audio file from Telegram and return the raw bytes + MIME
 /// type.
 async fn download_voice_file(
@@ -3848,6 +3850,15 @@ async fn download_voice_file(
     use teloxide::net::Download;
 
     let file = bot.get_file(file_id.clone()).send().await?;
+
+    // Reject files that exceed the size limit.
+    if file.size > MAX_VOICE_FILE_SIZE {
+        anyhow::bail!(
+            "voice file too large: {} bytes (max {MAX_VOICE_FILE_SIZE} bytes)",
+            file.size,
+        );
+    }
+
     let mut buf = Vec::new();
     bot.download_file(&file.path, &mut buf).await?;
 
