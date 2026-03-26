@@ -907,6 +907,8 @@ pub struct TelegramAdapter {
     /// User question manager for the ask-user tool — when set, the adapter
     /// subscribes to new questions and resolves them via reply-to messages.
     user_question_manager: Option<UserQuestionManagerRef>,
+    /// Optional STT service for transcribing voice messages to text.
+    stt_service:           Option<rara_kernel::stt::SttService>,
 }
 
 impl TelegramAdapter {
@@ -932,6 +934,7 @@ impl TelegramAdapter {
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
             user_question_manager: None,
+            stt_service: None,
         }
     }
 
@@ -1042,6 +1045,13 @@ impl TelegramAdapter {
     #[must_use]
     pub fn with_user_question_manager(mut self, mgr: UserQuestionManagerRef) -> Self {
         self.user_question_manager = Some(mgr);
+        self
+    }
+
+    /// Attach an STT service for voice message transcription.
+    #[must_use]
+    pub fn with_stt_service(mut self, stt: Option<rara_kernel::stt::SttService>) -> Self {
+        self.stt_service = stt;
         self
     }
 
