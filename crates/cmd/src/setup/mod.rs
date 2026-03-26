@@ -6,6 +6,7 @@ mod prompt;
 mod stt;
 mod telegram;
 mod user;
+mod writer;
 
 use clap::Args;
 pub use prompt::SetupMode;
@@ -44,26 +45,55 @@ impl SetupCmd {
             (None, SetupMode::Fresh)
         };
 
-        let _db_result = db::setup_database(mode).await?;
+        let db_result = db::setup_database(mode).await?;
 
-        let _llm_result =
+        let llm_result =
             llm::setup_llm(existing_config.as_ref().and_then(|c| c.llm.as_ref()), mode).await?;
 
-        let _telegram_result = telegram::setup_telegram(
+        let telegram_result = telegram::setup_telegram(
             existing_config.as_ref().and_then(|c| c.telegram.as_ref()),
             mode,
         )
         .await?;
 
-        let _user_result =
+        let user_result =
             user::setup_users(existing_config.as_ref().map_or(0, |c| c.users.len()), mode).await?;
 
-        let _stt_result = stt::setup_stt(mode).await?;
+        let stt_result = stt::setup_stt(mode).await?;
 
-        // TODO: remaining setup steps
-        // writer::write_config(...)
+        // Load base config for merging (FillMissing/Modify mode)
+        let base_yaml = if mode == SetupMode::Fresh {
+            None
+        } else {
+            std::fs::read_to_string(config_path)
+                .ok()
+                .and_then(|s| serde_yaml::from_str(&s).ok())
+        };
 
-        println!("\n=== Setup complete ===");
+        // Assemble final config
+        let config_value = writer::assemble_config(
+            base_yaml,
+            db_result.as_ref().map(|d| d.database_url.as_str()),
+            llm_result.as_ref(),
+            telegram_result.as_ref(),
+            user_result.as_deref(),
+            stt_result.as_ref(),
+        )?;
+
+        let yaml = writer::to_yaml(&config_value)?;
+
+        // Preview with secrets masked
+        println!("\n═══ Config Preview ═══");
+        println!("{}", writer::mask_secrets(&yaml));
+
+        // Confirm and write
+        if prompt::confirm("Write config?", true) {
+            writer::write_config(config_path, &yaml)?;
+        } else {
+            println!("Aborted. Config not written.");
+        }
+
+        println!("\n═══ Setup complete ═══");
         Ok(())
     }
 }
