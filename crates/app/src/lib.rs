@@ -95,6 +95,10 @@ pub struct AppConfig {
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knowledge:              Option<flatten::KnowledgeConfig>,
+    /// Speech-to-Text configuration (optional).
+    /// When present, `base_url` is required — startup fails if missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt:                    Option<rara_kernel::stt::SttConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:                Option<GatewayConfig>,
@@ -261,6 +265,20 @@ pub async fn start_with_options(
     options: StartOptions,
 ) -> Result<AppHandle, Whatever> {
     info!("Initializing job application");
+
+    // Validate STT config: if section is present, base_url must be non-empty.
+    if let Some(ref stt) = config.stt {
+        assert!(
+            !stt.base_url.trim().is_empty(),
+            "stt.base_url is required when stt section is configured"
+        );
+        info!(base_url = %stt.base_url, "STT service configured");
+    }
+
+    let _stt_service = config
+        .stt
+        .as_ref()
+        .map(rara_kernel::stt::SttService::from_config);
 
     let db_store = init_infra(&config)
         .await
