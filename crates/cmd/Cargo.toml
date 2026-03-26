@@ -46,12 +46,14 @@ rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shadow-rs = { workspace = true }
+sqlx.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 ulid.workspace = true
 uuid.workspace = true
+yunara-store.workspace = true
 
 [build-dependencies]
 shadow-rs = { workspace = true }
