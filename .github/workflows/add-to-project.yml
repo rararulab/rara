@@ -10,7 +10,7 @@ on:
 jobs:
   add-to-project:
     name: Add to project board
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     steps:
       - name: Add to project
         uses: actions/add-to-project@v1.0.2
