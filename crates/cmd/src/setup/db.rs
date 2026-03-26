@@ -38,23 +38,25 @@ pub async fn setup_database(mode: SetupMode) -> Result<Option<DbResult>, Whateve
         return Ok(None);
     }
 
-    let url = prompt::ask("SQLite URL", Some(&default_url));
+    loop {
+        let url = prompt::ask("SQLite URL", Some(&default_url));
 
-    match validate_database(&url).await {
-        Ok(count) => {
-            prompt::print_ok(&format!("connected, {count} migrations applied"));
-            Ok(Some(DbResult {
-                database_url:    url,
-                migration_count: count,
-            }))
-        }
-        Err(e) => {
-            prompt::print_err(&format!("database setup failed: {e}"));
-            let choice = prompt::ask_choice("What to do?", &["Retry", "Skip", "Exit"]);
-            match choice {
-                0 => Box::pin(setup_database(mode)).await,
-                1 => Ok(None),
-                _ => std::process::exit(1),
+        match validate_database(&url).await {
+            Ok(count) => {
+                prompt::print_ok(&format!("connected, {count} migrations applied"));
+                return Ok(Some(DbResult {
+                    database_url:    url,
+                    migration_count: count,
+                }));
+            }
+            Err(e) => {
+                prompt::print_err(&format!("database setup failed: {e}"));
+                let choice = prompt::ask_choice("What to do?", &["Retry", "Skip", "Exit"]);
+                match choice {
+                    0 => continue,
+                    1 => return Ok(None),
+                    _ => std::process::exit(1),
+                }
             }
         }
     }

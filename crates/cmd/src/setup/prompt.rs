@@ -60,22 +60,45 @@ pub fn ask(prompt: &str, default: Option<&str>) -> String {
 }
 
 /// Read a password from stdin (no echo). Falls back to plain `ask` if raw mode
-/// fails.
+/// is unavailable.
 pub fn ask_password(prompt: &str) -> String {
-    use crossterm::terminal;
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyModifiers},
+        terminal,
+    };
 
     print!("{prompt}: ");
     io::stdout().flush().expect("flush stdout");
 
-    let was_raw = terminal::enable_raw_mode().is_ok();
-    let mut input = String::new();
-    // In raw mode, read_line still works but won't echo.
-    io::stdin().read_line(&mut input).expect("read stdin");
-    if was_raw {
-        let _ = terminal::disable_raw_mode();
+    if terminal::enable_raw_mode().is_err() {
+        // Fallback: plain read (will echo).
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("read stdin");
+        println!();
+        return input.trim().to_owned();
     }
+
+    let mut buf = String::new();
+    loop {
+        if let Ok(Event::Key(key)) = event::read() {
+            match key.code {
+                KeyCode::Enter => break,
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let _ = terminal::disable_raw_mode();
+                    std::process::exit(130);
+                }
+                KeyCode::Backspace => {
+                    buf.pop();
+                }
+                KeyCode::Char(c) => buf.push(c),
+                _ => {}
+            }
+        }
+    }
+
+    let _ = terminal::disable_raw_mode();
     println!();
-    input.trim().to_owned()
+    buf
 }
 
 /// Present numbered choices and return selected index (0-based).

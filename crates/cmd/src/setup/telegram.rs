@@ -41,21 +41,23 @@ pub async fn setup_telegram(
     }
 
     let default_token = existing.and_then(|t| t.bot_token.as_deref());
-    let bot_token = prompt::ask("Bot Token (from @BotFather)", default_token);
 
-    // Validate bot token via Telegram getMe API
-    match validate_bot_token(&bot_token).await {
-        Ok(username) => {
-            prompt::print_ok(&format!("bot verified: @{username}"));
-        }
-        Err(e) => {
-            prompt::print_err(&format!("invalid bot token: {e}"));
-            if prompt::confirm("Retry?", true) {
-                return Box::pin(setup_telegram(existing, mode)).await;
+    let bot_token = loop {
+        let token = prompt::ask("Bot Token (from @BotFather)", default_token);
+
+        match validate_bot_token(&token).await {
+            Ok(username) => {
+                prompt::print_ok(&format!("bot verified: @{username}"));
+                break token;
             }
-            return Ok(None);
+            Err(e) => {
+                prompt::print_err(&format!("invalid bot token: {e}"));
+                if !prompt::confirm("Retry?", true) {
+                    return Ok(None);
+                }
+            }
         }
-    }
+    };
 
     let default_chat = existing.and_then(|t| t.chat_id.as_deref());
     let chat_id = prompt::ask("Primary Chat ID", default_chat);

@@ -31,13 +31,8 @@ pub struct SttResult {
 /// STT is entirely optional — the wizard only enters this section if the user
 /// explicitly opts in.  A best-effort connectivity check is performed against
 /// the whisper-server URL.
-pub async fn setup_stt(mode: SetupMode) -> Result<Option<SttResult>, Whatever> {
+pub async fn setup_stt(_mode: SetupMode) -> Result<Option<SttResult>, Whatever> {
     prompt::print_step("STT (optional)");
-
-    // STT config type lives on the STT feature branch and may not be available
-    // on main yet, so we cannot detect existing config.  In FillMissing mode we
-    // still offer the step since we have no way to know if it was configured.
-    let _ = mode;
 
     if !prompt::confirm("Configure speech-to-text?", false) {
         return Ok(None);

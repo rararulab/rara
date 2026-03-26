@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use snafu::{FromString, ResultExt, Whatever};
+use snafu::{ResultExt, Whatever};
 
 use super::prompt;
 
@@ -34,34 +34,33 @@ pub fn assemble_config(
 ) -> Result<serde_yaml::Value, Whatever> {
     let mut root = base_yaml.unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
 
-    let map = root
-        .as_mapping_mut()
-        .ok_or(snafu::Whatever::without_source(
-            "config root is not a mapping".into(),
-        ))?;
+    let map = match root.as_mapping_mut() {
+        Some(m) => m,
+        None => snafu::whatever!("config root is not a mapping"),
+    };
 
     // Database
     if let Some(url) = db_url {
         let mut db = serde_yaml::Mapping::new();
-        db.insert(y_str("database_url"), y_str_val(url));
+        db.insert(y_str("database_url"), y_str(url));
         map.insert(y_str("database"), serde_yaml::Value::Mapping(db));
     }
 
     // LLM
     if let Some(llm) = llm {
         let mut provider = serde_yaml::Mapping::new();
-        provider.insert(y_str("base_url"), y_str_val(&llm.base_url));
-        provider.insert(y_str("api_key"), y_str_val(&llm.api_key));
-        provider.insert(y_str("default_model"), y_str_val(&llm.default_model));
+        provider.insert(y_str("base_url"), y_str(&llm.base_url));
+        provider.insert(y_str("api_key"), y_str(&llm.api_key));
+        provider.insert(y_str("default_model"), y_str(&llm.default_model));
 
         let mut providers = serde_yaml::Mapping::new();
         providers.insert(
-            y_str_val(&llm.provider_name),
+            y_str(&llm.provider_name),
             serde_yaml::Value::Mapping(provider),
         );
 
         let mut llm_section = serde_yaml::Mapping::new();
-        llm_section.insert(y_str("default_provider"), y_str_val(&llm.provider_name));
+        llm_section.insert(y_str("default_provider"), y_str(&llm.provider_name));
         llm_section.insert(y_str("providers"), serde_yaml::Value::Mapping(providers));
 
         map.insert(y_str("llm"), serde_yaml::Value::Mapping(llm_section));
@@ -70,8 +69,8 @@ pub fn assemble_config(
     // Telegram
     if let Some(tg) = telegram {
         let mut tg_section = serde_yaml::Mapping::new();
-        tg_section.insert(y_str("bot_token"), y_str_val(&tg.bot_token));
-        tg_section.insert(y_str("chat_id"), y_str_val(&tg.chat_id));
+        tg_section.insert(y_str("bot_token"), y_str(&tg.bot_token));
+        tg_section.insert(y_str("chat_id"), y_str(&tg.chat_id));
         map.insert(y_str("telegram"), serde_yaml::Value::Mapping(tg_section));
     }
 
@@ -81,13 +80,13 @@ pub fn assemble_config(
             .iter()
             .map(|u| {
                 let mut user_map = serde_yaml::Mapping::new();
-                user_map.insert(y_str("name"), y_str_val(&u.name));
-                user_map.insert(y_str("role"), y_str_val(&u.role));
+                user_map.insert(y_str("name"), y_str(&u.name));
+                user_map.insert(y_str("role"), y_str(&u.role));
 
                 if let Some(ref tg_id) = u.telegram_user_id {
                     let mut platform = serde_yaml::Mapping::new();
-                    platform.insert(y_str("type"), y_str_val("telegram"));
-                    platform.insert(y_str("user_id"), y_str_val(tg_id));
+                    platform.insert(y_str("type"), y_str("telegram"));
+                    platform.insert(y_str("user_id"), y_str(tg_id));
                     user_map.insert(
                         y_str("platforms"),
                         serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(platform)]),
@@ -103,10 +102,10 @@ pub fn assemble_config(
     // STT
     if let Some(stt) = stt {
         let mut stt_section = serde_yaml::Mapping::new();
-        stt_section.insert(y_str("base_url"), y_str_val(&stt.base_url));
-        stt_section.insert(y_str("model"), y_str_val(&stt.model));
+        stt_section.insert(y_str("base_url"), y_str(&stt.base_url));
+        stt_section.insert(y_str("model"), y_str(&stt.model));
         if let Some(ref lang) = stt.language {
-            stt_section.insert(y_str("language"), y_str_val(lang));
+            stt_section.insert(y_str("language"), y_str(lang));
         }
         map.insert(y_str("stt"), serde_yaml::Value::Mapping(stt_section));
     }
@@ -162,8 +161,5 @@ pub fn write_config(config_path: &Path, yaml: &str) -> Result<(), Whatever> {
     Ok(())
 }
 
-/// Helper: create a YAML string key.
+/// Helper: create a YAML string value (used for both keys and values).
 fn y_str(s: &str) -> serde_yaml::Value { serde_yaml::Value::String(s.to_owned()) }
-
-/// Helper: create a YAML string value.
-fn y_str_val(s: &str) -> serde_yaml::Value { serde_yaml::Value::String(s.to_owned()) }
