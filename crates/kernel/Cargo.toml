@@ -35,8 +35,8 @@ indexmap.workspace = true
 jiff.workspace = true
 md5.workspace = true
 opendal = { workspace = true }
-parking_lot.workspace = true
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace", "metrics"] }
+parking_lot.workspace = true
 rand.workspace = true
 rapidfuzz.workspace = true
 rara-domain-shared.workspace = true
