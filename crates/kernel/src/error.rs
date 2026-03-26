@@ -179,6 +179,22 @@ pub enum KernelError {
     },
 }
 
+/// Format an error and its full source chain into a single string.
+///
+/// `std::error::Error::source()` often holds the real root cause (e.g.
+/// "connection refused") that `Display` alone omits.  This walks the chain
+/// so log messages contain actionable detail.
+pub fn format_error_chain(err: &dyn std::error::Error) -> String {
+    let mut msg = err.to_string();
+    let mut current = err.source();
+    while let Some(cause) = current {
+        msg.push_str(": ");
+        msg.push_str(&cause.to_string());
+        current = cause.source();
+    }
+    msg
+}
+
 /// Classify a provider error by HTTP status code and/or error message body.
 ///
 /// Used by retry and fallback logic to decide whether to retry, fall back to
