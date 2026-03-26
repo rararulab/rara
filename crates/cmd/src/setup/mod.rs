@@ -3,6 +3,7 @@
 mod db;
 mod llm;
 mod prompt;
+mod telegram;
 
 use clap::Args;
 pub use prompt::SetupMode;
@@ -46,8 +47,13 @@ impl SetupCmd {
         let _llm_result =
             llm::setup_llm(existing_config.as_ref().and_then(|c| c.llm.as_ref()), mode).await?;
 
-        // TODO: setup steps will be added in subsequent tasks
-        // telegram::setup_telegram(...)
+        let _telegram_result = telegram::setup_telegram(
+            existing_config.as_ref().and_then(|c| c.telegram.as_ref()),
+            mode,
+        )
+        .await?;
+
+        // TODO: remaining setup steps
         // user::setup_users(...)
         // stt::setup_stt(...)
         // writer::write_config(...)
