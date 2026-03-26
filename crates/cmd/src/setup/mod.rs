@@ -3,7 +3,9 @@
 mod db;
 mod llm;
 mod prompt;
+mod stt;
 mod telegram;
+mod user;
 
 use clap::Args;
 pub use prompt::SetupMode;
@@ -53,9 +55,12 @@ impl SetupCmd {
         )
         .await?;
 
+        let _user_result =
+            user::setup_users(existing_config.as_ref().map_or(0, |c| c.users.len()), mode).await?;
+
+        let _stt_result = stt::setup_stt(mode).await?;
+
         // TODO: remaining setup steps
-        // user::setup_users(...)
-        // stt::setup_stt(...)
         // writer::write_config(...)
 
         println!("\n=== Setup complete ===");
