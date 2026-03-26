@@ -95,6 +95,10 @@ pub struct AppConfig {
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knowledge:              Option<flatten::KnowledgeConfig>,
+    /// Speech-to-Text configuration (optional).
+    /// When present, `base_url` is required — startup fails if missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt:                    Option<rara_kernel::stt::SttConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:                Option<GatewayConfig>,
@@ -262,6 +266,20 @@ pub async fn start_with_options(
 ) -> Result<AppHandle, Whatever> {
     info!("Initializing job application");
 
+    // Validate STT config: if section is present, base_url must be non-empty.
+    if let Some(ref stt) = config.stt {
+        snafu::ensure_whatever!(
+            !stt.base_url.trim().is_empty(),
+            "stt.base_url is required when stt section is configured"
+        );
+        info!(base_url = %stt.base_url, "STT service configured");
+    }
+
+    let stt_service = config
+        .stt
+        .as_ref()
+        .map(rara_kernel::stt::SttService::from_config);
+
     let db_store = init_infra(&config)
         .await
         .whatever_context("Failed to initialize infrastructure services")?;
@@ -306,21 +324,26 @@ pub async fn start_with_options(
     ));
     let web_router = web_adapter.router();
 
-    let telegram_adapter =
-        match try_build_telegram(&backend.settings_svc, rara.user_question_manager.clone()).await {
-            Ok(Some(adapter)) => {
-                info!("Telegram adapter built");
-                Some(adapter)
-            }
-            Ok(None) => {
-                info!("Telegram not configured (bot_token unset in settings), skipping");
-                None
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to build Telegram adapter, skipping");
-                None
-            }
-        };
+    let telegram_adapter = match try_build_telegram(
+        &backend.settings_svc,
+        rara.user_question_manager.clone(),
+        stt_service,
+    )
+    .await
+    {
+        Ok(Some(adapter)) => {
+            info!("Telegram adapter built");
+            Some(adapter)
+        }
+        Ok(None) => {
+            info!("Telegram not configured (bot_token unset in settings), skipping");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to build Telegram adapter, skipping");
+            None
+        }
+    };
 
     let wechat_adapter = match try_build_wechat(&backend.settings_svc).await {
         Ok(Some(adapter)) => {
@@ -644,6 +667,7 @@ pub async fn start_with_options(
 async fn try_build_telegram(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
     user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
+    stt_service: Option<rara_kernel::stt::SttService>,
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
 
@@ -690,7 +714,8 @@ async fn try_build_telegram(
         rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
             .whatever_context("failed to build telegram adapter")?
             .with_config(tg_config)
-            .with_user_question_manager(user_question_manager),
+            .with_user_question_manager(user_question_manager)
+            .with_stt_service(stt_service),
     );
 
     let config_handle = adapter.config_handle();

@@ -907,6 +907,8 @@ pub struct TelegramAdapter {
     /// User question manager for the ask-user tool — when set, the adapter
     /// subscribes to new questions and resolves them via reply-to messages.
     user_question_manager: Option<UserQuestionManagerRef>,
+    /// Optional STT service for transcribing voice messages to text.
+    stt_service:           Option<rara_kernel::stt::SttService>,
 }
 
 impl TelegramAdapter {
@@ -932,6 +934,7 @@ impl TelegramAdapter {
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
             user_question_manager: None,
+            stt_service: None,
         }
     }
 
@@ -1042,6 +1045,13 @@ impl TelegramAdapter {
     #[must_use]
     pub fn with_user_question_manager(mut self, mgr: UserQuestionManagerRef) -> Self {
         self.user_question_manager = Some(mgr);
+        self
+    }
+
+    /// Attach an STT service for voice message transcription.
+    #[must_use]
+    pub fn with_stt_service(mut self, stt: Option<rara_kernel::stt::SttService>) -> Self {
+        self.stt_service = stt;
         self
     }
 
@@ -1296,6 +1306,7 @@ impl ChannelAdapter for TelegramAdapter {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .into();
+        let stt_service = self.stt_service.clone();
 
         // Register slash-menu with Telegram so '/' shows available commands.
         {
@@ -1367,6 +1378,7 @@ impl ChannelAdapter for TelegramAdapter {
                 active_streams,
                 command_handlers,
                 callback_handlers,
+                stt_service,
             )
             .await;
         });
@@ -1419,6 +1431,7 @@ async fn polling_loop(
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
     callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
+    stt_service: Option<rara_kernel::stt::SttService>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1475,6 +1488,7 @@ async fn polling_loop(
                     let active_streams = Arc::clone(&active_streams);
                     let command_handlers = Arc::clone(&command_handlers);
                     let callback_handlers = Arc::clone(&callback_handlers);
+                    let stt = stt_service.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1487,6 +1501,7 @@ async fn polling_loop(
                             &active_streams,
                             &command_handlers,
                             &callback_handlers,
+                            &stt,
                         )
                         .await;
                     });
@@ -2257,6 +2272,7 @@ async fn handle_update(
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
+    stt_service: &Option<rara_kernel::stt::SttService>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -2667,6 +2683,56 @@ async fn handle_update(
             }
         } else {
             raw
+        }
+    } else {
+        raw
+    };
+
+    // If the message has a voice note or audio attachment, transcribe via STT.
+    let raw = if msg.voice().is_some() || msg.audio().is_some() {
+        let file_id = msg
+            .voice()
+            .map(|v| &v.file.id)
+            .or_else(|| msg.audio().map(|a| &a.file.id));
+
+        let mime_hint = msg
+            .audio()
+            .and_then(|a| a.mime_type.as_ref())
+            .map(|m| m.as_ref());
+
+        if let (Some(file_id), Some(stt)) = (file_id, stt_service) {
+            match download_voice_file(bot, file_id, mime_hint).await {
+                Ok((audio_data, mime_type)) => match stt.transcribe(audio_data, &mime_type).await {
+                    Ok(text) if !text.trim().is_empty() => {
+                        tracing::info!(len = text.len(), "voice message transcribed");
+                        let combined = match raw.content {
+                            MessageContent::Text(ref caption) if !caption.trim().is_empty() => {
+                                format!("{caption}\n\n{text}")
+                            }
+                            _ => text,
+                        };
+                        RawPlatformMessage {
+                            content: MessageContent::Text(combined),
+                            ..raw
+                        }
+                    }
+                    Ok(_) => {
+                        tracing::warn!("STT returned empty transcription, skipping");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "STT transcription failed, skipping voice message");
+                        return;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to download voice file, skipping");
+                    return;
+                }
+            }
+        } else {
+            tracing::warn!("voice message received but no STT service configured, skipping");
+            return;
         }
     } else {
         raw
@@ -3626,7 +3692,8 @@ pub fn telegram_to_raw_platform_message(
     // Photos without caption still produce a valid message (empty text);
     // only skip when there is neither text nor a photo attachment.
     let raw_text = msg.text().or_else(|| msg.caption());
-    if raw_text.is_none() && msg.photo().is_none() {
+    if raw_text.is_none() && msg.photo().is_none() && msg.voice().is_none() && msg.audio().is_none()
+    {
         return None;
     }
     let raw_text = raw_text.unwrap_or_default();
@@ -3643,7 +3710,11 @@ pub fn telegram_to_raw_platform_message(
         raw_text.to_owned()
     };
 
-    if text.trim().is_empty() && msg.photo().is_none() {
+    if text.trim().is_empty()
+        && msg.photo().is_none()
+        && msg.voice().is_none()
+        && msg.audio().is_none()
+    {
         return None;
     }
 
@@ -3763,6 +3834,39 @@ async fn download_and_compress_photo(
     );
 
     Ok((media_type, b64, original_path, compressed_path))
+}
+
+/// Maximum voice file size (25 MB). Telegram limits normal users to 20 MB,
+/// but premium users can send larger files.
+const MAX_VOICE_FILE_SIZE: u32 = 25 * 1024 * 1024;
+
+/// Download a voice/audio file from Telegram and return the raw bytes + MIME
+/// type.
+async fn download_voice_file(
+    bot: &teloxide::Bot,
+    file_id: &teloxide::types::FileId,
+    mime_hint: Option<&str>,
+) -> anyhow::Result<(Vec<u8>, String)> {
+    use teloxide::net::Download;
+
+    let file = bot.get_file(file_id.clone()).send().await?;
+
+    // Reject files that exceed the size limit.
+    if file.size > MAX_VOICE_FILE_SIZE {
+        anyhow::bail!(
+            "voice file too large: {} bytes (max {MAX_VOICE_FILE_SIZE} bytes)",
+            file.size,
+        );
+    }
+
+    let mut buf = Vec::new();
+    bot.download_file(&file.path, &mut buf).await?;
+
+    // Telegram voice messages are OGG/Opus by default.
+    let mime_type = mime_hint.unwrap_or("audio/ogg").to_owned();
+    tracing::debug!(size = buf.len(), mime = %mime_type, "downloaded voice file");
+
+    Ok((buf, mime_type))
 }
 
 pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }
