@@ -26,7 +26,7 @@ impl SttService {
     /// Build a new service from config.
     pub fn from_config(config: &SttConfig) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
             .expect("failed to build reqwest client for STT");
 
