@@ -62,6 +62,33 @@
   --motion-slow: 500ms;
 }
 
+/* Dark mode color overrides — warm rose palette adapted for dark backgrounds */
+.dark {
+  --color-background: #1a1214;
+  --color-foreground: #e8dfe0;
+  --color-card: #231a1c;
+  --color-card-foreground: #e8dfe0;
+  --color-primary: #E8788A;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #3d2a2e;
+  --color-secondary-foreground: #e8dfe0;
+  --color-muted: #3d2a2e;
+  --color-muted-foreground: #a89496;
+  --color-accent: #3d2a2e;
+  --color-accent-foreground: #e8dfe0;
+  --color-destructive: #D46A6A;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #3d2a2e;
+  --color-input: #3d2a2e;
+  --color-ring: #E8788A;
+  --color-ok: #7BC4A0;
+  --color-warn: #E8B86D;
+  --color-err: #D46A6A;
+  --color-pop: #E8788A;
+  --color-pop-hover: #f08898;
+  --color-subtle: #6d5b5e;
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -74,6 +101,13 @@
       radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--color-accent) 22%, transparent) 0%, transparent 48%),
       linear-gradient(to bottom, color-mix(in oklab, var(--color-background) 92%, white), var(--color-background));
     min-height: 100vh;
+  }
+  .dark body,
+  body.dark {
+    background-image:
+      radial-gradient(circle at 0% 0%, color-mix(in oklab, var(--color-primary) 8%, transparent) 0%, transparent 45%),
+      radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--color-accent) 12%, transparent) 0%, transparent 48%),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-background) 95%, black), var(--color-background));
   }
   button,
   a,
@@ -162,6 +196,17 @@
 
   .code-chip {
     @apply rounded-md border border-border/60 bg-muted/50 px-2 py-1 text-xs;
+  }
+
+  /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
+  .dark .app-surface,
+  .dark .data-panel,
+  .dark .filter-panel,
+  .dark .empty-state-card,
+  .dark .data-table-card {
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--color-border) 65%, transparent) inset,
+      0 10px 30px rgba(0, 0, 0, 0.2);
   }
 }
 
