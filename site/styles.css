@@ -133,73 +133,153 @@ h1 {
   color: var(--foam);
 }
 
-/* ── Quick Start ── */
+/* ── Animations ── */
 
-.quickstart {
-  margin: 0 0 2.5rem;
+.fade-in {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.5s ease, transform 0.5s ease;
 }
 
-.quickstart pre {
-  margin: 0;
-  padding: 1.2rem 1.4rem;
-  background: var(--overlay);
-  border: 1px solid rgba(152, 147, 165, 0.15);
-  border-radius: 10px;
-  overflow-x: auto;
-  font-size: 0.85rem;
-  line-height: 1.65;
+.fade-in.visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
-.quickstart .ps1 {
-  color: var(--muted);
+.hero .kicker {
+  animation: fade-up 0.6s ease both;
 }
 
-.quickstart .cmd {
-  color: var(--pine);
+h1 {
+  animation: fade-up 0.6s 0.1s ease both;
 }
 
-.quickstart .out {
-  color: var(--subtle);
+.subtitle {
+  animation: fade-up 0.6s 0.2s ease both;
 }
 
-/* ── Modules ── */
+.cta-row {
+  animation: fade-up 0.6s 0.3s ease both;
+}
 
-.modules {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.8rem;
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  background: var(--love);
+  vertical-align: text-bottom;
+  margin-left: 0.1em;
+  animation: blink 1s step-end infinite;
+}
+
+/* ── Stagger children ── */
+
+.diff-card.fade-in:nth-child(1) { transition-delay: 0s; }
+.diff-card.fade-in:nth-child(2) { transition-delay: 0.08s; }
+.diff-card.fade-in:nth-child(3) { transition-delay: 0.16s; }
+.diff-card.fade-in:nth-child(4) { transition-delay: 0.24s; }
+.diff-card.fade-in:nth-child(5) { transition-delay: 0.32s; }
+.diff-card.fade-in:nth-child(6) { transition-delay: 0.40s; }
+
+.flow-step.fade-in:nth-child(1) { transition-delay: 0s; }
+.flow-step.fade-in:nth-child(2) { transition-delay: 0.1s; }
+.flow-step.fade-in:nth-child(3) { transition-delay: 0.2s; }
+.flow-step.fade-in:nth-child(4) { transition-delay: 0.3s; }
+
+/* ── Differentiators ── */
+
+.section-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 1.2rem;
+}
+
+.diff {
   margin-bottom: 2.5rem;
 }
 
-.module {
+.diff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
+.diff-card {
   background: var(--surface);
   border: 1px solid var(--overlay);
   border-radius: 10px;
   padding: 1.1rem 1.2rem;
 }
 
-.module h2 {
+.diff-card h3 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   font-weight: 700;
-  color: var(--text);
-  text-transform: lowercase;
+  color: var(--love);
 }
 
-.module p {
-  margin: 0.4rem 0 0.6rem;
-  font-size: 0.85rem;
+.diff-card p {
+  margin: 0.4rem 0 0;
+  font-size: 0.82rem;
   color: var(--muted);
+  line-height: 1.6;
+}
+
+/* ── How it works ── */
+
+.how {
+  margin-bottom: 2.5rem;
+}
+
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.flow-step {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--overlay);
+  border-radius: 10px;
+}
+
+.step-num {
+  color: var(--love);
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.flow-step p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--subtle);
   line-height: 1.55;
 }
 
-.badge {
-  display: inline-block;
-  padding: 0.12rem 0.55rem;
-  font-size: 0.72rem;
-  color: var(--iris);
-  background: var(--overlay);
-  border-radius: 999px;
+.flow-step strong {
+  color: var(--text);
 }
 
 /* ── Architecture Flow ── */
@@ -234,11 +314,16 @@ h1 {
     font-size: 1.6rem;
   }
 
-  .modules {
+  .diff-grid {
     grid-template-columns: 1fr;
   }
 
   .hero {
     padding: 2.5rem 0 2rem;
+  }
+
+  .flow-step {
+    flex-direction: column;
+    gap: 0.3rem;
   }
 }
