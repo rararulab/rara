@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send } from "lucide-react";
+import { Bot, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useServerStatus } from "@/hooks/use-server-status";
 import { ConversationPanelToggleButton } from "./SessionSidebar";
@@ -69,10 +69,28 @@ export function EmptyState({
         </div>
       )}
 
-      <div className="flex-1" />
+      <div className="flex flex-1 flex-col items-center justify-center gap-6">
+        <div className="chat-empty-logo">
+          <Bot className="h-8 w-8 text-white" />
+        </div>
+        <div className="text-center space-y-2">
+          <h2 className="text-lg font-semibold text-foreground">Start a conversation</h2>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Ask anything — rara can help with coding, analysis, creative tasks, and more.
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          <span className="chat-empty-hint">
+            <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Enter</kbd> to send
+          </span>
+          <span className="chat-empty-hint">
+            <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Shift+Enter</kbd> new line
+          </span>
+        </div>
+      </div>
 
       <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
-        <div className="pointer-events-auto flex items-end gap-2 rounded-2xl border border-border/40 bg-background/70 p-2 shadow-[0_10px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+        <div className="pointer-events-auto chat-composer flex items-end gap-2">
           <textarea
             ref={textareaRef}
             value={input}
@@ -86,7 +104,7 @@ export function EmptyState({
           />
           <Button
             size="icon"
-            className="h-10 w-10 shrink-0 rounded-xl shadow-sm"
+            className="h-10 w-10 shrink-0 rounded-xl bg-gradient-to-br from-primary to-pop-hover shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 transition-shadow"
             onClick={handleSend}
             disabled={!input.trim() || !isOnline}
             title={isOnline ? "Send message" : "Server offline"}

@@ -314,7 +314,7 @@ export function SessionList({
                     className={cn(
                       "group relative flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm transition-all",
                       activeKey === s.key
-                        ? "bg-primary/10 text-foreground ring-1 ring-primary/15"
+                        ? "bg-primary/10 text-foreground border-l-2 border-l-primary"
                         : "text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/60",
                     )}
                     onClick={() => onSelect(s.key)}

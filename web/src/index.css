@@ -16,6 +16,7 @@
 
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+@import "highlight.js/styles/github.css" layer(base);
 
 @theme {
   /* Colors — from @rararulab/style palette.json */
@@ -46,14 +47,14 @@
   --color-subtle: #B8A0A4;
 
   /* Typography */
-  --font-sans: 'Nunito', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
 
   /* Radius */
   --radius-sm: 6px;
   --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 16px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
   --radius-full: 9999px;
 
   /* Motion */
@@ -90,6 +91,20 @@
 }
 
 @layer base {
+  .dark pre code.hljs {
+    background: transparent;
+    color: var(--color-foreground);
+  }
+  .dark .hljs-keyword { color: #ff7b72; }
+  .dark .hljs-string { color: #a5d6ff; }
+  .dark .hljs-comment { color: #8b949e; }
+  .dark .hljs-function { color: #d2a8ff; }
+  .dark .hljs-number { color: #79c0ff; }
+  .dark .hljs-title { color: #d2a8ff; }
+  .dark .hljs-built_in { color: #ffa657; }
+  .dark .hljs-params { color: var(--color-foreground); }
+  .dark .hljs-attr { color: #79c0ff; }
+
   * {
     @apply border-border;
   }
@@ -196,6 +211,123 @@
 
   .code-chip {
     @apply rounded-md border border-border/60 bg-muted/50 px-2 py-1 text-xs;
+  }
+
+  /* Code block styling for prose content */
+  .prose pre {
+    @apply rounded-xl border border-border/50 bg-muted/40 p-4 text-sm;
+    backdrop-filter: blur(4px);
+  }
+  .prose pre code {
+    @apply bg-transparent p-0 text-xs leading-relaxed;
+    font-family: var(--font-mono);
+  }
+  .prose :not(pre) > code {
+    @apply rounded-md border border-border/40 bg-muted/50 px-1.5 py-0.5 text-xs font-medium;
+    font-family: var(--font-mono);
+  }
+
+  /* Chat message styles */
+  .msg-user {
+    @apply rounded-2xl rounded-br-md px-4 py-3 text-sm;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-pop-hover));
+    color: var(--color-primary-foreground);
+    box-shadow: 0 2px 8px color-mix(in oklab, var(--color-primary) 25%, transparent);
+  }
+
+  .msg-assistant {
+    @apply rounded-2xl rounded-bl-md border border-border/40 px-4 py-3;
+    background: color-mix(in oklab, var(--color-card) 85%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  .dark .msg-assistant {
+    background: color-mix(in oklab, var(--color-card) 70%, transparent);
+  }
+
+  .msg-avatar {
+    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs;
+    transition: transform var(--motion-fast) ease;
+  }
+  .msg-avatar:hover {
+    transform: scale(1.08);
+  }
+
+  /* Timestamp slide-up on hover */
+  .msg-timestamp {
+    @apply text-[10px] mt-1.5 transition-all duration-200;
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  .group:hover .msg-timestamp {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .msg-user .msg-timestamp {
+    opacity: 0.7;
+    transform: translateY(0);
+  }
+
+  /* Chat composer */
+  .chat-composer {
+    @apply rounded-2xl border border-border/50 p-2;
+    background: color-mix(in oklab, var(--color-card) 80%, transparent);
+    backdrop-filter: blur(20px);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-border) 30%, transparent),
+      0 8px 32px rgba(0, 0, 0, 0.08),
+      0 2px 8px rgba(0, 0, 0, 0.04);
+    transition: box-shadow var(--motion-fast) ease, border-color var(--motion-fast) ease;
+  }
+  .chat-composer:focus-within {
+    border-color: color-mix(in oklab, var(--color-primary) 50%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-primary) 20%, transparent),
+      0 8px 32px rgba(0, 0, 0, 0.1),
+      0 2px 8px color-mix(in oklab, var(--color-primary) 8%, transparent);
+  }
+  .dark .chat-composer {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-border) 40%, transparent),
+      0 8px 32px rgba(0, 0, 0, 0.3),
+      0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  /* Chat empty state */
+  .chat-empty-logo {
+    @apply flex h-16 w-16 items-center justify-center rounded-2xl;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-pop-hover));
+    box-shadow: 0 8px 24px color-mix(in oklab, var(--color-primary) 30%, transparent);
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  .chat-empty-hint {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-muted/40 px-3 py-1 text-xs text-muted-foreground;
+  }
+
+  /* Thinking shimmer */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  .thinking-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-muted-foreground) 0%,
+      var(--color-foreground) 50%,
+      var(--color-muted-foreground) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 2s ease-in-out infinite;
   }
 
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
