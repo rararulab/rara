@@ -1,0 +1,100 @@
+/*
+ * Copyright 2025 Rararulab
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Send } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useServerStatus } from "@/hooks/use-server-status";
+import { ConversationPanelToggleButton } from "./SessionSidebar";
+
+// ---------------------------------------------------------------------------
+// EmptyState (when no session is selected)
+// ---------------------------------------------------------------------------
+
+export function EmptyState({
+  onSendFirstMessage,
+  panelCollapsed,
+  onTogglePanel,
+}: {
+  onSendFirstMessage: (text: string) => void;
+  panelCollapsed: boolean;
+  onTogglePanel: () => void;
+}) {
+  const { isOnline } = useServerStatus();
+  const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleSend = useCallback(() => {
+    const text = input.trim();
+    if (!text || !isOnline) return;
+    onSendFirstMessage(text);
+    setInput("");
+  }, [input, isOnline, onSendFirstMessage]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend],
+  );
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
+
+  return (
+    <div className="relative flex flex-1 flex-col">
+      {panelCollapsed && (
+        <div className="absolute left-4 top-4">
+          <ConversationPanelToggleButton collapsed onToggle={onTogglePanel} />
+        </div>
+      )}
+
+      <div className="flex-1" />
+
+      <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
+        <div className="pointer-events-auto flex items-end gap-2 rounded-2xl border border-border/40 bg-background/70 p-2 shadow-[0_10px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
+            rows={1}
+            disabled={!isOnline}
+            autoFocus
+            className="flex-1 resize-none appearance-none border-0 bg-transparent px-2 py-2.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <Button
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-xl shadow-sm"
+            onClick={handleSend}
+            disabled={!input.trim() || !isOnline}
+            title={isOnline ? "Send message" : "Server offline"}
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
