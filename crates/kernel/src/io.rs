@@ -535,26 +535,6 @@ pub enum IOError {
 }
 
 // ---------------------------------------------------------------------------
-// OutboxStore
-// ---------------------------------------------------------------------------
-
-/// Durable outbox for messages that could not be delivered immediately.
-///
-/// When egress detects a user is offline, the envelope is appended here.
-/// A background drainer periodically re-publishes pending envelopes.
-#[async_trait]
-pub trait OutboxStore: Send + Sync + 'static {
-    /// Append an envelope to the durable outbox.
-    async fn append(&self, envelope: OutboundEnvelope) -> Result<(), IOError>;
-
-    /// Drain up to `max` pending envelopes for re-delivery.
-    async fn drain_pending(&self, max: usize) -> Vec<OutboundEnvelope>;
-
-    /// Mark an envelope as successfully delivered (remove from outbox).
-    async fn mark_delivered(&self, id: &MessageId) -> Result<(), IOError>;
-}
-
-// ---------------------------------------------------------------------------
 // PipeId
 // ---------------------------------------------------------------------------
 

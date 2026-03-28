@@ -158,14 +158,6 @@ async fn stat_single_file(path: &std::path::Path) -> FileStat {
         }
     }
 
-    // Adjust char count: the last line may not end with newline.
-    if char_count > 0 {
-        // Check if the file actually ends with a newline by comparing byte
-        // count. If chars > bytes, we overcounted one newline.
-        // Simpler: just accept the +1 per line approximation — close enough
-        // for LLM use.
-    }
-
     FileStat {
         path: display,
         lines: Some(line_count),
