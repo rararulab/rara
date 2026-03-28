@@ -344,7 +344,10 @@ impl TapeService {
         };
         messages.extend(history);
 
-        Ok(messages)
+        // Merge all leading system messages into one for providers with strict
+        // chat templates (e.g. Qwen via llama.cpp) that require a single
+        // system message at position 0.
+        Ok(super::context::merge_leading_system_messages(messages))
     }
 
     // -----------------------------------------------------------------------
@@ -1403,5 +1406,60 @@ mod tests {
         assert!(!entries.iter().any(|e| {
             e.payload.get("content").and_then(|v| v.as_str()) == Some("after anchor")
         }));
+    }
+
+    #[tokio::test]
+    async fn rebuild_messages_merges_system_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "test-merge-sys";
+
+        // Seed the tape with a user message then an anchor with summary
+        svc.append_message(
+            tape,
+            serde_json::json!({"role":"user","content":"hello"}),
+            None,
+        )
+        .await
+        .unwrap();
+        svc.handoff(
+            tape,
+            "topic/done",
+            super::HandoffState {
+                summary: Some("previous context".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        // New conversation after anchor
+        svc.append_message(
+            tape,
+            serde_json::json!({"role":"user","content":"hi again"}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let messages = svc
+            .rebuild_messages_for_llm(tape, None, "main system prompt")
+            .await
+            .unwrap();
+
+        // There should be exactly ONE system message at the front (merged)
+        let system_msgs: Vec<_> = messages
+            .iter()
+            .take_while(|m| m.role == crate::llm::Role::System)
+            .collect();
+        assert_eq!(
+            system_msgs.len(),
+            1,
+            "expected exactly 1 leading system message, got {}",
+            system_msgs.len()
+        );
+
+        let text = system_msgs[0].content.as_text();
+        assert!(text.contains("main system prompt"), "missing main prompt");
+        assert!(text.contains("previous context"), "missing anchor context");
     }
 }
