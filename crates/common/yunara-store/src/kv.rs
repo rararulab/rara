@@ -21,7 +21,7 @@ use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::err::*;
+use crate::error::*;
 
 /// Key-value store backed by SQLite.
 ///

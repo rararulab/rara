@@ -76,7 +76,7 @@ mod blocking;
 mod builder;
 mod context;
 mod driver;
-mod err;
+mod error;
 mod execution_client;
 mod handle;
 mod id;
@@ -88,7 +88,7 @@ mod worker;
 // Public API
 pub use blocking::BlockingWorker;
 pub use context::WorkerContext;
-pub use err::{CronParseError, ErrorSeverity, WorkError, WorkResult};
+pub use error::{CronParseError, ErrorSeverity, WorkError, WorkResult};
 pub use execution_client::{
     CapabilityInfo, ExecutionWorkerClient, ExecutionWorkerClientError, RemoteWorkerError,
 };

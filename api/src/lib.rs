@@ -27,13 +27,13 @@ pub mod pb {
 
     pub mod hello {
         pub mod v1 {
-            tonic::include_proto!("job.hello.v1");
+            tonic::include_proto!("rara.hello.v1");
         }
     }
 
     pub mod telegrambot {
         pub mod v1 {
-            tonic::include_proto!("job.telegrambot.v1");
+            tonic::include_proto!("rara.telegrambot.v1");
         }
     }
 

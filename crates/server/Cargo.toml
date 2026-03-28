@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "HTTP and gRPC server implementation for job"
+description = "HTTP and gRPC server implementation for rara"
 
 [dependencies]
 async-trait = { workspace = true }

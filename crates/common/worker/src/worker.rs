@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{context::WorkerContext, err::WorkResult};
+use crate::{context::WorkerContext, error::WorkResult};
 
 // ============================================================================
 // Fallible Worker Trait (Recommended)

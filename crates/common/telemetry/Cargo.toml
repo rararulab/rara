@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Telemetry utilities for job: logging, tracing, panic hooks"
+description = "Telemetry utilities for rara: logging, tracing, panic hooks"
 
 [features]
 tokio-console = ["console-subscriber", "tokio/tracing"]

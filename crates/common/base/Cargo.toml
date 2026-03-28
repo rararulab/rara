@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Base utilities and common types for job"
+description = "Base utilities and common types for rara"
 
 [dependencies]
 derive_more = { workspace = true }

@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Application orchestration and lifecycle management for job"
+description = "Application orchestration and lifecycle management for rara"
 
 [dependencies]
 agentfs-sdk = { workspace = true }
