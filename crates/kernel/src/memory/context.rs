@@ -339,17 +339,21 @@ pub fn merge_leading_system_messages(messages: Vec<Message>) -> Vec<Message> {
         return messages;
     }
 
-    let merged_text = messages[..system_count]
-        .iter()
-        .map(|m| {
-            debug_assert!(
-                matches!(m.content, MessageContent::Text(_)),
-                "merge_leading_system_messages only handles text content"
-            );
-            m.content.as_text()
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n---\n\n");
+    let merged_text =
+        messages[..system_count]
+            .iter()
+            .enumerate()
+            .fold(String::new(), |mut acc, (i, m)| {
+                debug_assert!(
+                    matches!(m.content, MessageContent::Text(_)),
+                    "merge_leading_system_messages only handles text content"
+                );
+                if i > 0 {
+                    acc.push_str("\n\n---\n\n");
+                }
+                acc.push_str(m.content.as_text());
+                acc
+            });
 
     let mut result = Vec::with_capacity(messages.len() - system_count + 1);
     result.push(Message::system(merged_text));
