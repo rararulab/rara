@@ -3,21 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Rara: 可爱外壳 + 硬核内核的 AI Agent 平台。" />
-    <title>Rara | Kawaii Terminal Agent</title>
+    <meta name="description" content="Rara: 可爱外壳 + 硬核终端内核的 AI Agent 平台。" />
+    <title>Rara | Cute Terminal Agent</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&family=Space+Mono:wght@400;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Mochiy+Pop+One&family=Space+Mono:wght@400;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="bg-grid" aria-hidden="true"></div>
+    <div class="ambient ambient-a" aria-hidden="true"></div>
+    <div class="ambient ambient-b" aria-hidden="true"></div>
+    <div class="scanline" aria-hidden="true"></div>
 
     <header class="shell topbar">
-      <a class="brand" href="./">rara<span>.lab</span></a>
+      <a class="brand" href="./">rara<span>.exe</span></a>
       <nav class="nav">
         <a href="./docs/">Docs</a>
         <a href="https://github.com/rararulab/rara">GitHub</a>
@@ -26,51 +28,74 @@
 
     <main class="shell">
       <section class="hero">
-        <div class="hero-copy">
-          <p class="kicker">kawaii kernel mode :: ready</p>
-          <h1>可爱是界面，硬核是系统。</h1>
+        <div class="hero-copy panel glass reveal-up">
+          <p class="kicker">stitch vibe :: kawaii-terminal</p>
+          <h1>可爱操作台，硬核执行核。</h1>
           <p class="subtitle">
-            Rara 把二次元能量和工程级执行力揉成一个 Agent 平台。你可以像操作终端一样驱动它，但体验比终端更可爱。
+            Rara 把二次元角色感的交互层，和工程级 Agent 编排能力拼在同一张桌面上。
+            看起来软萌，跑起来像生产级终端系统。
           </p>
+
           <div class="cta-row">
             <a class="btn btn-primary" href="./docs/">boot /docs</a>
-            <a class="btn" href="https://github.com/rararulab/rara">source code</a>
+            <a class="btn" href="https://github.com/rararulab/rara">git clone</a>
           </div>
+
+          <ul class="meta-row" aria-label="highlights">
+            <li><span>01</span> 自主多步执行</li>
+            <li><span>02</span> 上下文记忆保真</li>
+            <li><span>03</span> 可视化 Dock 工作流</li>
+          </ul>
         </div>
 
-        <aside class="terminal" aria-label="terminal preview">
-          <div class="term-head">
-            <span class="dot dot-red"></span>
-            <span class="dot dot-yellow"></span>
-            <span class="dot dot-green"></span>
-            <span class="term-title">rara@magic-shell:~</span>
-          </div>
-          <pre class="term-body"><code>> boot::rara --persona kawaii-hacker
-[ok] sync memory graph
-[ok] mount toolchain adapters
-[ok] spawn symphony orchestrator
-[ok] open dock canvas
+        <div class="hero-right reveal-up delayed">
+          <section class="panel terminal" aria-label="terminal preview">
+            <div class="term-head">
+              <span class="dot dot-red"></span>
+              <span class="dot dot-yellow"></span>
+              <span class="dot dot-green"></span>
+              <span class="term-title">rara@cute-shell:~</span>
+            </div>
+            <pre class="term-body"><code>> boot::rara --mode magical-dev
+[ok] attach memory graph
+[ok] enable tool orchestration
+[ok] start symphony runtime
+[ok] open dock canvas ui
 [ready] mission control online
 
-user@rara:~$ ./ship --stable --cute</code></pre>
-        </aside>
+user@rara:~$ ./ship --safe --fast --cute</code></pre>
+          </section>
+
+          <section class="panel sticker">
+            <p class="sticker-title">Mascot Signal</p>
+            <p class="sticker-face">(>ω<)ノ☆</p>
+            <p class="sticker-copy">
+              “别担心，命令我来跑。你只要决定下一步目标。”
+            </p>
+          </section>
+        </div>
       </section>
 
-      <section class="feature-grid" aria-label="key features">
-        <article class="feature">
+      <section class="module-grid">
+        <article class="module panel reveal-up">
+          <p class="module-tag">module://loop</p>
           <h2>Autonomous Loop</h2>
-          <p>多步任务可持续推进，自动调度工具与上下文，不需要你手动盯每一步。</p>
-          <p class="chip">loop::autonomous</p>
+          <p>任务会自动拆解、调用工具、回收上下文，不用你每一步手动催促。</p>
+          <code class="chip">loop::autonomous</code>
         </article>
-        <article class="feature">
+
+        <article class="module panel reveal-up delayed-2">
+          <p class="module-tag">module://memory</p>
           <h2>Persistent Memory</h2>
-          <p>会话信息与长期知识统一管理，关键事实在复杂场景里也能保持稳定。</p>
-          <p class="chip">memory::persistent</p>
+          <p>重要事实在长对话里不丢失，跨任务也能保持稳定可追溯。</p>
+          <code class="chip">memory::persistent</code>
         </article>
-        <article class="feature">
+
+        <article class="module panel reveal-up delayed-3">
+          <p class="module-tag">module://dock</p>
           <h2>Dock Canvas</h2>
-          <p>把文本、图像、工具结果汇聚到同一画布，缩短从思路到执行的距离。</p>
-          <p class="chip">dock::generative</p>
+          <p>把文本、图像和工具结果汇聚成可操作画布，减少上下文切换成本。</p>
+          <code class="chip">dock::generative</code>
         </article>
       </section>
     </main>
