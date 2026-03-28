@@ -23,6 +23,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
+import ThemeToggle from '@/components/ThemeToggle';
 
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);
@@ -132,6 +133,7 @@ export default function DashboardLayout() {
             <LayoutDashboard className="h-3.5 w-3.5" />
             Dock
           </Button>
+          <ThemeToggle />
           <Button
             variant="ghost"
             size="sm"
