@@ -488,7 +488,7 @@ export function ChatThread({
         )}
 
         {!messagesQuery.isLoading && (
-          <div className="space-y-4">
+          <div className="space-y-6">
             {visibleMessages.map((msg, i) => {
               const isLastAssistant =
                 msg.role === "assistant" &&

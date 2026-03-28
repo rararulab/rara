@@ -227,6 +227,47 @@
     font-family: var(--font-mono);
   }
 
+  /* Chat message styles */
+  .msg-user {
+    @apply rounded-2xl rounded-br-md px-4 py-3 text-sm;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-pop-hover));
+    color: var(--color-primary-foreground);
+    box-shadow: 0 2px 8px color-mix(in oklab, var(--color-primary) 25%, transparent);
+  }
+
+  .msg-assistant {
+    @apply rounded-2xl rounded-bl-md border border-border/40 px-4 py-3;
+    background: color-mix(in oklab, var(--color-card) 85%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  .dark .msg-assistant {
+    background: color-mix(in oklab, var(--color-card) 70%, transparent);
+  }
+
+  .msg-avatar {
+    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs;
+    transition: transform var(--motion-fast) ease;
+  }
+  .msg-avatar:hover {
+    transform: scale(1.08);
+  }
+
+  /* Timestamp slide-up on hover */
+  .msg-timestamp {
+    @apply text-[10px] mt-1.5 transition-all duration-200;
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  .group:hover .msg-timestamp {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .msg-user .msg-timestamp {
+    opacity: 0.7;
+    transform: translateY(0);
+  }
+
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
   .dark .app-surface,
   .dark .data-panel,

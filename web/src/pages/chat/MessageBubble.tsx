@@ -29,6 +29,8 @@ import { extractTextContent, formatTime } from "./utils";
 // MessageBubble
 // ---------------------------------------------------------------------------
 
+const PROSE_CLASS = "prose prose-sm max-w-none text-foreground prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground";
+
 function ImageBlock({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
 
@@ -72,10 +74,10 @@ export function MessageBubble({ msg, metrics, onClick }: { msg: ChatMessageData;
       {/* Avatar */}
       <div
         className={cn(
-          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-medium",
+          "msg-avatar",
           isUser
-            ? "bg-primary/90 text-primary-foreground"
-            : "bg-background/60 text-muted-foreground",
+            ? "bg-primary text-primary-foreground"
+            : "bg-muted text-muted-foreground",
         )}
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
@@ -86,8 +88,8 @@ export function MessageBubble({ msg, metrics, onClick }: { msg: ChatMessageData;
         className={cn(
           isUser ? "max-w-[78%]" : "max-w-[min(78ch,calc(100%-4rem))] w-full",
           isUser
-            ? "rounded-2xl bg-primary/90 px-4 py-2.5 text-primary-foreground"
-            : "px-1 py-1 text-foreground",
+            ? "msg-user"
+            : "msg-assistant",
         )}
       >
         {isMultimodal ? (
@@ -102,7 +104,7 @@ export function MessageBubble({ msg, metrics, onClick }: { msg: ChatMessageData;
                   ) : (
                     <div
                       key={i}
-                      className="prose prose-sm max-w-none text-foreground prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs"
+                      className={PROSE_CLASS}
                     >
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                         {block.text}
@@ -120,13 +122,13 @@ export function MessageBubble({ msg, metrics, onClick }: { msg: ChatMessageData;
         ) : isUser ? (
           <p className="whitespace-pre-wrap text-sm">{text}</p>
         ) : (
-          <div className="prose prose-sm max-w-none text-foreground prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
+          <div className={PROSE_CLASS}>
             <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
           </div>
         )}
         <p
           className={cn(
-            "mt-1 text-[10px]",
+            "msg-timestamp",
             isUser ? "text-primary-foreground/70" : "text-muted-foreground",
           )}
         >
