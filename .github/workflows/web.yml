@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - docs/**
+      - site/**
 
   push:
     branches:
@@ -15,6 +16,7 @@ on:
       - main
     paths:
       - docs/**
+      - site/**
 
 concurrency:
   group: web-${{ github.ref }}
@@ -62,7 +64,9 @@ jobs:
 
           # Publish with git directly so the self-hosted runner does not depend on rsync.
           find "$deploy_dir" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
-          cp -R docs/book/. "$deploy_dir"/
+          cp -R site/. "$deploy_dir"/
+          mkdir -p "$deploy_dir/docs"
+          cp -R docs/book/. "$deploy_dir/docs"/
           touch "$deploy_dir/.nojekyll"
 
           pushd "$deploy_dir" >/dev/null

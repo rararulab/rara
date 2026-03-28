@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Rara: 可爱外壳 + 硬核内核的 AI Agent 平台。" />
+    <title>Rara | Kawaii Terminal Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+
+    <header class="shell topbar">
+      <a class="brand" href="./">rara<span>.lab</span></a>
+      <nav class="nav">
+        <a href="./docs/">Docs</a>
+        <a href="https://github.com/rararulab/rara">GitHub</a>
+      </nav>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="kicker">kawaii kernel mode :: ready</p>
+          <h1>可爱是界面，硬核是系统。</h1>
+          <p class="subtitle">
+            Rara 把二次元能量和工程级执行力揉成一个 Agent 平台。你可以像操作终端一样驱动它，但体验比终端更可爱。
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="./docs/">boot /docs</a>
+            <a class="btn" href="https://github.com/rararulab/rara">source code</a>
+          </div>
+        </div>
+
+        <aside class="terminal" aria-label="terminal preview">
+          <div class="term-head">
+            <span class="dot dot-red"></span>
+            <span class="dot dot-yellow"></span>
+            <span class="dot dot-green"></span>
+            <span class="term-title">rara@magic-shell:~</span>
+          </div>
+          <pre class="term-body"><code>> boot::rara --persona kawaii-hacker
+[ok] sync memory graph
+[ok] mount toolchain adapters
+[ok] spawn symphony orchestrator
+[ok] open dock canvas
+[ready] mission control online
+
+user@rara:~$ ./ship --stable --cute</code></pre>
+        </aside>
+      </section>
+
+      <section class="feature-grid" aria-label="key features">
+        <article class="feature">
+          <h2>Autonomous Loop</h2>
+          <p>多步任务可持续推进，自动调度工具与上下文，不需要你手动盯每一步。</p>
+          <p class="chip">loop::autonomous</p>
+        </article>
+        <article class="feature">
+          <h2>Persistent Memory</h2>
+          <p>会话信息与长期知识统一管理，关键事实在复杂场景里也能保持稳定。</p>
+          <p class="chip">memory::persistent</p>
+        </article>
+        <article class="feature">
+          <h2>Dock Canvas</h2>
+          <p>把文本、图像、工具结果汇聚到同一画布，缩短从思路到执行的距离。</p>
+          <p class="chip">dock::generative</p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
