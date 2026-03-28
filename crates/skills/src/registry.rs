@@ -151,6 +151,8 @@ impl SkillRegistry for InMemoryRegistry {
         }
 
         tokio::fs::remove_dir_all(path).await.context(IoSnafu)?;
+        // Remove from in-memory map so list_skills() no longer returns it
+        self.remove(name);
         Ok(())
     }
 }

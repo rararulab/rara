@@ -203,20 +203,21 @@ fn flatten_llm(llm: &LlmConfig, out: &mut Vec<(String, String)>) {
 }
 
 fn flatten_telegram(tg: &TelegramConfig, out: &mut Vec<(String, String)>) {
+    use rara_domain_shared::settings::keys;
     if let Some(ref v) = tg.bot_token {
-        out.push(("telegram.bot_token".into(), v.clone()));
+        out.push((keys::TELEGRAM_BOT_TOKEN.into(), v.clone()));
     }
     if let Some(ref v) = tg.chat_id {
-        out.push(("telegram.chat_id".into(), v.clone()));
+        out.push((keys::TELEGRAM_CHAT_ID.into(), v.clone()));
     }
     if let Some(ref v) = tg.allowed_group_chat_id {
-        out.push(("telegram.allowed_group_chat_id".into(), v.clone()));
+        out.push((keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID.into(), v.clone()));
     }
     if let Some(ref v) = tg.group_policy {
-        out.push(("telegram.group_policy".into(), v.clone()));
+        out.push((keys::TELEGRAM_GROUP_POLICY.into(), v.clone()));
     }
     if let Some(ref v) = tg.notification_channel_id {
-        out.push(("telegram.notification_channel_id".into(), v.clone()));
+        out.push((keys::TELEGRAM_NOTIFICATION_CHANNEL_ID.into(), v.clone()));
     }
 }
 
