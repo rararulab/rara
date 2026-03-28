@@ -268,6 +268,31 @@
     transform: translateY(0);
   }
 
+  /* Chat composer */
+  .chat-composer {
+    @apply rounded-2xl border border-border/50 p-2;
+    background: color-mix(in oklab, var(--color-card) 80%, transparent);
+    backdrop-filter: blur(20px);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-border) 30%, transparent),
+      0 8px 32px rgba(0, 0, 0, 0.08),
+      0 2px 8px rgba(0, 0, 0, 0.04);
+    transition: box-shadow var(--motion-fast) ease, border-color var(--motion-fast) ease;
+  }
+  .chat-composer:focus-within {
+    border-color: color-mix(in oklab, var(--color-primary) 50%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-primary) 20%, transparent),
+      0 8px 32px rgba(0, 0, 0, 0.1),
+      0 2px 8px color-mix(in oklab, var(--color-primary) 8%, transparent);
+  }
+  .dark .chat-composer {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-border) 40%, transparent),
+      0 8px 32px rgba(0, 0, 0, 0.3),
+      0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
   .dark .app-surface,
   .dark .data-panel,
