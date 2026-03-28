@@ -189,7 +189,7 @@ impl ToolExecute for FoldBranchTool {
 
         let agent_handle = self
             .handle
-            .spawn_child(&self.session_key, &principal, manifest, p.instruction)
+            .spawn_child(self.session_key, &principal, manifest, p.instruction)
             .await
             .map_err(|e| anyhow::anyhow!("fold-branch spawn failed: {e}"))?;
 

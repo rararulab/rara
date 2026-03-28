@@ -82,7 +82,7 @@ impl ToolExecute for ListSessionsTool {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("kernel handle not yet available"))?;
 
-        let mut sessions = handle.list_processes().await;
+        let mut sessions = handle.list_processes();
 
         // Filter by last_activity if requested.
         if let Some(since) = updated_since {

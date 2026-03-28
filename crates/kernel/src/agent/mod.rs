@@ -900,8 +900,7 @@ pub(crate) async fn run_agent_loop(
     // Query context via syscalls.
     let manifest =
         handle
-            .session_manifest(&session_key)
-            .await
+            .session_manifest(session_key)
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to get manifest: {e}"),
             })?;
@@ -962,12 +961,12 @@ pub(crate) async fn run_agent_loop(
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) = handle
-        .session_resolve_driver(session_key)
-        .await
-        .map_err(|e| KernelError::AgentExecution {
-            message: format!("failed to resolve LLM driver: {e}"),
-        })?;
+    let (driver, model) =
+        handle
+            .session_resolve_driver(session_key)
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to resolve LLM driver: {e}"),
+            })?;
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -1243,7 +1242,7 @@ pub(crate) async fn run_agent_loop(
         // Inject active background tasks status (first iteration only to
         // avoid repeated token cost in multi-iteration turns).
         let bg_tasks = if iteration == 0 {
-            handle.background_tasks(&session_key)
+            handle.background_tasks(session_key)
         } else {
             Vec::new()
         };
@@ -2424,7 +2423,7 @@ pub(crate) async fn run_agent_loop(
             // (e.g. Telegram callback handler) can deliver the user's decision.
             // Uses the same oneshot pattern as the guard approval system.
             let (tx, rx) = tokio::sync::oneshot::channel();
-            handle.register_tool_call_limit(&session_key, current_limit_id, tx);
+            handle.register_tool_call_limit(session_key, current_limit_id, tx);
 
             info!(
                 tool_calls_made,

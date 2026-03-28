@@ -1746,7 +1746,7 @@ async fn handle_tool_call_limit_callback(
         }
     };
 
-    let resolved = handle.resolve_tool_call_limit(&session_key, limit_id, decision);
+    let resolved = handle.resolve_tool_call_limit(session_key, limit_id, decision);
 
     let answer_text = match decision {
         rara_kernel::io::ToolCallLimitDecision::Continue => "▶️ Continuing",
