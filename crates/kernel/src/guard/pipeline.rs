@@ -18,10 +18,35 @@
 //! Taint is checked first (cheaper, session-level) and short-circuits
 //! before the more expensive argument-level pattern scan.
 
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::{path_scope::PathScopeGuard, pattern::PatternGuard, taint::TaintTracker};
 use crate::session::SessionKey;
+
+/// Which guard layer produced a block verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardLayer {
+    /// Taint-flow analysis (session-level label propagation).
+    Taint,
+    /// Regex pattern scanning on tool arguments.
+    Pattern,
+    /// Filesystem path scope enforcement.
+    PathScope,
+}
+
+impl fmt::Display for GuardLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Taint => f.write_str("taint"),
+            Self::Pattern => f.write_str("pattern"),
+            Self::PathScope => f.write_str("path_scope"),
+        }
+    }
+}
 
 /// Verdict from the guard pipeline.
 #[derive(Debug)]
@@ -30,8 +55,8 @@ pub enum GuardVerdict {
     Pass,
     /// Tool call is blocked.
     Blocked {
-        /// Which layer blocked it: "taint", "pattern", or "path_scope".
-        layer:     &'static str,
+        /// Which guard layer blocked the call.
+        layer:     GuardLayer,
         /// Human-readable reason.
         reason:    String,
         /// The tool that was blocked.
@@ -72,7 +97,7 @@ impl GuardPipeline {
         // Layer 1: taint-flow check (session-level, O(1) per label).
         if let Err(violation) = self.taint.check_tool_input(session, tool_name) {
             return GuardVerdict::Blocked {
-                layer:     "taint",
+                layer:     GuardLayer::Taint,
                 reason:    violation.to_string(),
                 tool_name: tool_name.to_string(),
             };
@@ -87,7 +112,7 @@ impl GuardPipeline {
             )
         }) {
             return GuardVerdict::Blocked {
-                layer:     "pattern",
+                layer:     GuardLayer::Pattern,
                 reason:    format!(
                     "{}: matched '{}'",
                     critical.rule_name, critical.matched_pattern
@@ -99,7 +124,7 @@ impl GuardPipeline {
         // Layer 3: path scope check (argument-level, file tools only).
         if let Some(reason) = self.path_scope.check(tool_name, args) {
             return GuardVerdict::Blocked {
-                layer: "path_scope",
+                layer: GuardLayer::PathScope,
                 reason,
                 tool_name: tool_name.to_string(),
             };
@@ -155,7 +180,10 @@ mod tests {
         let verdict = pipeline.pre_execute(&sk, "bash", &args);
         assert!(matches!(
             verdict,
-            GuardVerdict::Blocked { layer: "taint", .. }
+            GuardVerdict::Blocked {
+                layer: GuardLayer::Taint,
+                ..
+            }
         ));
     }
 
@@ -168,7 +196,7 @@ mod tests {
         assert!(matches!(
             verdict,
             GuardVerdict::Blocked {
-                layer: "pattern",
+                layer: GuardLayer::Pattern,
                 ..
             }
         ));
@@ -183,7 +211,7 @@ mod tests {
         assert!(matches!(
             verdict,
             GuardVerdict::Blocked {
-                layer: "pattern",
+                layer: GuardLayer::Pattern,
                 ..
             }
         ));
@@ -198,7 +226,10 @@ mod tests {
         let verdict = pipeline.pre_execute(&sk, "web_fetch", &args);
         assert!(matches!(
             verdict,
-            GuardVerdict::Blocked { layer: "taint", .. }
+            GuardVerdict::Blocked {
+                layer: GuardLayer::Taint,
+                ..
+            }
         ));
     }
 
@@ -212,7 +243,7 @@ mod tests {
         assert!(matches!(
             verdict,
             GuardVerdict::Blocked {
-                layer: "path_scope",
+                layer: GuardLayer::PathScope,
                 ..
             }
         ));
@@ -236,7 +267,7 @@ mod tests {
         assert!(matches!(
             pipeline.pre_execute(&sk, "list-directory", &args),
             GuardVerdict::Blocked {
-                layer: "path_scope",
+                layer: GuardLayer::PathScope,
                 ..
             }
         ));

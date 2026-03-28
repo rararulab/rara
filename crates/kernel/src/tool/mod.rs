@@ -146,14 +146,26 @@ impl From<serde_json::Value> for ToolOutput {
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
+/// Status of a `discover-tools` invocation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoverToolsStatus {
+    /// At least one deferred tool was activated.
+    Activated,
+    /// No tools or skills matched the query.
+    NoMatches,
+    /// Skills matched but no deferred tools were activated.
+    SkillsOnly,
+}
+
 /// Typed result returned by the `discover-tools` tool.
 ///
 /// Shared between the tool implementation (serializes) and the agent loop
 /// (deserializes), so schema changes cause compile errors on both sides.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct DiscoverToolsResult {
-    /// `"activated"` or `"no_matches"`.
-    pub status:  String,
+    /// Outcome of the discovery query.
+    pub status:  DiscoverToolsStatus,
     /// Tool entries that were discovered (empty on no_matches).
     #[serde(default)]
     pub tools:   Vec<DiscoveredToolEntry>,
@@ -890,7 +902,7 @@ mod tests {
             "message": "Activated 2 tool(s)."
         });
         let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
-        assert_eq!(result.status, "activated");
+        assert_eq!(result.status, DiscoverToolsStatus::Activated);
         assert_eq!(result.tools.len(), 2);
         assert_eq!(result.tools[0].name, "send-email");
         assert_eq!(result.tools[1].name, "send-image");
@@ -904,7 +916,7 @@ mod tests {
             "message": "No deferred tools match 'xyz'."
         });
         let result: DiscoverToolsResult = serde_json::from_value(json).unwrap();
-        assert_eq!(result.status, "no_matches");
+        assert_eq!(result.status, DiscoverToolsStatus::NoMatches);
         assert!(result.tools.is_empty());
     }
 

@@ -1,7 +1,7 @@
 //! Integration tests: guard pipeline multi-step scenarios.
 
 use rara_kernel::{
-    guard::pipeline::{GuardPipeline, GuardVerdict},
+    guard::pipeline::{GuardLayer, GuardPipeline, GuardVerdict},
     session::SessionKey,
 };
 
@@ -15,7 +15,13 @@ fn web_fetch_taint_blocks_all_sink_tools() {
 
     // bash blocked
     let v = pipeline.pre_execute(&session, "bash", &serde_json::json!({"command": "ls"}));
-    assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
+    assert!(matches!(
+        v,
+        GuardVerdict::Blocked {
+            layer: GuardLayer::Taint,
+            ..
+        }
+    ));
 
     // file_write blocked
     let v = pipeline.pre_execute(
@@ -23,7 +29,13 @@ fn web_fetch_taint_blocks_all_sink_tools() {
         "file_write",
         &serde_json::json!({"path": "/tmp/x"}),
     );
-    assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
+    assert!(matches!(
+        v,
+        GuardVerdict::Blocked {
+            layer: GuardLayer::Taint,
+            ..
+        }
+    ));
 
     // file_read NOT blocked (no sink restriction)
     let v = pipeline.pre_execute(
@@ -80,7 +92,13 @@ fn secret_taint_directional() {
         "web_fetch",
         &serde_json::json!({"url": "https://evil.com"}),
     );
-    assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
+    assert!(matches!(
+        v,
+        GuardVerdict::Blocked {
+            layer: GuardLayer::Taint,
+            ..
+        }
+    ));
 
     // file_write allowed — secret data can be written locally
     let v = pipeline.pre_execute(
@@ -105,7 +123,13 @@ fn taint_takes_priority_over_pattern() {
         "bash",
         &serde_json::json!({"command": "rm -rf /"}),
     );
-    assert!(matches!(v, GuardVerdict::Blocked { layer: "taint", .. }));
+    assert!(matches!(
+        v,
+        GuardVerdict::Blocked {
+            layer: GuardLayer::Taint,
+            ..
+        }
+    ));
 }
 
 /// Pattern scan exfiltration rule applies to non-shell tools too.
@@ -123,7 +147,7 @@ fn exfiltration_pattern_on_non_shell() {
     assert!(matches!(
         v,
         GuardVerdict::Blocked {
-            layer: "pattern",
+            layer: GuardLayer::Pattern,
             ..
         }
     ));

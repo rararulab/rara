@@ -19,8 +19,8 @@
 //! instructions.
 
 use rara_kernel::tool::{
-    DiscoverToolsResult, DiscoveredSkillEntry, DiscoveredToolEntry, ToolContext, ToolExecute,
-    summarize_parameters,
+    DiscoverToolsResult, DiscoverToolsStatus, DiscoveredSkillEntry, DiscoveredToolEntry,
+    ToolContext, ToolExecute, summarize_parameters,
 };
 use rara_skills::registry::InMemoryRegistry;
 use rara_tool_macro::ToolDef;
@@ -135,7 +135,7 @@ impl ToolExecute for DiscoverToolsTool {
             cats.truncate(10);
             let hint = cats.join(", ");
             let result = DiscoverToolsResult {
-                status:  "no_matches".to_string(),
+                status:  DiscoverToolsStatus::NoMatches,
                 tools:   vec![],
                 skills:  vec![],
                 message: format!("No tools or skills match '{query}'. Try: {hint}"),
@@ -157,9 +157,9 @@ impl ToolExecute for DiscoverToolsTool {
         }
         let result = DiscoverToolsResult {
             status:  if tool_count > 0 {
-                "activated".to_string()
+                DiscoverToolsStatus::Activated
             } else {
-                "skills_only".to_string()
+                DiscoverToolsStatus::SkillsOnly
             },
             tools:   tool_matches,
             skills:  skill_matches,

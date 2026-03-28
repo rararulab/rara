@@ -47,7 +47,7 @@ use tracing::{error, info, info_span, warn};
 
 use crate::{
     error::{IoSnafu, KernelError, Result},
-    guard::pipeline::{GuardPipeline, GuardVerdict},
+    guard::pipeline::{GuardLayer, GuardPipeline, GuardVerdict},
     handle::KernelHandle,
     identity::Role,
     io::{StreamEvent, StreamHandle},
@@ -2031,7 +2031,7 @@ pub(crate) async fn run_agent_loop(
                                 );
                                 // Remember approved path so the user is not
                                 // prompted again for the same directory tree.
-                                if layer == "path_scope" {
+                                if layer == GuardLayer::PathScope {
                                     guard_pipeline.approve_path_scope(&name, &args);
                                 }
                                 // Fall through to normal tool execution.
