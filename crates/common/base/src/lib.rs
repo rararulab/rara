@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod arc_cow;
-pub mod env;
 pub mod id;
 pub mod process_group;
 pub mod readable_size;

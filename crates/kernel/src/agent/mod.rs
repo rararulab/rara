@@ -1023,7 +1023,6 @@ pub(crate) async fn run_agent_loop(
     // can restore tool access after a successful recovery iteration.
     let original_tool_defs = tool_defs.clone();
     let mut empty_response_nudged = false;
-    let mut context_window_recovery_used = false;
     let mut last_progress_at = Instant::now();
 
     let mut needs_anchor_reminder = false;
@@ -1532,10 +1531,6 @@ pub(crate) async fn run_agent_loop(
         };
 
         if let Some(Err(ref e)) = driver_result {
-            if !context_window_recovery_used && matches!(e, KernelError::ContextWindow) {
-                context_window_recovery_used = true;
-            }
-
             if llm_error_recovery_count < MAX_LLM_ERROR_RECOVERIES
                 && crate::error::is_retryable_provider_error(e)
             {

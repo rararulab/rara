@@ -13,11 +13,9 @@ description = "Base utilities and common types for job"
 
 [dependencies]
 derive_more = { workspace = true }
-dotenvy = "0.15.7"
 rustix = { workspace = true, features = ["process"] }
 schemars.workspace = true
 serde.workspace = true
-snafu.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
