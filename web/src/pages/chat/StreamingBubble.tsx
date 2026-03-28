@@ -16,6 +16,7 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import { Bot, Loader2, Wrench } from "lucide-react";
 import {
   formatCompletedToolLine,
@@ -133,7 +134,7 @@ export function StreamingBubble({ stream }: { stream: StreamState }) {
         {/* Streaming text content */}
         {stream.text && (
           <div className="prose prose-sm max-w-none text-foreground prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
               {stream.text}
             </ReactMarkdown>
           </div>

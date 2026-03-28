@@ -16,6 +16,7 @@
 
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+@import "highlight.js/styles/github.css" layer(base);
 
 @theme {
   /* Colors — from @rararulab/style palette.json */
@@ -90,6 +91,20 @@
 }
 
 @layer base {
+  .dark pre code.hljs {
+    background: transparent;
+    color: var(--color-foreground);
+  }
+  .dark .hljs-keyword { color: #ff7b72; }
+  .dark .hljs-string { color: #a5d6ff; }
+  .dark .hljs-comment { color: #8b949e; }
+  .dark .hljs-function { color: #d2a8ff; }
+  .dark .hljs-number { color: #79c0ff; }
+  .dark .hljs-title { color: #d2a8ff; }
+  .dark .hljs-built_in { color: #ffa657; }
+  .dark .hljs-params { color: var(--color-foreground); }
+  .dark .hljs-attr { color: #79c0ff; }
+
   * {
     @apply border-border;
   }
@@ -196,6 +211,20 @@
 
   .code-chip {
     @apply rounded-md border border-border/60 bg-muted/50 px-2 py-1 text-xs;
+  }
+
+  /* Code block styling for prose content */
+  .prose pre {
+    @apply rounded-xl border border-border/50 bg-muted/40 p-4 text-sm;
+    backdrop-filter: blur(4px);
+  }
+  .prose pre code {
+    @apply bg-transparent p-0 text-xs leading-relaxed;
+    font-family: var(--font-mono);
+  }
+  .prose :not(pre) > code {
+    @apply rounded-md border border-border/40 bg-muted/50 px-1.5 py-0.5 text-xs font-medium;
+    font-family: var(--font-mono);
   }
 
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
