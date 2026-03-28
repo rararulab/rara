@@ -60,7 +60,7 @@ async fn get_stats(
 async fn list_sessions(
     State(handle): State<KernelHandle>,
 ) -> Result<Json<Vec<rara_kernel::session::SessionStats>>, ProblemDetails> {
-    Ok(Json(handle.list_processes().await))
+    Ok(Json(handle.list_processes()))
 }
 
 async fn get_session_turns(

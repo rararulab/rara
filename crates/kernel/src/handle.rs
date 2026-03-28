@@ -323,8 +323,8 @@ impl KernelHandle {
     pub fn trace_service(&self) -> &crate::trace::TraceService { &self.trace_service }
 
     /// List scheduled jobs, optionally filtered by session key.
-    pub fn list_jobs(&self, session_key: Option<&SessionKey>) -> Vec<crate::schedule::JobEntry> {
-        self.job_wheel.lock().list(session_key)
+    pub fn list_jobs(&self, session_key: Option<SessionKey>) -> Vec<crate::schedule::JobEntry> {
+        self.job_wheel.lock().list(session_key.as_ref())
     }
 
     /// Generate the skills prompt block for injection into the agent system
@@ -336,15 +336,12 @@ impl KernelHandle {
     /// Get detailed runtime statistics for a single session.
     ///
     /// Returns `None` if the session does not exist.
-    pub async fn session_stats(
-        &self,
-        session_key: &SessionKey,
-    ) -> Option<crate::session::SessionStats> {
-        self.process_table.stats(*session_key)
+    pub fn session_stats(&self, session_key: SessionKey) -> Option<crate::session::SessionStats> {
+        self.process_table.stats(session_key)
     }
 
     /// List detailed runtime statistics for all sessions.
-    pub async fn list_processes(&self) -> Vec<crate::session::SessionStats> {
+    pub fn list_processes(&self) -> Vec<crate::session::SessionStats> {
         self.process_table.all_process_stats()
     }
 
@@ -408,7 +405,7 @@ impl KernelHandle {
     /// automatically when the child is removed from the process table.
     pub async fn spawn_child(
         &self,
-        session_key: &SessionKey,
+        session_key: SessionKey,
         principal: &Principal,
         manifest: AgentManifest,
         input: String,
@@ -417,8 +414,8 @@ impl KernelHandle {
         // per-session child limit.
         let child_sem = self
             .process_table
-            .with(session_key, |p| p.child_semaphore.clone())
-            .ok_or_else(|| KernelError::SessionNotFound { key: *session_key })?;
+            .with(&session_key, |p| p.child_semaphore.clone())
+            .ok_or_else(|| KernelError::SessionNotFound { key: session_key })?;
 
         let child_permit =
             child_sem
@@ -433,7 +430,7 @@ impl KernelHandle {
             manifest,
             input,
             principal.clone(),
-            Some(*session_key),
+            Some(session_key),
             None,
             reply_tx,
         );
@@ -460,7 +457,7 @@ impl KernelHandle {
     }
 
     /// Query session state (direct access — no event queue roundtrip).
-    pub async fn session_status(&self, session_key: SessionKey) -> Result<SessionStats> {
+    pub fn session_status(&self, session_key: SessionKey) -> Result<SessionStats> {
         self.process_table
             .stats(session_key)
             .ok_or(KernelError::ProcessNotFound {
@@ -469,43 +466,43 @@ impl KernelHandle {
     }
 
     /// List child sessions (direct access — no event queue roundtrip).
-    pub async fn session_children(&self, session_key: SessionKey) -> Vec<SessionStats> {
+    pub fn session_children(&self, session_key: SessionKey) -> Vec<SessionStats> {
         self.process_table.children_of(session_key)
     }
 
     /// Register a background task entry on the parent session.
     pub fn register_background_task(
         &self,
-        session_key: &SessionKey,
+        session_key: SessionKey,
         entry: crate::session::BackgroundTaskEntry,
     ) {
-        self.process_table.with_mut(session_key, |session| {
+        self.process_table.with_mut(&session_key, |session| {
             session.background_tasks.push(entry);
         });
     }
 
     /// Remove a background task entry from the parent session.
     /// Returns `true` if the task was found and removed.
-    pub fn remove_background_task(&self, session_key: &SessionKey, child_key: &SessionKey) -> bool {
+    pub fn remove_background_task(&self, session_key: SessionKey, child_key: SessionKey) -> bool {
         self.process_table
-            .with_mut(session_key, |session| {
+            .with_mut(&session_key, |session| {
                 let before = session.background_tasks.len();
                 session
                     .background_tasks
-                    .retain(|t| &t.child_key != child_key);
+                    .retain(|t| t.child_key != child_key);
                 session.background_tasks.len() < before
             })
             .unwrap_or(false)
     }
 
     /// Check if a child session is a background task of the given parent.
-    pub fn is_background_task(&self, parent_key: &SessionKey, child_key: &SessionKey) -> bool {
+    pub fn is_background_task(&self, parent_key: SessionKey, child_key: SessionKey) -> bool {
         self.process_table
-            .with(parent_key, |session| {
+            .with(&parent_key, |session| {
                 session
                     .background_tasks
                     .iter()
-                    .any(|t| &t.child_key == child_key)
+                    .any(|t| t.child_key == child_key)
             })
             .unwrap_or(false)
     }
@@ -513,10 +510,10 @@ impl KernelHandle {
     /// List active background tasks for a session.
     pub fn background_tasks(
         &self,
-        session_key: &SessionKey,
+        session_key: SessionKey,
     ) -> Vec<crate::session::BackgroundTaskEntry> {
         self.process_table
-            .with(session_key, |session| session.background_tasks.clone())
+            .with(&session_key, |session| session.background_tasks.clone())
             .unwrap_or_default()
     }
 
@@ -533,11 +530,11 @@ impl KernelHandle {
     /// the old `rx` to receive a channel-closed error (treated as Stop).
     pub fn register_tool_call_limit(
         &self,
-        session_key: &SessionKey,
+        session_key: SessionKey,
         limit_id: u64,
         tx: tokio::sync::oneshot::Sender<crate::io::ToolCallLimitDecision>,
     ) {
-        self.process_table.with_mut(session_key, |session| {
+        self.process_table.with_mut(&session_key, |session| {
             session.pending_tool_call_limit = Some((limit_id, tx));
         });
     }
@@ -556,12 +553,12 @@ impl KernelHandle {
     /// waiting agent loop.
     pub fn resolve_tool_call_limit(
         &self,
-        session_key: &SessionKey,
+        session_key: SessionKey,
         limit_id: u64,
         decision: crate::io::ToolCallLimitDecision,
     ) -> bool {
         self.process_table
-            .with_mut(session_key, |session| {
+            .with_mut(&session_key, |session| {
                 if let Some((pending_id, _)) = &session.pending_tool_call_limit {
                     if *pending_id != limit_id {
                         return false; // stale callback — ignore
@@ -581,16 +578,16 @@ impl KernelHandle {
     /// Store a value in a session's private namespace.
     pub async fn mem_store(
         &self,
-        session_key: &SessionKey,
+        session_key: SessionKey,
         principal: &Principal,
         key: &str,
         value: serde_json::Value,
     ) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEventEnvelope::syscall(
-            *session_key,
+            session_key,
             Syscall::MemStore {
-                session_key: *session_key,
+                session_key,
                 principal: principal.clone(),
                 key: key.to_string(),
                 value,
@@ -718,7 +715,7 @@ impl KernelHandle {
 
     /// Check whether a tool requires approval before execution
     /// (direct access — no event queue roundtrip).
-    pub async fn requires_approval(&self, _session_key: SessionKey, tool_name: &str) -> bool {
+    pub fn requires_approval(&self, tool_name: &str) -> bool {
         self.security.requires_approval(tool_name)
     }
 
@@ -748,9 +745,9 @@ impl KernelHandle {
 
     /// Get the manifest for a session (direct access — no event queue
     /// roundtrip).
-    pub async fn session_manifest(&self, session_key: &SessionKey) -> Result<AgentManifest> {
+    pub fn session_manifest(&self, session_key: SessionKey) -> Result<AgentManifest> {
         self.process_table
-            .with(session_key, |p| p.manifest.clone())
+            .with(&session_key, |p| p.manifest.clone())
             .ok_or(KernelError::ProcessNotFound {
                 id: session_key.to_string(),
             })
@@ -774,7 +771,7 @@ impl KernelHandle {
     /// Resolve an [`LlmDriver`](crate::llm::LlmDriver) + model for this
     /// session via the kernel's `DriverRegistry`
     /// (direct access — no event queue roundtrip).
-    pub async fn session_resolve_driver(
+    pub fn session_resolve_driver(
         &self,
         session_key: SessionKey,
     ) -> Result<(crate::llm::LlmDriverRef, String)> {

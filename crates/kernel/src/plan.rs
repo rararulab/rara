@@ -259,8 +259,7 @@ pub(crate) async fn run_plan_loop(
     // Build agent context for the planner (same identity as reactive loop).
     let manifest =
         handle
-            .session_manifest(&session_key)
-            .await
+            .session_manifest(session_key)
             .map_err(|e| KernelError::AgentExecution {
                 message: format!("failed to get manifest for planning: {e}"),
             })?;
@@ -331,8 +330,7 @@ pub(crate) async fn run_plan_loop(
     // Note: each plan step's inner agent loop has its own independent
     // limit check — this outer layer provides cross-step protection.
     let limit_interval = handle
-        .session_manifest(&session_key)
-        .await
+        .session_manifest(session_key)
         .map(|m| m.tool_call_limit.unwrap_or(0))
         .unwrap_or(0);
     let mut next_limit_at: usize = limit_interval;
@@ -486,7 +484,7 @@ pub(crate) async fn run_plan_loop(
             });
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            handle.register_tool_call_limit(&session_key, current_limit_id, tx);
+            handle.register_tool_call_limit(session_key, current_limit_id, tx);
 
             info!(
                 total_tool_calls,
@@ -726,12 +724,12 @@ async fn create_plan_via_llm(
     agent_system_prompt: &str,
     tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
-    let (driver, model) = handle
-        .session_resolve_driver(session_key)
-        .await
-        .map_err(|e| KernelError::AgentExecution {
-            message: format!("failed to resolve LLM driver for planning: {e}"),
-        })?;
+    let (driver, model) =
+        handle
+            .session_resolve_driver(session_key)
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to resolve LLM driver for planning: {e}"),
+            })?;
 
     let create_plan_tool = CreatePlanTool;
     let tool_def = llm::ToolDefinition {
@@ -833,12 +831,12 @@ async fn replan_via_llm(
     agent_system_prompt: &str,
     tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
-    let (driver, model) = handle
-        .session_resolve_driver(session_key)
-        .await
-        .map_err(|e| KernelError::AgentExecution {
-            message: format!("failed to resolve LLM driver for replan: {e}"),
-        })?;
+    let (driver, model) =
+        handle
+            .session_resolve_driver(session_key)
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to resolve LLM driver for replan: {e}"),
+            })?;
 
     let create_plan_tool = CreatePlanTool;
     let tool_def = llm::ToolDefinition {
@@ -1044,7 +1042,7 @@ async fn execute_worker_step(
 
     // Spawn the child agent.
     let agent_handle = match handle
-        .spawn_child(&session_key, &principal, worker_manifest, step.task.clone())
+        .spawn_child(session_key, &principal, worker_manifest, step.task.clone())
         .await
     {
         Ok(h) => h,

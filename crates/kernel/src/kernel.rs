@@ -970,7 +970,7 @@ impl Kernel {
 
         // If this child was a background task, trigger a proactive turn on the
         // parent to deliver the result.
-        let is_background = self.handle().is_background_task(&parent_id, &child_id);
+        let is_background = self.handle().is_background_task(parent_id, child_id);
 
         if is_background {
             // Capture trigger_message_id before removing from active list.
@@ -986,7 +986,7 @@ impl Kernel {
                 .flatten();
 
             // Remove from active list.
-            self.handle().remove_background_task(&parent_id, &child_id);
+            self.handle().remove_background_task(parent_id, child_id);
 
             // TODO: AgentRunLoopResult has no explicit success/error field.
             // This heuristic is fragile — consider adding a status field to

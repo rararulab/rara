@@ -118,7 +118,7 @@ impl CommandHandler for StatusCommandHandler {
 
         // -- Section 2: Runtime metrics (from process table) ----------------
         if let Ok(sk) = SessionKey::try_from_raw(&session_key_str) {
-            if let Some(stats) = self.handle.session_stats(&sk).await {
+            if let Some(stats) = self.handle.session_stats(sk) {
                 let _ = writeln!(text);
                 let _ = writeln!(text, "<b>Runtime</b>");
                 let _ = writeln!(text, "State: {}", stats.state);
@@ -129,7 +129,7 @@ impl CommandHandler for StatusCommandHandler {
             }
 
             // -- Section 3: Scheduled jobs ----------------------------------
-            let jobs = self.handle.list_jobs(Some(&sk));
+            let jobs = self.handle.list_jobs(Some(sk));
             let _ = writeln!(text);
             if jobs.is_empty() {
                 let _ = writeln!(text, "<b>Scheduled jobs</b>: none");
@@ -198,7 +198,7 @@ impl CallbackHandler for StatusJobsCallbackHandler {
             }
         };
 
-        let jobs = self.handle.list_jobs(Some(&sk));
+        let jobs = self.handle.list_jobs(Some(sk));
         if jobs.is_empty() {
             return Ok(CallbackResult::SendMessage {
                 text: "No scheduled jobs.".to_owned(),

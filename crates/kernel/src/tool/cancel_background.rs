@@ -68,7 +68,7 @@ impl ToolExecute for CancelBackgroundTool {
             .map_err(|_| anyhow::anyhow!("invalid task_id: {}", p.task_id))?;
         let reason = p.reason.as_deref().unwrap_or("cancelled by parent");
 
-        if !self.handle.is_background_task(&self.session_key, &task_id) {
+        if !self.handle.is_background_task(self.session_key, task_id) {
             return Ok(serde_json::json!({
                 "error": "task not found or not a background task of this session",
                 "task_id": p.task_id,
@@ -94,7 +94,7 @@ impl ToolExecute for CancelBackgroundTool {
         // Signal succeeded — now safe to remove from active list so
         // ChildSessionDone won't trigger a proactive turn.
         self.handle
-            .remove_background_task(&self.session_key, &task_id);
+            .remove_background_task(self.session_key, task_id);
 
         // Emit BackgroundTaskDone so clients remove the status indicator.
         self.handle.stream_hub().emit_to_session(

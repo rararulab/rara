@@ -320,7 +320,7 @@ async fn run_chat_tui(
                             };
                             if let Ok(key) = SessionKey::try_from_raw(&session_key) {
                                 kernel_handle.resolve_tool_call_limit(
-                                    &key,
+                                    key,
                                     limit_id,
                                     decision,
                                 );

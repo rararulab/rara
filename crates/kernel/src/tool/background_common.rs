@@ -61,7 +61,7 @@ pub(crate) async fn spawn_and_register_background(
     );
 
     let agent_handle = handle
-        .spawn_child(session_key, &principal, manifest.clone(), input)
+        .spawn_child(*session_key, &principal, manifest.clone(), input)
         .await
         .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
 
@@ -69,7 +69,7 @@ pub(crate) async fn spawn_and_register_background(
 
     // Register as background task on parent session.
     handle.register_background_task(
-        session_key,
+        *session_key,
         BackgroundTaskEntry {
             child_key,
             agent_name: manifest.name.clone(),

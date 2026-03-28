@@ -887,7 +887,7 @@ impl SyscallTool {
 
         let agent_handle = self
             .handle
-            .spawn_child(&self.session_key, &principal, manifest, task.to_string())
+            .spawn_child(self.session_key, &principal, manifest, task.to_string())
             .await
             .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
 
@@ -937,7 +937,7 @@ impl SyscallTool {
             match self
                 .handle
                 .spawn_child(
-                    &self.session_key,
+                    self.session_key,
                     &principal,
                     manifest,
                     task_req.task.clone(),
@@ -1014,7 +1014,6 @@ impl SyscallTool {
         let info = self
             .handle
             .session_status(target_key)
-            .await
             .map_err(|e| anyhow::anyhow!("status failed: {e}"))?;
         Ok(serde_json::json!({
             "agent_id": info.session_key.to_string(),
@@ -1025,7 +1024,7 @@ impl SyscallTool {
     }
 
     async fn exec_children(&self) -> anyhow::Result<serde_json::Value> {
-        let children = self.handle.session_children(self.session_key).await;
+        let children = self.handle.session_children(self.session_key);
         let list: Vec<serde_json::Value> = children
             .iter()
             .map(|c| {
@@ -1065,7 +1064,7 @@ impl SyscallTool {
     ) -> anyhow::Result<serde_json::Value> {
         let principal = self.principal()?;
         self.handle
-            .mem_store(&self.session_key, &principal, key, value)
+            .mem_store(self.session_key, &principal, key, value)
             .await
             .map_err(|e| anyhow::anyhow!("mem_store failed: {e}"))?;
         Ok(serde_json::json!({ "ok": true }))
