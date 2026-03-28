@@ -24,7 +24,7 @@
 use serde_json::Value;
 
 use super::{HandoffState, TapEntry, TapEntryKind, TapResult};
-use crate::llm::{Message, ToolCallRequest};
+use crate::llm::{Message, MessageContent, ToolCallRequest};
 
 /// When the number of notes since the last anchor exceeds this threshold, a
 /// hint is appended to the system message suggesting memory consolidation.
@@ -323,6 +323,44 @@ pub fn user_tape_context(entries: &[TapEntry], anchor_summary: Option<&str>) -> 
     Some(Message::system(body))
 }
 
+/// Merge all consecutive system-role messages at the front of the list into a
+/// single system message.
+///
+/// Providers with strict chat templates (e.g. Qwen via llama.cpp) require
+/// exactly one system message at position 0.  This function is safe for all
+/// providers — the semantic content is preserved by joining with `\n\n---\n\n`.
+pub fn merge_leading_system_messages(messages: Vec<Message>) -> Vec<Message> {
+    let system_count = messages
+        .iter()
+        .take_while(|m| m.role == crate::llm::Role::System)
+        .count();
+
+    if system_count <= 1 {
+        return messages;
+    }
+
+    let merged_text =
+        messages[..system_count]
+            .iter()
+            .enumerate()
+            .fold(String::new(), |mut acc, (i, m)| {
+                debug_assert!(
+                    matches!(m.content, MessageContent::Text(_)),
+                    "merge_leading_system_messages only handles text content"
+                );
+                if i > 0 {
+                    acc.push_str("\n\n---\n\n");
+                }
+                acc.push_str(m.content.as_text());
+                acc
+            });
+
+    let mut result = Vec::with_capacity(messages.len() - system_count + 1);
+    result.push(Message::system(merged_text));
+    result.extend(messages.into_iter().skip(system_count));
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
@@ -579,6 +617,77 @@ mod tests {
         assert!(text.contains("Next steps: Follow up tomorrow"));
         // Should not contain double newlines when summary is absent.
         assert!(!text.contains("\n\n"));
+    }
+
+    // -----------------------------------------------------------------------
+    // merge_leading_system_messages tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn merge_leading_system_messages_single() {
+        let messages = vec![Message::system("hello"), Message::user("hi")];
+        let merged = merge_leading_system_messages(messages);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].role, Role::System);
+        assert_eq!(merged[0].content.as_text(), "hello");
+        assert_eq!(merged[1].role, Role::User);
+    }
+
+    #[test]
+    fn merge_leading_system_messages_multiple() {
+        let messages = vec![
+            Message::system("system prompt"),
+            Message::system("[Previous Context]\nSummary here"),
+            Message::system("[User Memory]\nNotes here"),
+            Message::user("hi"),
+            Message::assistant("hello"),
+        ];
+        let merged = merge_leading_system_messages(messages);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].role, Role::System);
+        assert!(merged[0].content.as_text().contains("system prompt"));
+        assert!(merged[0].content.as_text().contains("[Previous Context]"));
+        assert!(merged[0].content.as_text().contains("[User Memory]"));
+        assert_eq!(merged[1].role, Role::User);
+        assert_eq!(merged[2].role, Role::Assistant);
+    }
+
+    #[test]
+    fn merge_leading_system_messages_no_system() {
+        let messages = vec![Message::user("hi")];
+        let merged = merge_leading_system_messages(messages);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].role, Role::User);
+    }
+
+    #[test]
+    fn merge_leading_system_messages_empty() {
+        let merged = merge_leading_system_messages(vec![]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_leading_system_messages_all_system() {
+        let messages = vec![Message::system("a"), Message::system("b")];
+        let merged = merge_leading_system_messages(messages);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].content.as_text(), "a\n\n---\n\nb");
+    }
+
+    #[test]
+    fn merge_leading_system_messages_does_not_merge_non_leading() {
+        // System message after a user message should NOT be merged
+        let messages = vec![
+            Message::system("prompt"),
+            Message::user("hi"),
+            Message::system("injected"),
+            Message::assistant("ok"),
+        ];
+        let merged = merge_leading_system_messages(messages);
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[0].role, Role::System);
+        assert_eq!(merged[0].content.as_text(), "prompt");
+        assert_eq!(merged[2].role, Role::System);
     }
 
     #[test]
