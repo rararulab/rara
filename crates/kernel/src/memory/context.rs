@@ -24,7 +24,7 @@
 use serde_json::Value;
 
 use super::{HandoffState, TapEntry, TapEntryKind, TapResult};
-use crate::llm::{Message, ToolCallRequest};
+use crate::llm::{Message, MessageContent, ToolCallRequest};
 
 /// When the number of notes since the last anchor exceeds this threshold, a
 /// hint is appended to the system message suggesting memory consolidation.
@@ -341,7 +341,13 @@ pub fn merge_leading_system_messages(messages: Vec<Message>) -> Vec<Message> {
 
     let merged_text = messages[..system_count]
         .iter()
-        .map(|m| m.content.as_text())
+        .map(|m| {
+            debug_assert!(
+                matches!(m.content, MessageContent::Text(_)),
+                "merge_leading_system_messages only handles text content"
+            );
+            m.content.as_text()
+        })
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
 
