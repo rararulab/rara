@@ -293,6 +293,23 @@
       0 2px 8px rgba(0, 0, 0, 0.15);
   }
 
+  /* Chat empty state */
+  .chat-empty-logo {
+    @apply flex h-16 w-16 items-center justify-center rounded-2xl;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-pop-hover));
+    box-shadow: 0 8px 24px color-mix(in oklab, var(--color-primary) 30%, transparent);
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  .chat-empty-hint {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-muted/40 px-3 py-1 text-xs text-muted-foreground;
+  }
+
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
   .dark .app-surface,
   .dark .data-panel,
