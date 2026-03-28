@@ -310,6 +310,26 @@
     @apply inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-muted/40 px-3 py-1 text-xs text-muted-foreground;
   }
 
+  /* Thinking shimmer */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  .thinking-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-muted-foreground) 0%,
+      var(--color-foreground) 50%,
+      var(--color-muted-foreground) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 2s ease-in-out infinite;
+  }
+
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */
   .dark .app-surface,
   .dark .data-panel,
