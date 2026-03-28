@@ -691,9 +691,10 @@ impl KernelEventEnvelope {
     /// events.
     ///
     /// - **Global** (returns `None`): `UserMessage`, `GroupMessage`,
-    ///   `CreateSession`, `IdleCheck`, `Shutdown`
+    ///   `CreateSession`, `ScheduledTask`, `SendNotification`, `MitaHeartbeat`,
+    ///   `IdleCheck`, `Shutdown`
     /// - **Sharded** (returns `Some`): `SendSignal`, `TurnCompleted`,
-    ///   `ChildSessionDone`, `SessionCommand`, `Deliver`
+    ///   `ChildSessionDone`, `SessionCommand`, `MitaDirective`, `Deliver`
     pub fn shard_key(&self) -> Option<SessionKey> {
         match &self.kind {
             KernelEvent::SendSignal { .. }
