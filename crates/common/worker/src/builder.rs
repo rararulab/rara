@@ -26,7 +26,7 @@ use std::{marker::PhantomData, str::FromStr, time::Duration};
 use snafu::ResultExt;
 
 use crate::{
-    err::CronParseError,
+    error::CronParseError,
     handle::{
         CronHandle, CronOrNotifyHandle, IntervalHandle, IntervalOrNotifyHandle, NotifyHandle,
         OnceHandle,
@@ -265,7 +265,7 @@ where
         mut self,
         expr: &str,
     ) -> Result<WorkerBuilder<'m, S, W, TriggerCron>, CronParseError> {
-        let cron = croner::Cron::from_str(expr).context(crate::err::InvalidExpressionSnafu)?;
+        let cron = croner::Cron::from_str(expr).context(crate::error::InvalidExpressionSnafu)?;
         self.trigger = Some(Trigger::Cron(cron));
         Ok(WorkerBuilder {
             manager:    self.manager,
@@ -363,7 +363,7 @@ where
         mut self,
         expr: &str,
     ) -> Result<WorkerBuilder<'m, S, W, TriggerCronOrNotify>, CronParseError> {
-        let cron = croner::Cron::from_str(expr).context(crate::err::InvalidExpressionSnafu)?;
+        let cron = croner::Cron::from_str(expr).context(crate::error::InvalidExpressionSnafu)?;
         self.trigger = Some(Trigger::CronOrNotify(cron));
         Ok(WorkerBuilder {
             manager:    self.manager,
@@ -781,7 +781,7 @@ where
         mut self,
         expr: &str,
     ) -> Result<FallibleWorkerBuilder<'m, S, W, TriggerCron>, crate::CronParseError> {
-        let cron = croner::Cron::from_str(expr).context(crate::err::InvalidExpressionSnafu)?;
+        let cron = croner::Cron::from_str(expr).context(crate::error::InvalidExpressionSnafu)?;
         self.trigger = Some(crate::Trigger::Cron(cron));
         Ok(FallibleWorkerBuilder {
             manager:    self.manager,
@@ -819,7 +819,7 @@ where
         mut self,
         expr: &str,
     ) -> Result<FallibleWorkerBuilder<'m, S, W, TriggerCronOrNotify>, crate::CronParseError> {
-        let cron = croner::Cron::from_str(expr).context(crate::err::InvalidExpressionSnafu)?;
+        let cron = croner::Cron::from_str(expr).context(crate::error::InvalidExpressionSnafu)?;
         self.trigger = Some(crate::Trigger::CronOrNotify(cron));
         Ok(FallibleWorkerBuilder {
             manager:    self.manager,

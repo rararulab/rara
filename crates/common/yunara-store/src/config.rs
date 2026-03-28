@@ -14,7 +14,7 @@
 
 use sqlx::sqlite::SqlitePoolOptions;
 
-use crate::{db::DBStore, err::Result};
+use crate::{db::DBStore, error::Result};
 
 /// Database configuration for SQLite.
 ///

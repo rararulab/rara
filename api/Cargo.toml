@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "API definitions and gRPC stubs for job"
+description = "API definitions and gRPC stubs for rara"
 
 [dependencies]
 prost = { workspace = true }

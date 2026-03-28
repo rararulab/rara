@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Error types and handling utilities for job"
+description = "Error types and handling utilities for rara"
 
 [dependencies]
 http = { workspace = true }

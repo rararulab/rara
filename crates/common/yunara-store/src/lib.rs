@@ -14,10 +14,10 @@
 
 pub mod config;
 pub mod db;
-pub mod err;
+pub mod error;
 pub mod kv;
 
 pub use config::DatabaseConfig;
 pub use db::DBStore;
-pub use err::{Error, Result};
+pub use error::{Error, Result};
 pub use kv::KVStore;

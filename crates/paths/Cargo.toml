@@ -2,7 +2,7 @@
 name = "rara-paths"
 version = "0.0.1"
 edition.workspace = true
-description = "Path utilities for job"
+description = "Path utilities for rara"
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

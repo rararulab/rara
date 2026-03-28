@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Tokio runtime configuration and management for job"
+description = "Tokio runtime configuration and management for rara"
 
 [dependencies]
 bon.workspace = true

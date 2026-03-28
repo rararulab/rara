@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Command-line interface for job"
+description = "Command-line interface for rara"
 
 [package.metadata.wix]
 upgrade-guid = "3FAE8A69-CCE2-441B-81F1-C9E84D108D7C"

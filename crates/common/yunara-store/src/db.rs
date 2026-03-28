@@ -14,7 +14,7 @@
 
 use sqlx::{Sqlite, SqlitePool, sqlite::SqlitePoolOptions};
 
-use crate::{err::*, kv::KVStore};
+use crate::{error::*, kv::KVStore};
 
 /// Database store that manages the SQLite connection pool.
 #[derive(Clone)]
