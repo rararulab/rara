@@ -16,7 +16,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
 };
 
 use snafu::{ResultExt, Whatever};
@@ -24,7 +24,9 @@ use snafu::{ResultExt, Whatever};
 use super::prompt;
 
 /// Default port for whisper-server during setup verification.
-const DEFAULT_PORT: u16 = 8080;
+/// Uses a non-standard port to avoid collisions with common dev servers on
+/// 8080.
+const DEFAULT_PORT: u16 = 8178;
 
 /// Hugging Face base URL for whisper.cpp GGML models.
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
@@ -38,7 +40,7 @@ const MODEL_OPTIONS: &[(&str, &str)] = &[
     ("large-v3-turbo", "~1.5 GB, best accuracy with turbo speed"),
 ];
 
-/// Result of the whisper installation process.
+/// Result of the whisper.cpp detection / install / verification pipeline.
 pub struct WhisperInstallResult {
     /// Path to the whisper-server binary.
     pub server_bin: PathBuf,
@@ -145,6 +147,20 @@ async fn install_whisper_server() -> Result<PathBuf, Whatever> {
     // Clone or update whisper.cpp.
     if src_dir.join("CMakeLists.txt").is_file() {
         println!("  updating whisper.cpp source...");
+        // Check for dirty worktree before pulling to avoid confusing errors.
+        let dirty = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&src_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
+        if dirty {
+            println!("  warning: local modifications detected in whisper.cpp/, resetting...");
+            run_cmd("git", &["checkout", "."], Some(&src_dir))?;
+        }
         run_cmd("git", &["pull", "--ff-only"], Some(&src_dir))?;
     } else {
         println!("  cloning whisper.cpp...");
@@ -317,19 +333,35 @@ async fn ensure_model() -> Result<PathBuf, Whatever> {
     Ok(model_path)
 }
 
-/// Download a file with progress indication.
+/// Download a file using curl or wget, with progress indication.
+///
+/// Runs the download tool in a blocking task to avoid stalling the
+/// tokio runtime thread during large file transfers.
 async fn download_file(url: &str, dest: &Path) -> Result<(), Whatever> {
+    let url = url.to_owned();
+    let dest = dest.to_owned();
+
+    tokio::task::spawn_blocking(move || download_file_blocking(&url, &dest))
+        .await
+        .whatever_context("download task panicked")?
+}
+
+/// Blocking implementation of file download via curl/wget.
+fn download_file_blocking(url: &str, dest: &Path) -> Result<(), Whatever> {
     // Prefer curl for better progress display.
+    println!("  trying curl...");
     let status = Command::new("curl")
-        .args(["-L", "--progress-bar", "-o"])
+        .args(["-L", "--progress-bar", "--fail", "-o"])
         .arg(dest.as_os_str())
         .arg(url)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status();
 
-    if matches!(status, Ok(s) if s.success()) {
-        return Ok(());
+    match &status {
+        Ok(s) if s.success() => return Ok(()),
+        Ok(s) => println!("  curl failed with exit code {s}, trying wget..."),
+        Err(e) => println!("  curl not available ({e}), trying wget..."),
     }
 
     // Fallback to wget.
@@ -341,16 +373,37 @@ async fn download_file(url: &str, dest: &Path) -> Result<(), Whatever> {
         .stderr(Stdio::inherit())
         .status();
 
-    if matches!(status, Ok(s) if s.success()) {
-        return Ok(());
+    match &status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => snafu::whatever!("wget failed with exit code {s} for {url}"),
+        Err(e) => {
+            snafu::whatever!("neither curl nor wget available ({e}) — install one to proceed")
+        }
     }
-
-    snafu::whatever!("failed to download {url} — install curl or wget")
 }
 
 // ---------------------------------------------------------------------------
 // Server verification
 // ---------------------------------------------------------------------------
+
+/// Drop guard that ensures a child process is killed and reaped.
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    fn new(child: Child) -> Self { Self(Some(child)) }
+
+    /// Take ownership of the child, disabling the automatic kill on drop.
+    fn take(&mut self) -> Option<Child> { self.0.take() }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(ref mut child) = self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
 
 /// Start whisper-server, verify it responds, then shut it down.
 async fn test_server(server_bin: &Path, model_path: &Path, port: u16) -> Result<(), Whatever> {
@@ -382,10 +435,11 @@ async fn test_server(server_bin: &Path, model_path: &Path, port: u16) -> Result<
 
     // Start the server process.
     // Use --inference-path to make it OpenAI-compatible with rara's SttService.
-    let mut child = Command::new(server_bin)
+    // Pass model_path via .arg(OsStr) to avoid lossy UTF-8 conversion.
+    let child = Command::new(server_bin)
+        .arg("-m")
+        .arg(model_path.as_os_str())
         .args([
-            "-m",
-            &model_path.to_string_lossy(),
             "--host",
             "127.0.0.1",
             "--port",
@@ -399,6 +453,9 @@ async fn test_server(server_bin: &Path, model_path: &Path, port: u16) -> Result<
         .spawn()
         .whatever_context("failed to start whisper-server")?;
 
+    // Wrap in a guard so the child is always killed, even on early errors/panics.
+    let mut guard = ChildGuard::new(child);
+
     // Wait for the server to be ready (poll /health).
     let health_url = format!("http://127.0.0.1:{port}/health");
     let client = reqwest::Client::new();
@@ -408,17 +465,20 @@ async fn test_server(server_bin: &Path, model_path: &Path, port: u16) -> Result<
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         // Check if the process exited early.
-        if let Ok(Some(status)) = child.try_wait() {
-            let stderr = child
-                .stderr
-                .take()
-                .map(|mut s| {
-                    let mut buf = String::new();
-                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                    buf
-                })
-                .unwrap_or_default();
-            snafu::whatever!("whisper-server exited prematurely with {status}\n{stderr}");
+        if let Some(ref mut child) = guard.0 {
+            if let Ok(Some(status)) = child.try_wait() {
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = String::new();
+                        std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                // Guard will handle cleanup in drop.
+                snafu::whatever!("whisper-server exited prematurely with {status}\n{stderr}");
+            }
         }
 
         match client
@@ -440,7 +500,7 @@ async fn test_server(server_bin: &Path, model_path: &Path, port: u16) -> Result<
     }
 
     if !ready {
-        let _ = child.kill();
+        // Guard will kill + wait in drop.
         snafu::whatever!("whisper-server did not become ready within 30 seconds");
     }
 
@@ -456,10 +516,12 @@ async fn test_server(server_bin: &Path, model_path: &Path, port: u16) -> Result<
         }
     }
 
-    // Shut down the test server.
+    // Explicitly shut down the test server via the guard.
     println!("  stopping test server...");
-    let _ = child.kill();
-    let _ = child.wait();
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     prompt::print_ok("test server stopped");
 
     Ok(())
@@ -546,4 +608,42 @@ fn generate_silent_wav() -> Vec<u8> {
     buf.resize(buf.len() + data_size as usize, 0);
 
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silent_wav_has_correct_structure() {
+        let wav = generate_silent_wav();
+
+        // Total size: 44 header bytes + 32000 data bytes (16000 samples * 2 bytes)
+        assert_eq!(wav.len(), 44 + 32000);
+
+        // RIFF header
+        assert_eq!(&wav[0..4], b"RIFF");
+        let file_size = u32::from_le_bytes(wav[4..8].try_into().unwrap());
+        assert_eq!(file_size as usize, wav.len() - 8);
+        assert_eq!(&wav[8..12], b"WAVE");
+
+        // fmt chunk
+        assert_eq!(&wav[12..16], b"fmt ");
+        let fmt_size = u32::from_le_bytes(wav[16..20].try_into().unwrap());
+        assert_eq!(fmt_size, 16); // PCM
+        let audio_format = u16::from_le_bytes(wav[20..22].try_into().unwrap());
+        assert_eq!(audio_format, 1); // PCM
+        let channels = u16::from_le_bytes(wav[22..24].try_into().unwrap());
+        assert_eq!(channels, 1); // mono
+        let sample_rate = u32::from_le_bytes(wav[24..28].try_into().unwrap());
+        assert_eq!(sample_rate, 16000);
+
+        // data chunk
+        assert_eq!(&wav[36..40], b"data");
+        let data_size = u32::from_le_bytes(wav[40..44].try_into().unwrap());
+        assert_eq!(data_size, 32000);
+
+        // All data samples are silence (zeros)
+        assert!(wav[44..].iter().all(|&b| b == 0));
+    }
 }

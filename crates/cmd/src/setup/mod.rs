@@ -45,8 +45,9 @@ enum SetupSub {
 impl SetupCmd {
     /// Run the full setup wizard, or a specific subcommand.
     pub async fn run(self) -> Result<(), Whatever> {
-        if self.sub == Some(SetupSub::Whisper) {
-            return stt::run_whisper_setup().await;
+        match self.sub {
+            Some(SetupSub::Whisper) => return stt::run_whisper_setup().await,
+            None => {}
         }
 
         println!("rara setup\n");
