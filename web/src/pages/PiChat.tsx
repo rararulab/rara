@@ -104,9 +104,9 @@ function SessionListPanel({
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-foreground">
-                    {s.title || "Untitled"}
+                    {s.title || s.preview || "New conversation"}
                   </div>
-                  {s.preview && (
+                  {s.title && s.preview && (
                     <div className="mt-0.5 truncate text-xs text-muted-foreground">
                       {s.preview}
                     </div>
@@ -141,7 +141,6 @@ export default function PiChat() {
   const containerRef = useRef<HTMLDivElement>(null);
   const initRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
-  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
 
   /** Switch the agent to a different session. */
@@ -150,7 +149,6 @@ export default function PiChat() {
     if (!agent) return;
     agent.clearMessages();
     agent.sessionId = session.key;
-    setSessionTitle(session.title);
   }, []);
 
   /** Create a new empty session and switch to it. */
@@ -215,8 +213,6 @@ export default function PiChat() {
       } else {
         initialSession = await api.post<ChatSession>("/api/v1/chat/sessions", {});
       }
-      setSessionTitle(initialSession.title);
-
       // 5. Create the Agent with rara's WebSocket-backed stream function.
       //    The streamFn reads agent.sessionId at call time to get the active session key.
       const agent: Agent = new Agent({
@@ -250,23 +246,24 @@ export default function PiChat() {
   return (
     <div className="flex h-screen w-screen flex-col">
       {/* Session toolbar */}
-      <div className="relative z-50 flex h-11 shrink-0 items-center justify-between border-b border-border bg-background px-4">
+      <div className="relative z-50 flex h-10 shrink-0 items-center gap-1 border-b border-border bg-background px-2">
         <button
           onClick={() => setShowSessionList(true)}
-          className="truncate text-sm font-medium text-foreground hover:text-foreground/80 transition-colors cursor-pointer"
-          title="Switch session"
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          title="Sessions"
         >
-          {sessionTitle || "Untitled"}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12h18M3 6h18M3 18h18" />
+          </svg>
         </button>
         <button
           onClick={newSession}
-          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
           title="New session"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          New
         </button>
       </div>
       {/* Chat panel container */}
