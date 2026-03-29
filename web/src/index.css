@@ -107,7 +107,9 @@
     display: none !important;
   }
 
-  /* Align user messages to the right in pi-web-ui chat */
+  /* ── pi-web-ui chat layout overrides (light DOM) ── */
+
+  /* User messages: right-aligned */
   user-message > .flex.justify-start {
     justify-content: flex-end !important;
   }
@@ -129,8 +131,12 @@
   * {
     @apply border-border;
   }
+  :root {
+    --font-sans: "LXGW WenKai Screen", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
     min-height: 100vh;
   }
   /* Rara admin gradient background — only on admin pages */
