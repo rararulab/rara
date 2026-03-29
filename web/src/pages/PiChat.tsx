@@ -96,6 +96,12 @@ export default function PiChat() {
       await chatPanel.setAgent(agent, {
         onApiKeyRequired: async () => true,
       });
+
+      // 8. Hide model/thinking selectors — rara manages these server-side
+      if (chatPanel.agentInterface) {
+        chatPanel.agentInterface.enableModelSelector = false;
+        chatPanel.agentInterface.enableThinkingSelector = false;
+      }
     })();
 
     return () => {
