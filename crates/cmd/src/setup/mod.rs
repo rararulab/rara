@@ -20,6 +20,7 @@ mod prompt;
 mod stt;
 mod telegram;
 mod user;
+mod whisper_install;
 mod writer;
 
 use clap::{Args, Subcommand};

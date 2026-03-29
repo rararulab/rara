@@ -16,7 +16,7 @@ use snafu::{ResultExt, Whatever};
 
 use super::{
     prompt::{self, SetupMode},
-    writer,
+    whisper_install, writer,
 };
 
 /// STT configuration result.
@@ -62,55 +62,28 @@ pub async fn setup_stt(_mode: SetupMode) -> Result<Option<SttResult>, Whatever> 
     }))
 }
 
-/// Standalone whisper STT setup — reads existing config, prompts for STT
-/// settings, merges into config file, and writes back.
+/// Standalone `setup whisper` — detects, installs, configures, and verifies
+/// whisper.cpp, then writes STT settings into the config file.
 pub async fn run_whisper_setup() -> Result<(), Whatever> {
     println!("rara setup whisper\n");
 
-    let config_path = rara_paths::config_file();
+    // Run the full detection / install / verification pipeline.
+    let install = whisper_install::ensure_whisper().await?;
 
-    // Load existing config to show current values as defaults.
-    let existing: Option<rara_app::AppConfig> = if config_path.is_file() {
-        rara_app::AppConfig::new().ok()
-    } else {
-        None
-    };
+    // Build the STT config result.
+    let base_url = format!("http://127.0.0.1:{}", install.port);
 
-    let existing_stt = existing.as_ref().and_then(|c| c.stt.as_ref());
-
-    let default_url = existing_stt
-        .map(|s| s.base_url.as_str())
-        .unwrap_or("http://localhost:8080");
-    let default_model = existing_stt
-        .map(|s| s.model.as_str())
-        .unwrap_or("whisper-1");
-    let default_lang = existing_stt.and_then(|s| s.language.as_deref());
-
-    prompt::print_step("Whisper STT");
-
-    let base_url = prompt::ask("whisper-server URL", Some(default_url));
-    let model = prompt::ask("Model", Some(default_model));
-    let lang = prompt::ask(
-        "Language hint (e.g. zh, en; empty for auto-detect)",
-        default_lang,
-    );
+    let lang = prompt::ask("Language hint (e.g. zh, en; empty for auto-detect)", None);
     let language = if lang.is_empty() { None } else { Some(lang) };
-
-    // Best-effort connectivity check
-    match validate_stt(&base_url).await {
-        Ok(()) => prompt::print_ok("whisper-server connected"),
-        Err(e) => prompt::print_err(&format!(
-            "cannot reach server: {e} (you can start it later)"
-        )),
-    }
 
     let stt_result = SttResult {
         base_url,
-        model,
+        model: "whisper-1".to_owned(),
         language,
     };
 
-    // Merge into existing config file
+    // Merge into existing config file.
+    let config_path = rara_paths::config_file();
     let base_yaml: Option<serde_yaml::Value> = std::fs::read_to_string(&config_path)
         .ok()
         .and_then(|s| serde_yaml::from_str(&s).ok());
@@ -129,7 +102,17 @@ pub async fn run_whisper_setup() -> Result<(), Whatever> {
         println!("Aborted. Config not written.");
     }
 
+    // Print systemd hint for production use.
     println!("\n═══ Whisper setup complete ═══");
+    println!();
+    println!("To run whisper-server in production, create a systemd service or use:");
+    println!(
+        "  {} -m {} --host 127.0.0.1 --port {} --inference-path /v1/audio/transcriptions --convert",
+        install.server_bin.display(),
+        install.model_path.display(),
+        install.port,
+    );
+
     Ok(())
 }
 
