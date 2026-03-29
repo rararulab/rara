@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-export const BASE_URL = import.meta.env.VITE_API_URL || '';
+export const BASE_URL = '';
 
 /** Build common request headers. */
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {

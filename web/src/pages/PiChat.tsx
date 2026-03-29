@@ -56,7 +56,13 @@ function SessionListPanel({
       .then(setSessions)
       .catch(() => setSessions([]))
       .finally(() => setLoading(false));
-  }, []);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   const handleDelete = async (key: string, e: React.MouseEvent) => {
     e.stopPropagation();

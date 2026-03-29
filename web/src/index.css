@@ -148,7 +148,7 @@
   select {
     @apply outline-none;
   }
-  :focus-visible {
+  .rara-admin :focus-visible {
     @apply ring-2 ring-ring/55 ring-offset-2 ring-offset-background;
   }
 }
