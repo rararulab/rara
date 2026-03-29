@@ -333,53 +333,60 @@ async fn ensure_model() -> Result<PathBuf, Whatever> {
     Ok(model_path)
 }
 
-/// Download a file using curl or wget, with progress indication.
-///
-/// Runs the download tool in a blocking task to avoid stalling the
-/// tokio runtime thread during large file transfers.
+/// Download a file via reqwest with progress display.
 async fn download_file(url: &str, dest: &Path) -> Result<(), Whatever> {
-    let url = url.to_owned();
-    let dest = dest.to_owned();
+    use std::io::Write;
 
-    tokio::task::spawn_blocking(move || download_file_blocking(&url, &dest))
+    use tokio::io::AsyncWriteExt;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .send()
         .await
-        .whatever_context("download task panicked")?
-}
+        .whatever_context("download request failed")?;
 
-/// Blocking implementation of file download via curl/wget.
-fn download_file_blocking(url: &str, dest: &Path) -> Result<(), Whatever> {
-    // Prefer curl for better progress display.
-    println!("  trying curl...");
-    let status = Command::new("curl")
-        .args(["-L", "--progress-bar", "--fail", "-o"])
-        .arg(dest.as_os_str())
-        .arg(url)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
-
-    match &status {
-        Ok(s) if s.success() => return Ok(()),
-        Ok(s) => println!("  curl failed with exit code {s}, trying wget..."),
-        Err(e) => println!("  curl not available ({e}), trying wget..."),
+    if !resp.status().is_success() {
+        snafu::whatever!("download failed: HTTP {}", resp.status());
     }
 
-    // Fallback to wget.
-    let status = Command::new("wget")
-        .args(["-q", "--show-progress", "-O"])
-        .arg(dest.as_os_str())
-        .arg(url)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
+    let total = resp.content_length();
+    let mut stream = resp.bytes_stream();
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .whatever_context("failed to create output file")?;
 
-    match &status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => snafu::whatever!("wget failed with exit code {s} for {url}"),
-        Err(e) => {
-            snafu::whatever!("neither curl nor wget available ({e}) — install one to proceed")
+    let mut downloaded: u64 = 0;
+    let mut last_pct: u64 = 0;
+
+    use futures::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.whatever_context("error reading download stream")?;
+        file.write_all(&chunk)
+            .await
+            .whatever_context("error writing to file")?;
+        downloaded += chunk.len() as u64;
+
+        // Print progress every ~5%.
+        if let Some(total) = total {
+            let pct = downloaded * 100 / total;
+            if pct >= last_pct + 5 {
+                last_pct = pct;
+                print!("\r  downloading... {pct}%");
+                std::io::stdout().flush().ok();
+            }
         }
     }
+
+    file.flush()
+        .await
+        .whatever_context("failed to flush file")?;
+
+    if total.is_some() {
+        println!("\r  downloading... 100%");
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
