@@ -218,13 +218,13 @@ export default function PiChat() {
       const agentMsgs = toAgentMessages(msgs);
       if (agentMsgs.length > 0) {
         agent.replaceMessages(agentMsgs);
-        // replaceMessages() only updates internal state without emitting events,
-        // so we must manually trigger a Lit re-render on the AgentInterface.
-        chatPanelRef.current?.agentInterface?.requestUpdate();
       }
     } catch {
       /* session may have no messages yet */
     }
+    // Always trigger re-render after switching — even for empty sessions
+    // so cleared messages are reflected in the UI.
+    chatPanelRef.current?.agentInterface?.requestUpdate();
   }, []);
 
   /** Create a new empty session and switch to it. */
