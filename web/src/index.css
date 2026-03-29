@@ -98,6 +98,15 @@
 }
 
 @layer base {
+  /*
+   * pi-web-ui's ArtifactsPanel applies both "hidden" and "flex" classes.
+   * In Tailwind v4 "flex" overrides "hidden", leaving a visible full-screen
+   * overlay. Force hidden to win.
+   */
+  .hidden {
+    display: none !important;
+  }
+
   .dark pre code.hljs {
     background: transparent;
     color: var(--color-foreground);
