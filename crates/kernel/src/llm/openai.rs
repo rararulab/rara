@@ -538,9 +538,23 @@ impl LlmDriver for OpenAiDriver {
             total_tokens:      u.total.unwrap_or(0),
         });
 
+        // Strip embedded <think> tags from content for providers that place
+        // reasoning there instead of `reasoning_content`.
+        let (embedded_thinking, cleaned_content) = choice
+            .message
+            .content
+            .as_deref()
+            .map(super::think_tag::strip_think_tags)
+            .map(|(thinking, content)| (thinking, non_empty(content)))
+            .unwrap_or((None, None));
+
+        // Prefer explicit reasoning_content when present, otherwise use
+        // extracted `<think>` content.
+        let reasoning_content = choice.message.reasoning_content.or(embedded_thinking);
+
         Ok(CompletionResponse {
-            content: choice.message.content,
-            reasoning_content: choice.message.reasoning_content,
+            content: cleaned_content,
+            reasoning_content,
             tool_calls,
             stop_reason,
             usage,
@@ -691,11 +705,12 @@ impl LlmEmbedder for OpenAiDriver {
 // ---------------------------------------------------------------------------
 
 struct StreamAccumulator {
-    text:        String,
-    reasoning:   String,
-    tools:       HashMap<u32, PendingToolCall>,
-    stop_reason: StopReason,
-    usage:       Option<Usage>,
+    text:         String,
+    reasoning:    String,
+    think_parser: super::think_tag::ThinkTagParser,
+    tools:        HashMap<u32, PendingToolCall>,
+    stop_reason:  StopReason,
+    usage:        Option<Usage>,
 }
 
 struct PendingToolCall {
@@ -708,21 +723,32 @@ struct PendingToolCall {
 impl StreamAccumulator {
     fn new() -> Self {
         Self {
-            text:        String::new(),
-            reasoning:   String::new(),
-            tools:       HashMap::new(),
-            stop_reason: StopReason::Stop,
-            usage:       None,
+            text:         String::new(),
+            reasoning:    String::new(),
+            think_parser: super::think_tag::ThinkTagParser::new(),
+            tools:        HashMap::new(),
+            stop_reason:  StopReason::Stop,
+            usage:        None,
         }
     }
 
     async fn process_chunk(&mut self, chunk: &RawStreamChunk, tx: &mpsc::Sender<StreamDelta>) {
         for choice in &chunk.choices {
-            // Text delta
+            // Text delta (split out embedded <think> blocks).
             if let Some(ref text) = choice.delta.content {
                 if !text.is_empty() {
-                    self.text.push_str(text);
-                    let _ = tx.send(StreamDelta::TextDelta { text: text.clone() }).await;
+                    for segment in self.think_parser.push(text) {
+                        match segment {
+                            super::think_tag::Segment::Text(t) => {
+                                self.text.push_str(&t);
+                                let _ = tx.send(StreamDelta::TextDelta { text: t }).await;
+                            }
+                            super::think_tag::Segment::Thinking(t) => {
+                                self.reasoning.push_str(&t);
+                                let _ = tx.send(StreamDelta::ReasoningDelta { text: t }).await;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -836,13 +862,33 @@ impl StreamAccumulator {
             .collect()
     }
 
-    async fn finalize(self, tx: &mpsc::Sender<StreamDelta>, model: String) -> CompletionResponse {
+    async fn finalize(
+        mut self,
+        tx: &mpsc::Sender<StreamDelta>,
+        model: String,
+    ) -> CompletionResponse {
+        // Flush trailing partial content that was buffered for tag boundary
+        // detection.
+        for segment in self.think_parser.flush() {
+            match segment {
+                super::think_tag::Segment::Text(t) => {
+                    self.text.push_str(&t);
+                    let _ = tx.send(StreamDelta::TextDelta { text: t }).await;
+                }
+                super::think_tag::Segment::Thinking(t) => {
+                    self.reasoning.push_str(&t);
+                    let _ = tx.send(StreamDelta::ReasoningDelta { text: t }).await;
+                }
+            }
+        }
+
         let Self {
             text,
             reasoning,
             tools,
             stop_reason,
             usage,
+            ..
         } = self;
         let tool_calls = Self::collect_tools(tools);
 
