@@ -14,19 +14,14 @@
  * limitations under the License.
  */
 
-export const BASE_URL = import.meta.env.VITE_API_URL || '';
+export const BASE_URL = '';
 
-/** Build common request headers (Content-Type + Authorization if logged in). */
+/** Build common request headers. */
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = {
+  return {
     'Content-Type': 'application/json',
     ...extra,
   };
-  const token = localStorage.getItem('access_token');
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return headers;
 }
 
 class ApiError extends Error {
@@ -41,26 +36,15 @@ class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-function clearAuthAndRedirect() {
-  localStorage.removeItem('access_token');
-  if (window.location.pathname !== '/login') {
-    window.location.href = '/login';
-  }
-}
-
 async function request<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const token = localStorage.getItem('access_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(fetchOptions?.headers as Record<string, string>),
   };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
 
   try {
     const res = await fetch(`${BASE_URL}${path}`, {
@@ -68,11 +52,6 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
       headers,
       signal: controller.signal,
     });
-
-    if (res.status === 401) {
-      clearAuthAndRedirect();
-      throw new ApiError(401, 'Unauthorized');
-    }
 
     if (!res.ok) {
       const text = await res.text();
