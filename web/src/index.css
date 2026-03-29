@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+@import "@mariozechner/pi-web-ui/app.css";
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @import "highlight.js/styles/github.css" layer(base);
