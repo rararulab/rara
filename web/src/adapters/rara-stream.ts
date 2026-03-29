@@ -126,7 +126,7 @@ function buildWsUrl(sessionKey: string): string {
   // Strip trailing slash
   base = base.replace(/\/$/, "");
 
-  return `${base}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}`;
+  return `${base}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web_ryan`;
 }
 
 /**
