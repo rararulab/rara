@@ -107,6 +107,11 @@
     display: none !important;
   }
 
+  /* Align user messages to the right in pi-web-ui chat */
+  user-message > .flex.justify-start {
+    justify-content: flex-end !important;
+  }
+
   .dark pre code.hljs {
     background: transparent;
     color: var(--color-foreground);
