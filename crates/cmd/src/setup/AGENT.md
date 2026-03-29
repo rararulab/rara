@@ -1,27 +1,34 @@
 # setup — Agent Guidelines
 
 ## Purpose
-Interactive CLI wizard that guides users through configuring rara's core dependencies.
+Interactive CLI wizard for configuring rara — database, LLM, Telegram, STT, and users. Also provides `rara setup whisper` for automated whisper.cpp installation.
 
 ## Architecture
-- `mod.rs` — entry point, mode selection, orchestrates all steps
-- `prompt.rs` — generic Q&A utilities (ask, ask_choice, confirm, etc.)
-- `db.rs` — database URL + connection test + migration
-- `llm.rs` — provider selection + API key + model + verification
-- `telegram.rs` — bot token + chat_id + test message
-- `user.rs` — user identity (name, role, platform mappings)
-- `stt.rs` — optional whisper-server config + connectivity check
-- `writer.rs` — YAML assembly, secret masking, backup + write
+- `mod.rs` — `SetupCmd` with optional `SetupSub` subcommands (currently: `Whisper`). Orchestrates the full wizard flow.
+- `whisper_install.rs` — Automated whisper.cpp pipeline: detect existing binary → clone/build from source → download GGML model → start server → verify health + transcription → shutdown. Entry point: `ensure_whisper()`.
+- `stt.rs` — STT config section for the full wizard (`setup_stt`) and standalone whisper entry point (`run_whisper_setup`).
+- `writer.rs` — Config assembly and YAML serialization. `assemble_config()` merges all sections.
+- `prompt.rs` — Interactive CLI helpers (ask, confirm, ask_choice, print_step/ok/err).
+- `db.rs`, `llm.rs`, `telegram.rs`, `user.rs` — Individual config sections for the full wizard.
 
 ## Critical Invariants
-- Each step validates immediately after input — never write unvalidated config.
+- **Setup only writes config files** — it does NOT call settings API. Config syncs to settings automatically at app startup.
+- **whisper-server must use `--inference-path /v1/audio/transcriptions`** — rara's `SttService` expects the OpenAI-compatible endpoint, not whisper.cpp's default `/inference`.
+- **whisper-server must use `--convert`** — Telegram sends OGG/Opus voice files; without this flag whisper.cpp only accepts 16-bit 16kHz WAV.
+- **ChildGuard pattern** — `test_server` wraps the child process in a drop guard to ensure cleanup on any exit path (early error, panic).
+- **Model paths use `OsStr`** — never convert paths through `to_string_lossy()` for command arguments; use `.arg(path.as_os_str())`.
 - Existing config is always backed up before overwrite (`config.yaml.bak`).
 - API keys are masked in preview output.
 - FillMissing mode must never overwrite existing values.
-- Setup only writes config.yaml — no runtime behavior changes.
 
 ## What NOT To Do
-- Do NOT auto-discover services — only configure what the user explicitly provides.
-- Do NOT install dependencies — only configure connection info.
-- Do NOT modify runtime behavior — setup only writes config.yaml.
-- Do NOT add new setup steps without the validate-then-retry pattern.
+- Do NOT add settings API calls to setup — setup only writes `~/.config/rara/config.yaml`.
+- Do NOT ask the user for OS/arch — detect automatically from the machine.
+- Do NOT use port 8080 as default — use 8178 to avoid collisions with common dev servers.
+- Do NOT spawn long-running downloads on the tokio runtime thread — use `spawn_blocking`.
+- Do NOT convert `Path` to `String` for command args — use `.as_os_str()` to preserve non-UTF-8 paths.
+
+## Dependencies
+- **Upstream**: `rara_paths` (config/data dir paths), `rara_app::AppConfig` (existing config loading)
+- **External**: `reqwest` (health checks, test transcription), `serde_yaml` (config read/write), `serde_json` (response parsing)
+- **Build-time**: whisper.cpp requires `cmake`, `make`, `git` on the host machine

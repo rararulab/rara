@@ -14,7 +14,10 @@
 
 use snafu::{ResultExt, Whatever};
 
-use super::prompt::{self, SetupMode};
+use super::{
+    prompt::{self, SetupMode},
+    whisper_install, writer,
+};
 
 /// STT configuration result.
 pub struct SttResult {
@@ -57,6 +60,60 @@ pub async fn setup_stt(_mode: SetupMode) -> Result<Option<SttResult>, Whatever> 
         model,
         language,
     }))
+}
+
+/// Standalone `setup whisper` — detects, installs, configures, and verifies
+/// whisper.cpp, then writes STT settings into the config file.
+pub async fn run_whisper_setup() -> Result<(), Whatever> {
+    println!("rara setup whisper\n");
+
+    // Run the full detection / install / verification pipeline.
+    let install = whisper_install::ensure_whisper().await?;
+
+    // Build the STT config result.
+    let base_url = format!("http://127.0.0.1:{}", install.port);
+
+    let lang = prompt::ask("Language hint (e.g. zh, en; empty for auto-detect)", None);
+    let language = if lang.is_empty() { None } else { Some(lang) };
+
+    let stt_result = SttResult {
+        base_url,
+        model: "whisper-1".to_owned(),
+        language,
+    };
+
+    // Merge into existing config file.
+    let config_path = rara_paths::config_file();
+    let base_yaml: Option<serde_yaml::Value> = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|s| serde_yaml::from_str(&s).ok());
+
+    let config_value =
+        writer::assemble_config(base_yaml, None, None, None, None, Some(&stt_result))?;
+
+    let yaml = writer::to_yaml(&config_value)?;
+
+    println!("\n═══ STT Config Preview ═══");
+    println!("{}", writer::mask_secrets(&yaml));
+
+    if prompt::confirm("Write config?", true) {
+        writer::write_config(config_path, &yaml)?;
+    } else {
+        println!("Aborted. Config not written.");
+    }
+
+    // Print systemd hint for production use.
+    println!("\n═══ Whisper setup complete ═══");
+    println!();
+    println!("To run whisper-server in production, create a systemd service or use:");
+    println!(
+        "  {} -m {} --host 127.0.0.1 --port {} --inference-path /v1/audio/transcriptions --convert",
+        install.server_bin.display(),
+        install.model_path.display(),
+        install.port,
+    );
+
+    Ok(())
 }
 
 /// Best-effort connectivity check to whisper-server.
