@@ -22,18 +22,32 @@ mod telegram;
 mod user;
 mod writer;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 pub use prompt::SetupMode;
 use snafu::Whatever;
 
 /// Interactive setup wizard -- configure database, LLM, Telegram, and more.
 #[derive(Debug, Clone, Args)]
 #[command(about = "Interactive setup wizard -- configure database, LLM, Telegram, and more")]
-pub struct SetupCmd;
+pub struct SetupCmd {
+    #[command(subcommand)]
+    sub: Option<SetupSub>,
+}
+
+/// Available setup subcommands for configuring individual components.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+enum SetupSub {
+    /// Configure whisper speech-to-text (STT) settings only.
+    Whisper,
+}
 
 impl SetupCmd {
-    /// Run the interactive setup wizard.
+    /// Run the full setup wizard, or a specific subcommand.
     pub async fn run(self) -> Result<(), Whatever> {
+        if self.sub == Some(SetupSub::Whisper) {
+            return stt::run_whisper_setup().await;
+        }
+
         println!("rara setup\n");
 
         let config_path = rara_paths::config_file();
