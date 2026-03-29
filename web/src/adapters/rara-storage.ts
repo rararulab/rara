@@ -54,10 +54,14 @@ export class RaraStorageBackend implements StorageBackend {
       settingsApi.list(),
     ]);
 
-    // Populate session metadata store
-    const metaStore = this.store("sessions");
+    // Populate both session stores — pi-web-ui uses "sessions" for full data
+    // and "sessions-metadata" for the lightweight list (SessionListDialog reads the latter)
+    const sessionsStore = this.store("sessions");
+    const metaStore = this.store("sessions-metadata");
     for (const s of sessions) {
-      metaStore.set(s.key, chatSessionToMetadata(s));
+      const meta = chatSessionToMetadata(s);
+      sessionsStore.set(s.key, meta);
+      metaStore.set(s.key, meta);
     }
 
     // Populate settings store
@@ -89,6 +93,13 @@ export class RaraStorageBackend implements StorageBackend {
   ): Promise<void> {
     this.store(storeName).set(key, value);
 
+    // Keep both session stores in sync
+    if (storeName === "sessions") {
+      this.store("sessions-metadata").set(key, value);
+    } else if (storeName === "sessions-metadata") {
+      this.store("sessions").set(key, value);
+    }
+
     // Fire-and-forget sync for settings — coerce to string for the REST API
     if (storeName === "settings") {
       settingsApi.set(key, String(value)).catch((e) => {
@@ -104,8 +115,10 @@ export class RaraStorageBackend implements StorageBackend {
   async delete(storeName: string, key: string): Promise<void> {
     this.store(storeName).delete(key);
 
-    // Fire-and-forget sync for session deletion
-    if (storeName === "sessions") {
+    // Keep both session stores in sync and fire-and-forget API deletion
+    if (storeName === "sessions" || storeName === "sessions-metadata") {
+      this.store("sessions").delete(key);
+      this.store("sessions-metadata").delete(key);
       api
         .del(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
         .catch((e) => {
