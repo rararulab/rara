@@ -16,7 +16,6 @@
 
 import { useState, useEffect, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
-import CascadeViewer, { type StreamingNode, type TurnTrace } from "@/components/CascadeViewer";
 import {
   Activity,
   ChevronDown,
@@ -51,6 +50,52 @@ import {
 // ---------------------------------------------------------------------------
 // Types (matching Rust backend)
 // ---------------------------------------------------------------------------
+
+/** A single node streamed via WebSocket during live session observation. */
+interface StreamingNode {
+  type: "thought" | "action" | "observation";
+  key: string;
+  text?: string;
+  toolName?: string;
+  toolId?: string;
+  arguments?: Record<string, unknown>;
+  resultPreview?: string;
+  success?: boolean;
+  error?: string | null;
+  durationMs?: number;
+  streaming?: boolean;
+}
+
+interface ToolCallTrace {
+  name: string;
+  id: string;
+  duration_ms: number;
+  success: boolean;
+  arguments: Record<string, unknown>;
+  result_preview: string;
+  error: string | null;
+}
+
+interface IterationTrace {
+  index: number;
+  first_token_ms: number | null;
+  stream_ms: number;
+  text_preview: string;
+  reasoning_text: string | null;
+  tool_calls: ToolCallTrace[];
+}
+
+/** Trace data for a single agent turn (returned by the turns API). */
+interface TurnTrace {
+  duration_ms: number;
+  model: string;
+  input_text: string | null;
+  iterations: IterationTrace[];
+  final_text_len: number;
+  total_tool_calls: number;
+  success: boolean;
+  error: string | null;
+}
 
 interface SystemStats {
   active_sessions: number;
@@ -549,11 +594,35 @@ export default function KernelTop() {
                                 Failed to load turn traces
                               </div>
                             ) : (
-                              <CascadeViewer
-                                traces={turnsQuery.data ?? []}
-                                streamingNodes={streamingNodes}
-                                isStreaming={isStreaming}
-                              />
+                              <div className="space-y-2">
+                                {isStreaming && streamingNodes.length > 0 && (
+                                  <div className="rounded border border-border bg-muted/30 p-3">
+                                    <div className="mb-1 text-xs font-medium text-muted-foreground">Live stream</div>
+                                    {streamingNodes.map((n) => (
+                                      <div key={n.key} className="text-xs font-mono truncate">
+                                        <Badge variant="outline" className="mr-1.5 text-[10px]">{n.type}</Badge>
+                                        {n.text ?? n.toolName ?? n.resultPreview ?? "..."}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {(turnsQuery.data ?? []).map((t, i) => (
+                                  <div key={i} className="rounded border border-border p-3 text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant={t.success ? "secondary" : "destructive"} className="text-[10px]">
+                                        {t.success ? "OK" : "ERR"}
+                                      </Badge>
+                                      <span className="font-mono text-muted-foreground">{t.model}</span>
+                                      <span className="text-muted-foreground">{t.duration_ms}ms</span>
+                                      <span className="text-muted-foreground">{t.total_tool_calls} tool calls</span>
+                                    </div>
+                                    {t.error && <div className="mt-1 text-destructive">{t.error}</div>}
+                                  </div>
+                                ))}
+                                {(turnsQuery.data ?? []).length === 0 && !isStreaming && (
+                                  <div className="text-sm text-muted-foreground italic">No turns recorded</div>
+                                )}
+                              </div>
                             )}
                           </div>
                         </TableCell>
