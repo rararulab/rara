@@ -157,66 +157,77 @@ pub(crate) fn strip_think_tags(text: &str) -> (Option<String>, String) {
 mod tests {
     use super::*;
 
+    fn collect_stream(chunks: &[&str]) -> (String, String) {
+        let mut parser = ThinkTagParser::new();
+        let mut text = String::new();
+        let mut thinking = String::new();
+
+        for chunk in chunks {
+            for seg in parser.push(chunk) {
+                match seg {
+                    Segment::Text(t) => text.push_str(&t),
+                    Segment::Thinking(t) => thinking.push_str(&t),
+                }
+            }
+        }
+
+        for seg in parser.flush() {
+            match seg {
+                Segment::Text(t) => text.push_str(&t),
+                Segment::Thinking(t) => thinking.push_str(&t),
+            }
+        }
+
+        (text, thinking)
+    }
+
     #[test]
     fn no_think_tags() {
-        let mut parser = ThinkTagParser::new();
-        let segments = parser.push("Hello world");
-        assert_eq!(segments, vec![Segment::Text("Hello world".into())]);
+        let (text, thinking) = collect_stream(&["Hello world"]);
+        assert_eq!(thinking, "");
+        assert_eq!(text, "Hello world");
     }
 
     #[test]
     fn complete_think_block() {
-        let mut parser = ThinkTagParser::new();
-        let segments = parser.push("<think>reasoning here</think>visible text");
-        assert_eq!(
-            segments,
-            vec![
-                Segment::Thinking("reasoning here".into()),
-                Segment::Text("visible text".into()),
-            ]
-        );
+        let (text, thinking) = collect_stream(&["<think>reasoning here</think>visible text"]);
+        assert_eq!(thinking, "reasoning here");
+        assert_eq!(text, "visible text");
     }
 
     #[test]
     fn streaming_partial_open_tag() {
-        let mut parser = ThinkTagParser::new();
-        let s1 = parser.push("<thi");
-        assert_eq!(s1, vec![]);
-        let s2 = parser.push("nk>inside");
-        assert_eq!(s2, vec![Segment::Thinking("inside".into())]);
+        let (text, thinking) = collect_stream(&["<thi", "nk>inside"]);
+        assert_eq!(thinking, "inside");
+        assert_eq!(text, "");
     }
 
     #[test]
     fn streaming_partial_close_tag() {
-        let mut parser = ThinkTagParser::new();
-        let s0 = parser.push("<think>reason");
-        assert_eq!(s0, vec![Segment::Thinking("reason".into())]);
-        let s1 = parser.push("ing</thi");
-        assert_eq!(s1, vec![Segment::Thinking("ing".into())]);
-        let s2 = parser.push("nk>after");
-        assert_eq!(s2, vec![Segment::Text("after".into())]);
+        let (text, thinking) = collect_stream(&["<think>reason", "ing</thi", "nk>after"]);
+        assert_eq!(thinking, "reasoning");
+        assert_eq!(text, "after");
     }
 
     #[test]
     fn false_alarm_partial_tag() {
-        let mut parser = ThinkTagParser::new();
-        let s1 = parser.push("<thi");
-        assert_eq!(s1, vec![]);
-        let s2 = parser.push("s is not a tag");
-        assert_eq!(s2, vec![Segment::Text("<this is not a tag".into())]);
+        let (text, thinking) = collect_stream(&["<thi", "s is not a tag"]);
+        assert_eq!(thinking, "");
+        assert_eq!(text, "<this is not a tag");
     }
 
     #[test]
     fn think_at_start_then_text() {
-        let mut parser = ThinkTagParser::new();
-        let s1 = parser.push("<think>\nLet me think...\n</think>\n\nHello!");
-        assert_eq!(
-            s1,
-            vec![
-                Segment::Thinking("\nLet me think...\n".into()),
-                Segment::Text("\n\nHello!".into()),
-            ]
-        );
+        let (text, thinking) = collect_stream(&["<think>\nLet me think...\n</think>\n\nHello!"]);
+        assert_eq!(thinking, "\nLet me think...\n");
+        assert_eq!(text, "\n\nHello!");
+    }
+
+    #[test]
+    fn split_boundaries_around_both_tags() {
+        let (text, thinking) = collect_stream(&["before<thi", "nk>mid</th", "ink>after"]);
+        assert_eq!(thinking, "mid");
+        assert_eq!(text, "beforeafter");
     }
 
     #[test]
