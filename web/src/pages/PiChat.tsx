@@ -24,10 +24,50 @@ import {
   CustomProvidersStore,
 } from "@mariozechner/pi-web-ui";
 import { Agent } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { UserMessage, AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
-import type { ChatSession } from "@/api/types";
+import type { ChatSession, ChatMessageData } from "@/api/types";
+
+/** Strip `<think>...</think>` blocks from assistant text. */
+function stripThinkTags(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
+/** Convert rara ChatMessageData to pi-agent-core AgentMessage for display. */
+function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  for (const m of msgs) {
+    const raw =
+      typeof m.content === "string"
+        ? m.content
+        : m.content
+            .filter((b): b is { type: "text"; text: string } => b.type === "text")
+            .map((b) => b.text)
+            .join("\n");
+    const ts = new Date(m.created_at).getTime();
+
+    if (m.role === "user") {
+      result.push({ role: "user", content: raw, timestamp: ts } as UserMessage);
+    } else if (m.role === "assistant") {
+      const text = stripThinkTags(raw);
+      const content: TextContent[] = text ? [{ type: "text", text }] : [];
+      result.push({
+        role: "assistant",
+        content,
+        api: "messages",
+        provider: "anthropic",
+        model: "unknown",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: ts,
+      } as AssistantMessage);
+    }
+  }
+  return result;
+}
 
 function formatRelativeDate(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -147,14 +187,29 @@ export default function PiChat() {
   const containerRef = useRef<HTMLDivElement>(null);
   const initRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
+  const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
 
-  /** Switch the agent to a different session. */
-  const switchSession = useCallback((session: ChatSession) => {
+  /** Switch the agent to a different session, loading its history. */
+  const switchSession = useCallback(async (session: ChatSession) => {
     const agent = agentRef.current;
     if (!agent) return;
     agent.clearMessages();
     agent.sessionId = session.key;
+    try {
+      const msgs = await api.get<ChatMessageData[]>(
+        `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
+      );
+      const agentMsgs = toAgentMessages(msgs);
+      if (agentMsgs.length > 0) {
+        agent.replaceMessages(agentMsgs);
+        // replaceMessages() only updates internal state without emitting events,
+        // so we must manually trigger a Lit re-render on the AgentInterface.
+        chatPanelRef.current?.agentInterface?.requestUpdate();
+      }
+    } catch {
+      /* session may have no messages yet */
+    }
   }, []);
 
   /** Create a new empty session and switch to it. */
@@ -229,6 +284,7 @@ export default function PiChat() {
 
       // 6. Mount the ChatPanel custom element
       const chatPanel = document.createElement("pi-chat-panel") as import("@mariozechner/pi-web-ui").ChatPanel;
+      chatPanelRef.current = chatPanel;
       container.appendChild(chatPanel);
 
       // 7. Wire agent into the panel — skip API key prompt since rara manages keys server-side
