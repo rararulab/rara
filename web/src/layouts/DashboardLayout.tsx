@@ -87,7 +87,7 @@ export default function DashboardLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-transparent">
+    <div className="rara-admin flex h-screen bg-transparent">
       {shouldShowOnboarding && (
         <OnboardingModal
           open={onboardingOpen}

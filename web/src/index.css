@@ -20,26 +20,26 @@
 @import "highlight.js/styles/github.css" layer(base);
 
 @theme {
-  /* Colors — from @rararulab/style palette.json */
-  --color-background: #fafafa;
-  --color-foreground: #3D2B2E;
-  --color-card: #ffffff;
-  --color-card-foreground: #3D2B2E;
-  --color-primary: #E8788A;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #F0DEE0;
-  --color-secondary-foreground: #3D2B2E;
-  --color-muted: #F0DEE0;
-  --color-muted-foreground: #8C7478;
-  --color-accent: #F0DEE0;
-  --color-accent-foreground: #3D2B2E;
-  --color-destructive: #D46A6A;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #F0DEE0;
-  --color-input: #F0DEE0;
-  --color-ring: #E8788A;
+  /* Re-export pi-web-ui / mini-lit color tokens so Tailwind utilities work */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 
-  /* Semantic status colors */
+  /* Semantic status colors — rara admin */
   --color-ok: #7BC4A0;
   --color-warn: #E8B86D;
   --color-err: #D46A6A;
@@ -47,48 +47,54 @@
   --color-pop-hover: #D4606F;
   --color-subtle: #B8A0A4;
 
-  /* Typography */
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
-
-  /* Radius */
-  --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
-  --radius-full: 9999px;
-
   /* Motion */
   --motion-fast: 150ms;
   --motion-normal: 250ms;
   --motion-slow: 500ms;
 }
 
-/* Dark mode color overrides — warm rose palette adapted for dark backgrounds */
-.dark {
-  --color-background: #1a1214;
-  --color-foreground: #e8dfe0;
-  --color-card: #231a1c;
-  --color-card-foreground: #e8dfe0;
-  --color-primary: #E8788A;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #3d2a2e;
-  --color-secondary-foreground: #e8dfe0;
-  --color-muted: #3d2a2e;
-  --color-muted-foreground: #a89496;
-  --color-accent: #3d2a2e;
-  --color-accent-foreground: #e8dfe0;
-  --color-destructive: #D46A6A;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #3d2a2e;
-  --color-input: #3d2a2e;
-  --color-ring: #E8788A;
-  --color-ok: #7BC4A0;
-  --color-warn: #E8B86D;
-  --color-err: #D46A6A;
-  --color-pop: #E8788A;
-  --color-pop-hover: #f08898;
-  --color-subtle: #6d5b5e;
+/*
+ * Rara admin palette — scoped to .rara-admin (DashboardLayout).
+ * Chat page uses pi-web-ui's native theme untouched.
+ */
+.rara-admin {
+  --background: #fafafa;
+  --foreground: #3D2B2E;
+  --card: #ffffff;
+  --card-foreground: #3D2B2E;
+  --primary: #E8788A;
+  --primary-foreground: #ffffff;
+  --secondary: #F0DEE0;
+  --secondary-foreground: #3D2B2E;
+  --muted: #F0DEE0;
+  --muted-foreground: #8C7478;
+  --accent: #F0DEE0;
+  --accent-foreground: #3D2B2E;
+  --destructive: #D46A6A;
+  --destructive-foreground: #ffffff;
+  --border: #F0DEE0;
+  --input: #F0DEE0;
+  --ring: #E8788A;
+}
+
+.rara-admin.dark {
+  --background: #1a1214;
+  --foreground: #e8dfe0;
+  --card: #231a1c;
+  --card-foreground: #e8dfe0;
+  --primary: #E8788A;
+  --primary-foreground: #ffffff;
+  --secondary: #3d2a2e;
+  --secondary-foreground: #e8dfe0;
+  --muted: #3d2a2e;
+  --muted-foreground: #a89496;
+  --accent: #3d2a2e;
+  --accent-foreground: #e8dfe0;
+  --destructive: #D46A6A;
+  --destructive-foreground: #ffffff;
+  --border: #3d2a2e;
+  --input: #3d2a2e;
+  --ring: #E8788A;
 }
 
 @layer base {
@@ -111,15 +117,16 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: var(--font-sans);
+    min-height: 100vh;
+  }
+  /* Rara admin gradient background — only on admin pages */
+  .rara-admin {
     background-image:
       radial-gradient(circle at 0% 0%, color-mix(in oklab, var(--color-primary) 14%, transparent) 0%, transparent 45%),
       radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--color-accent) 22%, transparent) 0%, transparent 48%),
       linear-gradient(to bottom, color-mix(in oklab, var(--color-background) 92%, white), var(--color-background));
-    min-height: 100vh;
   }
-  .dark body,
-  body.dark {
+  .dark .rara-admin {
     background-image:
       radial-gradient(circle at 0% 0%, color-mix(in oklab, var(--color-primary) 8%, transparent) 0%, transparent 45%),
       radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--color-accent) 12%, transparent) 0%, transparent 48%),
