@@ -164,7 +164,7 @@ export default function PiChat() {
           className="truncate text-sm font-medium text-foreground hover:text-foreground/80 transition-colors cursor-pointer"
           title="Switch session"
         >
-          {sessionTitle || "New conversation"}
+          {sessionTitle || "Untitled"}
         </button>
         <button
           onClick={newSession}
