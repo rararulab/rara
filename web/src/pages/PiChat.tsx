@@ -78,7 +78,7 @@ function SessionListPanel({
         onClick={onClose}
       />
       {/* Panel */}
-      <div className="fixed inset-y-0 left-0 z-[61] flex w-80 flex-col border-r border-border bg-background shadow-xl">
+      <div className="fixed inset-y-0 left-0 z-[61] flex w-full max-w-80 flex-col border-r border-border bg-background shadow-xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold text-foreground">Sessions</span>
           <button
