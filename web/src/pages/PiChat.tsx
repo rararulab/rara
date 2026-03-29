@@ -244,30 +244,19 @@ export default function PiChat() {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen flex-col">
-      {/* Session toolbar */}
-      <div className="relative z-50 flex h-10 shrink-0 items-center gap-1 border-b border-border bg-background px-2">
-        <button
-          onClick={() => setShowSessionList(true)}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-          title="Sessions"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 12h18M3 6h18M3 18h18" />
-          </svg>
-        </button>
-        <button
-          onClick={newSession}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-          title="New session"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-      </div>
+    <div className="relative h-screen w-screen">
+      {/* Sessions button — fixed top-left */}
+      <button
+        onClick={() => setShowSessionList(true)}
+        className="absolute left-2 top-2 z-50 rounded-md bg-background/80 p-1.5 text-muted-foreground shadow-sm backdrop-blur hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+        title="Sessions"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M3 12h18M3 6h18M3 18h18" />
+        </svg>
+      </button>
       {/* Chat panel container */}
-      <div ref={containerRef} className="min-h-0 flex-1" />
+      <div ref={containerRef} className="h-full w-full" />
       {/* Session list slide-over */}
       {showSessionList && (
         <SessionListPanel
