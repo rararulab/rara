@@ -640,22 +640,57 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                 if let Some(ref s) = *guard {
                     // Send typing indicator before processing.
                     WebAdapter::broadcast_event(&sessions, &session_key, &WebEvent::Typing);
-                    if let Err(e) = s.ingest(raw).await {
-                        error!(session_key, error = %e, "sink ingest failed");
-                        WebAdapter::broadcast_event(
-                            &sessions,
-                            &session_key,
-                            &WebEvent::Error {
-                                message: e.to_string(),
-                            },
-                        );
-                    } else {
-                        // Spawn a stream forwarder to bridge StreamHub → WebSocket.
-                        spawn_stream_forwarder(
-                            Arc::clone(&stream_hub),
-                            Arc::clone(&sessions),
-                            session_key.clone(),
-                        );
+                    // Resolve identity + session first (like TG adapter),
+                    // then submit. This gives us the kernel-resolved
+                    // session key needed by the stream forwarder.
+                    //
+                    // When no channel binding exists yet (first message),
+                    // resolve() returns session_key = None. Patch it with
+                    // the URL-provided key (a valid UUID from the sessions
+                    // API) so the kernel reuses the existing session
+                    // instead of creating a new one.
+                    match s.resolve(raw).await {
+                        Ok(mut msg) => {
+                            if msg.session_key.is_none() {
+                                if let Ok(sk) =
+                                    rara_kernel::session::SessionKey::try_from_raw(&session_key)
+                                {
+                                    msg.session_key = Some(sk);
+                                }
+                            }
+                            let resolved_key = msg
+                                .session_key
+                                .as_ref()
+                                .map(|k| k.to_string())
+                                .unwrap_or_else(|| session_key.clone());
+                            if let Err(e) = s.submit_message(msg) {
+                                error!(session_key, error = %e, "submit_message failed");
+                                WebAdapter::broadcast_event(
+                                    &sessions,
+                                    &session_key,
+                                    &WebEvent::Error {
+                                        message: e.to_string(),
+                                    },
+                                );
+                            } else {
+                                // Spawn a stream forwarder to bridge StreamHub → WebSocket.
+                                spawn_stream_forwarder(
+                                    Arc::clone(&stream_hub),
+                                    Arc::clone(&sessions),
+                                    resolved_key,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!(session_key, error = %e, "resolve failed");
+                            WebAdapter::broadcast_event(
+                                &sessions,
+                                &session_key,
+                                &WebEvent::Error {
+                                    message: e.to_string(),
+                                },
+                            );
+                        }
                     }
                 } else {
                     warn!(session_key, "sink not set, cannot dispatch message");
