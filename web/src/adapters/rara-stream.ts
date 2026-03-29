@@ -26,7 +26,8 @@ import type {
   ToolCall,
   Usage,
 } from "@mariozechner/pi-ai";
-import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 
 import { BASE_URL } from "@/api/client";
 
@@ -162,7 +163,7 @@ export function createRaraStreamFn(): StreamFn {
     context: Context,
     _options?: SimpleStreamOptions,
   ): AssistantMessageEventStream => {
-    const stream = new AssistantMessageEventStream();
+    const stream = createAssistantMessageEventStream();
 
     if (!activeSessionKey) {
       const errorMsg = buildPartial(model, [

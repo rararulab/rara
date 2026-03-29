@@ -17,9 +17,8 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bot, LayoutDashboard, LogOut } from 'lucide-react';
+import { Activity, Bot, LayoutDashboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAuth } from '@/contexts/AuthContext';
 import { settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
@@ -73,7 +72,6 @@ function hasConfiguredLlmProvider(settings: Record<string, string> | undefined):
 export default function DashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { logout } = useAuth();
   const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
 
   const settingsQuery = useQuery({
@@ -86,11 +84,6 @@ export default function DashboardLayout() {
 
   const handleOnboardingDismiss = () => {
     setOnboardingOpen(false);
-  };
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login', { replace: true });
   };
 
   return (
@@ -134,16 +127,6 @@ export default function DashboardLayout() {
             Dock
           </Button>
           <ThemeToggle />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-destructive"
-            onClick={handleLogout}
-            title="Sign out"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            Logout
-          </Button>
         </div>
 
         <div className={cn('flex-1 min-h-0', isFullBleed ? 'p-2 md:p-3' : 'p-4 md:p-6')}>

@@ -14,14 +14,11 @@
  * limitations under the License.
  */
 
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { BrowserRouter, Routes, Route } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AuthProvider } from '@/contexts/AuthContext';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
-import ProtectedRoute from '@/components/ProtectedRoute';
 import DashboardLayout from '@/layouts/DashboardLayout';
-import Login from '@/pages/Login';
-import AgentConsole from '@/pages/AgentConsole';
+import PiChat from '@/pages/PiChat';
 import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
 import KernelTop from '@/pages/KernelTop';
@@ -33,34 +30,23 @@ const queryClient = new QueryClient();
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ServerStatusProvider>
-          <BrowserRouter>
-            <Routes>
-              {/* Public routes */}
-              <Route path="/login" element={<Login />} />
+      <ServerStatusProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* Fullscreen pi-web-ui chat */}
+            <Route index element={<PiChat />} />
 
-              {/* Protected routes */}
-              <Route element={<ProtectedRoute />}>
-                <Route element={<DashboardLayout />}>
-                  <Route index element={<Navigate to="/agent" replace />} />
-                  <Route path="agent" element={<AgentConsole />} />
-                  <Route path="docs" element={<Docs />} />
-                  <Route path="settings" element={<Settings />} />
-                  <Route path="kernel-top" element={<KernelTop />} />
-                  <Route path="symphony" element={<Symphony />} />
-                  <Route path="dock" element={<Dock />} />
-
-                  {/* Redirects for old routes */}
-                  <Route path="chat" element={<Navigate to="/agent?tab=chat" replace />} />
-                  <Route path="skills" element={<Navigate to="/settings?section=skills" replace />} />
-                  <Route path="mcp" element={<Navigate to="/settings?section=mcp" replace />} />
-                </Route>
-              </Route>
-            </Routes>
-          </BrowserRouter>
-        </ServerStatusProvider>
-      </AuthProvider>
+            {/* Admin pages with dashboard layout */}
+            <Route element={<DashboardLayout />}>
+              <Route path="docs" element={<Docs />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="kernel-top" element={<KernelTop />} />
+              <Route path="symphony" element={<Symphony />} />
+              <Route path="dock" element={<Dock />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </ServerStatusProvider>
     </QueryClientProvider>
   );
 }
