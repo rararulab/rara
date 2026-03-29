@@ -89,10 +89,10 @@ export class RaraStorageBackend implements StorageBackend {
   ): Promise<void> {
     this.store(storeName).set(key, value);
 
-    // Fire-and-forget sync for settings
-    if (storeName === "settings" && typeof value === "string") {
-      settingsApi.set(key, value).catch(() => {
-        // Best-effort — the cache is already updated
+    // Fire-and-forget sync for settings — coerce to string for the REST API
+    if (storeName === "settings") {
+      settingsApi.set(key, String(value)).catch((e) => {
+        console.warn("Background settings sync failed:", e);
       });
     }
   }
@@ -108,7 +108,9 @@ export class RaraStorageBackend implements StorageBackend {
     if (storeName === "sessions") {
       api
         .del(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
-        .catch(() => {});
+        .catch((e) => {
+          console.warn("Background session delete failed:", e);
+        });
     }
   }
 

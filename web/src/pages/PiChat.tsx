@@ -26,6 +26,8 @@ import {
 import { Agent } from "@mariozechner/pi-agent-core";
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
+import { api } from "@/api/client";
+import type { ChatSession } from "@/api/types";
 
 /**
  * Fullscreen wrapper that mounts pi-web-ui's <pi-chat-panel> Web Component,
@@ -69,14 +71,28 @@ export default function PiChat() {
       );
       setAppStorage(storage);
 
-      // 4. Create the Agent with rara's WebSocket-backed stream function
-      const agent = new Agent({ streamFn: createRaraStreamFn() });
+      // 4. Resolve the active session key before creating the agent.
+      //    Use the most recent existing session or create a new one.
+      const existingSessions = await api.get<ChatSession[]>(
+        "/api/v1/chat/sessions?limit=1&offset=0",
+      );
+      const initialSessionKey =
+        existingSessions.length > 0
+          ? existingSessions[0].key
+          : (await api.post<ChatSession>("/api/v1/chat/sessions", {})).key;
 
-      // 5. Mount the ChatPanel custom element
+      // 5. Create the Agent with rara's WebSocket-backed stream function.
+      //    The streamFn reads agent.sessionId at call time to get the active session key.
+      const agent: Agent = new Agent({
+        streamFn: createRaraStreamFn(() => agent.sessionId),
+        sessionId: initialSessionKey,
+      });
+
+      // 6. Mount the ChatPanel custom element
       const chatPanel = document.createElement("pi-chat-panel") as import("@mariozechner/pi-web-ui").ChatPanel;
       container.appendChild(chatPanel);
 
-      // 6. Wire agent into the panel — skip API key prompt since rara manages keys server-side
+      // 7. Wire agent into the panel — skip API key prompt since rara manages keys server-side
       await chatPanel.setAgent(agent, {
         onApiKeyRequired: async () => true,
       });

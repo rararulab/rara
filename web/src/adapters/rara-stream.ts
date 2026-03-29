@@ -68,15 +68,11 @@ type WebEvent =
   | { type: "phase"; phase: string };
 
 // ---------------------------------------------------------------------------
-// Session key — must be set before streaming
+// Session key — provided via callback at stream time
 // ---------------------------------------------------------------------------
 
-let activeSessionKey: string | null = null;
-
-/** Set the active session key used for WebSocket connections. */
-export function setActiveSessionKey(key: string): void {
-  activeSessionKey = key;
-}
+/** Callback that returns the current session key for WebSocket connections. */
+export type SessionKeyFn = () => string | undefined;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -156,8 +152,12 @@ function extractUserText(context: Context): string {
 // Stream function factory
 // ---------------------------------------------------------------------------
 
-/** Create a StreamFn that bridges rara's WebSocket chat API to pi-ai events. */
-export function createRaraStreamFn(): StreamFn {
+/**
+ * Create a StreamFn that bridges rara's WebSocket chat API to pi-ai events.
+ * The `getSessionKey` callback is invoked at stream time to obtain the
+ * current session key for the WebSocket connection.
+ */
+export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
   return (
     model: Model<any>,
     context: Context,
@@ -165,7 +165,8 @@ export function createRaraStreamFn(): StreamFn {
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
 
-    if (!activeSessionKey) {
+    const sessionKey = getSessionKey();
+    if (!sessionKey) {
       const errorMsg = buildPartial(model, [
         { type: "text", text: "No active session key set." },
       ]);
@@ -177,7 +178,7 @@ export function createRaraStreamFn(): StreamFn {
     }
 
     const userText = extractUserText(context);
-    const wsUrl = buildWsUrl(activeSessionKey);
+    const wsUrl = buildWsUrl(sessionKey);
 
     // Accumulated content blocks for building partial messages
     const content: (TextContent | ThinkingContent | ToolCall)[] = [];
