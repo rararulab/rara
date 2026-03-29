@@ -158,7 +158,7 @@ export default function PiChat() {
   return (
     <div className="flex h-screen w-screen flex-col">
       {/* Session toolbar */}
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+      <div className="relative z-50 flex h-11 shrink-0 items-center justify-between border-b border-border bg-background px-4">
         <button
           onClick={openSessionList}
           className="truncate text-sm font-medium text-foreground hover:text-foreground/80 transition-colors cursor-pointer"
