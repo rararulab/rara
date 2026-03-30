@@ -405,7 +405,12 @@ fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
                         Role::Assistant => MessageRole::Assistant,
                         Role::Tool => MessageRole::Tool,
                     };
-                    let content = MessageContent::Text(msg.content.as_text().to_owned());
+                    // Preserve multimodal content (images) via serde round-trip
+                    // between llm::MessageContent and channel::types::MessageContent
+                    // (both share the same serde format).
+                    let content: MessageContent = serde_json::to_value(&msg.content)
+                        .and_then(|v| serde_json::from_value(v))
+                        .unwrap_or_else(|_| MessageContent::Text(msg.content.as_text().to_owned()));
                     let tool_calls: Vec<ChannelToolCall> = msg
                         .tool_calls
                         .iter()
