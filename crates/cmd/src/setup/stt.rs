@@ -19,14 +19,20 @@ use super::{
     whisper_install, writer,
 };
 
-/// STT configuration result.
+/// STT configuration result collected during the setup wizard.
 pub struct SttResult {
     /// whisper-server base URL.
-    pub base_url: String,
+    pub base_url:   String,
     /// Model identifier.
-    pub model:    String,
+    pub model:      String,
     /// Optional language hint (e.g. "zh", "en").
-    pub language: Option<String>,
+    pub language:   Option<String>,
+    /// Path to the whisper-server binary (managed mode only).
+    pub server_bin: Option<String>,
+    /// Path to the GGML model file (managed mode only).
+    pub model_path: Option<String>,
+    /// Whether rara should start/stop the whisper-server process.
+    pub managed:    bool,
 }
 
 /// Guide the user through optional STT (speech-to-text) configuration.
@@ -59,6 +65,9 @@ pub async fn setup_stt(_mode: SetupMode) -> Result<Option<SttResult>, Whatever> 
         base_url,
         model,
         language,
+        server_bin: None,
+        model_path: None,
+        managed: false,
     }))
 }
 
@@ -80,6 +89,9 @@ pub async fn run_whisper_setup() -> Result<(), Whatever> {
         base_url,
         model: "whisper-1".to_owned(),
         language,
+        server_bin: Some(install.server_bin.to_string_lossy().into_owned()),
+        model_path: Some(install.model_path.to_string_lossy().into_owned()),
+        managed: true,
     };
 
     // Merge into existing config file.
@@ -102,16 +114,9 @@ pub async fn run_whisper_setup() -> Result<(), Whatever> {
         println!("Aborted. Config not written.");
     }
 
-    // Print systemd hint for production use.
     println!("\n═══ Whisper setup complete ═══");
-    println!();
-    println!("To run whisper-server in production, create a systemd service or use:");
-    println!(
-        "  {} -m {} --host 127.0.0.1 --port {} --inference-path /v1/audio/transcriptions --convert",
-        install.server_bin.display(),
-        install.model_path.display(),
-        install.port,
-    );
+    println!("\nWhisper-server will start automatically with rara (managed: true).");
+    println!("To manage the server yourself, set `stt.managed: false` in config.yaml.");
 
     Ok(())
 }
