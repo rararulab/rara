@@ -329,6 +329,8 @@ pub struct ModelCapabilities {
     pub supports_parallel_tool_calls: bool,
     pub tools_disabled_reason:        Option<&'static str>,
     pub context_window_tokens:        usize,
+    /// Whether the model accepts image/vision content in messages.
+    pub supports_vision:              bool,
 }
 
 /// Conservative fallback context window size used when the provider API
@@ -341,6 +343,13 @@ impl ModelCapabilities {
     #[must_use]
     pub fn with_context_window(mut self, tokens: usize) -> Self {
         self.context_window_tokens = tokens;
+        self
+    }
+
+    /// Set whether the model supports vision/image content.
+    #[must_use]
+    pub fn with_vision(mut self, supported: bool) -> Self {
+        self.supports_vision = supported;
         self
     }
 
@@ -366,6 +375,7 @@ impl ModelCapabilities {
                     "ollama deepseek-r1 variants do not support function/tool calling",
                 ),
                 context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+                supports_vision: false,
             };
         }
 
@@ -375,6 +385,7 @@ impl ModelCapabilities {
             supports_parallel_tool_calls: !matches!(provider, LlmProviderFamily::Ollama),
             tools_disabled_reason: None,
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+            supports_vision: false,
         }
     }
 }
