@@ -22,6 +22,7 @@ import {
   SettingsStore,
   ProviderKeysStore,
   CustomProvidersStore,
+  defaultConvertToLlm,
 } from "@mariozechner/pi-web-ui";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -314,6 +315,7 @@ export default function PiChat() {
       //    The streamFn reads agent.sessionId at call time to get the active session key.
       const agent: Agent = new Agent({
         streamFn: createRaraStreamFn(() => agent.sessionId),
+        convertToLlm: defaultConvertToLlm,
         sessionId: initialSession.key,
       });
       agentRef.current = agent;
