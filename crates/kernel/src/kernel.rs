@@ -2044,7 +2044,16 @@ impl Kernel {
             // Serialize multimodal content (with images) directly so image
             // blocks survive the tape round-trip into LLM context.
             let tape_content = match &msg.content {
-                crate::channel::types::MessageContent::Multimodal(_) => {
+                crate::channel::types::MessageContent::Multimodal(blocks) => {
+                    info!(
+                        block_count = blocks.len(),
+                        has_images = blocks.iter().any(|b| matches!(
+                            b,
+                            crate::channel::types::ContentBlock::ImageBase64 { .. }
+                                | crate::channel::types::ContentBlock::ImageUrl { .. }
+                        )),
+                        "persisting multimodal user message to tape"
+                    );
                     serde_json::to_value(&msg.content).unwrap_or_else(|e| {
                         warn!(%e, "failed to serialize multimodal content; falling back to text");
                         serde_json::Value::String(user_text.clone())
