@@ -978,6 +978,9 @@ pub(crate) async fn run_agent_loop(
     } else if let Some(api_len) = driver.model_context_length(&model).await {
         capabilities = capabilities.with_context_window(api_len);
     }
+    if let Some(has_vision) = driver.model_supports_vision(&model).await {
+        capabilities = capabilities.with_vision(has_vision);
+    }
     tool_context.context_window_tokens = capabilities.context_window_tokens;
     // Provide the live registry (with dynamic MCP tools) so discover-tools
     // can query the full catalog at runtime, not a boot-time snapshot.
@@ -1323,10 +1326,18 @@ pub(crate) async fn run_agent_loop(
             "LLM request"
         );
 
+        // Strip image content blocks when the model lacks vision support so
+        // the provider does not reject the request.
+        let request_messages = if capabilities.supports_vision {
+            messages.clone()
+        } else {
+            messages.iter().map(|m| m.strip_images()).collect()
+        };
+
         // Build completion request
         let request = llm::CompletionRequest {
             model:               model.clone(),
-            messages:            messages.clone(),
+            messages:            request_messages,
             tools:               tool_defs.clone(),
             temperature:         Some(0.7),
             max_tokens:          Some(2048),

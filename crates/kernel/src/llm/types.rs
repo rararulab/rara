@@ -187,6 +187,40 @@ impl Message {
         }
     }
 
+    /// Return a copy of this message with image content blocks replaced by
+    /// a text placeholder. Text-only messages are returned as-is.
+    #[must_use]
+    pub fn strip_images(&self) -> Self {
+        let content = match &self.content {
+            MessageContent::Multimodal(blocks) => {
+                let has_images = blocks.iter().any(|b| {
+                    matches!(
+                        b,
+                        ContentBlock::ImageUrl { .. } | ContentBlock::ImageBase64 { .. }
+                    )
+                });
+                if !has_images {
+                    return self.clone();
+                }
+                let text_parts: Vec<&str> = blocks
+                    .iter()
+                    .map(|b| match b {
+                        ContentBlock::Text { text } => text.as_str(),
+                        ContentBlock::ImageUrl { .. } | ContentBlock::ImageBase64 { .. } => {
+                            "[image: current model does not support vision]"
+                        }
+                    })
+                    .collect();
+                MessageContent::Text(text_parts.join("\n"))
+            }
+            MessageContent::Text(_) => return self.clone(),
+        };
+        Self {
+            content,
+            ..self.clone()
+        }
+    }
+
     /// Rough character-count estimate for context size budgeting.
     pub fn estimated_char_len(&self) -> usize {
         let content_len = match &self.content {
@@ -329,6 +363,8 @@ pub struct ModelCapabilities {
     pub supports_parallel_tool_calls: bool,
     pub tools_disabled_reason:        Option<&'static str>,
     pub context_window_tokens:        usize,
+    /// Whether the model accepts image/vision content in messages.
+    pub supports_vision:              bool,
 }
 
 /// Conservative fallback context window size used when the provider API
@@ -341,6 +377,13 @@ impl ModelCapabilities {
     #[must_use]
     pub fn with_context_window(mut self, tokens: usize) -> Self {
         self.context_window_tokens = tokens;
+        self
+    }
+
+    /// Set whether the model supports vision/image content.
+    #[must_use]
+    pub fn with_vision(mut self, supported: bool) -> Self {
+        self.supports_vision = supported;
         self
     }
 
@@ -366,6 +409,7 @@ impl ModelCapabilities {
                     "ollama deepseek-r1 variants do not support function/tool calling",
                 ),
                 context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+                supports_vision: false,
             };
         }
 
@@ -375,6 +419,7 @@ impl ModelCapabilities {
             supports_parallel_tool_calls: !matches!(provider, LlmProviderFamily::Ollama),
             tools_disabled_reason: None,
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+            supports_vision: false,
         }
     }
 }
@@ -466,6 +511,39 @@ mod tests {
         assert!(!caps.supports_tools);
         assert_eq!(caps.provider, LlmProviderFamily::Ollama);
         assert_eq!(caps.context_window_tokens, DEFAULT_CONTEXT_WINDOW_TOKENS);
+    }
+
+    #[test]
+    fn strip_images_replaces_image_blocks_with_notice() {
+        let msg = Message {
+            role:         Role::User,
+            content:      MessageContent::Multimodal(vec![
+                ContentBlock::Text {
+                    text: "look at this".into(),
+                },
+                ContentBlock::ImageBase64 {
+                    media_type: "image/jpeg".into(),
+                    data:       "AAAA".into(),
+                },
+            ]),
+            tool_calls:   vec![],
+            tool_call_id: None,
+        };
+        let stripped = msg.strip_images();
+        match &stripped.content {
+            MessageContent::Text(t) => {
+                assert!(t.contains("look at this"), "text should be preserved");
+                assert!(t.contains("[image:"), "image placeholder should be present");
+            }
+            MessageContent::Multimodal(_) => panic!("should be text after stripping"),
+        }
+    }
+
+    #[test]
+    fn strip_images_preserves_text_only_message() {
+        let msg = Message::user("hello");
+        let stripped = msg.strip_images();
+        assert_eq!(stripped.content.as_text(), "hello");
     }
 
     #[test]
