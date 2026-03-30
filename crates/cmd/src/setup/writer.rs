@@ -107,6 +107,15 @@ pub fn assemble_config(
         if let Some(ref lang) = stt.language {
             stt_section.insert(y_str("language"), y_str(lang));
         }
+        if stt.managed {
+            stt_section.insert(y_str("managed"), serde_yaml::Value::Bool(true));
+        }
+        if let Some(ref bin) = stt.server_bin {
+            stt_section.insert(y_str("server_bin"), y_str(bin));
+        }
+        if let Some(ref model) = stt.model_path {
+            stt_section.insert(y_str("model_path"), y_str(model));
+        }
         map.insert(y_str("stt"), serde_yaml::Value::Mapping(stt_section));
     }
 
