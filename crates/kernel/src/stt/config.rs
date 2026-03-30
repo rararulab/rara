@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,20 @@ pub struct SttConfig {
     #[serde(default = "default_timeout_secs")]
     #[builder(default = default_timeout_secs())]
     pub timeout_secs: u64,
+
+    /// Whether rara should spawn and supervise the whisper-server process.
+    /// When `false` (default), the user manages the server externally.
+    #[serde(default)]
+    #[builder(default)]
+    pub managed: bool,
+
+    /// Path to the whisper-server binary (required when `managed: true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_bin: Option<PathBuf>,
+
+    /// Path to the whisper model file (required when `managed: true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_path: Option<PathBuf>,
 }
 
 fn default_model() -> String { "whisper-1".to_owned() }
