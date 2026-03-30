@@ -978,6 +978,9 @@ pub(crate) async fn run_agent_loop(
     } else if let Some(api_len) = driver.model_context_length(&model).await {
         capabilities = capabilities.with_context_window(api_len);
     }
+    if let Some(has_vision) = driver.model_supports_vision(&model).await {
+        capabilities = capabilities.with_vision(has_vision);
+    }
     tool_context.context_window_tokens = capabilities.context_window_tokens;
     // Provide the live registry (with dynamic MCP tools) so discover-tools
     // can query the full catalog at runtime, not a boot-time snapshot.
