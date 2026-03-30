@@ -194,6 +194,15 @@ pub struct InboundMessage {
 impl InboundMessage {
     /// Create a synthetic internal message (for workers, SyscallTool, etc.).
     pub fn synthetic(text: String, user: UserId, session_id: SessionKey) -> Self {
+        Self::synthetic_content(MessageContent::Text(text), user, session_id)
+    }
+
+    /// Create a synthetic internal message with explicit content blocks.
+    pub fn synthetic_content(
+        content: MessageContent,
+        user: UserId,
+        session_id: SessionKey,
+    ) -> Self {
         Self {
             id: MessageId::new(),
             source: ChannelSource {
@@ -205,7 +214,7 @@ impl InboundMessage {
             user,
             session_key: Some(session_id),
             target_session_key: None,
-            content: MessageContent::Text(text),
+            content,
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
@@ -2060,5 +2069,38 @@ mod stream_hub_tests {
         // Closing a session with no streams should not panic.
         hub.close_session(&session);
         assert!(hub.subscribe_session(&session).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod inbound_message_tests {
+    use super::*;
+    use crate::channel::types::ContentBlock;
+
+    #[test]
+    fn synthetic_content_keeps_multimodal_blocks() {
+        let content = MessageContent::Multimodal(vec![
+            ContentBlock::Text {
+                text: "see attached".to_string(),
+            },
+            ContentBlock::ImageUrl {
+                url: "https://example.com/demo.png".to_string(),
+            },
+        ]);
+
+        let msg = InboundMessage::synthetic_content(
+            content,
+            UserId("tester".to_string()),
+            SessionKey::new(),
+        );
+
+        match msg.content {
+            MessageContent::Multimodal(blocks) => {
+                assert_eq!(blocks.len(), 2);
+                assert!(matches!(blocks[0], ContentBlock::Text { .. }));
+                assert!(matches!(blocks[1], ContentBlock::ImageUrl { .. }));
+            }
+            MessageContent::Text(_) => panic!("synthetic_content should preserve multimodal input"),
+        }
     }
 }

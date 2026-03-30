@@ -618,7 +618,7 @@ impl Kernel {
                 let result = self
                     .handle_spawn_agent(
                         manifest,
-                        input,
+                        crate::channel::types::MessageContent::Text(input),
                         principal,
                         parent_id,
                         None,
@@ -704,7 +704,7 @@ impl Kernel {
     async fn handle_spawn_agent(
         &self,
         manifest: AgentManifest,
-        input: String,
+        input: crate::channel::types::MessageContent,
         principal: Principal,
         parent_id: Option<SessionKey>,
         // TODO: not yet implemented — intended for restoring a previous
@@ -810,7 +810,8 @@ impl Kernel {
         // The synthetic UserMessage uses session_key so that
         // handle_user_message finds this process via direct table lookup.
         let msg_session = session_key;
-        let inbound = InboundMessage::synthetic(input, principal.user_id.clone(), msg_session);
+        let inbound =
+            InboundMessage::synthetic_content(input, principal.user_id.clone(), msg_session);
         if let Err(e) = &self
             .event_queue
             .try_push(KernelEventEnvelope::user_message(inbound))
@@ -1326,7 +1327,7 @@ impl Kernel {
         let spawn_result = self
             .handle_spawn_agent(
                 manifest,
-                msg.content.as_text(),
+                msg.content.clone(),
                 principal,
                 None,
                 resume_session_id,
@@ -1420,7 +1421,7 @@ impl Kernel {
         match self
             .handle_spawn_agent(
                 manifest,
-                job.message.clone(),
+                crate::channel::types::MessageContent::Text(job.message.clone()),
                 principal,
                 None, // no parent
                 None, // no resume
@@ -1648,7 +1649,9 @@ impl Kernel {
             match self
                 .handle_spawn_agent(
                     manifest,
-                    "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                    crate::channel::types::MessageContent::Text(
+                        "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                    ),
                     principal,
                     None,
                     None,
