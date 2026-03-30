@@ -2094,13 +2094,11 @@ mod inbound_message_tests {
             SessionKey::new(),
         );
 
-        match msg.content {
-            MessageContent::Multimodal(blocks) => {
-                assert_eq!(blocks.len(), 2);
-                assert!(matches!(blocks[0], ContentBlock::Text { .. }));
-                assert!(matches!(blocks[1], ContentBlock::ImageUrl { .. }));
-            }
-            MessageContent::Text(_) => panic!("synthetic_content should preserve multimodal input"),
-        }
+        let MessageContent::Multimodal(blocks) = msg.content else {
+            panic!("expected Multimodal");
+        };
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(blocks[0], ContentBlock::Text { .. }));
+        assert!(matches!(blocks[1], ContentBlock::ImageUrl { .. }));
     }
 }

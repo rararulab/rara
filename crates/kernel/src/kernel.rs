@@ -53,6 +53,7 @@ use crate::{
         AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, ExecutionMode,
         Priority, run_agent_loop,
     },
+    channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -618,7 +619,7 @@ impl Kernel {
                 let result = self
                     .handle_spawn_agent(
                         manifest,
-                        crate::channel::types::MessageContent::Text(input),
+                        MessageContent::Text(input),
                         principal,
                         parent_id,
                         None,
@@ -1421,7 +1422,7 @@ impl Kernel {
         match self
             .handle_spawn_agent(
                 manifest,
-                crate::channel::types::MessageContent::Text(job.message.clone()),
+                MessageContent::Text(job.message.clone()),
                 principal,
                 None, // no parent
                 None, // no resume
@@ -1649,7 +1650,7 @@ impl Kernel {
             match self
                 .handle_spawn_agent(
                     manifest,
-                    crate::channel::types::MessageContent::Text(
+                    MessageContent::Text(
                         "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
                     ),
                     principal,
@@ -1907,7 +1908,7 @@ impl Kernel {
                     msg_id,
                     user,
                     session_key,
-                    crate::channel::types::MessageContent::Text(response_text),
+                    MessageContent::Text(response_text),
                     vec![],
                 )
                 .with_origin(origin_endpoint);
@@ -2558,7 +2559,7 @@ impl Kernel {
                         in_reply_to,
                         user.clone(),
                         egress_session_key.clone(),
-                        crate::channel::types::MessageContent::Text(turn.text),
+                        MessageContent::Text(turn.text),
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
@@ -2607,7 +2608,7 @@ impl Kernel {
                         in_reply_to,
                         user.clone(),
                         egress_session_key.clone(),
-                        crate::channel::types::MessageContent::Text(fallback_text.to_string()),
+                        MessageContent::Text(fallback_text.to_string()),
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
