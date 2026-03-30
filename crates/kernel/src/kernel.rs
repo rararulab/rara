@@ -53,6 +53,7 @@ use crate::{
         AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, ExecutionMode,
         Priority, run_agent_loop,
     },
+    channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
@@ -618,7 +619,7 @@ impl Kernel {
                 let result = self
                     .handle_spawn_agent(
                         manifest,
-                        input,
+                        MessageContent::Text(input),
                         principal,
                         parent_id,
                         None,
@@ -704,7 +705,7 @@ impl Kernel {
     async fn handle_spawn_agent(
         &self,
         manifest: AgentManifest,
-        input: String,
+        input: crate::channel::types::MessageContent,
         principal: Principal,
         parent_id: Option<SessionKey>,
         // TODO: not yet implemented — intended for restoring a previous
@@ -810,7 +811,8 @@ impl Kernel {
         // The synthetic UserMessage uses session_key so that
         // handle_user_message finds this process via direct table lookup.
         let msg_session = session_key;
-        let inbound = InboundMessage::synthetic(input, principal.user_id.clone(), msg_session);
+        let inbound =
+            InboundMessage::synthetic_content(input, principal.user_id.clone(), msg_session);
         if let Err(e) = &self
             .event_queue
             .try_push(KernelEventEnvelope::user_message(inbound))
@@ -1326,7 +1328,7 @@ impl Kernel {
         let spawn_result = self
             .handle_spawn_agent(
                 manifest,
-                msg.content.as_text(),
+                msg.content.clone(),
                 principal,
                 None,
                 resume_session_id,
@@ -1420,7 +1422,7 @@ impl Kernel {
         match self
             .handle_spawn_agent(
                 manifest,
-                job.message.clone(),
+                MessageContent::Text(job.message.clone()),
                 principal,
                 None, // no parent
                 None, // no resume
@@ -1648,7 +1650,9 @@ impl Kernel {
             match self
                 .handle_spawn_agent(
                     manifest,
-                    "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                    MessageContent::Text(
+                        "Mita session initialized. Awaiting heartbeat instructions.".to_string(),
+                    ),
                     principal,
                     None,
                     None,
@@ -1904,7 +1908,7 @@ impl Kernel {
                     msg_id,
                     user,
                     session_key,
-                    crate::channel::types::MessageContent::Text(response_text),
+                    MessageContent::Text(response_text),
                     vec![],
                 )
                 .with_origin(origin_endpoint);
@@ -2564,7 +2568,7 @@ impl Kernel {
                         in_reply_to,
                         user.clone(),
                         egress_session_key.clone(),
-                        crate::channel::types::MessageContent::Text(turn.text),
+                        MessageContent::Text(turn.text),
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
@@ -2613,7 +2617,7 @@ impl Kernel {
                         in_reply_to,
                         user.clone(),
                         egress_session_key.clone(),
-                        crate::channel::types::MessageContent::Text(fallback_text.to_string()),
+                        MessageContent::Text(fallback_text.to_string()),
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
