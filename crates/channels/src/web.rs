@@ -367,6 +367,8 @@ pub struct WebAdapter {
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
     shutdown_rx:       watch::Receiver<bool>,
+    /// Optional STT service for transcribing voice messages to text.
+    stt_service:       Option<rara_kernel::stt::SttService>,
 }
 
 impl WebAdapter {
@@ -381,7 +383,15 @@ impl WebAdapter {
             owner_token,
             shutdown_tx,
             shutdown_rx,
+            stt_service: None,
         }
+    }
+
+    /// Attach an STT service for voice message transcription.
+    #[must_use]
+    pub fn with_stt_service(mut self, stt: Option<rara_kernel::stt::SttService>) -> Self {
+        self.stt_service = stt;
+        self
     }
 
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
@@ -398,6 +408,7 @@ impl WebAdapter {
             endpoint_registry: Arc::clone(&self.endpoint_registry),
             owner_token:       self.owner_token.clone(),
             shutdown_rx:       self.shutdown_rx.clone(),
+            stt_service:       self.stt_service.clone(),
         };
 
         Router::new()
@@ -455,6 +466,7 @@ struct WebAdapterState {
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     owner_token:       Option<String>,
     shutdown_rx:       watch::Receiver<bool>,
+    stt_service:       Option<rara_kernel::stt::SttService>,
 }
 
 // ---------------------------------------------------------------------------
