@@ -53,6 +53,10 @@ pub trait LlmDriver: Send + Sync {
     /// Returns `None` when the provider does not support model metadata
     /// queries.  Callers fall back to a conservative default (128 K).
     async fn model_context_length(&self, _model: &str) -> Option<usize> { None }
+
+    /// Whether the given model supports image/vision input.
+    /// Returns `None` when the provider does not expose modality metadata.
+    async fn model_supports_vision(&self, _model: &str) -> Option<bool> { None }
 }
 
 /// Shared reference to an [`LlmDriver`].

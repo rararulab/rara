@@ -39,6 +39,13 @@ use crate::error::{KernelError, Result};
 // OpenAiDriver
 // ---------------------------------------------------------------------------
 
+/// Cached metadata for a model from the provider's `/models` endpoint.
+#[derive(Debug, Clone)]
+struct ModelMeta {
+    context_length:  Option<usize>,
+    supports_vision: bool,
+}
+
 /// OpenAI-compatible LLM driver.
 ///
 /// Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
@@ -53,11 +60,11 @@ pub struct OpenAiDriver {
     /// Per-event idle timeout for SSE streaming. Defaults to
     /// [`Self::DEFAULT_SSE_IDLE_TIMEOUT`].
     sse_idle_timeout: Duration,
-    /// Lazily populated cache of model_id → context_length from the
-    /// provider's `/models` endpoint.  Initialised at most once via
+    /// Lazily populated cache of model metadata from the provider's
+    /// `/models` endpoint.  Initialised at most once via
     /// [`tokio::sync::OnceCell`] to avoid duplicate fetches under
     /// concurrent access.
-    models_cache:     tokio::sync::OnceCell<HashMap<String, usize>>,
+    models_cache:     tokio::sync::OnceCell<HashMap<String, ModelMeta>>,
 }
 
 enum OpenAiDriverConfigSource {
@@ -430,11 +437,11 @@ impl OpenAiDriver {
         }
     }
 
-    /// Fetch context lengths for all models from the provider's `/models`
-    /// endpoint.  Returns a map of `model_id → context_length`.
+    /// Fetch metadata for all models from the provider's `/models` endpoint.
+    /// Returns a map of `model_id → ModelMeta`.
     ///
     /// Errors are logged and swallowed — callers fall back to the default.
-    async fn fetch_context_lengths(&self) -> HashMap<String, usize> {
+    async fn fetch_model_metadata(&self) -> HashMap<String, ModelMeta> {
         let config = match self.resolve_config().await {
             Ok(c) => c,
             Err(e) => {
@@ -481,15 +488,28 @@ impl OpenAiDriver {
             }
         };
 
-        let cache: HashMap<String, usize> = raw
+        let cache: HashMap<String, ModelMeta> = raw
             .data
             .into_iter()
-            .filter_map(|e| e.context_length.map(|len| (e.id, len)))
+            .map(|e| {
+                let supports_vision = e
+                    .architecture
+                    .as_ref()
+                    .map(|a| a.input_modalities.iter().any(|m| m == "image"))
+                    .unwrap_or(false);
+                (
+                    e.id,
+                    ModelMeta {
+                        context_length: e.context_length,
+                        supports_vision,
+                    },
+                )
+            })
             .collect();
 
         tracing::debug!(
             cached_models = cache.len(),
-            "populated model context length cache from /models"
+            "populated model metadata cache from /models"
         );
 
         cache
@@ -620,9 +640,17 @@ impl LlmDriver for OpenAiDriver {
     async fn model_context_length(&self, model: &str) -> Option<usize> {
         let cache = self
             .models_cache
-            .get_or_init(|| self.fetch_context_lengths())
+            .get_or_init(|| self.fetch_model_metadata())
             .await;
-        cache.get(model).copied()
+        cache.get(model).and_then(|m| m.context_length)
+    }
+
+    async fn model_supports_vision(&self, model: &str) -> Option<bool> {
+        let cache = self
+            .models_cache
+            .get_or_init(|| self.fetch_model_metadata())
+            .await;
+        cache.get(model).map(|m| m.supports_vision)
     }
 }
 
@@ -1291,6 +1319,16 @@ struct RawModelEntry {
     /// OpenRouter but absent from the standard OpenAI response.
     #[serde(default)]
     context_length: Option<usize>,
+    /// Model architecture metadata including input/output modalities.
+    /// Returned by OpenRouter but absent from the standard OpenAI response.
+    #[serde(default)]
+    architecture:   Option<RawModelArchitecture>,
+}
+
+#[derive(Deserialize)]
+struct RawModelArchitecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,4 +1355,40 @@ struct RawEmbeddingResponse {
 struct RawEmbeddingData {
     embedding: Vec<f32>,
     index:     u32,
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_model_entry_parses_input_modalities() {
+        let json = serde_json::json!({
+            "id": "openai/gpt-4o",
+            "context_length": 128000,
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"]
+            }
+        });
+        let entry: RawModelEntry = serde_json::from_value(json).unwrap();
+        assert_eq!(entry.id, "openai/gpt-4o");
+        assert_eq!(entry.context_length, Some(128000));
+        let arch = entry.architecture.unwrap();
+        assert!(arch.input_modalities.contains(&"image".to_string()));
+    }
+
+    #[test]
+    fn raw_model_entry_missing_architecture() {
+        let json = serde_json::json!({
+            "id": "some-model",
+            "context_length": 4096
+        });
+        let entry: RawModelEntry = serde_json::from_value(json).unwrap();
+        assert!(entry.architecture.is_none());
+    }
 }
