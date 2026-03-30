@@ -1326,10 +1326,18 @@ pub(crate) async fn run_agent_loop(
             "LLM request"
         );
 
+        // Strip image content blocks when the model lacks vision support so
+        // the provider does not reject the request.
+        let request_messages = if capabilities.supports_vision {
+            messages.clone()
+        } else {
+            messages.iter().map(|m| m.strip_images()).collect()
+        };
+
         // Build completion request
         let request = llm::CompletionRequest {
             model:               model.clone(),
-            messages:            messages.clone(),
+            messages:            request_messages,
             tools:               tool_defs.clone(),
             temperature:         Some(0.7),
             max_tokens:          Some(2048),
