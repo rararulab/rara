@@ -23,10 +23,12 @@ import {
   ProviderKeysStore,
   CustomProvidersStore,
   defaultConvertToLlm,
+  type Attachment,
+  type UserMessageWithAttachments,
 } from "@mariozechner/pi-web-ui";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { UserMessage, AssistantMessage, TextContent, ImageContent } from "@mariozechner/pi-ai";
+import type { UserMessage, AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
@@ -35,6 +37,11 @@ import type { ChatSession, ChatMessageData } from "@/api/types";
 /** Strip `<think>...</think>` blocks from assistant text. */
 function stripThinkTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
+function mimeToFilename(mimeType: string, index: number): string {
+  const ext = mimeType.split("/")[1] || "bin";
+  return `session-image-${index + 1}.${ext}`;
 }
 
 /** Convert rara ChatMessageData to pi-agent-core AgentMessage for display. */
@@ -47,24 +54,33 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
       if (typeof m.content === "string") {
         result.push({ role: "user", content: m.content, timestamp: ts } as UserMessage);
       } else {
-        // Map rara content blocks to pi-ai content types, preserving images.
-        const piContent: (TextContent | ImageContent)[] = m.content.flatMap(
-          (b): (TextContent | ImageContent)[] => {
-            if (b.type === "text") return [{ type: "text", text: b.text }];
-            if (b.type === "image_base64") {
-              const img = b as { type: "image_base64"; media_type: string; data: string };
-              return [{ type: "image", mimeType: img.media_type, data: img.data }];
-            }
-            return [];
-          },
-        );
-        const hasImages = piContent.some((c) => c.type === "image");
-        // pi-ai UserMessage accepts string | (TextContent | ImageContent)[];
-        // use array form only when images are present to avoid rendering issues.
-        const content: string | (TextContent | ImageContent)[] = hasImages
-          ? piContent
-          : piContent.filter((c): c is TextContent => c.type === "text").map(c => c.text).join("\n");
-        result.push({ role: "user", content, timestamp: ts } as UserMessage);
+        const text = m.content
+          .filter((b): b is { type: "text"; text: string } => b.type === "text")
+          .map((b) => b.text)
+          .join("\n");
+        const attachments: Attachment[] = m.content.flatMap((b, index): Attachment[] => {
+          if (b.type !== "image_base64") return [];
+          return [{
+            id: `${m.seq}-image-${index}`,
+            type: "image",
+            fileName: mimeToFilename(b.media_type, index),
+            mimeType: b.media_type,
+            size: Math.floor((b.data.length * 3) / 4),
+            content: b.data,
+            preview: b.data,
+          }];
+        });
+
+        if (attachments.length > 0) {
+          result.push({
+            role: "user-with-attachments",
+            content: text,
+            attachments,
+            timestamp: ts,
+          } as UserMessageWithAttachments as AgentMessage);
+        } else {
+          result.push({ role: "user", content: text, timestamp: ts } as UserMessage);
+        }
       }
     } else if (m.role === "assistant") {
       const raw =
