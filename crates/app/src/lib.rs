@@ -275,6 +275,22 @@ pub async fn start_with_options(
         info!(base_url = %stt.base_url, "STT service configured");
     }
 
+    // If managed mode, spawn and wait for whisper-server before building STT
+    // client.
+    let whisper_process = if let Some(ref stt) = config.stt {
+        if let Some(mut wp) = rara_kernel::stt::WhisperProcess::from_config(stt) {
+            wp.start().await.whatever_context(
+                "failed to start managed whisper-server (check stt.server_bin and stt.model_path)",
+            )?;
+            info!("managed whisper-server started");
+            Some(wp)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let stt_service = config
         .stt
         .as_ref()
@@ -427,6 +443,10 @@ pub async fn start_with_options(
     );
 
     let cancellation_token = CancellationToken::new();
+
+    // Supervisor restarts whisper-server on crash, stops on app shutdown.
+    let _whisper_supervisor =
+        whisper_process.map(|wp| wp.spawn_supervisor(cancellation_token.clone()));
 
     // Start bidirectional config <-> settings sync
     {
