@@ -33,6 +33,7 @@ import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
 import type { ChatSession, ChatMessageData } from "@/api/types";
+import { VoiceRecorder } from "@/components/VoiceRecorder";
 
 /** Strip `<think>...</think>` blocks from assistant text. */
 function stripThinkTags(text: string): string {
@@ -372,6 +373,12 @@ export default function PiChat() {
           <path d="M3 12h18M3 6h18M3 18h18" />
         </svg>
       </button>
+      {/* Voice recorder button — fixed top-right */}
+      <div className="absolute right-2 top-2 z-50">
+        <VoiceRecorder
+          getSessionKey={() => agentRef.current?.sessionId}
+        />
+      </div>
       {/* Chat panel container */}
       <div ref={containerRef} className="h-full w-full" />
       {/* Session list slide-over */}
