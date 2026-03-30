@@ -25,7 +25,7 @@ import {
 } from "@mariozechner/pi-web-ui";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { UserMessage, AssistantMessage, TextContent } from "@mariozechner/pi-ai";
+import type { UserMessage, AssistantMessage, TextContent, ImageContent } from "@mariozechner/pi-ai";
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
@@ -40,18 +40,39 @@ function stripThinkTags(text: string): string {
 function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
   const result: AgentMessage[] = [];
   for (const m of msgs) {
-    const raw =
-      typeof m.content === "string"
-        ? m.content
-        : m.content
-            .filter((b): b is { type: "text"; text: string } => b.type === "text")
-            .map((b) => b.text)
-            .join("\n");
     const ts = new Date(m.created_at).getTime();
 
     if (m.role === "user") {
-      result.push({ role: "user", content: raw, timestamp: ts } as UserMessage);
+      if (typeof m.content === "string") {
+        result.push({ role: "user", content: m.content, timestamp: ts } as UserMessage);
+      } else {
+        // Map rara content blocks to pi-ai content types, preserving images.
+        const piContent: (TextContent | ImageContent)[] = m.content.flatMap(
+          (b): (TextContent | ImageContent)[] => {
+            if (b.type === "text") return [{ type: "text", text: b.text }];
+            if (b.type === "image_base64") {
+              const img = b as { type: "image_base64"; media_type: string; data: string };
+              return [{ type: "image", mimeType: img.media_type, data: img.data }];
+            }
+            return [];
+          },
+        );
+        const hasImages = piContent.some((c) => c.type === "image");
+        // pi-ai UserMessage accepts string | (TextContent | ImageContent)[];
+        // use array form only when images are present to avoid rendering issues.
+        const content: string | (TextContent | ImageContent)[] = hasImages
+          ? piContent
+          : piContent.filter((c): c is TextContent => c.type === "text").map(c => c.text).join("\n");
+        result.push({ role: "user", content, timestamp: ts } as UserMessage);
+      }
     } else if (m.role === "assistant") {
+      const raw =
+        typeof m.content === "string"
+          ? m.content
+          : m.content
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text)
+              .join("\n");
       const text = stripThinkTags(raw);
       const content: TextContent[] = text ? [{ type: "text", text }] : [];
       result.push({
