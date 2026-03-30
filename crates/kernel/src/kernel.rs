@@ -2041,9 +2041,20 @@ impl Kernel {
                 warn!(%e, "failed to persist Mita directive to tape");
             }
         } else {
+            // Serialize multimodal content (with images) directly so image
+            // blocks survive the tape round-trip into LLM context.
+            let tape_content = match &msg.content {
+                crate::channel::types::MessageContent::Multimodal(_) => {
+                    serde_json::to_value(&msg.content).unwrap_or_else(|e| {
+                        warn!(%e, "failed to serialize multimodal content; falling back to text");
+                        serde_json::Value::String(user_text.clone())
+                    })
+                }
+                _ => serde_json::Value::String(user_text.clone()),
+            };
             let tape_payload = serde_json::json!({
                 "role": "user",
-                "content": &user_text,
+                "content": tape_content,
             });
             if let Err(e) = &self
                 .tape_service

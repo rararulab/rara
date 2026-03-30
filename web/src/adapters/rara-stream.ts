@@ -19,6 +19,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
+  ImageContent,
   Model,
   SimpleStreamOptions,
   TextContent,
@@ -130,19 +131,47 @@ function buildWsUrl(sessionKey: string): string {
 }
 
 /**
- * Extract the latest user message text from a pi-ai Context.
- * Falls back to empty string if no user message is found.
+ * Extract the latest user message content from a pi-ai Context.
+ * Returns a plain string for text-only messages, or a JSON string
+ * matching the backend InboundPayload format when images are present.
  */
-function extractUserText(context: Context): string {
+function extractUserPayload(context: Context): string {
   for (let i = context.messages.length - 1; i >= 0; i--) {
     const msg = context.messages[i];
     if (msg.role === "user") {
       if (typeof msg.content === "string") return msg.content;
-      // Array of content blocks — concatenate text parts
-      return msg.content
-        .filter((c): c is TextContent => c.type === "text")
-        .map((c) => c.text)
-        .join("\n");
+
+      // Check if there are any image blocks
+      const hasImages = msg.content.some((c) => c.type === "image");
+
+      if (!hasImages) {
+        // Text-only — return plain string (backend parses as plain text)
+        return msg.content
+          .filter((c): c is TextContent => c.type === "text")
+          .map((c) => c.text)
+          .join("\n");
+      }
+
+      // Multimodal — build JSON payload matching backend InboundPayload.
+      // Backend's parse_inbound_text_frame() tries JSON first, so this
+      // will be deserialized as InboundPayload { content: MessageContent }.
+      type RaraBlock =
+        | { type: "text"; text: string }
+        | { type: "image_base64"; media_type: string; data: string };
+      const blocks: RaraBlock[] = msg.content.flatMap((c): RaraBlock[] => {
+        if (c.type === "text") {
+          return [{ type: "text", text: c.text }];
+        }
+        if (c.type === "image") {
+          // pi-ai uses { mimeType, data }, rara uses { media_type, data }
+          const img = c as ImageContent;
+          if (img.mimeType && img.data) {
+            return [{ type: "image_base64", media_type: img.mimeType, data: img.data }];
+          }
+        }
+        return [];
+      });
+      return JSON.stringify({ content: blocks });
     }
   }
   return "";
@@ -177,7 +206,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
       return stream;
     }
 
-    const userText = extractUserText(context);
+    const userPayload = extractUserPayload(context);
     const wsUrl = buildWsUrl(sessionKey);
 
     // Accumulated content blocks for building partial messages
@@ -222,7 +251,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
         // Emit start event
         safePush({ type: "start", partial: buildPartial(model, content) });
         // Send user message
-        ws.send(userText);
+        ws.send(userPayload);
       };
 
       ws.onmessage = (ev: MessageEvent) => {
