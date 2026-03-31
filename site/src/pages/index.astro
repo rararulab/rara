@@ -442,32 +442,31 @@ import Base from '../layouts/Base.astro';
     p.glyphs = gs;
   }
 
-  // ── Rendering (delta-time driven) ──
-  const REP_R = 120, REP_F = 0.5, SPR = 5, DMP = 0.00005;
+  // ── Rendering ──
+  const REP_R = 120, REP_F = 8, SPR = 0.08, DMP = 0.75;
   const LENS_R = 110, MAX_SC = 1.5;
   const SLIDE = 50;
 
-  function tickRepulse(p: Pg, dt: number) {
+  function tickRepulse(p: Pg) {
     p.ctx.clearRect(0, 0, p.w, p.h);
     p.ctx.fillStyle = BG; p.ctx.fillRect(0, 0, p.w, p.h);
-    const decay = Math.pow(DMP, dt);
     for (const g of p.glyphs) {
       const dx = g.x - p.mouse.x, dy = g.y - p.mouse.y;
       const d = Math.sqrt(dx * dx + dy * dy);
       if (d < REP_R && d > 0.1) {
-        const f = (1 - d / REP_R) * REP_F * dt;
+        const f = (1 - d / REP_R) * REP_F;
         g.vx += (dx / d) * f; g.vy += (dy / d) * f;
       }
-      g.vx += (g.baseX - g.x) * SPR * dt;
-      g.vy += (g.baseY - g.y) * SPR * dt;
-      g.vx *= decay; g.vy *= decay;
-      g.x += g.vx * dt; g.y += g.vy * dt;
+      g.vx += (g.baseX - g.x) * SPR;
+      g.vy += (g.baseY - g.y) * SPR;
+      g.vx *= DMP; g.vy *= DMP;
+      g.x += g.vx; g.y += g.vy;
       p.ctx.font = g.font; p.ctx.fillStyle = g.color; p.ctx.textBaseline = 'middle';
       p.ctx.fillText(g.ch, g.x, g.y);
     }
   }
 
-  function tickLens(p: Pg, time: number, dt: number, showTree: boolean) {
+  function tickLens(p: Pg, time: number, showTree: boolean) {
     const tgt = p.reveal;
     const e = tgt * tgt * (3 - 2 * tgt);
     const sy = (1 - e) * SLIDE;
@@ -540,10 +539,10 @@ import Base from '../layouts/Base.astro';
 
     // Only render visible pages (current and adjacent)
     const cur = Math.round(scrollIdx);
-    if (cur === 0) tickRepulse(pgs[0]!, dt);
+    if (cur === 0) tickRepulse(pgs[0]!);
     for (let i = Math.max(1, cur - 1); i <= Math.min(pgs.length - 1, cur + 1); i++) {
       if (i === 0) continue;
-      tickLens(pgs[i]!, time, dt, i === 1);
+      tickLens(pgs[i]!, time, i === 1);
     }
 
     requestAnimationFrame(tick);
