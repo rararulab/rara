@@ -52,11 +52,18 @@ export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps)
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm",
-      });
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, {
+          mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+            ? "audio/webm;codecs=opus"
+            : "audio/webm",
+        });
+      } catch (err) {
+        stream.getTracks().forEach((t) => t.stop());
+        console.error("MediaRecorder creation failed:", err);
+        return;
+      }
       chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
@@ -102,7 +109,7 @@ export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps)
           ws.onmessage = (ev: MessageEvent) => {
             try {
               const event = JSON.parse(ev.data as string);
-              if (event.type === "done" || event.type === "error") {
+              if (event.type === "done" || event.type === "error" || event.type === "message") {
                 ws.close();
               }
             } catch {

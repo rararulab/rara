@@ -572,9 +572,12 @@ async fn transcribe_audio_blocks(
         match block {
             ContentBlock::AudioBase64 { data, media_type } => {
                 let text = transcribe_single_audio(&data, &media_type, stt).await;
-                if !text.is_empty() {
-                    result.push(ContentBlock::Text { text });
-                }
+                let text = if text.is_empty() {
+                    "[voice message]".to_owned()
+                } else {
+                    text
+                };
+                result.push(ContentBlock::Text { text });
             }
             other => result.push(other),
         }
