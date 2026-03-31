@@ -101,7 +101,7 @@ import Base from '../layouts/Base.astro';
     const m = { x: -9999, y: -9999 };
     c.addEventListener('mousemove', e => { const r = c.getBoundingClientRect(); m.x = e.clientX - r.left; m.y = e.clientY - r.top; });
     c.addEventListener('mouseleave', () => { m.x = m.y = -9999; });
-    c.addEventListener('touchmove', e => { e.preventDefault(); const r = c.getBoundingClientRect(); const t = e.touches[0]!; m.x = t.clientX - r.left; m.y = t.clientY - r.top; }, { passive: false });
+    c.addEventListener('touchmove', e => { const r = c.getBoundingClientRect(); const t = e.touches[0]!; m.x = t.clientX - r.left; m.y = t.clientY - r.top; }, { passive: true });
     c.addEventListener('touchend', () => { m.x = m.y = -9999; });
     return m;
   }
@@ -173,10 +173,11 @@ import Base from '../layouts/Base.astro';
   let syscalls: Syscall[] = [];
   let agentNextId = 0;
   let lastEvent = 0;
+  let kernelEnabled = true;
   let kernelCx = 0, kernelCy = 0;
   let kernelAngle = 0; // rotating loop
   const KERNEL_R = 28;
-  const ORBIT_MIN = 80, ORBIT_MAX = 160;
+  let ORBIT_MIN = 80, ORBIT_MAX = 160;
   const AGENT_LABELS = ['mita', 'scout', 'planner', 'coder', 'reviewer', 'writer'];
   const SYSCALL_LABELS = ['memory', 'tool', 'channel', 'guard', 'spawn', 'io'];
 
@@ -345,46 +346,72 @@ import Base from '../layouts/Base.astro';
   // ── Build pages (bigger fonts) ──
   function buildP0() {
     const p = pgs[0]!; sizeCanvas(p);
-    p.glyphs = [
-      ...mCenter('rara', 80, ROSE, p.w / 2, p.h / 2 - 40),
-      ...mCenter('your agent, harnessed by kernel', 18, DIM, p.w / 2, p.h / 2 + 30),
+    const narrow = p.w < 640;
+    const titleFs = narrow ? 56 : 80;
+    const subFs = narrow ? 12 : 18;
+    const gs: Glyph[] = [
+      ...mCenter('rara', titleFs, ROSE, p.w / 2, p.h / 2 - (narrow ? 24 : 40)),
     ];
+    if (narrow) {
+      gs.push(...mCenter('your agent,', subFs, DIM, p.w / 2, p.h / 2 + 20));
+      gs.push(...mCenter('harnessed by kernel', subFs, DIM, p.w / 2, p.h / 2 + 38));
+    } else {
+      gs.push(...mCenter('your agent, harnessed by kernel', subFs, DIM, p.w / 2, p.h / 2 + 30));
+    }
+    p.glyphs = gs;
   }
 
   function buildP1() {
     const p = pgs[1]!; sizeCanvas(p);
-    const mw = Math.min(520, p.w * 0.45);
-    const left = Math.max(60, p.w * 0.08);
+    const narrow = p.w < 640;
+    const mw = narrow ? Math.min(520, p.w - 48) : Math.min(520, p.w * 0.45);
+    const left = narrow ? (p.w - mw) / 2 : Math.max(60, p.w * 0.08);
     const gs: Glyph[] = [];
 
     const testBody = mPara(
       "An operating system doesn\u2019t tell a process what to compute \u2014 it provides scheduling, memory, I/O, and protection. Rara does the same for agents: lifecycle, memory, tool access, channels, and guardrails. You define the behavior. Rara runs it.",
-      15, 26, DIM, 0, 0, mw
+      narrow ? 14 : 15, 26, DIM, 0, 0, mw
     );
     const totalH = 38 * 2 + 36 + testBody.endY;
-    let y = Math.max(60, (p.h - totalH) / 2);
+    // On narrow screens, push text toward the top to leave room for kernel below
+    let y = narrow ? Math.max(48, (p.h * 0.5 - totalH) / 2) : Math.max(60, (p.h - totalH) / 2);
 
-    gs.push(...mLine('Think of an agent as a process.', 26, TEXT, left, y));
-    y += 42;
-    gs.push(...mLine('Rara is its kernel.', 26, TEXT, left, y));
+    if (narrow) {
+      gs.push(...mCenter('Think of an agent', 15, TEXT, p.w / 2, y));
+      y += 26;
+      gs.push(...mCenter('as a process.', 15, TEXT, p.w / 2, y));
+      y += 26;
+      gs.push(...mCenter('Rara is its kernel.', 15, TEXT, p.w / 2, y));
+    } else {
+      gs.push(...mLine('Think of an agent as a process.', 26, TEXT, left, y));
+      y += 42;
+      gs.push(...mLine('Rara is its kernel.', 26, TEXT, left, y));
+    }
     colorW(gs, 'process', ROSE);
     colorW(gs, 'kernel', ROSE);
     y += 42 + 36;
 
     const body = mPara(
       "An operating system doesn\u2019t tell a process what to compute \u2014 it provides scheduling, memory, I/O, and protection. Rara does the same for agents: lifecycle, memory, tool access, channels, and guardrails. You define the behavior. Rara runs it.",
-      15, 26, DIM, left, y, mw
+      narrow ? 14 : 15, 26, DIM, left, y, mw
     );
     gs.push(...body.glyphs);
     p.glyphs = gs;
 
-    // Init kernel scene on right side
-    initKernel(p.w * 0.73, p.h * 0.48);
+    // Hide kernel scene on narrow screens — not enough room
+    if (!narrow) {
+      ORBIT_MIN = 80; ORBIT_MAX = 160;
+      kernelEnabled = true;
+      initKernel(p.w * 0.73, p.h * 0.48);
+    } else {
+      kernelEnabled = false;
+      agents = []; syscalls = [];
+    }
   }
 
   function buildP2() {
     const p = pgs[2]!; sizeCanvas(p);
-    const mw = Math.min(600, p.w - 120);
+    const mw = Math.min(600, p.w - (p.w < 640 ? 48 : 120));
     const left = (p.w - mw) / 2;
     const gs: Glyph[] = [];
 
@@ -413,7 +440,7 @@ import Base from '../layouts/Base.astro';
 
   function buildP3() {
     const p = pgs[3]!; sizeCanvas(p);
-    const mw = Math.min(600, p.w - 120);
+    const mw = Math.min(600, p.w - (p.w < 640 ? 48 : 120));
     const left = (p.w - mw) / 2;
     const gs: Glyph[] = [];
 
@@ -476,7 +503,7 @@ import Base from '../layouts/Base.astro';
     p.ctx.clearRect(0, 0, p.w, p.h);
     p.ctx.fillStyle = BG; p.ctx.fillRect(0, 0, p.w, p.h);
 
-    if (showTree && a > 0.01) drawKernelScene(p.ctx, time, a);
+    if (showTree && kernelEnabled && a > 0.01) drawKernelScene(p.ctx, time, a);
     if (a < 0.01) return;
     p.ctx.globalAlpha = a;
 
