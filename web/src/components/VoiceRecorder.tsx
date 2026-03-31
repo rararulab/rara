@@ -70,15 +70,16 @@ export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps)
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
+      // Capture session key at record start so it stays fixed for the entire
+      // record/send lifecycle, even if the user switches sessions mid-recording.
+      const capturedSessionKey = sessionKey;
+
       recorder.onstop = async () => {
         // Stop all tracks to release the microphone.
         stream.getTracks().forEach((t) => t.stop());
 
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         if (blob.size === 0) return;
-
-        const sk = getSessionKey();
-        if (!sk) return;
 
         setSending(true);
         try {
@@ -99,7 +100,7 @@ export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps)
           // Send via WebSocket — same pattern as rara-stream.
           // Keep the connection open until the backend finishes processing,
           // then call onComplete to reload the session messages.
-          const wsUrl = buildWsUrl(sk);
+          const wsUrl = buildWsUrl(capturedSessionKey);
           const ws = new WebSocket(wsUrl);
 
           ws.onopen = () => {

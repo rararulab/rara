@@ -1147,24 +1147,27 @@ impl<'a> WireMessage<'a> {
             MessageContent::Multimodal(blocks) => {
                 let parts = blocks
                     .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(WireContentPart::Text { text }),
-                        ContentBlock::ImageUrl { url } => Some(WireContentPart::ImageUrl {
+                    .map(|b| match b {
+                        ContentBlock::Text { text } => WireContentPart::Text { text },
+                        ContentBlock::ImageUrl { url } => WireContentPart::ImageUrl {
                             image_url: WireImageUrl {
                                 url: std::borrow::Cow::Borrowed(url),
                             },
-                        }),
+                        },
                         ContentBlock::ImageBase64 { media_type, data } => {
                             let data_uri = format!("data:{media_type};base64,{data}");
-                            Some(WireContentPart::ImageUrl {
+                            WireContentPart::ImageUrl {
                                 image_url: WireImageUrl {
                                     url: std::borrow::Cow::Owned(data_uri),
                                 },
-                            })
+                            }
                         }
-                        // Audio blocks should be transcribed before reaching the LLM;
-                        // skip any that leak through.
-                        ContentBlock::AudioBase64 { .. } => None,
+                        // Audio blocks should be transcribed before reaching the LLM.
+                        // If one leaks through, convert to a text placeholder so the
+                        // prompt is not silently incomplete.
+                        ContentBlock::AudioBase64 { .. } => WireContentPart::Text {
+                            text: "[audio: not transcribed]",
+                        },
                     })
                     .collect();
                 WireContent::Multimodal(parts)
