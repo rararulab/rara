@@ -9,10 +9,18 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/status-WIP%20%F0%9F%9A%A7-yellow" alt="WIP">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License">
+  <img src="https://img.shields.io/badge/rust-%23dea584?logo=rust&logoColor=white" alt="Rust">
+</p>
+
+<p align="center">
   <a href="https://rararulab.github.io/rara">Website</a> &middot;
   <a href="#getting-started">Getting Started</a> &middot;
   <a href="https://tape.systems">Tape Systems</a>
 </p>
+
+> **Work in Progress** — APIs, behavior, and module boundaries may change at any time.
 
 ---
 
