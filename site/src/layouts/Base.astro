@@ -43,31 +43,10 @@ const { title, description = 'A self-evolving, proactive agent runtime built in 
     background: var(--bg);
     color: var(--text);
     font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', monospace;
-    font-size: 16px;
     -webkit-font-smoothing: antialiased;
   }
 
   body {
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2rem;
-  }
-
-  a {
-    color: var(--green);
-    text-decoration: none;
-    border-bottom: 1px solid var(--green-dim);
-    transition: color 0.2s, border-color 0.2s;
-  }
-
-  a:hover {
-    color: var(--rose);
-    border-color: var(--rose-dim);
-  }
-
-  @media (max-width: 480px) {
-    body { padding: 1.5rem 1rem; }
+    overflow: hidden;
   }
 </style>

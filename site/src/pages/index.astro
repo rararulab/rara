@@ -1,128 +1,559 @@
 ---
 import Base from '../layouts/Base.astro';
-import Typewriter from '../components/Typewriter.astro';
-import Features from '../components/Features.astro';
 ---
 
-<Base title="rara — a self-evolving proactive agent">
-  <div class="terminal">
-    <div class="hero">
-      <h1 class="hero-title">
-        <span class="prompt">&gt; </span><Typewriter text="rara" />
-      </h1>
-      <p class="hero-sub" id="sub">
-        A self-evolving, proactive agent runtime built in Rust.<br />
-        Kernel-inspired architecture. Heartbeat-driven. Multi-channel.
-      </p>
-    </div>
-
-    <Features />
-
-    <div class="cta" id="cta">
-      <span class="prompt">&gt; </span><a href="https://github.com/rararulab/rara">github.com/rararulab/rara</a>
-      <div class="clone-line">
-        <span class="prompt">$</span> git clone https://github.com/rararulab/rara.git
-      </div>
-      <div class="badge">rust &middot; apache-2.0 &middot; work in progress</div>
-    </div>
+<Base title="rara — your agent, harnessed by kernel">
+  <a class="gh-corner" href="https://github.com/rararulab/rara" aria-label="GitHub">
+    <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+      <path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.82-.26.82-.58l-.01-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.08 1.84 1.23 1.84 1.23 1.07 1.84 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6.02 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.81 5.63-5.48 5.92.42.37.81 1.1.81 2.22l-.01 3.29c0 .32.21.7.82.58A12 12 0 0 0 12 .3"/>
+    </svg>
+  </a>
+  <div class="page" id="page">
+    <section class="section"><canvas id="c0"></canvas></section>
+    <section class="section"><canvas id="c1"></canvas></section>
+    <section class="section"><canvas id="c2"></canvas></section>
+    <section class="section"><canvas id="c3"></canvas></section>
   </div>
+  <div class="scroll-hint" id="scroll-hint">&#8595;</div>
+  <footer class="footer">rust &middot; apache-2.0 &middot; work in progress</footer>
 </Base>
 
 <style>
-  .terminal {
-    max-width: 640px;
-    width: 100%;
+  .gh-corner {
+    position: fixed; top: 1.25rem; right: 1.25rem; z-index: 10;
+    color: var(--green-dim); transition: color 0.2s;
   }
+  .gh-corner:hover { color: var(--rose); }
 
-  .hero {
-    margin-bottom: 2.5rem;
+  .page {
+    scroll-snap-type: y mandatory;
+    overflow-y: auto;
+    height: 100vh;
   }
+  .section { height: 100vh; scroll-snap-align: start; }
+  canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
 
-  .hero-title {
-    font-size: 2.4rem;
-    font-weight: 700;
-    color: var(--rose);
-    line-height: 1.2;
-    min-height: 3rem;
+  .scroll-hint {
+    position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
+    color: var(--green-dim); font-size: 1.2rem; z-index: 10;
+    animation: bob 2s ease-in-out infinite; opacity: 0.6;
+    transition: opacity 0.4s; pointer-events: none;
   }
+  .scroll-hint.hidden { opacity: 0; }
 
-  .prompt {
-    color: var(--green);
+  .footer {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+    text-align: center; padding: 0.6rem; font-size: 0.7rem;
+    color: var(--green-dim); pointer-events: none;
+    opacity: 0; transition: opacity 0.4s;
   }
+  .footer.visible { opacity: 1; }
 
-  .hero-sub {
-    margin-top: 0.75rem;
-    font-size: 1rem;
-    color: var(--text-dim);
-    line-height: 1.6;
-    opacity: 0;
-    transition: opacity 0.6s ease;
-  }
-
-  .hero-sub.visible {
-    opacity: 1;
-  }
-
-  .cta {
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--bg-light);
-    opacity: 0;
-    transition: opacity 0.6s ease;
-  }
-
-  .cta.visible {
-    opacity: 1;
-  }
-
-  .clone-line {
-    margin-top: 1rem;
-    padding: 0.6rem 1rem;
-    background: var(--bg-light);
-    border-radius: 4px;
-    font-size: 0.85rem;
-    color: var(--text-dim);
-    user-select: all;
-  }
-
-  .clone-line .prompt {
-    margin-right: 0.5em;
-  }
-
-  .badge {
-    display: inline-block;
-    margin-top: 1rem;
-    font-size: 0.8rem;
-    color: var(--green-dim);
-  }
-
-  @media (max-width: 480px) {
-    .hero-title { font-size: 1.8rem; }
+  @keyframes bob {
+    0%, 100% { transform: translateX(-50%) translateY(0); }
+    50% { transform: translateX(-50%) translateY(8px); }
   }
 </style>
 
 <script>
-  // Show subtitle after typewriter finishes
-  document.addEventListener('typed', () => {
-    const sub = document.getElementById('sub');
-    if (sub) {
-      setTimeout(() => sub.classList.add('visible'), 300);
-    }
-  });
+  import { prepareWithSegments, layoutWithLines } from '@chenglou/pretext';
 
-  // Show CTA after features animate in
-  const observer = new MutationObserver(() => {
-    const features = document.getElementById('features');
-    if (features?.classList.contains('visible')) {
-      const featureCount = features.querySelectorAll('.feature').length;
-      setTimeout(() => {
-        document.getElementById('cta')?.classList.add('visible');
-      }, featureCount * 120 + 400);
-      observer.disconnect();
-    }
-  });
+  // ── Theme ──
+  const ROSE = '#c4787a';
+  const ROSE_DIM = '#9a5c5e';
+  const DIM = '#7a6e6b';
+  const GREEN = '#5a8a72';
+  const GREEN_DIM = '#3d6b53';
+  const TEXT = '#e8d5d0';
+  const BG = '#0f1f17';
+  const FAM = "'SF Mono','Cascadia Code','Fira Code','JetBrains Mono','Menlo',monospace";
 
-  const features = document.getElementById('features');
-  if (features) {
-    observer.observe(features, { attributes: true, attributeFilter: ['class'] });
+  // ── Types ──
+  type Glyph = {
+    ch: string; baseX: number; baseY: number;
+    x: number; y: number; vx: number; vy: number;
+    color: string; baseFontSize: number; font: string;
+  };
+
+  // Agent = circle around kernel, Syscall = signal line to kernel
+  type Agent = {
+    id: number; label: string; color: string;
+    angle: number; dist: number; r: number;
+    x: number; y: number;
+    birthTime: number; alpha: number; dead: boolean;
+    speed: number; // orbital speed
+  };
+
+  type Syscall = {
+    agentId: number; label: string;
+    progress: number; // 0→1 animation
+    startTime: number;
+  };
+
+  type Pg = {
+    canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D;
+    mouse: { x: number; y: number };
+    glyphs: Glyph[]; w: number; h: number; reveal: number;
+  };
+
+  // ── Helpers ──
+  function trackMouse(c: HTMLCanvasElement) {
+    const m = { x: -9999, y: -9999 };
+    c.addEventListener('mousemove', e => { const r = c.getBoundingClientRect(); m.x = e.clientX - r.left; m.y = e.clientY - r.top; });
+    c.addEventListener('mouseleave', () => { m.x = m.y = -9999; });
+    c.addEventListener('touchmove', e => { e.preventDefault(); const r = c.getBoundingClientRect(); const t = e.touches[0]!; m.x = t.clientX - r.left; m.y = t.clientY - r.top; }, { passive: false });
+    c.addEventListener('touchend', () => { m.x = m.y = -9999; });
+    return m;
   }
+
+  function sizeCanvas(p: Pg) {
+    const dpr = window.devicePixelRatio || 1;
+    p.w = p.canvas.clientWidth; p.h = p.canvas.clientHeight;
+    p.canvas.width = p.w * dpr; p.canvas.height = p.h * dpr;
+    p.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function mk(ch: string, x: number, y: number, color: string, fs: number): Glyph {
+    return { ch, baseX: x, baseY: y, x, y, vx: 0, vy: 0, color, baseFontSize: fs, font: `${fs}px ${FAM}` };
+  }
+
+  function mLine(text: string, fs: number, color: string, x: number, y: number): Glyph[] {
+    const p = prepareWithSegments(text, `${fs}px ${FAM}`);
+    const gs: Glyph[] = [];
+    let cx = x;
+    for (let i = 0; i < p.segments.length; i++) {
+      const seg = p.segments[i]!, sw = p.widths[i]!;
+      if (seg.trim() === '') { cx += sw; continue; }
+      const ch = [...seg], cw = sw / ch.length;
+      for (const c of ch) { gs.push(mk(c, cx, y, color, fs)); cx += cw; }
+    }
+    return gs;
+  }
+
+  function mCenter(text: string, fs: number, color: string, cx: number, y: number): Glyph[] {
+    const p = prepareWithSegments(text, `${fs}px ${FAM}`);
+    let t = 0; for (const w of p.widths) t += w;
+    return mLine(text, fs, color, cx - t / 2, y);
+  }
+
+  function mPara(text: string, fs: number, lh: number, color: string, x: number, y: number, mw: number): { glyphs: Glyph[]; endY: number } {
+    const p = prepareWithSegments(text, `${fs}px ${FAM}`);
+    const { lines } = layoutWithLines(p, mw, lh);
+    const gs: Glyph[] = [];
+    let ly = y;
+    for (const l of lines) { gs.push(...mLine(l.text, fs, color, x, ly)); ly += lh; }
+    return { glyphs: gs, endY: ly };
+  }
+
+  function colorW(gs: Glyph[], w: string, c: string) {
+    let wi = 0, si = -1;
+    for (let i = 0; i < gs.length; i++) {
+      if (gs[i]!.ch === w[wi]) { if (!wi) si = i; wi++; if (wi === w.length) { for (let j = si; j <= i; j++) gs[j]!.color = c; wi = 0; si = -1; } }
+      else { wi = 0; si = -1; }
+    }
+  }
+
+  function lerp(a: string, b: string, t: number): string {
+    const [ar,ag,ab] = hex(a), [br,bg,bb] = hex(b);
+    return `rgb(${Math.round(ar+(br-ar)*t)},${Math.round(ag+(bg-ag)*t)},${Math.round(ab+(bb-ab)*t)})`;
+  }
+  function hex(h: string): [number,number,number] {
+    h = h.replace('#','');
+    return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+  }
+
+  // ── Pages ──
+  const pgs: Pg[] = [0,1,2,3].map(i => {
+    const cv = document.getElementById(`c${i}`) as HTMLCanvasElement;
+    return { canvas: cv, ctx: cv.getContext('2d')!, mouse: trackMouse(cv), glyphs: [], w: 0, h: 0, reveal: i === 0 ? 1 : 0 };
+  });
+
+  // ── Kernel loop + orbiting agents + syscalls ──
+  let agents: Agent[] = [];
+  let syscalls: Syscall[] = [];
+  let agentNextId = 0;
+  let lastEvent = 0;
+  let kernelCx = 0, kernelCy = 0;
+  let kernelAngle = 0; // rotating loop
+  const KERNEL_R = 28;
+  const ORBIT_MIN = 80, ORBIT_MAX = 160;
+  const AGENT_LABELS = ['mita', 'scout', 'planner', 'coder', 'reviewer', 'writer'];
+  const SYSCALL_LABELS = ['memory', 'tool', 'channel', 'guard', 'spawn', 'io'];
+
+  function initKernel(cx: number, cy: number) {
+    kernelCx = cx; kernelCy = cy;
+    agentNextId = 0; agents = []; syscalls = []; lastEvent = 0;
+    // Start with a couple of agents
+    addAgent('mita', ROSE, 0);
+    addAgent('scout', GREEN, 0);
+  }
+
+  function addAgent(label: string, color: string, time: number) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = ORBIT_MIN + Math.random() * (ORBIT_MAX - ORBIT_MIN);
+    const speed = (0.15 + Math.random() * 0.2) * (Math.random() > 0.5 ? 1 : -1);
+    agents.push({
+      id: agentNextId++, label, color, angle, dist,
+      r: 5 + Math.random() * 2, x: kernelCx, y: kernelCy,
+      birthTime: time, alpha: 0, dead: false, speed,
+    });
+  }
+
+  function fireSyscall(agentId: number, time: number) {
+    const label = SYSCALL_LABELS[Math.floor(Math.random() * SYSCALL_LABELS.length)]!;
+    syscalls.push({ agentId, label, progress: 0, startTime: time });
+  }
+
+  function drawKernelScene(ctx: CanvasRenderingContext2D, time: number, ga: number) {
+    // Events: spawn/kill agents, fire syscalls
+    if (time - lastEvent > 1100) {
+      lastEvent = time;
+      const alive = agents.filter(a => !a.dead);
+      const r = Math.random();
+      if (r < 0.3 && alive.length < 7) {
+        // Spawn new agent
+        const label = AGENT_LABELS[Math.floor(Math.random() * AGENT_LABELS.length)]!;
+        addAgent(label, Math.random() > 0.5 ? GREEN : ROSE_DIM, time);
+      } else if (r < 0.45 && alive.length > 2) {
+        // Kill oldest
+        const oldest = alive.reduce((a, b) => a.birthTime < b.birthTime ? a : b);
+        if (time - oldest.birthTime > 4000) oldest.dead = true;
+      } else {
+        // Fire a syscall from random agent
+        if (alive.length > 0) {
+          const a = alive[Math.floor(Math.random() * alive.length)]!;
+          fireSyscall(a.id, time);
+        }
+      }
+    }
+
+    // Clean up
+    agents = agents.filter(a => !a.dead || a.alpha > 0.01);
+    syscalls = syscalls.filter(s => s.progress < 1);
+
+    // Rotate kernel
+    kernelAngle += 0.008;
+
+    // ── Draw kernel loop (dashed rotating ring) ──
+    ctx.globalAlpha = ga * 0.6;
+    ctx.strokeStyle = ROSE;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.arc(kernelCx, kernelCy, KERNEL_R, kernelAngle, kernelAngle + Math.PI * 1.7);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Kernel label
+    ctx.globalAlpha = ga * 0.5;
+    ctx.fillStyle = ROSE;
+    ctx.font = `10px ${FAM}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('kernel', kernelCx, kernelCy);
+
+    // ── Draw orbit rings (faint) ──
+    ctx.globalAlpha = ga * 0.06;
+    ctx.strokeStyle = GREEN;
+    ctx.lineWidth = 1;
+    for (const d of [ORBIT_MIN, (ORBIT_MIN + ORBIT_MAX) / 2, ORBIT_MAX]) {
+      ctx.beginPath(); ctx.arc(kernelCx, kernelCy, d, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // ── Update & draw agents ──
+    for (const a of agents) {
+      if (a.dead) { a.alpha = Math.max(0, a.alpha - 0.025); }
+      else { a.alpha = Math.min(1, a.alpha + 0.04); }
+
+      // Orbit
+      a.angle += a.speed * 0.016;
+      const tx = kernelCx + Math.cos(a.angle) * a.dist;
+      const ty = kernelCy + Math.sin(a.angle) * a.dist;
+      a.x += (tx - a.x) * 0.15;
+      a.y += (ty - a.y) * 0.15;
+
+      const al = a.alpha * ga;
+      if (al < 0.01) continue;
+
+      // Agent dot
+      ctx.globalAlpha = al;
+      ctx.fillStyle = a.color;
+      ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2); ctx.fill();
+
+      // Label
+      ctx.globalAlpha = al * 0.6;
+      ctx.fillStyle = DIM;
+      ctx.font = `10px ${FAM}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(a.label, a.x, a.y + a.r + 4);
+
+      // Birth pulse
+      const age = time - a.birthTime;
+      if (age < 500 && !a.dead) {
+        const t = age / 500;
+        ctx.strokeStyle = a.color; ctx.lineWidth = 1;
+        ctx.globalAlpha = (1 - t) * al * 0.4;
+        ctx.beginPath(); ctx.arc(a.x, a.y, a.r + t * 18, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    // ── Draw syscalls (animated line from agent to kernel) ──
+    for (const s of syscalls) {
+      s.progress += 0.02;
+      const agent = agents.find(a => a.id === s.agentId);
+      if (!agent || s.progress >= 1) continue;
+
+      const al = agent.alpha * ga;
+      if (al < 0.01) continue;
+
+      // Line from agent toward kernel
+      const dx = kernelCx - agent.x, dy = kernelCy - agent.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const nx = dx / len, ny = dy / len;
+
+      // Animated dot traveling along the line
+      const headT = Math.min(s.progress * 1.5, 1);
+      const hx = agent.x + dx * headT;
+      const hy = agent.y + dy * headT;
+
+      // Faint line
+      ctx.globalAlpha = al * 0.15 * (1 - s.progress);
+      ctx.strokeStyle = GREEN;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(agent.x, agent.y); ctx.lineTo(hx, hy); ctx.stroke();
+
+      // Traveling dot
+      ctx.globalAlpha = al * (1 - s.progress) * 0.8;
+      ctx.fillStyle = GREEN;
+      ctx.beginPath(); ctx.arc(hx, hy, 2, 0, Math.PI * 2); ctx.fill();
+
+      // Label at midpoint
+      if (s.progress < 0.5) {
+        const mx = agent.x + dx * 0.4 - ny * 10;
+        const my = agent.y + dy * 0.4 + nx * 10;
+        ctx.globalAlpha = al * 0.4 * (1 - s.progress * 2);
+        ctx.fillStyle = GREEN_DIM;
+        ctx.font = `9px ${FAM}`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(s.label, mx, my);
+      }
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  }
+
+  // ── Build pages (bigger fonts) ──
+  function buildP0() {
+    const p = pgs[0]!; sizeCanvas(p);
+    p.glyphs = [
+      ...mCenter('rara', 80, ROSE, p.w / 2, p.h / 2 - 40),
+      ...mCenter('your agent, harnessed by kernel', 18, DIM, p.w / 2, p.h / 2 + 30),
+    ];
+  }
+
+  function buildP1() {
+    const p = pgs[1]!; sizeCanvas(p);
+    const mw = Math.min(520, p.w * 0.45);
+    const left = Math.max(60, p.w * 0.08);
+    const gs: Glyph[] = [];
+
+    const testBody = mPara(
+      "An operating system doesn\u2019t tell a process what to compute \u2014 it provides scheduling, memory, I/O, and protection. Rara does the same for agents: lifecycle, memory, tool access, channels, and guardrails. You define the behavior. Rara runs it.",
+      15, 26, DIM, 0, 0, mw
+    );
+    const totalH = 38 * 2 + 36 + testBody.endY;
+    let y = Math.max(60, (p.h - totalH) / 2);
+
+    gs.push(...mLine('Think of an agent as a process.', 26, TEXT, left, y));
+    y += 42;
+    gs.push(...mLine('Rara is its kernel.', 26, TEXT, left, y));
+    colorW(gs, 'process', ROSE);
+    colorW(gs, 'kernel', ROSE);
+    y += 42 + 36;
+
+    const body = mPara(
+      "An operating system doesn\u2019t tell a process what to compute \u2014 it provides scheduling, memory, I/O, and protection. Rara does the same for agents: lifecycle, memory, tool access, channels, and guardrails. You define the behavior. Rara runs it.",
+      15, 26, DIM, left, y, mw
+    );
+    gs.push(...body.glyphs);
+    p.glyphs = gs;
+
+    // Init kernel scene on right side
+    initKernel(p.w * 0.73, p.h * 0.48);
+  }
+
+  function buildP2() {
+    const p = pgs[2]!; sizeCanvas(p);
+    const mw = Math.min(600, p.w - 120);
+    const left = (p.w - mw) / 2;
+    const gs: Glyph[] = [];
+
+    const testBody = mPara(
+      'A kernel event bus dispatches signals. Channels \u2014 web, Telegram, WeChat \u2014 are I/O surfaces, not separate bots. Guard policies enforce boundaries. Skills extend capabilities without touching core. The kernel schedules, the agent computes.',
+      15, 26, DIM, 0, 0, mw
+    );
+    const totalH = 40 + 36 + testBody.endY;
+    let y = Math.max(60, (p.h - totalH) / 2);
+
+    gs.push(...mLine('the architecture', 16, GREEN, left, y));
+    y += 40 + 16;
+
+    const body = mPara(
+      'A kernel event bus dispatches signals. Channels \u2014 web, Telegram, WeChat \u2014 are I/O surfaces, not separate bots. Guard policies enforce boundaries. Skills extend capabilities without touching core. The kernel schedules, the agent computes.',
+      15, 26, DIM, left, y, mw
+    );
+    gs.push(...body.glyphs);
+    colorW(gs, 'event bus', ROSE);
+    colorW(gs, 'Channels', TEXT);
+    colorW(gs, 'Guard', TEXT);
+    colorW(gs, 'Skills', TEXT);
+    p.glyphs = gs;
+  }
+
+  function buildP3() {
+    const p = pgs[3]!; sizeCanvas(p);
+    const mw = Math.min(600, p.w - 120);
+    const left = (p.w - mw) / 2;
+    const gs: Glyph[] = [];
+
+    const testBody = mPara(
+      'Memory is built on Tape \u2014 a unified fact model for long-running, multi-agent work. Four primitives: append writes facts to the tail, anchors mark reconstruction points, handoffs enable phase transitions, and sessions define context boundaries. Complex memory emerges from simple append-only logs.',
+      15, 26, DIM, 0, 0, mw
+    );
+    const totalH = 40 + 36 + testBody.endY + 36;
+    let y = Math.max(60, (p.h - totalH) / 2);
+
+    gs.push(...mLine('context from tape', 16, GREEN, left, y));
+    y += 40 + 16;
+
+    const body = mPara(
+      'Memory is built on Tape \u2014 a unified fact model for long-running, multi-agent work. Four primitives: append writes facts to the tail, anchors mark reconstruction points, handoffs enable phase transitions, and sessions define context boundaries. Complex memory emerges from simple append-only logs.',
+      15, 26, DIM, left, y, mw
+    );
+    gs.push(...body.glyphs);
+    colorW(gs, 'Tape', ROSE);
+    colorW(gs, 'append', TEXT);
+    colorW(gs, 'anchors', TEXT);
+    colorW(gs, 'handoffs', TEXT);
+    colorW(gs, 'sessions', TEXT);
+
+    y = body.endY + 28;
+    gs.push(...mLine('tape.systems', 13, GREEN_DIM, left, y));
+    p.glyphs = gs;
+  }
+
+  // ── Rendering (delta-time driven) ──
+  const REP_R = 120, REP_F = 0.5, SPR = 5, DMP = 0.00005;
+  const LENS_R = 110, MAX_SC = 1.5;
+  const SLIDE = 50;
+
+  function tickRepulse(p: Pg, dt: number) {
+    p.ctx.clearRect(0, 0, p.w, p.h);
+    p.ctx.fillStyle = BG; p.ctx.fillRect(0, 0, p.w, p.h);
+    const decay = Math.pow(DMP, dt);
+    for (const g of p.glyphs) {
+      const dx = g.x - p.mouse.x, dy = g.y - p.mouse.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < REP_R && d > 0.1) {
+        const f = (1 - d / REP_R) * REP_F * dt;
+        g.vx += (dx / d) * f; g.vy += (dy / d) * f;
+      }
+      g.vx += (g.baseX - g.x) * SPR * dt;
+      g.vy += (g.baseY - g.y) * SPR * dt;
+      g.vx *= decay; g.vy *= decay;
+      g.x += g.vx * dt; g.y += g.vy * dt;
+      p.ctx.font = g.font; p.ctx.fillStyle = g.color; p.ctx.textBaseline = 'middle';
+      p.ctx.fillText(g.ch, g.x, g.y);
+    }
+  }
+
+  function tickLens(p: Pg, time: number, dt: number, showTree: boolean) {
+    const tgt = p.reveal;
+    const e = tgt * tgt * (3 - 2 * tgt);
+    const sy = (1 - e) * SLIDE;
+    const a = e;
+
+    p.ctx.clearRect(0, 0, p.w, p.h);
+    p.ctx.fillStyle = BG; p.ctx.fillRect(0, 0, p.w, p.h);
+
+    if (showTree && a > 0.01) drawKernelScene(p.ctx, time, a);
+    if (a < 0.01) return;
+    p.ctx.globalAlpha = a;
+
+    const mx = p.mouse.x, my = p.mouse.y;
+    // Cache: only compute lens if mouse is on canvas
+    const hasLens = mx > -999 && my > -999;
+    for (const g of p.glyphs) {
+      const dy2 = g.baseY + sy;
+      let sc = 1, col = g.color;
+      if (hasLens) {
+        const dx = g.baseX - mx, dy = dy2 - my;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < LENS_R) {
+          const t = 1 - dist / LENS_R;
+          sc = 1 + (MAX_SC - 1) * t * t;
+          if (g.color === DIM || g.color === TEXT) col = lerp(g.color, ROSE, t * 0.5);
+        }
+      }
+      if (sc === 1) {
+        p.ctx.font = g.font; p.ctx.fillStyle = col;
+        p.ctx.textBaseline = 'middle';
+        p.ctx.fillText(g.ch, g.baseX, dy2);
+      } else {
+        const fs = g.baseFontSize * sc;
+        p.ctx.font = `${fs}px ${FAM}`; p.ctx.fillStyle = col;
+        p.ctx.textBaseline = 'middle';
+        p.ctx.fillText(g.ch, g.baseX + (g.baseFontSize - fs) * 0.3, dy2);
+      }
+    }
+    p.ctx.globalAlpha = 1;
+  }
+
+  // ── Scroll & loop ──
+  let scrollIdx = 0;
+  const pageEl = document.getElementById('page')!;
+  const hint = document.getElementById('scroll-hint');
+  const footer = document.querySelector('.footer');
+
+  pageEl.addEventListener('scroll', () => {
+    scrollIdx = pageEl.scrollTop / pageEl.clientHeight;
+    hint?.classList.toggle('hidden', scrollIdx > 0.1);
+    footer?.classList.toggle('visible', scrollIdx > pgs.length - 1.5);
+  });
+
+  let prevTs = 0;
+  let startTime = 0;
+  function tick(ts: number) {
+    if (!startTime) { startTime = ts; prevTs = ts; }
+    const dt = Math.min((ts - prevTs) / 1000, 0.05); // seconds, capped at 50ms
+    prevTs = ts;
+    const time = ts - startTime;
+
+    // Update reveals (frame-rate independent lerp)
+    const revealRate = 1 - Math.pow(0.00003, dt);
+    for (let i = 0; i < pgs.length; i++) {
+      const p = pgs[i]!;
+      const tgt = scrollIdx >= i - 0.3 ? 1 : 0;
+      p.reveal += (tgt - p.reveal) * revealRate;
+      if (Math.abs(p.reveal - tgt) < 0.002) p.reveal = tgt;
+    }
+
+    // Only render visible pages (current and adjacent)
+    const cur = Math.round(scrollIdx);
+    if (cur === 0) tickRepulse(pgs[0]!, dt);
+    for (let i = Math.max(1, cur - 1); i <= Math.min(pgs.length - 1, cur + 1); i++) {
+      if (i === 0) continue;
+      tickLens(pgs[i]!, time, dt, i === 1);
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  function rebuild() {
+    buildP0(); buildP1(); buildP2(); buildP3();
+    for (let i = 1; i < pgs.length; i++) pgs[i]!.reveal = 0;
+  }
+
+  window.addEventListener('resize', rebuild);
+  document.fonts.ready.then(() => { rebuild(); requestAnimationFrame(tick); });
 </script>
