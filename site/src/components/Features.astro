@@ -1,0 +1,75 @@
+---
+const features = [
+  { label: 'kernel', desc: 'event-driven core with LLM, tools, memory, guard, and mood' },
+  { label: 'proactive', desc: 'heartbeat loop that acts without waiting for input' },
+  { label: 'memory', desc: '3-layer tape memory with session context and long-term recall' },
+  { label: 'channels', desc: 'web, telegram, wechat — one agent, many surfaces' },
+  { label: 'skills', desc: 'extensible capability system for tools and integrations' },
+  { label: 'soul', desc: 'personality and behavioral traits that shape every response' },
+];
+---
+
+<div class="features" id="features">
+  {features.map(({ label, desc }) => (
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="label">{label}</span>
+      <span class="desc"> — {desc}</span>
+    </div>
+  ))}
+</div>
+
+<style>
+  .features {
+    margin-bottom: 2.5rem;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+
+  .features.visible {
+    opacity: 1;
+  }
+
+  .feature {
+    padding: 0.35rem 0;
+    line-height: 1.5;
+    font-size: 0.92rem;
+    opacity: 0;
+    transform: translateX(-8px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+
+  .feature.visible {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  .prompt {
+    color: var(--green);
+    margin-right: 0.5em;
+  }
+
+  .label {
+    color: var(--rose);
+    font-weight: 600;
+  }
+
+  .desc {
+    color: var(--text-dim);
+  }
+</style>
+
+<script>
+  document.addEventListener('typed', () => {
+    const features = document.getElementById('features');
+    if (!features) return;
+
+    // Small delay after subtitle appears
+    setTimeout(() => {
+      features.classList.add('visible');
+      features.querySelectorAll('.feature').forEach((el, i) => {
+        setTimeout(() => el.classList.add('visible'), i * 120);
+      });
+    }, 800);
+  });
+</script>

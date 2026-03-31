@@ -1,0 +1,128 @@
+---
+import Base from '../layouts/Base.astro';
+import Typewriter from '../components/Typewriter.astro';
+import Features from '../components/Features.astro';
+---
+
+<Base title="rara — a self-evolving proactive agent">
+  <div class="terminal">
+    <div class="hero">
+      <h1 class="hero-title">
+        <span class="prompt">&gt; </span><Typewriter text="rara" />
+      </h1>
+      <p class="hero-sub" id="sub">
+        A self-evolving, proactive agent runtime built in Rust.<br />
+        Kernel-inspired architecture. Heartbeat-driven. Multi-channel.
+      </p>
+    </div>
+
+    <Features />
+
+    <div class="cta" id="cta">
+      <span class="prompt">&gt; </span><a href="https://github.com/rararulab/rara">github.com/rararulab/rara</a>
+      <div class="clone-line">
+        <span class="prompt">$</span> git clone https://github.com/rararulab/rara.git
+      </div>
+      <div class="badge">rust &middot; apache-2.0 &middot; work in progress</div>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .terminal {
+    max-width: 640px;
+    width: 100%;
+  }
+
+  .hero {
+    margin-bottom: 2.5rem;
+  }
+
+  .hero-title {
+    font-size: 2.4rem;
+    font-weight: 700;
+    color: var(--rose);
+    line-height: 1.2;
+    min-height: 3rem;
+  }
+
+  .prompt {
+    color: var(--green);
+  }
+
+  .hero-sub {
+    margin-top: 0.75rem;
+    font-size: 1rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+
+  .hero-sub.visible {
+    opacity: 1;
+  }
+
+  .cta {
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--bg-light);
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+
+  .cta.visible {
+    opacity: 1;
+  }
+
+  .clone-line {
+    margin-top: 1rem;
+    padding: 0.6rem 1rem;
+    background: var(--bg-light);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    user-select: all;
+  }
+
+  .clone-line .prompt {
+    margin-right: 0.5em;
+  }
+
+  .badge {
+    display: inline-block;
+    margin-top: 1rem;
+    font-size: 0.8rem;
+    color: var(--green-dim);
+  }
+
+  @media (max-width: 480px) {
+    .hero-title { font-size: 1.8rem; }
+  }
+</style>
+
+<script>
+  // Show subtitle after typewriter finishes
+  document.addEventListener('typed', () => {
+    const sub = document.getElementById('sub');
+    if (sub) {
+      setTimeout(() => sub.classList.add('visible'), 300);
+    }
+  });
+
+  // Show CTA after features animate in
+  const observer = new MutationObserver(() => {
+    const features = document.getElementById('features');
+    if (features?.classList.contains('visible')) {
+      const featureCount = features.querySelectorAll('.feature').length;
+      setTimeout(() => {
+        document.getElementById('cta')?.classList.add('visible');
+      }, featureCount * 120 + 400);
+      observer.disconnect();
+    }
+  });
+
+  const features = document.getElementById('features');
+  if (features) {
+    observer.observe(features, { attributes: true, attributeFilter: ['class'] });
+  }
+</script>
