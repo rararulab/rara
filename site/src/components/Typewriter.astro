@@ -1,0 +1,46 @@
+---
+interface Props {
+  text: string;
+  delay?: number;
+}
+
+const { text, delay = 500 } = Astro.props;
+---
+
+<span class="typewriter" data-text={text} data-delay={delay}></span><span class="cursor"></span>
+
+<style>
+  .cursor {
+    display: inline-block;
+    width: 0.6em;
+    height: 1.15em;
+    background: var(--rose);
+    vertical-align: text-bottom;
+    margin-left: 2px;
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+</style>
+
+<script>
+  document.querySelectorAll('.typewriter').forEach((el) => {
+    const text = el.getAttribute('data-text') || '';
+    const delay = parseInt(el.getAttribute('data-delay') || '500', 10);
+    let i = 0;
+
+    function typeChar() {
+      if (i < text.length) {
+        el.textContent += text[i];
+        i++;
+        setTimeout(typeChar, 120 + Math.random() * 80);
+      } else {
+        el.dispatchEvent(new CustomEvent('typed', { bubbles: true }));
+      }
+    }
+
+    setTimeout(typeChar, delay);
+  });
+</script>

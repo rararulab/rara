@@ -54,7 +54,11 @@ tmp-*/
 
 # Docs build outputs
 docs/book/
-public/
+/public/
+
+# Astro site build output
+site/dist/
+site/.astro/
 
 # Local git worktrees (in-repo)
 .worktrees/
