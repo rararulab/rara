@@ -389,7 +389,7 @@ import Base from '../layouts/Base.astro';
     const gs: Glyph[] = [];
 
     const testBody = mPara(
-      'A kernel event bus dispatches signals. Channels \u2014 web, Telegram, WeChat \u2014 are I/O surfaces, not separate bots. Guard policies enforce boundaries. Skills extend capabilities without touching core. The kernel schedules, the agent computes.',
+      'A kernel event bus dispatches signals. Channels \u2014 Telegram, Web, TUI, WeChat \u2014 are I/O surfaces, not separate bots. A gateway supervisor boots, restarts, and auto-deploys on git updates. Guard policies enforce boundaries. Skills extend capabilities without touching core.',
       15, 26, DIM, 0, 0, mw
     );
     const totalH = 40 + 36 + testBody.endY;
@@ -399,12 +399,13 @@ import Base from '../layouts/Base.astro';
     y += 40 + 16;
 
     const body = mPara(
-      'A kernel event bus dispatches signals. Channels \u2014 web, Telegram, WeChat \u2014 are I/O surfaces, not separate bots. Guard policies enforce boundaries. Skills extend capabilities without touching core. The kernel schedules, the agent computes.',
+      'A kernel event bus dispatches signals. Channels \u2014 Telegram, Web, TUI, WeChat \u2014 are I/O surfaces, not separate bots. A gateway supervisor boots, restarts, and auto-deploys on git updates. Guard policies enforce boundaries. Skills extend capabilities without touching core.',
       15, 26, DIM, left, y, mw
     );
     gs.push(...body.glyphs);
     colorW(gs, 'event bus', ROSE);
     colorW(gs, 'Channels', TEXT);
+    colorW(gs, 'gateway', TEXT);
     colorW(gs, 'Guard', TEXT);
     colorW(gs, 'Skills', TEXT);
     p.glyphs = gs;
