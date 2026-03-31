@@ -83,8 +83,7 @@ alias t := test
 [doc("check that every crate has an AGENT.md")]
 [group("👆 Code Quality")]
 check-agent-md:
-    @cd scripts && go build -o bin/devtool ./cmd/devtool/
-    @scripts/bin/devtool check-agent-md
+    @devkit check-agent-md
 
 [doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md, check-deps)")]
 [group("👆 Code Quality")]
@@ -311,22 +310,15 @@ alias ma := migrate-add
 # Worktree Management
 # ========================================================================================
 
-DEVTOOL := "scripts/bin/devtool"
-
-[doc("build devtool binary")]
-[group("🔧 Development")]
-devtool-build:
-    @cd scripts && go build -o bin/devtool ./cmd/devtool/
-
 [doc("interactive worktree manager (TUI)")]
 [group("🌳 Worktree")]
-wt: devtool-build
-    @{{DEVTOOL}} wt
+wt:
+    @devkit wt
 
 [doc("check crate dependency direction rules")]
 [group("👆 Code Quality")]
-check-deps: devtool-build
-    @{{DEVTOOL}} check-deps
+check-deps:
+    @devkit check-deps
 
 # ========================================================================================
 # Dependency Management
