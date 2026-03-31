@@ -35,6 +35,7 @@ An operating system doesn't tell a process what to compute — it provides sched
 - **Proactive** — Heartbeat-driven background actions, not just request-response
 - **Multi-channel** — Web, Telegram, WeChat — one agent, many I/O surfaces
 - **Skills** — Extensible capability system without touching core
+- **Gateway** — Supervisor that boots, restarts, and auto-deploys on git updates — like a bootloader for your agent OS
 
 ## Getting Started
 
