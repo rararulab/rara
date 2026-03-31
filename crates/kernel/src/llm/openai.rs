@@ -1162,6 +1162,12 @@ impl<'a> WireMessage<'a> {
                                 },
                             }
                         }
+                        // Audio blocks should be transcribed before reaching the LLM.
+                        // If one leaks through, convert to a text placeholder so the
+                        // prompt is not silently incomplete.
+                        ContentBlock::AudioBase64 { .. } => WireContentPart::Text {
+                            text: "[audio: not transcribed]",
+                        },
                     })
                     .collect();
                 WireContent::Multimodal(parts)

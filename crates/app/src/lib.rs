@@ -335,9 +335,10 @@ pub async fn start_with_options(
     .await
     .whatever_context("Failed to initialize BackendState")?;
 
-    let web_adapter = Arc::new(rara_channels::web::WebAdapter::new(
-        config.owner_token.clone(),
-    ));
+    let web_adapter = Arc::new(
+        rara_channels::web::WebAdapter::new(config.owner_token.clone())
+            .with_stt_service(stt_service.clone()),
+    );
     let web_router = web_adapter.router();
 
     let telegram_adapter = match try_build_telegram(

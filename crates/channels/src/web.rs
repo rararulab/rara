@@ -33,6 +33,7 @@
 //! | GET    | `/ws`       | WebSocket upgrade (bidirectional)    |
 //! | GET    | `/events`   | SSE stream (server-push)             |
 //! | POST   | `/messages` | Send message (fire-and-forget)       |
+//! | (none) |             | Audio flows as `AudioBase64` content blocks via WS |
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -367,6 +368,8 @@ pub struct WebAdapter {
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
     shutdown_rx:       watch::Receiver<bool>,
+    /// Optional STT service for transcribing voice messages to text.
+    stt_service:       Option<rara_kernel::stt::SttService>,
 }
 
 impl WebAdapter {
@@ -381,7 +384,15 @@ impl WebAdapter {
             owner_token,
             shutdown_tx,
             shutdown_rx,
+            stt_service: None,
         }
+    }
+
+    /// Attach an STT service for voice message transcription.
+    #[must_use]
+    pub fn with_stt_service(mut self, stt: Option<rara_kernel::stt::SttService>) -> Self {
+        self.stt_service = stt;
+        self
     }
 
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
@@ -398,6 +409,7 @@ impl WebAdapter {
             endpoint_registry: Arc::clone(&self.endpoint_registry),
             owner_token:       self.owner_token.clone(),
             shutdown_rx:       self.shutdown_rx.clone(),
+            stt_service:       self.stt_service.clone(),
         };
 
         Router::new()
@@ -455,6 +467,7 @@ struct WebAdapterState {
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     owner_token:       Option<String>,
     shutdown_rx:       watch::Receiver<bool>,
+    stt_service:       Option<rara_kernel::stt::SttService>,
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +540,92 @@ fn build_raw_platform_message(
             interaction_type:         InteractionType::Message,
         }),
         metadata: HashMap::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio transcription helpers
+// ---------------------------------------------------------------------------
+
+use rara_kernel::channel::types::ContentBlock;
+
+/// Transcribe any `AudioBase64` blocks in the message content, replacing them
+/// with `Text` blocks containing the transcribed text.
+async fn transcribe_audio_blocks(
+    content: MessageContent,
+    stt: &Option<rara_kernel::stt::SttService>,
+) -> MessageContent {
+    let blocks = match content {
+        MessageContent::Text(_) => return content,
+        MessageContent::Multimodal(blocks) => blocks,
+    };
+
+    if !blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::AudioBase64 { .. }))
+    {
+        return MessageContent::Multimodal(blocks);
+    }
+
+    let mut result: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            ContentBlock::AudioBase64 { data, media_type } => {
+                let text = transcribe_single_audio(&data, &media_type, stt).await;
+                let text = if text.is_empty() {
+                    "[voice message]".to_owned()
+                } else {
+                    text
+                };
+                result.push(ContentBlock::Text { text });
+            }
+            other => result.push(other),
+        }
+    }
+
+    // Simplify: if only one text block remains, unwrap to plain text.
+    if result.len() == 1 {
+        if let ContentBlock::Text { text } = &result[0] {
+            return MessageContent::Text(text.clone());
+        }
+    }
+    MessageContent::Multimodal(result)
+}
+
+/// Transcribe a single base64-encoded audio clip via the STT service.
+async fn transcribe_single_audio(
+    data_b64: &str,
+    media_type: &str,
+    stt: &Option<rara_kernel::stt::SttService>,
+) -> String {
+    use base64::Engine;
+
+    let Some(stt) = stt else {
+        warn!("voice message received but STT not configured");
+        return "[voice message]".to_owned();
+    };
+
+    let audio_bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(error = %e, "failed to decode audio base64");
+            return "[voice message]".to_owned();
+        }
+    };
+
+    match stt.transcribe(audio_bytes, media_type).await {
+        Ok(text) if !text.trim().is_empty() => {
+            info!(len = text.len(), "voice message transcribed");
+            text
+        }
+        Ok(_) => {
+            warn!("STT returned empty transcription");
+            String::new()
+        }
+        Err(e) => {
+            warn!(error = %e, "STT transcription failed");
+            "[voice message]".to_owned()
+        }
     }
 }
 
@@ -618,6 +717,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         let sessions = Arc::clone(&state.sessions);
         let session_key = session_key.clone();
         let user_id = params.user_id.clone();
+        let stt_service = state.stt_service.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 let text = match msg {
@@ -634,7 +734,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                 }
 
                 let payload = parse_inbound_text_frame(&text);
-                let raw = build_raw_platform_message(&session_key, &user_id, payload.content);
+                // Transcribe any audio blocks before submitting to the kernel.
+                let content = transcribe_audio_blocks(payload.content, &stt_service).await;
+                let raw = build_raw_platform_message(&session_key, &user_id, content);
 
                 let guard = sink.read().await;
                 if let Some(ref s) = *guard {

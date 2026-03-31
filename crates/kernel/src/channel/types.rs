@@ -135,6 +135,11 @@ pub enum ContentBlock {
         media_type: String,
         data:       String,
     },
+    /// Inline base64-encoded audio data (transcribed server-side by STT).
+    AudioBase64 {
+        media_type: String,
+        data:       String,
+    },
 }
 
 /// Message content — either plain text or multimodal blocks.
@@ -163,7 +168,9 @@ impl MessageContent {
                 .iter()
                 .filter_map(|b| match b {
                     ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::ImageUrl { .. } | ContentBlock::ImageBase64 { .. } => None,
+                    ContentBlock::ImageUrl { .. }
+                    | ContentBlock::ImageBase64 { .. }
+                    | ContentBlock::AudioBase64 { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
