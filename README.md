@@ -37,17 +37,6 @@ An operating system doesn't tell a process what to compute — it provides sched
 - **Skills** — Extensible capability system without touching core
 - **Gateway** — Supervisor that boots, restarts, and auto-deploys on git updates — like a bootloader for your agent OS
 
-## Getting Started
-
-```bash
-# prerequisites: rust, node 20+, just
-just check        # install dependencies and verify
-just run          # start the server
-cd web && npm i && npm run dev  # start the frontend
-```
-
-Configuration lives in `~/.config/rara/config.yaml` — see `config.example.yaml`.
-
 ## Inspired By
 
 - Kernel architecture inspired by [OpenFang](https://github.com/pchaganti/gx-openFang)
