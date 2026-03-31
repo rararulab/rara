@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rara — a self-evolving proactive agent</title>
+<meta name="description" content="Rust-based proactive agent runtime with kernel-inspired architecture, heartbeat-driven behavior, and multi-channel support.">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg:       #0f1f17;
+    --bg-light: #162a1f;
+    --rose:     #c4787a;
+    --rose-dim: #9a5c5e;
+    --text:     #e8d5d0;
+    --text-dim: #7a6e6b;
+    --green:    #5a8a72;
+    --green-dim:#3d6b53;
+  }
+
+  html { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+
+  .terminal {
+    max-width: 640px;
+    width: 100%;
+  }
+
+  /* Prompt line */
+  .prompt { color: var(--green); }
+  .cursor {
+    display: inline-block;
+    width: 0.6em;
+    height: 1.15em;
+    background: var(--rose);
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+    margin-left: 2px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Hero */
+  .hero { margin-bottom: 2.5rem; }
+  .hero-title {
+    font-size: 2.4rem;
+    font-weight: 700;
+    color: var(--rose);
+    line-height: 1.2;
+    min-height: 3rem;
+  }
+  .hero-sub {
+    margin-top: 0.75rem;
+    font-size: 1rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+  .hero-sub.visible { opacity: 1; }
+
+  /* Features */
+  .features {
+    margin-bottom: 2.5rem;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+  .features.visible { opacity: 1; }
+
+  .feature {
+    padding: 0.35rem 0;
+    line-height: 1.5;
+    font-size: 0.92rem;
+    opacity: 0;
+    transform: translateX(-8px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+  .feature.visible {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .feature .prompt { margin-right: 0.5em; }
+  .feature-label {
+    color: var(--rose);
+    font-weight: 600;
+  }
+  .feature-desc { color: var(--text-dim); }
+
+  /* CTA */
+  .cta {
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--bg-light);
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+  .cta.visible { opacity: 1; }
+
+  .cta a {
+    color: var(--green);
+    text-decoration: none;
+    border-bottom: 1px solid var(--green-dim);
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .cta a:hover {
+    color: var(--rose);
+    border-color: var(--rose-dim);
+  }
+
+  .clone-line {
+    margin-top: 1rem;
+    padding: 0.6rem 1rem;
+    background: var(--bg-light);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    user-select: all;
+  }
+
+  .badge {
+    display: inline-block;
+    margin-top: 1rem;
+    font-size: 0.8rem;
+    color: var(--green-dim);
+  }
+
+  @media (max-width: 480px) {
+    body { padding: 1.5rem 1rem; }
+    .hero-title { font-size: 1.8rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="terminal">
+  <div class="hero">
+    <div class="hero-title">
+      <span class="prompt">&gt; </span><span id="typed"></span><span class="cursor" id="cursor"></span>
+    </div>
+    <div class="hero-sub" id="sub">
+      A self-evolving, proactive agent runtime built in Rust.<br>
+      Kernel-inspired architecture. Heartbeat-driven. Multi-channel.
+    </div>
+  </div>
+
+  <div class="features" id="features">
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="feature-label">kernel</span>
+      <span class="feature-desc">— event-driven core with LLM, tools, memory, guard, and mood</span>
+    </div>
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="feature-label">proactive</span>
+      <span class="feature-desc">— heartbeat loop that acts without waiting for input</span>
+    </div>
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="feature-label">memory</span>
+      <span class="feature-desc">— 3-layer tape memory with session context and long-term recall</span>
+    </div>
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="feature-label">channels</span>
+      <span class="feature-desc">— web, telegram, wechat — one agent, many surfaces</span>
+    </div>
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="feature-label">skills</span>
+      <span class="feature-desc">— extensible capability system for tools and integrations</span>
+    </div>
+    <div class="feature">
+      <span class="prompt">$</span>
+      <span class="feature-label">soul</span>
+      <span class="feature-desc">— personality and behavioral traits that shape every response</span>
+    </div>
+  </div>
+
+  <div class="cta" id="cta">
+    <span class="prompt">&gt; </span><a href="https://github.com/rararulab/rara">github.com/rararulab/rara</a>
+    <div class="clone-line"><span class="prompt">$</span> git clone https://github.com/rararulab/rara.git</div>
+    <div class="badge">rust · apache-2.0 · work in progress</div>
+  </div>
+</div>
+
+<script>
+  const text = 'rara';
+  const typed = document.getElementById('typed');
+  const cursor = document.getElementById('cursor');
+  const sub = document.getElementById('sub');
+  const features = document.getElementById('features');
+  const featureEls = document.querySelectorAll('.feature');
+  const cta = document.getElementById('cta');
+
+  let i = 0;
+  function typeChar() {
+    if (i < text.length) {
+      typed.textContent += text[i];
+      i++;
+      setTimeout(typeChar, 150 + Math.random() * 100);
+    } else {
+      setTimeout(showSub, 400);
+    }
+  }
+
+  function showSub() {
+    sub.classList.add('visible');
+    setTimeout(showFeatures, 600);
+  }
+
+  function showFeatures() {
+    features.classList.add('visible');
+    featureEls.forEach((el, idx) => {
+      setTimeout(() => el.classList.add('visible'), idx * 120);
+    });
+    setTimeout(showCta, featureEls.length * 120 + 300);
+  }
+
+  function showCta() {
+    cta.classList.add('visible');
+  }
+
+  setTimeout(typeChar, 500);
+</script>
+
+</body>
+</html>
