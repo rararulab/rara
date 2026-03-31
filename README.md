@@ -47,6 +47,11 @@ cd web && npm i && npm run dev  # start the frontend
 
 Configuration lives in `~/.config/rara/config.yaml` — see `config.example.yaml`.
 
+## Inspired By
+
+- Kernel architecture inspired by [OpenFang](https://github.com/pchaganti/gx-openFang)
+- Tape memory system from [bub](https://bub.build) — see [tape.systems](https://tape.systems)
+
 ## License
 
 Apache-2.0
