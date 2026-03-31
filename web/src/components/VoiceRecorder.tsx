@@ -9,20 +9,38 @@
  */
 
 import { useState, useRef, useCallback } from "react";
-import { BASE_URL } from "@/api/client";
+import { buildWsUrl } from "@/adapters/rara-stream";
 
 type VoiceRecorderProps = {
   /** Returns the current session key. */
   getSessionKey: () => string | undefined;
-  /** Called when transcription completes and message is submitted. */
-  onSent?: () => void;
+  /** Called when the backend finishes processing the voice message. */
+  onComplete?: () => void;
 };
 
 /**
- * Floating microphone button for recording voice messages.
- * Records audio via MediaRecorder, uploads to POST /voice for transcription.
+ * Convert a Blob to a base64 string (without data-URI prefix).
  */
-export function VoiceRecorder({ getSessionKey, onSent }: VoiceRecorderProps) {
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      // Strip "data:...;base64," prefix
+      const base64 = result.split(",")[1] ?? "";
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Floating microphone button for recording voice messages.
+ * Records audio via MediaRecorder, sends as an AudioBase64 content block
+ * through the existing WebSocket chat API for server-side transcription.
+ */
+export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [sending, setSending] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -52,26 +70,57 @@ export function VoiceRecorder({ getSessionKey, onSent }: VoiceRecorderProps) {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         if (blob.size === 0) return;
 
+        const sk = getSessionKey();
+        if (!sk) return;
+
         setSending(true);
         try {
-          const form = new FormData();
-          form.append("file", blob, "voice.webm");
+          const audioBase64 = await blobToBase64(blob);
+          const mimeType = recorder.mimeType.split(";")[0] ?? "audio/webm";
 
-          const sk = getSessionKey();
-          if (!sk) return;
+          // Build JSON payload matching backend InboundPayload with AudioBase64 block.
+          const payload = JSON.stringify({
+            content: [
+              {
+                type: "audio_base64",
+                media_type: mimeType,
+                data: audioBase64,
+              },
+            ],
+          });
 
-          const url = `${BASE_URL}/api/v1/kernel/chat/voice?session_key=${encodeURIComponent(sk)}&user_id=web_ryan`;
-          const res = await fetch(url, { method: "POST", body: form });
+          // Send via WebSocket — same pattern as rara-stream.
+          // Keep the connection open until the backend finishes processing,
+          // then call onComplete to reload the session messages.
+          const wsUrl = buildWsUrl(sk);
+          const ws = new WebSocket(wsUrl);
 
-          if (!res.ok) {
-            const text = await res.text();
-            console.error("Voice upload failed:", res.status, text);
-          } else {
-            onSent?.();
-          }
+          ws.onopen = () => {
+            ws.send(payload);
+          };
+
+          ws.onmessage = (ev: MessageEvent) => {
+            try {
+              const event = JSON.parse(ev.data as string);
+              if (event.type === "done" || event.type === "error") {
+                ws.close();
+              }
+            } catch {
+              // Ignore non-JSON frames
+            }
+          };
+
+          ws.onerror = () => {
+            console.error("Voice WebSocket error");
+            setSending(false);
+          };
+
+          ws.onclose = () => {
+            setSending(false);
+            onComplete?.();
+          };
         } catch (err) {
-          console.error("Voice upload error:", err);
-        } finally {
+          console.error("Voice send error:", err);
           setSending(false);
         }
       };
@@ -82,7 +131,7 @@ export function VoiceRecorder({ getSessionKey, onSent }: VoiceRecorderProps) {
     } catch (err) {
       console.error("Microphone access denied:", err);
     }
-  }, [getSessionKey, onSent]);
+  }, [getSessionKey, onComplete]);
 
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state === "recording") {

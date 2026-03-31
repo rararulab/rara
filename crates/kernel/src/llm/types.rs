@@ -56,6 +56,12 @@ pub enum ContentBlock {
         media_type: String,
         data:       String,
     },
+    /// Inline base64-encoded audio data (transcribed server-side by STT).
+    /// Should never reach the LLM — the adapter transcribes before submission.
+    AudioBase64 {
+        media_type: String,
+        data:       String,
+    },
 }
 
 /// Message content — either plain text or multimodal blocks.
@@ -193,13 +199,15 @@ impl Message {
     pub fn strip_images(&self) -> Self {
         let content = match &self.content {
             MessageContent::Multimodal(blocks) => {
-                let has_images = blocks.iter().any(|b| {
+                let has_non_text = blocks.iter().any(|b| {
                     matches!(
                         b,
-                        ContentBlock::ImageUrl { .. } | ContentBlock::ImageBase64 { .. }
+                        ContentBlock::ImageUrl { .. }
+                            | ContentBlock::ImageBase64 { .. }
+                            | ContentBlock::AudioBase64 { .. }
                     )
                 });
-                if !has_images {
+                if !has_non_text {
                     return self.clone();
                 }
                 let text_parts: Vec<&str> = blocks
@@ -209,6 +217,7 @@ impl Message {
                         ContentBlock::ImageUrl { .. } | ContentBlock::ImageBase64 { .. } => {
                             "[image: current model does not support vision]"
                         }
+                        ContentBlock::AudioBase64 { .. } => "[audio]",
                     })
                     .collect();
                 MessageContent::Text(text_parts.join("\n"))
@@ -233,6 +242,9 @@ impl Message {
                     // base64 images are large but already counted by the provider;
                     // use a small constant so we don't over-count.
                     ContentBlock::ImageBase64 { .. } => 256,
+                    // Audio blocks are transcribed before reaching the LLM;
+                    // estimate a small placeholder size.
+                    ContentBlock::AudioBase64 { .. } => 100,
                 })
                 .sum(),
         };

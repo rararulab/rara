@@ -266,6 +266,21 @@ export default function PiChat() {
     chatPanelRef.current?.agentInterface?.requestUpdate();
   }, []);
 
+  /** Reload current session messages (e.g. after voice message completes). */
+  const reloadMessages = useCallback(async () => {
+    const agent = agentRef.current;
+    if (!agent?.sessionId) return;
+    try {
+      const msgs = await api.get<ChatMessageData[]>(
+        `/api/v1/chat/sessions/${encodeURIComponent(agent.sessionId)}/messages?limit=200`,
+      );
+      agent.replaceMessages(toAgentMessages(msgs));
+      chatPanelRef.current?.agentInterface?.requestUpdate();
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   /** Create a new empty session and switch to it. */
   const newSession = useCallback(async () => {
     const created = await api.post<ChatSession>("/api/v1/chat/sessions", {});
@@ -377,6 +392,7 @@ export default function PiChat() {
       <div className="absolute right-2 top-2 z-50">
         <VoiceRecorder
           getSessionKey={() => agentRef.current?.sessionId}
+          onComplete={reloadMessages}
         />
       </div>
       {/* Chat panel container */}

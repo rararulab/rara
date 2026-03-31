@@ -112,7 +112,7 @@ function buildPartial(
  * Derive the WebSocket URL from the configured API base URL.
  * Converts http(s) to ws(s) and appends the chat WS path.
  */
-function buildWsUrl(sessionKey: string): string {
+export function buildWsUrl(sessionKey: string): string {
   let base = BASE_URL;
 
   // When BASE_URL is empty, derive from current page location

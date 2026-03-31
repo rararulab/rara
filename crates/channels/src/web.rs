@@ -33,7 +33,7 @@
 //! | GET    | `/ws`       | WebSocket upgrade (bidirectional)    |
 //! | GET    | `/events`   | SSE stream (server-push)             |
 //! | POST   | `/messages` | Send message (fire-and-forget)       |
-//! | POST   | `/voice`    | Upload voice audio for transcription  |
+//! | (none) |             | Audio flows as `AudioBase64` content blocks via WS |
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -416,7 +416,6 @@ impl WebAdapter {
             .route("/ws", get(ws_handler))
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
-            .route("/voice", post(voice_handler))
             .route("/signals/{session_id}/interrupt", post(interrupt_handler))
             .with_state(state)
     }
@@ -545,6 +544,89 @@ fn build_raw_platform_message(
 }
 
 // ---------------------------------------------------------------------------
+// Audio transcription helpers
+// ---------------------------------------------------------------------------
+
+use rara_kernel::channel::types::ContentBlock;
+
+/// Transcribe any `AudioBase64` blocks in the message content, replacing them
+/// with `Text` blocks containing the transcribed text.
+async fn transcribe_audio_blocks(
+    content: MessageContent,
+    stt: &Option<rara_kernel::stt::SttService>,
+) -> MessageContent {
+    let blocks = match content {
+        MessageContent::Text(_) => return content,
+        MessageContent::Multimodal(blocks) => blocks,
+    };
+
+    if !blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::AudioBase64 { .. }))
+    {
+        return MessageContent::Multimodal(blocks);
+    }
+
+    let mut result: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            ContentBlock::AudioBase64 { data, media_type } => {
+                let text = transcribe_single_audio(&data, &media_type, stt).await;
+                if !text.is_empty() {
+                    result.push(ContentBlock::Text { text });
+                }
+            }
+            other => result.push(other),
+        }
+    }
+
+    // Simplify: if only one text block remains, unwrap to plain text.
+    if result.len() == 1 {
+        if let ContentBlock::Text { text } = &result[0] {
+            return MessageContent::Text(text.clone());
+        }
+    }
+    MessageContent::Multimodal(result)
+}
+
+/// Transcribe a single base64-encoded audio clip via the STT service.
+async fn transcribe_single_audio(
+    data_b64: &str,
+    media_type: &str,
+    stt: &Option<rara_kernel::stt::SttService>,
+) -> String {
+    use base64::Engine;
+
+    let Some(stt) = stt else {
+        warn!("voice message received but STT not configured");
+        return "[voice message]".to_owned();
+    };
+
+    let audio_bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(error = %e, "failed to decode audio base64");
+            return "[voice message]".to_owned();
+        }
+    };
+
+    match stt.transcribe(audio_bytes, media_type).await {
+        Ok(text) if !text.trim().is_empty() => {
+            info!(len = text.len(), "voice message transcribed");
+            text
+        }
+        Ok(_) => {
+            warn!("STT returned empty transcription");
+            String::new()
+        }
+        Err(e) => {
+            warn!(error = %e, "STT transcription failed");
+            "[voice message]".to_owned()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket handler
 // ---------------------------------------------------------------------------
 
@@ -632,6 +714,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         let sessions = Arc::clone(&state.sessions);
         let session_key = session_key.clone();
         let user_id = params.user_id.clone();
+        let stt_service = state.stt_service.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 let text = match msg {
@@ -648,7 +731,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                 }
 
                 let payload = parse_inbound_text_frame(&text);
-                let raw = build_raw_platform_message(&session_key, &user_id, payload.content);
+                // Transcribe any audio blocks before submitting to the kernel.
+                let content = transcribe_audio_blocks(payload.content, &stt_service).await;
+                let raw = build_raw_platform_message(&session_key, &user_id, content);
 
                 let guard = sink.read().await;
                 if let Some(ref s) = *guard {
@@ -942,149 +1027,6 @@ async fn send_message_handler(
             let status = axum::http::StatusCode::SERVICE_UNAVAILABLE;
             (status, "adapter not started").into_response()
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// POST /voice handler
-// ---------------------------------------------------------------------------
-
-/// Query parameters for POST /voice.
-#[derive(Debug, Deserialize)]
-struct VoiceQuery {
-    session_key: String,
-    user_id:     String,
-}
-
-/// Maximum voice upload size (25 MB).
-const MAX_VOICE_SIZE: usize = 25 * 1024 * 1024;
-
-async fn voice_handler(
-    Query(params): Query<VoiceQuery>,
-    State(state): State<WebAdapterState>,
-    mut multipart: axum::extract::Multipart,
-) -> Response {
-    debug!(
-        session_key = %params.session_key,
-        user_id = %params.user_id,
-        "POST /voice"
-    );
-
-    let stt = match &state.stt_service {
-        Some(s) => s.clone(),
-        None => {
-            return (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "STT service not configured",
-            )
-                .into_response();
-        }
-    };
-
-    // Extract audio data from multipart form.
-    let mut audio_data: Option<Vec<u8>> = None;
-    let mut mime_type = "audio/webm".to_owned();
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or_default().to_owned();
-        if name == "file" {
-            if let Some(ct) = field.content_type() {
-                mime_type = ct.to_owned();
-            }
-            match field.bytes().await {
-                Ok(bytes) => {
-                    if bytes.len() > MAX_VOICE_SIZE {
-                        return (
-                            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                            format!(
-                                "voice file too large: {} bytes (max {MAX_VOICE_SIZE})",
-                                bytes.len()
-                            ),
-                        )
-                            .into_response();
-                    }
-                    audio_data = Some(bytes.to_vec());
-                }
-                Err(e) => {
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        format!("failed to read audio data: {e}"),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    }
-
-    let audio_data = match audio_data {
-        Some(d) if !d.is_empty() => d,
-        _ => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                "no audio data in request",
-            )
-                .into_response();
-        }
-    };
-
-    // Transcribe via STT service.
-    let text = match stt.transcribe(audio_data, &mime_type).await {
-        Ok(t) if !t.trim().is_empty() => t,
-        Ok(_) => {
-            return (
-                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                "transcription returned empty text",
-            )
-                .into_response();
-        }
-        Err(e) => {
-            error!(error = %e, "STT transcription failed");
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("transcription failed: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    info!(
-        session_key = %params.session_key,
-        len = text.len(),
-        "voice message transcribed"
-    );
-
-    // Submit transcribed text to kernel (same flow as POST /messages).
-    WebAdapter::get_or_create_session(&state.sessions, &params.session_key);
-    let raw = build_raw_platform_message(
-        &params.session_key,
-        &params.user_id,
-        MessageContent::Text(text),
-    );
-
-    let guard = state.sink.read().await;
-    match &*guard {
-        Some(sink) => {
-            WebAdapter::broadcast_event(&state.sessions, &params.session_key, &WebEvent::Typing);
-            match sink.ingest(raw).await {
-                Ok(()) => {
-                    spawn_stream_forwarder(
-                        Arc::clone(&state.stream_hub),
-                        Arc::clone(&state.sessions),
-                        params.session_key,
-                    );
-                    axum::Json(SendMessageResponse { accepted: true }).into_response()
-                }
-                Err(e) => {
-                    error!(error = %e, "ingest failed");
-                    (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-                }
-            }
-        }
-        None => (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "adapter not started",
-        )
-            .into_response(),
     }
 }
 

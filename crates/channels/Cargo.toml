@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-axum = { workspace = true, features = ["multipart", "ws"] }
+axum = { workspace = true, features = ["ws"] }
 base64 = { workspace = true }
 chrono = { workspace = true }
 dashmap = "6"

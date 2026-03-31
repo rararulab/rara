@@ -1147,21 +1147,24 @@ impl<'a> WireMessage<'a> {
             MessageContent::Multimodal(blocks) => {
                 let parts = blocks
                     .iter()
-                    .map(|b| match b {
-                        ContentBlock::Text { text } => WireContentPart::Text { text },
-                        ContentBlock::ImageUrl { url } => WireContentPart::ImageUrl {
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(WireContentPart::Text { text }),
+                        ContentBlock::ImageUrl { url } => Some(WireContentPart::ImageUrl {
                             image_url: WireImageUrl {
                                 url: std::borrow::Cow::Borrowed(url),
                             },
-                        },
+                        }),
                         ContentBlock::ImageBase64 { media_type, data } => {
                             let data_uri = format!("data:{media_type};base64,{data}");
-                            WireContentPart::ImageUrl {
+                            Some(WireContentPart::ImageUrl {
                                 image_url: WireImageUrl {
                                     url: std::borrow::Cow::Owned(data_uri),
                                 },
-                            }
+                            })
                         }
+                        // Audio blocks should be transcribed before reaching the LLM;
+                        // skip any that leak through.
+                        ContentBlock::AudioBase64 { .. } => None,
                     })
                     .collect();
                 WireContent::Multimodal(parts)
