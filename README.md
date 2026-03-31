@@ -31,7 +31,7 @@ An operating system doesn't tell a process what to compute — it provides sched
 ## Getting Started
 
 ```bash
-# prerequisites: rust, postgresql 17+, node 20+, just
+# prerequisites: rust, node 20+, just
 just check        # install dependencies and verify
 just run          # start the server
 cd web && npm i && npm run dev  # start the frontend
