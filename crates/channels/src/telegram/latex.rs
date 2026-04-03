@@ -29,10 +29,18 @@
 //! - Subscripts/superscripts via Unicode characters (limited charset)
 //! - `\frac{a}{b}` → `a/b`, `\text{...}` → content as-is
 
+/// Maximum recursion depth for nested LaTeX constructs (e.g. subscripts inside
+/// subscripts). Prevents stack overflow from adversarial input.
+const MAX_DEPTH: usize = 8;
+
 /// Convert LaTeX math delimiters and their contents to Unicode text.
 ///
 /// Processes `$$...$$` (display math, rendered on its own line) and `$...$`
 /// (inline math) blocks. Text outside math delimiters is returned unchanged.
+///
+/// **Important:** This function must only be called on plain-text segments. It
+/// does not understand Markdown code spans or fenced code blocks — the caller
+/// is responsible for protecting those regions (see [`super::markdown`]).
 pub fn latex_to_unicode(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
@@ -41,21 +49,20 @@ pub fn latex_to_unicode(input: &str) -> String {
 
     while i < len {
         // Display math: $$...$$
+        // Only convert when a valid closing $$ exists; otherwise preserve literal.
         if i + 1 < len && chars[i] == '$' && chars[i + 1] == '$' {
+            if let Some((content, end)) = try_parse_display_math(&chars, i) {
+                let converted = convert_latex_content_depth(content.trim(), 0);
+                result.push('\n');
+                result.push_str(&converted);
+                result.push('\n');
+                i = end;
+                continue;
+            }
+            // No closing $$ found — emit literal $$
+            result.push('$');
+            result.push('$');
             i += 2;
-            let start = i;
-            while i + 1 < len && !(chars[i] == '$' && chars[i + 1] == '$') {
-                i += 1;
-            }
-            let latex: String = chars[start..i].iter().collect();
-            let converted = convert_latex_content(latex.trim());
-            // Display math on its own line
-            result.push('\n');
-            result.push_str(&converted);
-            result.push('\n');
-            if i + 1 < len {
-                i += 2; // skip closing $$
-            }
             continue;
         }
 
@@ -64,7 +71,7 @@ pub fn latex_to_unicode(input: &str) -> String {
         // and non-space before closing $.
         if chars[i] == '$' {
             if let Some((content, end)) = try_parse_inline_math(&chars, i) {
-                let converted = convert_latex_content(content.trim());
+                let converted = convert_latex_content_depth(content.trim(), 0);
                 result.push_str(&converted);
                 i = end;
                 continue;
@@ -76,6 +83,31 @@ pub fn latex_to_unicode(input: &str) -> String {
     }
 
     result
+}
+
+/// Try to parse a display math block `$$...$$` starting at `pos`.
+///
+/// Returns `(content, end_position_after_closing_$$)` only if a valid closing
+/// `$$` is found. Returns `None` for unclosed delimiters to avoid corrupting
+/// trailing text.
+fn try_parse_display_math(chars: &[char], pos: usize) -> Option<(String, usize)> {
+    let len = chars.len();
+    if pos + 1 >= len || chars[pos] != '$' || chars[pos + 1] != '$' {
+        return None;
+    }
+
+    let content_start = pos + 2;
+    let mut i = content_start;
+    while i + 1 < len {
+        if chars[i] == '$' && chars[i + 1] == '$' {
+            let content: String = chars[content_start..i].iter().collect();
+            return Some((content, i + 2));
+        }
+        i += 1;
+    }
+
+    // No closing $$ found
+    None
 }
 
 /// Try to parse an inline math block `$...$` starting at `pos`.
@@ -113,8 +145,15 @@ fn try_parse_inline_math(chars: &[char], pos: usize) -> Option<(String, usize)> 
     None
 }
 
-/// Convert the interior of a LaTeX math block to Unicode.
-fn convert_latex_content(latex: &str) -> String {
+/// Convert the interior of a LaTeX math block to Unicode with depth tracking.
+///
+/// When `depth` reaches [`MAX_DEPTH`], returns the raw text without further
+/// conversion to prevent stack overflow from adversarial input.
+fn convert_latex_content_depth(latex: &str, depth: usize) -> String {
+    if depth >= MAX_DEPTH {
+        return latex.to_string();
+    }
+
     let mut result = String::with_capacity(latex.len());
     let chars: Vec<char> = latex.chars().collect();
     let len = chars.len();
@@ -123,7 +162,7 @@ fn convert_latex_content(latex: &str) -> String {
     while i < len {
         // LaTeX commands starting with backslash
         if chars[i] == '\\' {
-            if let Some(cmd) = try_latex_command_full(&chars, i) {
+            if let Some(cmd) = try_latex_command_full(&chars, i, depth) {
                 match cmd {
                     CommandResult::Static(s, end) => {
                         result.push_str(s);
@@ -149,7 +188,7 @@ fn convert_latex_content(latex: &str) -> String {
 
         // Subscript: _{...} or _x
         if chars[i] == '_' {
-            let (sub_content, end) = parse_sub_super_arg(&chars, i + 1);
+            let (sub_content, end) = parse_sub_super_arg(&chars, i + 1, depth);
             for ch in sub_content.chars() {
                 result.push(to_subscript(ch));
             }
@@ -159,7 +198,7 @@ fn convert_latex_content(latex: &str) -> String {
 
         // Superscript: ^{...} or ^x
         if chars[i] == '^' {
-            let (sup_content, end) = parse_sub_super_arg(&chars, i + 1);
+            let (sup_content, end) = parse_sub_super_arg(&chars, i + 1, depth);
             for ch in sup_content.chars() {
                 result.push(to_superscript(ch));
             }
@@ -183,8 +222,9 @@ fn convert_latex_content(latex: &str) -> String {
 /// Parse argument for subscript/superscript: either `{content}` or a single
 /// char.
 ///
-/// Returns `(content, end_position)`.
-fn parse_sub_super_arg(chars: &[char], pos: usize) -> (String, usize) {
+/// Returns `(content, end_position)`. The `depth` parameter is forwarded to
+/// recursive calls to enforce [`MAX_DEPTH`].
+fn parse_sub_super_arg(chars: &[char], pos: usize, depth: usize) -> (String, usize) {
     let len = chars.len();
     if pos >= len {
         return (String::new(), pos);
@@ -193,22 +233,21 @@ fn parse_sub_super_arg(chars: &[char], pos: usize) -> (String, usize) {
     if chars[pos] == '{' {
         // Braced group
         let start = pos + 1;
-        let mut depth = 1;
+        let mut brace_depth = 1;
         let mut i = start;
-        while i < len && depth > 0 {
+        while i < len && brace_depth > 0 {
             match chars[i] {
-                '{' => depth += 1,
-                '}' => depth -= 1,
+                '{' => brace_depth += 1,
+                '}' => brace_depth -= 1,
                 _ => {}
             }
-            if depth > 0 {
+            if brace_depth > 0 {
                 i += 1;
             }
         }
         let content: String = chars[start..i].iter().collect();
-        // Recursively convert LaTeX inside the braced group
-        let converted = convert_latex_content(&content);
-        (converted, if depth == 0 { i + 1 } else { i })
+        let converted = convert_latex_content_depth(&content, depth + 1);
+        (converted, if brace_depth == 0 { i + 1 } else { i })
     } else if chars[pos] == '\\' {
         // A LaTeX command as subscript/superscript argument
         if let Some((replacement, end)) = try_latex_command(chars, pos) {
@@ -231,8 +270,9 @@ enum CommandResult {
 
 /// Try to match a LaTeX command at `pos` (which must point to `\`).
 ///
-/// Returns the replacement text and end position on success.
-fn try_latex_command_full(chars: &[char], pos: usize) -> Option<CommandResult> {
+/// Returns the replacement text and end position on success. The `depth`
+/// parameter is forwarded to recursive conversion calls.
+fn try_latex_command_full(chars: &[char], pos: usize, depth: usize) -> Option<CommandResult> {
     let len = chars.len();
     if pos >= len || chars[pos] != '\\' {
         return None;
@@ -255,8 +295,8 @@ fn try_latex_command_full(chars: &[char], pos: usize) -> Option<CommandResult> {
     if name == "frac" {
         let (num, after_num) = parse_braced_group(chars, name_end)?;
         let (den, after_den) = parse_braced_group(chars, after_num)?;
-        let num_conv = convert_latex_content(&num);
-        let den_conv = convert_latex_content(&den);
+        let num_conv = convert_latex_content_depth(&num, depth + 1);
+        let den_conv = convert_latex_content_depth(&den, depth + 1);
         return Some(CommandResult::Dynamic(
             format!("{num_conv}/{den_conv}"),
             after_den,
@@ -272,7 +312,7 @@ fn try_latex_command_full(chars: &[char], pos: usize) -> Option<CommandResult> {
     // Handle \sqrt{x} → √x
     if name == "sqrt" {
         let (content, after) = parse_braced_group(chars, name_end)?;
-        let conv = convert_latex_content(&content);
+        let conv = convert_latex_content_depth(&content, depth + 1);
         return Some(CommandResult::Dynamic(format!("√{conv}"), after));
     }
 
@@ -284,7 +324,7 @@ fn try_latex_command_full(chars: &[char], pos: usize) -> Option<CommandResult> {
 /// Convenience wrapper that returns a static str reference when possible.
 /// Used by `parse_sub_super_arg` which only needs the replacement string.
 fn try_latex_command(chars: &[char], pos: usize) -> Option<(&'static str, usize)> {
-    match try_latex_command_full(chars, pos)? {
+    match try_latex_command_full(chars, pos, 0)? {
         CommandResult::Static(s, end) => Some((s, end)),
         CommandResult::Dynamic(..) => None,
     }
@@ -581,5 +621,41 @@ mod tests {
     #[test]
     fn nested_subscript_with_latex_command() {
         assert_eq!(latex_to_unicode("$EMA_{t-1}$"), "EMAₜ₋₁");
+    }
+
+    #[test]
+    fn unclosed_display_math_preserved() {
+        // Unclosed $$ must not corrupt trailing text
+        let input = "price is $$100 and something";
+        assert_eq!(latex_to_unicode(input), "price is $$100 and something");
+    }
+
+    #[test]
+    fn unclosed_inline_math_preserved() {
+        let input = "cost is $100 total";
+        assert_eq!(latex_to_unicode(input), input);
+    }
+
+    #[test]
+    fn deeply_nested_subscripts_cap() {
+        // Build deeply nested subscripts: x_{_{_{_{_{_{_{_{_x}}}}}}}}
+        let mut input = "x".to_string();
+        for _ in 0..20 {
+            input = format!("{input}_{{x}}");
+        }
+        let input = format!("${input}$");
+        // Should not panic/stack overflow — just returns something
+        let result = latex_to_unicode(&input);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn frac_conversion() {
+        assert_eq!(latex_to_unicode("$\\frac{a}{b}$"), "a/b");
+    }
+
+    #[test]
+    fn sqrt_conversion() {
+        assert_eq!(latex_to_unicode("$\\sqrt{x}$"), "√x");
     }
 }

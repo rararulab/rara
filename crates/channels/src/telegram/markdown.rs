@@ -59,8 +59,11 @@ pub fn markdown_to_telegram_html(md: &str) -> String {
     // into inline equivalents that the character-level parser can handle.
     let preprocessed = preprocess_blocks(md);
 
-    // Second pass: convert LaTeX math blocks to Unicode text.
-    let delatexed = super::latex::latex_to_unicode(&preprocessed);
+    // Second pass: convert LaTeX math blocks to Unicode text, but only in
+    // plain-text segments. Code blocks and inline code are protected by
+    // extracting them first, converting math in the remaining text, and
+    // then re-inserting the code segments unchanged.
+    let delatexed = latex_preserving_code(&preprocessed);
 
     // Third pass: escape HTML entities in the raw text.
     let escaped = html_escape(&delatexed);
@@ -170,6 +173,101 @@ pub fn markdown_to_telegram_html(md: &str) -> String {
 
         result.push(chars[i]);
         i += 1;
+    }
+
+    result
+}
+
+/// Apply LaTeX-to-Unicode conversion while preserving code blocks and inline
+/// code.
+///
+/// Fenced code blocks (` ``` `) and inline code spans (`` ` ``) are extracted
+/// as opaque placeholders before running [`super::latex::latex_to_unicode`],
+/// then restored afterwards. This prevents math-like patterns inside code from
+/// being rewritten.
+fn latex_preserving_code(input: &str) -> String {
+    let mut segments: Vec<String> = Vec::new();
+    let mut placeholders: Vec<String> = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut plain_start = 0;
+
+    while i < len {
+        // Fenced code block: ```...```
+        if i + 2 < len && chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`' {
+            // Flush preceding plain text
+            let plain: String = chars[plain_start..i].iter().collect();
+            segments.push(plain);
+
+            let block_start = i;
+            i += 3;
+            // Skip to closing ```
+            loop {
+                if i + 2 < len && chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`' {
+                    i += 3;
+                    break;
+                }
+                if i >= len {
+                    break;
+                }
+                i += 1;
+            }
+            let code_block: String = chars[block_start..i].iter().collect();
+            let placeholder = format!("\x00CODE{}\x00", placeholders.len());
+            placeholders.push(code_block);
+            segments.push(placeholder);
+            plain_start = i;
+            continue;
+        }
+
+        // Inline code: `...`
+        if chars[i] == '`' {
+            let plain: String = chars[plain_start..i].iter().collect();
+            segments.push(plain);
+
+            let span_start = i;
+            i += 1;
+            while i < len && chars[i] != '`' {
+                i += 1;
+            }
+            if i < len {
+                i += 1; // skip closing `
+            }
+            let code_span: String = chars[span_start..i].iter().collect();
+            let placeholder = format!("\x00CODE{}\x00", placeholders.len());
+            placeholders.push(code_span);
+            segments.push(placeholder);
+            plain_start = i;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    // Flush remaining plain text
+    if plain_start < len {
+        let plain: String = chars[plain_start..len].iter().collect();
+        segments.push(plain);
+    }
+
+    // Convert LaTeX only in plain-text segments (odd-indexed are placeholders)
+    let converted: String = segments
+        .into_iter()
+        .map(|seg| {
+            if seg.starts_with('\x00') && seg.ends_with('\x00') {
+                seg // placeholder — return as-is
+            } else {
+                super::latex::latex_to_unicode(&seg)
+            }
+        })
+        .collect();
+
+    // Restore code placeholders
+    let mut result = converted;
+    for (idx, original) in placeholders.iter().enumerate() {
+        let placeholder = format!("\x00CODE{idx}\x00");
+        result = result.replace(&placeholder, original);
     }
 
     result
@@ -384,4 +482,48 @@ pub fn chunk_message(html: &str, max_len: usize) -> Vec<String> {
     }
 
     chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latex_in_inline_code_not_converted() {
+        let input = "Use `$\\alpha$` for alpha";
+        let html = markdown_to_telegram_html(input);
+        // The $\alpha$ inside backticks must remain literal, not become α
+        assert!(html.contains("<code>$\\alpha$</code>"));
+    }
+
+    #[test]
+    fn latex_in_fenced_code_not_converted() {
+        let input = "```\n$\\alpha$\n```";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("<pre>$\\alpha$</pre>"));
+    }
+
+    #[test]
+    fn latex_outside_code_is_converted() {
+        let input = "The value $\\alpha$ is important";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("α"));
+        assert!(!html.contains("$\\alpha$"));
+    }
+
+    #[test]
+    fn mixed_code_and_math() {
+        let input = "Use `$x$` but also $\\beta$ works";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("<code>$x$</code>"));
+        assert!(html.contains("β"));
+    }
+
+    #[test]
+    fn link_url_not_corrupted_by_latex() {
+        // A $ in link text shouldn't trigger math conversion inside the URL
+        let input = "See [docs](https://example.com/path$var) here";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("https://example.com/path$var"));
+    }
 }
