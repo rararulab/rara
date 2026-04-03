@@ -59,8 +59,11 @@ pub fn markdown_to_telegram_html(md: &str) -> String {
     // into inline equivalents that the character-level parser can handle.
     let preprocessed = preprocess_blocks(md);
 
-    // Second pass: escape HTML entities in the raw text.
-    let escaped = html_escape(&preprocessed);
+    // Second pass: convert LaTeX math blocks to Unicode text.
+    let delatexed = super::latex::latex_to_unicode(&preprocessed);
+
+    // Third pass: escape HTML entities in the raw text.
+    let escaped = html_escape(&delatexed);
 
     let mut result = String::with_capacity(escaped.len());
     let chars: Vec<char> = escaped.chars().collect();
