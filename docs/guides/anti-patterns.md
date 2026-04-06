@@ -1,27 +1,31 @@
 # What NOT To Do
 
+Every entry has a **why** — the reasoning generalizes better than the rule alone.
+
 ## Code & Architecture
-- Do NOT put repository impls or routes in `yunara-store` — business logic stays in its own crates
-- Do NOT use manual `impl Display` + `impl Error` — use `snafu`
-- Do NOT use mock repositories in tests — use `testcontainers`
-- Do NOT use noop/hollow trait implementations — trait methods with real implementations must not have default empty bodies (silently return `Ok(())` / `Ok(None)` / `vec![]`). Optional UX hooks (`typing_indicator`, lifecycle hooks) are the only exception
-- Do NOT construct hollow identity objects — `Principal` must be built via `SecuritySubsystem::resolve_principal()` or `Principal::from_user()` with full role + permissions from the database. Never store placeholder values in Session
-- Do NOT write manual `fn new()` constructors for structs with 3+ fields — use `#[derive(bon::Builder)]` and construct via `Foo::builder().field(val).build()`. Config structs must also derive `Deserialize` and never `#[derive(Default)]`
-- Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file
-- Do NOT modify already-applied migration files — create a new migration instead
-- Do NOT write code comments in any language other than English
+
+- Do NOT put repository impls or routes in `yunara-store` — **why:** business logic mixed into the store layer creates circular dependencies and makes testing impossible without the full store stack
+- Do NOT use manual `impl Display` + `impl Error` — **why:** `snafu` generates consistent, composable error types; hand-rolled impls drift in style and miss context propagation
+- Do NOT use mock repositories in tests — **why:** mock/prod divergence masked a broken migration (historical incident); `testcontainers` catches real DB behavior
+- Do NOT use noop/hollow trait implementations (silently return `Ok(())` / `Ok(None)` / `vec![]`) — **why:** silent success hides integration bugs; if nothing tests or calls a method's return value, the method shouldn't exist. Exception: optional UX hooks (`typing_indicator`, lifecycle hooks) where no-op is the correct default
+- Do NOT construct hollow `Principal` objects — **why:** placeholder values bypass permission checks; `Principal` must come from `SecuritySubsystem::resolve_principal()` or `Principal::from_user()` with real role + permissions from the database
+- Do NOT write manual `fn new()` for 3+ field structs — **why:** `bon::Builder` provides consistent, IDE-friendly construction; manual constructors create positional-argument bugs
+- Do NOT hardcode database URLs or config defaults in Rust — **why:** config must be explicit and auditable in YAML; hidden defaults cause "works on my machine" failures
+- Do NOT modify already-applied migration files — **why:** SQLx tracks checksums; any change breaks startup on every deployed instance
+- Do NOT write code comments in any language other than English — **why:** non-English comments fragment search and break tooling for international contributors
 
 ## Workflow
-- Do NOT work directly on `main` — ALL changes (code, docs, config) require a worktree + PR, no exceptions
-- Do NOT merge locally on `main` — all merges go through GitHub PRs; never `git merge` or `git commit` on main
-- Do NOT edit files in the main checkout for 'quick fixes' — even one-line changes must go through the full issue → worktree → PR flow
-- Do NOT create issues without the appropriate agent label (`agent:claude`, `agent:codex`, etc.)
-- Do NOT create PRs or issues without type + component labels — every PR and issue must have a type label (`bug`, `enhancement`, `refactor`, `chore`, `documentation`) and a component label (`core`, `backend`, `ui`, `extension`, `ci`)
-- Do NOT leave stale worktrees — clean up after PR is merged
-- Do NOT report PR as complete before CI is green — use `gh pr checks --watch` and fix failures before reporting
-- Do NOT create a new crate without an `AGENT.md` — every crate must ship with agent guidelines from day one
+
+- Do NOT work directly on `main` — **why:** direct commits bypass CI, review, and issue tracking; even one-line changes need the safety net
+- Do NOT merge locally — **why:** local merges skip CI checks and lose the PR audit trail
+- Do NOT edit files in the main checkout for 'quick fixes' — **why:** this is the same rule as above, stated explicitly because "just this once" is the most common failure mode
+- Do NOT create issues/PRs without proper labels (agent + type + component) — **why:** unlabeled items break automated dashboards and make triage impossible
+- Do NOT leave stale worktrees — **why:** stale worktrees accumulate disk usage and cause branch confusion
+- Do NOT report PR as complete before CI is green — **why:** user acts on "done" signal; reporting prematurely wastes their time when CI fails
+- Do NOT create a new crate without an `AGENT.md` — **why:** without agent guidelines, the next agent working in this crate will repeat the same mistakes
 
 ## Agent System Prompt
-- Do NOT add "plan before act" rules to agent system prompts — this causes redundant/repetitive narrative text even for simple interactions (hello). The correct principle is "act first, report after" (see #201)
-- Do NOT use overly broad conditions to trigger memory search — "proactively search memory" causes every interaction to trigger search + meaningless narrative. Trigger conditions must be explicitly scoped (e.g., "user explicitly asks about past events")
-- Do NOT modify agent system prompts without testing — at minimum, verify with simple inputs like "hello" / "你好" that no abnormal/repetitive output is produced
+
+- Do NOT add "plan before act" rules — **why:** causes redundant narrative even for simple "hello" interactions; the correct principle is "act first, report after" (see #201)
+- Do NOT use overly broad memory search triggers — **why:** "proactively search memory" fires on every interaction, producing meaningless narrative; scope triggers explicitly (e.g., "user explicitly asks about past events")
+- Do NOT modify agent system prompts without testing — **why:** prompt changes have non-obvious emergent effects; verify with simple inputs ("hello" / "你好") that no abnormal output is produced
