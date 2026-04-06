@@ -166,7 +166,7 @@ Output a JSON array where each element has:
 - "memory_type": one of "preference", "fact", "event", "habit", "skill"
 - "category": a short lowercase category name (e.g. "profile", "preferences", "work", "hobbies", "events")
 
-Only extract information that is worth remembering long-term. Skip greetings, filler, and transient context.
+Only extract facts that would change how you interact with this user in a future conversation. Skip greetings, filler, and transient context.
 Output ONLY the JSON array, no markdown fences or explanation."#;
 
     let request = CompletionRequest {
