@@ -88,10 +88,14 @@ pub struct PlatformBindingConfig {
 // =========================================================================
 
 /// Initialize all kernel-side infrastructure and return a [`BootResult`].
+///
+/// `browser_manager` is optional — pass `Some` when Lightpanda started
+/// successfully; browser tools are registered into the tool registry when set.
 pub(crate) async fn boot(
     pool: sqlx::SqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
+    browser_manager: Option<rara_kernel::browser::BrowserManagerRef>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
 
@@ -198,21 +202,12 @@ pub(crate) async fn boot(
 
     // -- browser subsystem -------------------------------------------------
 
-    // match rara_kernel::browser::BrowserManager::start(rara_kernel::browser::BrowserConfig::default())
-    //     .await
-    // {
-    //     Ok(manager) => {
-    //         let manager_ref: rara_kernel::browser::BrowserManagerRef =
-    //             std::sync::Arc::new(manager);
-    //         for tool in rara_kernel::tool::browser::browser_tools(manager_ref) {
-    //             tool_registry.register(tool);
-    //         }
-    //         info!("Browser subsystem initialized with Lightpanda");
-    //     }
-    //     Err(e) => {
-    //         warn!("Browser subsystem disabled: {e}");
-    //     }
-    // }
+    if let Some(manager) = browser_manager {
+        for tool in rara_kernel::tool::browser::browser_tools(manager) {
+            tool_registry.register(tool);
+        }
+        info!("browser tools registered (Lightpanda)");
+    }
 
     // Register discover-tools — it reads the live registry from ToolContext at
     // query time, so dynamically registered tools (e.g. MCP) are always visible.
