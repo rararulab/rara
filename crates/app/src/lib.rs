@@ -108,6 +108,14 @@ pub struct AppConfig {
     /// Context folding (auto-anchor) configuration for the kernel.
     #[serde(default)]
     pub context_folding:        rara_kernel::kernel::ContextFoldingConfig,
+    /// Lightpanda browser subsystem (optional).
+    ///
+    /// When present, rara starts a Lightpanda CDP server and registers all
+    /// browser tools (`browser-navigate`, `browser-click`, etc.). When absent
+    /// or when the binary is not installed, browser tools are not available and
+    /// rara falls back to `http-fetch` for web access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser:                Option<rara_kernel::browser::BrowserConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -321,9 +329,33 @@ pub async fn start_with_options(
             .await
             .whatever_context("Failed to initialize config file sync")?;
 
-    let rara = crate::boot::boot(pool.clone(), settings_provider.clone(), &config.users)
-        .await
-        .whatever_context("Failed to boot kernel dependencies")?;
+    // -- browser subsystem (optional) -------------------------------------
+    // Start Lightpanda if a `browser:` section exists in config. Failure to
+    // start is non-fatal — browser tools are simply not registered.
+    let browser_manager: Option<rara_kernel::browser::BrowserManagerRef> =
+        if let Some(browser_cfg) = config.browser.clone() {
+            match rara_kernel::browser::BrowserManager::start(browser_cfg).await {
+                Ok(manager) => {
+                    info!("browser subsystem initialized with Lightpanda");
+                    Some(std::sync::Arc::new(manager))
+                }
+                Err(e) => {
+                    warn!(error = %e, "browser subsystem disabled — Lightpanda failed to start");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+    let rara = crate::boot::boot(
+        pool.clone(),
+        settings_provider.clone(),
+        &config.users,
+        browser_manager,
+    )
+    .await
+    .whatever_context("Failed to boot kernel dependencies")?;
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),
