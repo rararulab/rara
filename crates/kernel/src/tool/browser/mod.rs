@@ -19,6 +19,7 @@
 mod click;
 mod close;
 mod evaluate;
+mod fetch;
 mod navigate;
 mod navigate_back;
 mod press_key;
@@ -33,6 +34,7 @@ use crate::{browser::BrowserManagerRef, tool::AgentToolRef};
 pub fn browser_tools(manager: BrowserManagerRef) -> Vec<AgentToolRef> {
     use std::sync::Arc;
     vec![
+        Arc::new(fetch::BrowserFetchTool::new(manager.clone())),
         Arc::new(navigate::BrowserNavigateTool::new(manager.clone())),
         Arc::new(navigate_back::BrowserNavigateBackTool::new(manager.clone())),
         Arc::new(snapshot::BrowserSnapshotTool::new(manager.clone())),
