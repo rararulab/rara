@@ -53,6 +53,18 @@ pub struct BrowserConfig {
     /// Maximum snapshot size in bytes before truncation. Defaults to 50 KB.
     #[serde(default = "default_snapshot_max_bytes")]
     pub snapshot_max_bytes: usize,
+
+    /// Timeout for a single page navigation (`goto` / `new_page`). Defaults to
+    /// 30 seconds. A page that does not finish loading within this window is
+    /// cancelled and returns `BrowserError::PageLoadTimeout`.
+    #[serde(default = "default_navigate_timeout_secs")]
+    pub navigate_timeout_secs: u64,
+
+    /// Polling deadline for `browser-wait-for`. Defaults to 30 seconds.
+    /// When waiting for text to appear or disappear, give up after this many
+    /// seconds and return the current snapshot rather than hanging forever.
+    #[serde(default = "default_wait_for_timeout_secs")]
+    pub wait_for_timeout_secs: u64,
 }
 
 fn default_binary_path() -> PathBuf { PathBuf::from("lightpanda") }
@@ -61,6 +73,8 @@ fn default_port() -> u16 { 9222 }
 fn default_startup_timeout_secs() -> u64 { 10 }
 fn default_page_idle_timeout_secs() -> u64 { 300 }
 fn default_snapshot_max_bytes() -> usize { 51200 }
+fn default_navigate_timeout_secs() -> u64 { 30 }
+fn default_wait_for_timeout_secs() -> u64 { 30 }
 
 impl Default for BrowserConfig {
     fn default() -> Self {
@@ -71,6 +85,8 @@ impl Default for BrowserConfig {
             startup_timeout_secs:   default_startup_timeout_secs(),
             page_idle_timeout_secs: default_page_idle_timeout_secs(),
             snapshot_max_bytes:     default_snapshot_max_bytes(),
+            navigate_timeout_secs:  default_navigate_timeout_secs(),
+            wait_for_timeout_secs:  default_wait_for_timeout_secs(),
         }
     }
 }
@@ -212,23 +228,31 @@ impl BrowserManager {
                 .map(|tab| (store.active.clone().unwrap(), tab.page.clone()))
         };
 
+        let nav_timeout = Duration::from_secs(self.config.navigate_timeout_secs);
+
         let (tab_id, page) = if let Some((id, page)) = existing_page {
             // Reuse the active tab — navigate in-place to preserve history.
-            page.goto(url).await.map_err(|e| {
-                CdpSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?;
+            tokio::time::timeout(nav_timeout, page.goto(url))
+                .await
+                .map_err(|_| PageLoadTimeoutSnafu { url }.build())?
+                .map_err(|e| {
+                    CdpSnafu {
+                        message: e.to_string(),
+                    }
+                    .build()
+                })?;
             (id, page)
         } else {
             // No active tab — create a new one.
-            let page = self.browser.new_page(url).await.map_err(|e| {
-                CdpSnafu {
-                    message: e.to_string(),
-                }
-                .build()
-            })?;
+            let page = tokio::time::timeout(nav_timeout, self.browser.new_page(url))
+                .await
+                .map_err(|_| PageLoadTimeoutSnafu { url }.build())?
+                .map_err(|e| {
+                    CdpSnafu {
+                        message: e.to_string(),
+                    }
+                    .build()
+                })?;
             let id = ulid::Ulid::new().to_string();
             (id, page)
         };
@@ -554,9 +578,11 @@ impl BrowserManager {
             tokio::time::sleep(Duration::from_secs_f64(secs)).await;
         }
 
+        let poll_deadline = Duration::from_secs(self.config.wait_for_timeout_secs);
+
         if let Some(target) = text {
             let page = self.active_page().await?;
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + poll_deadline;
             loop {
                 let body: String = page
                     .evaluate("document.body?.innerText || ''")
@@ -581,7 +607,7 @@ impl BrowserManager {
 
         if let Some(target) = text_gone {
             let page = self.active_page().await?;
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + poll_deadline;
             loop {
                 let body: String = page
                     .evaluate("document.body?.innerText || ''")
