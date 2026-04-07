@@ -1655,6 +1655,42 @@ pub(crate) async fn run_agent_loop(
             continue;
         }
 
+        // Empty stream detection: when the LLM returned no text, no tool
+        // calls, AND no usage info, the provider likely rejected the request
+        // silently (e.g. context window exceeded on free-tier models).  Treat
+        // this as a retryable error: trigger an auto-fold to compress context
+        // and retry with tools disabled.
+        if !has_tool_calls
+            && accumulated_text.is_empty()
+            && last_usage.is_none()
+            && llm_error_recovery_count < MAX_LLM_ERROR_RECOVERIES
+        {
+            llm_error_recovery_count += 1;
+            warn!(
+                iteration,
+                model = model.as_str(),
+                recovery_attempt = llm_error_recovery_count,
+                max_recoveries = MAX_LLM_ERROR_RECOVERIES,
+                "LLM stream returned empty (no text, no tools, no usage) — likely context window \
+                 exceeded, attempting fold + recovery"
+            );
+
+            // Force an auto-fold on the next iteration to compress context
+            // before retrying.  The fold runs at the top of the loop (line
+            // ~1110) when force_fold_next_iteration is set.
+            force_fold_next_iteration = true;
+
+            llm_error_recovery_message = Some(
+                "[System] The previous request produced an empty response (possible context \
+                 window limit). Context has been compressed. Please reply to the user's question \
+                 directly without using tools."
+                    .to_string(),
+            );
+            tool_defs = vec![];
+            in_llm_error_recovery = true;
+            continue;
+        }
+
         // Terminal response: exit when the LLM produced no tool calls.
         // Recovery iterations always land here because tools were disabled,
         // but subsequent iterations (after tool restoration) can resume
