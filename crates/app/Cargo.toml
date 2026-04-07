@@ -24,6 +24,7 @@ common-worker = { workspace = true }
 config = { workspace = true }
 glob = "0.3.3"
 globset = "0.4"
+humantime = "2"
 humantime-serde = "1"
 ignore = "0.4"
 jiff.workspace = true

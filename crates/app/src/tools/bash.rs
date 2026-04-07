@@ -30,7 +30,7 @@ use rara_kernel::{
 };
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::{io::AsyncReadExt, sync::Mutex};
 
 /// Maximum output size in bytes (50 KB).
@@ -47,10 +47,71 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 pub struct BashParams {
     /// The shell command to execute.
     command: String,
-    /// Timeout in seconds (default 120).
-    timeout: Option<u64>,
+    /// Timeout in seconds (default 120). Accepts an integer (`30`), a
+    /// stringified integer (`"30"`), or a humantime duration (`"30s"`,
+    /// `"2m"`).
+    #[serde(default, deserialize_with = "deserialize_timeout")]
+    timeout: Option<Duration>,
     /// Working directory for the command.
     cwd:     Option<String>,
+}
+
+/// Accept `30` (integer), `"30"` (stringified integer), or `"30s"` /
+/// `"2m"` (humantime duration) for the timeout field.
+fn deserialize_timeout<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use std::fmt;
+
+    use serde::de::{self, Visitor};
+
+    struct TimeoutVisitor;
+
+    impl<'de> Visitor<'de> for TimeoutVisitor {
+        type Value = Option<Duration>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an integer, stringified integer, or humantime duration")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+
+        fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
+            d.deserialize_any(DurationVisitor).map(Some)
+        }
+    }
+
+    struct DurationVisitor;
+
+    impl Visitor<'_> for DurationVisitor {
+        type Value = Duration;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an integer (seconds), stringified integer, or humantime duration")
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Duration, E> {
+            Ok(Duration::from_secs(v))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Duration, E> {
+            let secs = u64::try_from(v).map_err(|_| E::custom(format!("negative timeout: {v}")))?;
+            Ok(Duration::from_secs(secs))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Duration, E> {
+            let s = v.trim();
+            // Try bare integer first ("30" → 30 seconds).
+            if let Ok(secs) = s.parse::<u64>() {
+                return Ok(Duration::from_secs(secs));
+            }
+            // Fall back to humantime ("30s", "2m").
+            humantime::parse_duration(s).map_err(|_| E::custom(format!("invalid timeout: {v:?}")))
+        }
+    }
+
+    deserializer.deserialize_option(TimeoutVisitor)
 }
 
 /// Typed result returned by the bash tool.
@@ -87,7 +148,9 @@ impl ToolExecute for BashTool {
 
     #[tracing::instrument(skip_all)]
     async fn run(&self, params: BashParams, context: &ToolContext) -> anyhow::Result<BashResult> {
-        let timeout_secs = params.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_dur = params
+            .timeout
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
         let effective_command = rtk_rewrite(&params.command).await;
 
         let mut cmd = tokio::process::Command::new("/bin/bash");
@@ -143,14 +206,12 @@ impl ToolExecute for BashTool {
             tokio::spawn(read_pipe_into(pipe, buf, None))
         });
 
-        let timeout_dur = std::time::Duration::from_secs(timeout_secs);
-
         let (status, timed_out) = tokio::select! {
             status = child.wait() => (Some(status), false),
             () = tokio::time::sleep(timeout_dur) => {
                 // Graceful two-phase kill: SIGTERM → wait 2s → SIGKILL.
                 if let Some(pgid) = pgid {
-                    tracing::warn!(pgid, timeout_secs, "bash command timed out, killing process group");
+                    tracing::warn!(pgid, ?timeout_dur, "bash command timed out, killing process group");
                     let _ = terminate_process_group(pgid);
 
                     let exited = tokio::time::timeout(
