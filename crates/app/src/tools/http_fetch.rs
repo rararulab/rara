@@ -46,8 +46,10 @@ pub struct HttpFetchResult {
 #[derive(ToolDef)]
 #[tool(
     name = "http-fetch",
-    description = "Fetch a URL via HTTP GET or POST; returns status, content type, and body \
-                   (truncated to 100KB).",
+    description = "Fetch a URL via raw HTTP GET or POST; returns status, content type, and body \
+                   (truncated to 100KB). For human-readable web pages use `browser-fetch` instead \
+                   — it executes JavaScript and returns clean Markdown. Reserve this tool for raw \
+                   API calls (JSON/XML endpoints) where you need the exact HTTP response.",
     tier = "deferred"
 )]
 pub struct HttpFetchTool {

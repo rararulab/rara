@@ -67,6 +67,10 @@ pub enum BrowserError {
     /// Lightpanda process exited unexpectedly.
     #[snafu(display("lightpanda process crashed: {message}"))]
     ProcessCrashed { message: String },
+
+    /// `lightpanda fetch` subprocess failed.
+    #[snafu(display("lightpanda fetch failed for {url}: {message}"))]
+    FetchFailed { url: String, message: String },
 }
 
 /// Convenience alias for browser results.

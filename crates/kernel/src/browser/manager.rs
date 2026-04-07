@@ -704,6 +704,41 @@ impl BrowserManager {
     }
 
     /// Close all tabs and release their CDP pages.
+    /// Fetch a URL and return its content as Markdown.
+    ///
+    /// Spawns `lightpanda fetch --dump markdown <url>` as a subprocess — no
+    /// CDP connection needed. Faster than `navigate` for read-only page
+    /// retrieval; executes JavaScript so dynamic/SPA pages render correctly.
+    ///
+    /// Output is truncated to `snapshot_max_bytes` to keep LLM context bounded.
+    pub async fn fetch_markdown(&self, url: &str) -> BrowserResult<String> {
+        let output = tokio::time::timeout(
+            Duration::from_secs(self.config.navigate_timeout_secs),
+            tokio::process::Command::new(&self.config.binary_path)
+                .args(["fetch", "--dump", "markdown", url])
+                .output(),
+        )
+        .await
+        .map_err(|_| PageLoadTimeoutSnafu { url }.build())?
+        .map_err(|e| {
+            FetchFailedSnafu {
+                url,
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+
+        // lightpanda always exits 0, even on navigation failure — errors are
+        // reported as Markdown content ("# Navigation failed\n\nReason: ...").
+        // Return stdout as-is so the LLM can read the failure reason directly.
+        let mut markdown = String::from_utf8_lossy(&output.stdout).into_owned();
+        if markdown.len() > self.config.snapshot_max_bytes {
+            markdown.truncate(self.config.snapshot_max_bytes);
+            markdown.push_str("\n…[truncated]");
+        }
+        Ok(markdown)
+    }
+
     pub async fn close_all(&self) -> BrowserResult<Vec<TabInfo>> {
         let pages: Vec<Page> = {
             let mut store = self.store.write().await;
