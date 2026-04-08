@@ -581,11 +581,8 @@ fn parse_tool_call_arguments(arguments: &str) -> std::result::Result<serde_json:
     Ok(args)
 }
 
-fn infer_has_tool_calls(
-    stop_reason: llm::StopReason,
-    pending_tool_calls: &HashMap<u32, PendingToolCall>,
-) -> bool {
-    stop_reason == llm::StopReason::ToolCalls || !pending_tool_calls.is_empty()
+fn infer_has_tool_calls(pending_tool_calls: &HashMap<u32, PendingToolCall>) -> bool {
+    !pending_tool_calls.is_empty()
 }
 
 fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
@@ -1483,6 +1480,13 @@ pub(crate) async fn run_agent_loop(
                     }
                 }
                 llm::StreamDelta::Done { stop_reason, usage } => {
+                    if stop_reason == llm::StopReason::ToolCalls && pending_tool_calls.is_empty() {
+                        warn!(
+                            iteration,
+                            stop_reason = ?stop_reason,
+                            "LLM returned tool-call stop reason without tool-call deltas; treating as non-tool turn"
+                        );
+                    }
                     if stop_reason != llm::StopReason::ToolCalls && !pending_tool_calls.is_empty() {
                         warn!(
                             iteration,
@@ -1491,7 +1495,7 @@ pub(crate) async fn run_agent_loop(
                             "LLM emitted tool-call deltas without tool-call stop reason; treating as tool turn"
                         );
                     }
-                    has_tool_calls = infer_has_tool_calls(stop_reason, &pending_tool_calls);
+                    has_tool_calls = infer_has_tool_calls(&pending_tool_calls);
                     last_stop_reason = Some(stop_reason);
                     last_usage = usage;
                     // Fallback: settle reasoning if no TextDelta arrived
@@ -2726,12 +2730,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextPressure, PendingToolCall, build_runtime_contract_prompt,
-        classify_context_pressure, did_create_anchor, infer_has_tool_calls,
-        resolve_soul_prompt, should_remind_tape_anchor, should_remind_tape_search,
+        ContextPressure, PendingToolCall, build_runtime_contract_prompt, classify_context_pressure,
+        did_create_anchor, infer_has_tool_calls, resolve_soul_prompt, should_remind_tape_anchor,
+        should_remind_tape_search,
     };
-    use crate::llm::StopReason;
-
     #[test]
     fn classify_context_pressure_returns_normal_below_threshold() {
         assert_eq!(
@@ -2867,9 +2869,9 @@ mod tests {
     }
 
     #[test]
-    fn infer_has_tool_calls_true_for_tool_stop_reason() {
+    fn infer_has_tool_calls_false_for_tool_stop_reason_without_pending_call() {
         let pending = HashMap::new();
-        assert!(infer_has_tool_calls(StopReason::ToolCalls, &pending));
+        assert!(!infer_has_tool_calls(&pending));
     }
 
     #[test]
@@ -2883,12 +2885,12 @@ mod tests {
                 arguments_buf: "{}".to_string(),
             },
         );
-        assert!(infer_has_tool_calls(StopReason::Stop, &pending));
+        assert!(infer_has_tool_calls(&pending));
     }
 
     #[test]
-    fn infer_has_tool_calls_false_without_tool_stop_or_pending_calls() {
+    fn infer_has_tool_calls_false_without_pending_calls() {
         let pending = HashMap::new();
-        assert!(!infer_has_tool_calls(StopReason::Stop, &pending));
+        assert!(!infer_has_tool_calls(&pending));
     }
 }
