@@ -19,15 +19,21 @@
 //! messages through the standard `KernelHandle` API, and asserts on turn
 //! traces and tape entries.
 
-use std::{path::Path, sync::Once, time::Duration};
+use std::{
+    path::Path,
+    sync::{Arc, Once},
+    time::Duration,
+};
 
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     identity::{Principal, UserId},
     io::{ChannelSource, InboundMessage, MessageId, Unresolved},
+    llm::ToolCallRequest,
     session::SessionKey,
-    testing::{TestKernelBuilder, scripted_response},
+    testing::{FakeTool, TestKernelBuilder, scripted_response, scripted_tool_call_response},
 };
+use serde_json::json;
 use tokio::time::{Instant, sleep};
 
 /// Override rara_paths directories to a writable temp path so tests
@@ -255,6 +261,85 @@ async fn empty_llm_response_handled() {
         turn.success,
         "empty response should not crash the session: {:?}",
         turn.error
+    );
+
+    tk.shutdown();
+}
+
+#[tokio::test]
+async fn tool_call_round_trip() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
+
+    // The FakeTool echoes back a single scripted result.
+    let fake_tool = Arc::new(FakeTool::new(
+        "echo",
+        vec![json!({"output": "hello world"})],
+    ));
+
+    // Script: turn 1 asks the LLM, which requests the `echo` tool; after the
+    // tool result is fed back, the LLM produces the final user-visible reply.
+    // Extra padding covers any auxiliary calls (e.g. knowledge extraction).
+    let tk = TestKernelBuilder::new(tmp.path())
+        .with_tool(fake_tool.clone())
+        .responses(vec![
+            scripted_tool_call_response(vec![ToolCallRequest {
+                id:        "call_echo_1".to_string(),
+                name:      "echo".to_string(),
+                arguments: json!({"text": "hello"}).to_string(),
+            }]),
+            scripted_response("The tool said: hello world"),
+            scripted_response("(padding)"),
+            scripted_response("(padding)"),
+        ])
+        .build()
+        .await;
+
+    let principal = Principal::lookup("test".to_string());
+    let session_key = tk
+        .handle
+        .spawn_named(
+            &tk.agent_name,
+            "use the echo tool".to_string(),
+            principal,
+            None,
+        )
+        .await
+        .expect("spawn session");
+
+    wait_for_turn_count(&tk.handle, session_key, 1).await;
+
+    // The tool must have been invoked exactly once with the scripted args.
+    let inputs = fake_tool.captured_inputs();
+    assert_eq!(
+        inputs.len(),
+        1,
+        "FakeTool should be called exactly once, got: {inputs:?}"
+    );
+    assert_eq!(
+        inputs[0],
+        json!({"text": "hello"}),
+        "FakeTool received unexpected arguments"
+    );
+
+    // The final iteration should carry the LLM's post-tool reply.
+    let traces = tk.handle.get_process_turns(session_key);
+    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
+    let turn = &traces[0];
+    assert!(turn.success, "turn should succeed: {:?}", turn.error);
+    assert!(
+        turn.iterations.len() >= 2,
+        "expected at least 2 iterations (tool call + final reply), got {}",
+        turn.iterations.len()
+    );
+    let preview = turn
+        .iterations
+        .last()
+        .map(|i| i.text_preview.as_str())
+        .unwrap_or("");
+    assert!(
+        preview.contains("hello world"),
+        "expected tool output to surface in final reply, got: {preview}"
     );
 
     tk.shutdown();
