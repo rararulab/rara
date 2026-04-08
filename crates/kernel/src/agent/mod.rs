@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod effect;
 pub mod fold;
 pub(crate) mod loop_breaker;
+pub mod machine;
 pub(crate) mod repetition;
+pub mod runner;
 
 /// Maximum **byte** length for child/worker agent results passed back to
 /// the parent context.  Child agents are instructed to self-summarize
