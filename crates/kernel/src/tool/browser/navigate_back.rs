@@ -15,13 +15,11 @@
 //! Navigate back in the active browser tab.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use serde::Serialize;
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{EmptyParams, ToolContext, ToolExecute},
-};
+use crate::tool::{EmptyParams, ToolContext, ToolExecute};
 
 /// Navigate back in the active tab's history.
 #[derive(ToolDef)]

@@ -1,8 +1,8 @@
-# browser — Agent Guidelines
+# rara-browser — Agent Guidelines
 
 ## Purpose
 
-Kernel-level browser subsystem powered by Lightpanda (Zig headless browser) via CDP. Provides agent-accessible browser automation tools with accessibility tree snapshots for token-efficient page representation.
+Driver crate providing a Lightpanda (Zig headless browser) CDP client. Exposes `BrowserManager` and snapshot/ref-map types so kernel browser tools can drive a headless browser without pulling chromiumoxide into `rara-kernel`.
 
 ## Architecture
 

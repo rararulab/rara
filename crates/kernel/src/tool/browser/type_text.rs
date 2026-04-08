@@ -15,14 +15,12 @@
 //! Type text into an element in the active browser page.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Type text into an input element identified by its ref ID.
 #[derive(ToolDef)]

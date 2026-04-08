@@ -369,7 +369,7 @@ pub struct WebAdapter {
     /// Shutdown signal receiver (cloneable).
     shutdown_rx:       watch::Receiver<bool>,
     /// Optional STT service for transcribing voice messages to text.
-    stt_service:       Option<rara_kernel::stt::SttService>,
+    stt_service:       Option<rara_stt::SttService>,
 }
 
 impl WebAdapter {
@@ -390,7 +390,7 @@ impl WebAdapter {
 
     /// Attach an STT service for voice message transcription.
     #[must_use]
-    pub fn with_stt_service(mut self, stt: Option<rara_kernel::stt::SttService>) -> Self {
+    pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
         self.stt_service = stt;
         self
     }
@@ -467,7 +467,7 @@ struct WebAdapterState {
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     owner_token:       Option<String>,
     shutdown_rx:       watch::Receiver<bool>,
-    stt_service:       Option<rara_kernel::stt::SttService>,
+    stt_service:       Option<rara_stt::SttService>,
 }
 
 // ---------------------------------------------------------------------------
@@ -553,7 +553,7 @@ use rara_kernel::channel::types::ContentBlock;
 /// with `Text` blocks containing the transcribed text.
 async fn transcribe_audio_blocks(
     content: MessageContent,
-    stt: &Option<rara_kernel::stt::SttService>,
+    stt: &Option<rara_stt::SttService>,
 ) -> MessageContent {
     let blocks = match content {
         MessageContent::Text(_) => return content,
@@ -596,7 +596,7 @@ async fn transcribe_audio_blocks(
 async fn transcribe_single_audio(
     data_b64: &str,
     media_type: &str,
-    stt: &Option<rara_kernel::stt::SttService>,
+    stt: &Option<rara_stt::SttService>,
 ) -> String {
     use base64::Engine;
 

@@ -29,7 +29,6 @@
 //! | Notification Bus | `NotificationBus` | Inter-component notification broadcasting |
 
 pub mod agent;
-pub mod browser;
 pub mod cascade;
 pub mod channel;
 pub mod debug;
@@ -52,7 +51,6 @@ pub mod queue;
 pub mod schedule;
 pub mod security;
 pub mod session;
-pub mod stt;
 pub(crate) mod syscall;
 pub mod task_report;
 pub mod tool;

@@ -1,0 +1,26 @@
+[package]
+name = "rara-stt"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Speech-to-text driver for rara agents (whisper-server HTTP client + supervisor)"
+
+[dependencies]
+anyhow.workspace = true
+bon.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

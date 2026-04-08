@@ -135,6 +135,8 @@ members = [
     "crates/rara-vault",
     "crates/rara-dock",
     "crates/rara-acp",
+    "crates/drivers/browser",
+    "crates/drivers/stt",
 ]
 
 [workspace.dependencies]
@@ -245,6 +247,8 @@ rara-agents = { path = "crates/agents" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
+rara-browser = { path = "crates/drivers/browser" }
+rara-stt = { path = "crates/drivers/stt" }
 rara-channels = { path = "crates/channels" }
 rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }

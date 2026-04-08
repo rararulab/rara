@@ -1,4 +1,4 @@
-# stt — Agent Guidelines
+# rara-stt — Agent Guidelines
 
 ## Purpose
 HTTP client for OpenAI-compatible Speech-to-Text servers (e.g. whisper.cpp `whisper-server`), with optional managed child-process supervision.

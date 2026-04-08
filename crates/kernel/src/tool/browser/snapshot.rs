@@ -15,13 +15,11 @@
 //! Take an accessibility tree snapshot of the active page.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use serde::Serialize;
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{EmptyParams, ToolContext, ToolExecute},
-};
+use crate::tool::{EmptyParams, ToolContext, ToolExecute};
 
 /// Capture a fresh accessibility tree snapshot of the active browser page.
 #[derive(ToolDef)]

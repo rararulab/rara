@@ -19,6 +19,7 @@ rara-dock = { workspace = true }
 rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
+rara-stt = { workspace = true }
 regex = { workspace = true }
 # teloxide 0.17 is pinned to reqwest 0.12; Proxy / ClientBuilder types must
 # match, so we keep a renamed 0.12 dep for the telegram proxy builder.

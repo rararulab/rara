@@ -908,7 +908,7 @@ pub struct TelegramAdapter {
     /// subscribes to new questions and resolves them via reply-to messages.
     user_question_manager: Option<UserQuestionManagerRef>,
     /// Optional STT service for transcribing voice messages to text.
-    stt_service:           Option<rara_kernel::stt::SttService>,
+    stt_service:           Option<rara_stt::SttService>,
 }
 
 impl TelegramAdapter {
@@ -1050,7 +1050,7 @@ impl TelegramAdapter {
 
     /// Attach an STT service for voice message transcription.
     #[must_use]
-    pub fn with_stt_service(mut self, stt: Option<rara_kernel::stt::SttService>) -> Self {
+    pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
         self.stt_service = stt;
         self
     }
@@ -1431,7 +1431,7 @@ async fn polling_loop(
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
     callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
-    stt_service: Option<rara_kernel::stt::SttService>,
+    stt_service: Option<rara_stt::SttService>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -2272,7 +2272,7 @@ async fn handle_update(
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
-    stt_service: &Option<rara_kernel::stt::SttService>,
+    stt_service: &Option<rara_stt::SttService>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {

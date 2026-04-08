@@ -15,14 +15,12 @@
 //! Manage browser tabs — list, select, close, or create new tabs.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Manage browser tabs: list, select, close, or create new tabs.
 #[derive(ToolDef)]
@@ -136,7 +134,7 @@ impl ToolExecute for BrowserTabsTool {
 }
 
 /// Convert internal tab info to serializable entries.
-fn to_entries(tabs: &[crate::browser::TabInfo]) -> Vec<TabEntry> {
+fn to_entries(tabs: &[rara_browser::TabInfo]) -> Vec<TabEntry> {
     tabs.iter()
         .map(|t| TabEntry {
             index:     t.index,

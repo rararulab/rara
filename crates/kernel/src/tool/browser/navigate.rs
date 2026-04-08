@@ -15,14 +15,12 @@
 //! Navigate to a URL in the browser.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Navigate to a URL, returning the page title and accessibility snapshot.
 #[derive(ToolDef)]
