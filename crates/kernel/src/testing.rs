@@ -19,9 +19,9 @@
 //! and no external dependencies (no DB, no network, no API keys).
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -37,7 +37,7 @@ use crate::{
     memory::{FileTapeStore, TapeService},
     security::{ApprovalManager, ApprovalPolicy, SecuritySubsystem},
     session::test_utils::InMemorySessionIndex,
-    tool::ToolRegistry,
+    tool::{AgentTool, AgentToolRef, ToolContext, ToolOutput, ToolRegistry},
 };
 
 // ---------------------------------------------------------------------------
@@ -230,6 +230,7 @@ pub struct TestKernelBuilder {
     responses: Vec<CompletionResponse>,
     manifest:  Option<AgentManifest>,
     config:    KernelConfig,
+    tools:     Vec<AgentToolRef>,
 }
 
 impl TestKernelBuilder {
@@ -250,7 +251,18 @@ impl TestKernelBuilder {
             responses: Vec::new(),
             manifest: None,
             config,
+            tools: Vec::new(),
         }
+    }
+
+    /// Register a tool with the test kernel's tool registry.
+    ///
+    /// Tools are registered before the kernel starts, so they are visible to
+    /// the agent runtime from the first turn.
+    #[must_use]
+    pub fn with_tool(mut self, tool: AgentToolRef) -> Self {
+        self.tools.push(tool);
+        self
     }
 
     /// Set the scripted LLM responses.
@@ -287,8 +299,12 @@ impl TestKernelBuilder {
         driver_registry.register_driver("scripted", driver);
         driver_registry.set_provider_model("scripted", "scripted-model", vec![]);
 
-        // Tool registry (empty -- no tools for scripted tests)
-        let tool_registry = Arc::new(ToolRegistry::new());
+        // Tool registry -- seed with any tools registered on the builder.
+        let mut registry = ToolRegistry::new();
+        for tool in self.tools {
+            registry.register(tool);
+        }
+        let tool_registry = Arc::new(registry);
 
         // Agent manifest
         let manifest = self.manifest.unwrap_or_else(|| AgentManifest {
@@ -408,6 +424,83 @@ pub fn scripted_response(text: &str) -> CompletionResponse {
         stop_reason:       StopReason::Stop,
         usage:             None,
         model:             "scripted".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeTool
+// ---------------------------------------------------------------------------
+
+/// Test-only [`AgentTool`] that returns pre-recorded outputs for each call
+/// and captures received inputs for post-hoc assertions.
+///
+/// Unlike real tools, `FakeTool` performs no I/O: every invocation pops the
+/// next queued response and records the input. This makes it a drop-in
+/// scripted counterpart to [`ScriptedLlmDriver`] for tool-call round-trip
+/// tests.
+///
+/// # Panics
+///
+/// `execute` panics if called more times than there are scripted responses.
+pub struct FakeTool {
+    name:        String,
+    description: String,
+    responses:   Mutex<VecDeque<serde_json::Value>>,
+    captured:    Mutex<Vec<serde_json::Value>>,
+}
+
+impl FakeTool {
+    /// Create a `FakeTool` with the given name and scripted responses.
+    ///
+    /// Each call to `execute` pops one response from the front of the queue.
+    pub fn new(name: impl Into<String>, responses: Vec<serde_json::Value>) -> Self {
+        Self {
+            name:        name.into(),
+            description: "Test tool (FakeTool)".to_string(),
+            responses:   Mutex::new(VecDeque::from(responses)),
+            captured:    Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Return a snapshot of every input the tool has received so far.
+    #[must_use]
+    pub fn captured_inputs(&self) -> Vec<serde_json::Value> {
+        self.captured
+            .lock()
+            .expect("FakeTool captured mutex poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl AgentTool for FakeTool {
+    fn name(&self) -> &str { &self.name }
+
+    fn description(&self) -> &str { &self.description }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": true,
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: &ToolContext,
+    ) -> anyhow::Result<ToolOutput> {
+        self.captured
+            .lock()
+            .expect("FakeTool captured mutex poisoned")
+            .push(params);
+        let output = self
+            .responses
+            .lock()
+            .expect("FakeTool responses mutex poisoned")
+            .pop_front()
+            .expect("FakeTool: no more scripted responses");
+        Ok(ToolOutput::from(output))
     }
 }
 

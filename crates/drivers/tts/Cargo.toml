@@ -21,7 +21,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 serde_yaml.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+wiremock = "0.6"
 
 [lints]
 workspace = true
