@@ -27,7 +27,7 @@ use tokio::sync::oneshot;
 use crate::{
     agent::{AgentManifest, AgentTurnResult},
     identity::{Principal, UserId},
-    io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter, Unresolved},
+    io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter},
     kv::KvScope,
     schedule::JobEntry,
     session::{AgentRunLoopResult, SessionKey, Signal},
@@ -272,7 +272,7 @@ pub enum KernelEvent {
     // === Input: from external sources ===
     /// A new user message from a channel adapter (via IngressPipeline).
     #[debug("UserMessage(session={:?})", _0.session_key_opt())]
-    UserMessage(InboundMessage<Unresolved>),
+    UserMessage(InboundMessage),
 
     /// A group-chat message where the bot was **not** directly mentioned.
     ///
@@ -280,7 +280,7 @@ pub enum KernelEvent {
     /// to the session tape, runs a lightweight LLM judgment to decide whether
     /// to reply, and only promotes to a full `UserMessage` turn on approval.
     #[debug("GroupMessage(session={:?})", _0.session_key_opt())]
-    GroupMessage(InboundMessage<Unresolved>),
+    GroupMessage(InboundMessage),
 
     // === Session control ===
     /// Request to create (or reactivate) a session.
@@ -428,7 +428,7 @@ pub struct KernelEventEnvelope {
 
 impl KernelEventEnvelope {
     /// Create a `UserMessage` event.
-    pub fn user_message(msg: InboundMessage<Unresolved>) -> Self {
+    pub fn user_message(msg: InboundMessage) -> Self {
         let base_key = msg.session_key_opt().copied().unwrap_or_default();
         Self {
             base: EventBase::from(base_key),
@@ -437,7 +437,7 @@ impl KernelEventEnvelope {
     }
 
     /// Create a `GroupMessage` event.
-    pub fn group_message(msg: InboundMessage<Unresolved>) -> Self {
+    pub fn group_message(msg: InboundMessage) -> Self {
         let base_key = msg.session_key_opt().copied().unwrap_or_default();
         Self {
             base: EventBase::from(base_key),

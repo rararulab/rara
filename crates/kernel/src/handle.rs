@@ -30,7 +30,7 @@ use crate::{
     identity::Principal,
     io::{
         AgentHandle, EndpointRegistryRef, IOError, IOSubsystem, InboundMessage, PipeReader,
-        PipeWriter, RawPlatformMessage, StreamHubRef, Unresolved,
+        PipeWriter, RawPlatformMessage, StreamHubRef,
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
@@ -238,7 +238,7 @@ impl KernelHandle {
     /// contexts. Prefer [`ingest_user_message`](Self::ingest_user_message)
     /// from async ingress paths so backpressure is retried instead of
     /// silently dropped.
-    pub fn submit_message(&self, msg: InboundMessage<Unresolved>) -> Result<()> {
+    pub fn submit_message(&self, msg: InboundMessage) -> Result<()> {
         self.event_queue
             .try_push(KernelEventEnvelope::user_message(msg))
             .map_err(|_| KernelError::Other {
@@ -254,7 +254,7 @@ impl KernelHandle {
     /// Synchronous variant — async ingress callers should use
     /// [`ingest_group_message`](Self::ingest_group_message) so transient
     /// `Full` errors are retried instead of dropping the message.
-    pub fn submit_group_message(&self, msg: InboundMessage<Unresolved>) -> Result<()> {
+    pub fn submit_group_message(&self, msg: InboundMessage) -> Result<()> {
         self.event_queue
             .try_push(KernelEventEnvelope::group_message(msg))
             .map_err(|_| KernelError::Other {
@@ -270,7 +270,7 @@ impl KernelHandle {
     /// land in the dead-letter sink rather than being dropped silently.
     pub async fn ingest_user_message(
         &self,
-        msg: InboundMessage<Unresolved>,
+        msg: InboundMessage,
     ) -> std::result::Result<(), IOError> {
         push_with_retry(
             &self.event_queue,
@@ -286,7 +286,7 @@ impl KernelHandle {
     /// produces a `GroupMessage` event for the proactive-judgment path.
     pub async fn ingest_group_message(
         &self,
-        msg: InboundMessage<Unresolved>,
+        msg: InboundMessage,
     ) -> std::result::Result<(), IOError> {
         push_with_retry(
             &self.event_queue,
@@ -327,14 +327,15 @@ impl KernelHandle {
 
     /// Resolve identity and (possibly) session for a raw platform message.
     ///
-    /// Returns an [`InboundMessage<Unresolved>`] — the caller must still
-    /// promote it to `Resolved` before routing.
+    /// Returns an [`InboundMessage`] — the caller must still populate
+    /// `session_key` via `set_session_key` / `resolve` before routing
+    /// past the kernel pre-routing pipeline.
     ///
     /// Delegates to [`IOSubsystem::resolve`].
     pub async fn resolve(
         &self,
         raw: RawPlatformMessage,
-    ) -> std::result::Result<InboundMessage<crate::io::Unresolved>, IOError> {
+    ) -> std::result::Result<InboundMessage, IOError> {
         self.io.resolve(raw).await
     }
 
@@ -857,6 +858,6 @@ impl KernelHandle {
     pub async fn deliver_internal(&self, msg: crate::io::InboundMessage) {
         let _ = self
             .event_queue
-            .push(KernelEventEnvelope::user_message(msg.into_unresolved()));
+            .push(KernelEventEnvelope::user_message(msg));
     }
 }

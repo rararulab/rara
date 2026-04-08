@@ -35,7 +35,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
     sync::{Arc, Mutex},
 };
 
@@ -59,30 +58,6 @@ use crate::{
 /// `StreamEvent::Progress`.
 pub mod stages {
     pub const THINKING: &str = "thinking";
-}
-
-/// Poetic loading hints displayed during LLM thinking phases.
-/// Each call to `random_hint()` returns a randomly-selected phrase.
-pub mod loading_hints {
-    use rand::Rng;
-
-    /// Pool of poetic Chinese loading messages.
-    pub const HINTS: &[&str] = &[
-        "稍候片刻，日出文自明。",
-        "风过空庭，字句正徐来。",
-        "纸白微明，未成篇章。",
-        "夜退星沉，此页初醒。",
-        "墨痕未定，片语已生香。",
-        "云开一隙，文章将至。",
-        "万籁俱寂，万字将成。",
-        "且听风定，再看句成。",
-    ];
-
-    /// Return a randomly-selected loading hint.
-    pub fn random_hint() -> &'static str {
-        let idx = rand::rng().random_range(0..HINTS.len());
-        HINTS[idx]
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,46 +121,24 @@ pub enum InteractionType {
 }
 
 // ---------------------------------------------------------------------------
-// InboundMessage type states
-// ---------------------------------------------------------------------------
-
-/// Marker: the message has not yet been assigned a session.
-///
-/// Produced by [`IOSubsystem::resolve()`] at ingress. The I/O layer looks up
-/// channel bindings but never creates sessions, so `session_key` may be
-/// `None`.
-#[derive(Debug, Clone, Copy)]
-pub struct Unresolved;
-
-/// Marker: the message has a guaranteed [`SessionKey`].
-///
-/// Produced by [`InboundMessage::resolve()`] inside the kernel after session
-/// creation / lookup. All downstream code (routing, LLM turn, stream
-/// forwarder) operates on this state.
-#[derive(Debug, Clone, Copy)]
-pub struct Resolved;
-
-// ---------------------------------------------------------------------------
 // InboundMessage
 // ---------------------------------------------------------------------------
 
 /// A unified inbound message from any channel adapter.
 ///
-/// Parameterised over a *type state* (`Unresolved` or `Resolved`) that
-/// tracks whether a [`SessionKey`] has been assigned.
+/// `session_key` is `None` on ingress when no channel binding exists
+/// (first contact from a new chat) and `Some` after the kernel resolves
+/// or creates a session via [`set_session_key`](Self::set_session_key) /
+/// [`resolve`](Self::resolve). Downstream code that requires the key
+/// should call [`require_session_key`](Self::require_session_key).
 ///
-/// - **`InboundMessage<Unresolved>`** — produced by [`IOSubsystem::resolve()`]
-///   and carried through the event queue. `session_key` is an `Option` that may
-///   be `None` for first-contact messages.
-/// - **`InboundMessage<Resolved>`** (the default) — produced by calling
-///   [`InboundMessage::resolve()`] inside the kernel. `session_key()` is
-///   guaranteed to return a valid reference.
-///
-/// The default type parameter is `Resolved` so that downstream code that
-/// always operates on resolved messages can write `InboundMessage` without
-/// a type argument.
+/// Historical note: this type used to be parameterised over an
+/// `Unresolved`/`Resolved` typestate. The typestate didn't actually
+/// prevent the bug it claimed to (`session_key` was still an `Option`
+/// internally, accessed with `expect`), and the `into_unresolved`
+/// downgrade was a no-op `PhantomData` switcheroo. Removed in #1180.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InboundMessage<State = Resolved> {
+pub struct InboundMessage {
     /// Unique message identifier (ULID).
     pub id:                 MessageId,
     /// Platform source details.
@@ -205,27 +158,20 @@ pub struct InboundMessage<State = Resolved> {
     /// Extension metadata (adapter-specific fields only).
     pub metadata:      HashMap<String, Value>,
 
-    // -- private fields --
     /// Session this message belongs to.
     ///
     /// `None` on ingress when no channel binding exists (first message).
-    /// Always `Some` after [`InboundMessage::resolve()`].
+    /// Always `Some` after the kernel runs session resolution.
     session_key: Option<SessionKey>,
-
-    /// Phantom field to carry the type-state parameter.
-    /// Transparent to serde (skipped on both ser and de).
-    #[serde(skip)]
-    _state: PhantomData<State>,
 }
 
-// -- Unresolved constructors & transition -----------------------------------
-
-impl InboundMessage<Unresolved> {
+impl InboundMessage {
     /// Construct an unresolved message at ingress.
     ///
-    /// `session_key` is `Some` when a channel binding already exists, `None`
-    /// for first-contact messages. The kernel will call
-    /// [`resolve()`](Self::resolve) before routing.
+    /// `session_key` is `Some` when a channel binding already exists,
+    /// `None` for first-contact messages. The kernel will populate it
+    /// before routing the message into an agent loop.
+    #[allow(clippy::too_many_arguments)]
     pub fn unresolved(
         id: MessageId,
         source: ChannelSource,
@@ -247,77 +193,41 @@ impl InboundMessage<Unresolved> {
             timestamp,
             metadata,
             session_key,
-            _state: PhantomData,
         }
     }
 
-    /// Read the optional session key before resolution.
+    /// Optional session key accessor.
     ///
-    /// Returns `Some` when a channel binding already mapped this chat to a
-    /// session, `None` for first-contact messages.
+    /// Returns `Some` when a binding exists or after resolution; `None`
+    /// only on ingress for first-contact messages.
     pub fn session_key_opt(&self) -> Option<&SessionKey> { self.session_key.as_ref() }
 
-    /// Set the session key before resolution.
-    ///
-    /// Used by channel adapters (e.g. web) that know the target session from
-    /// the URL but may receive `None` from the channel-binding lookup.
-    pub fn set_session_key(&mut self, key: SessionKey) { self.session_key = Some(key); }
-
-    /// Transition to `Resolved` by supplying the definitive session key.
-    ///
-    /// Consumes `self` and moves all fields into a new
-    /// `InboundMessage<Resolved>`.
-    pub fn resolve(self, key: SessionKey) -> InboundMessage<Resolved> {
-        InboundMessage {
-            id:                 self.id,
-            source:             self.source,
-            user:               self.user,
-            target_session_key: self.target_session_key,
-            content:            self.content,
-            reply_context:      self.reply_context,
-            timestamp:          self.timestamp,
-            metadata:           self.metadata,
-            session_key:        Some(key),
-            _state:             PhantomData,
-        }
-    }
-}
-
-// -- Resolved constructors & accessors --------------------------------------
-
-impl InboundMessage<Resolved> {
-    /// Guaranteed session key accessor.
+    /// Mandatory session key accessor used by code that runs after
+    /// kernel session resolution.
     ///
     /// # Panics
-    ///
-    /// Never panics — the type-state contract guarantees `session_key` is
-    /// `Some` for `Resolved` messages. The `expect` is a defensive assertion
-    /// only.
-    pub fn session_key(&self) -> &SessionKey {
+    /// Panics if called on a message whose session has not been
+    /// resolved yet. By contract, only the kernel's pre-routing pipeline
+    /// is allowed to observe `None`; everything downstream of
+    /// `handle_user_message` must see `Some`.
+    pub fn require_session_key(&self) -> &SessionKey {
         self.session_key
             .as_ref()
-            .expect("resolved message always has session_key")
+            .expect("session_key must be resolved before this point")
     }
 
-    /// Downgrade to `Unresolved` for re-entry into the event queue.
+    /// Set the session key (used by web adapter when the session is
+    /// known from the URL but the channel binding lookup returned `None`).
+    pub fn set_session_key(&mut self, key: SessionKey) { self.session_key = Some(key); }
+
+    /// Set the session key by consuming and returning self.
     ///
-    /// Synthetic messages are constructed as `Resolved` (they already have a
-    /// session key), but the event queue expects `Unresolved`. The session key
-    /// is preserved in the `Option` and will pass through resolution as a
-    /// no-op `Some` match.
-    pub fn into_unresolved(self) -> InboundMessage<Unresolved> {
-        InboundMessage {
-            id:                 self.id,
-            source:             self.source,
-            user:               self.user,
-            target_session_key: self.target_session_key,
-            content:            self.content,
-            reply_context:      self.reply_context,
-            timestamp:          self.timestamp,
-            metadata:           self.metadata,
-            session_key:        self.session_key,
-            _state:             PhantomData,
-        }
+    /// Convenience for the kernel's `let msg = msg.resolve(key);` pattern
+    /// at the boundary between unresolved ingress and resolved routing.
+    #[must_use]
+    pub fn resolve(mut self, key: SessionKey) -> Self {
+        self.session_key = Some(key);
+        self
     }
 
     /// Create a synthetic internal message (for workers, SyscallTool, etc.).
@@ -346,68 +256,9 @@ impl InboundMessage<Resolved> {
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
-            _state: PhantomData,
         }
     }
 
-    /// Create a synthetic internal message addressed to a specific agent by
-    /// name.
-    pub fn synthetic_to(
-        text: String,
-        user: UserId,
-        session_id: SessionKey,
-        _target_session_key: SessionKey,
-    ) -> Self {
-        Self {
-            id: MessageId::new(),
-            source: ChannelSource {
-                channel_type:        ChannelType::Internal,
-                platform_message_id: None,
-                platform_user_id:    user.0.clone(),
-                platform_chat_id:    None,
-            },
-            user,
-            session_key: Some(session_id),
-            target_session_key: None,
-            content: MessageContent::Text(text),
-            reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: HashMap::new(),
-            _state: PhantomData,
-        }
-    }
-
-    /// Create a synthetic internal message addressed to a specific agent by ID
-    /// (agent-to-agent communication).
-    pub fn synthetic_to_id(
-        text: String,
-        user: UserId,
-        session_key: SessionKey,
-        target_id: SessionKey,
-    ) -> Self {
-        Self {
-            id: MessageId::new(),
-            source: ChannelSource {
-                channel_type:        ChannelType::Internal,
-                platform_message_id: None,
-                platform_user_id:    user.0.clone(),
-                platform_chat_id:    None,
-            },
-            user,
-            session_key: Some(session_key),
-            target_session_key: Some(target_id),
-            content: MessageContent::Text(text),
-            reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: HashMap::new(),
-            _state: PhantomData,
-        }
-    }
-}
-
-// -- State-independent methods ----------------------------------------------
-
-impl<S> InboundMessage<S> {
     /// Build the originating endpoint for session-scoped reply routing.
     ///
     /// Returns `Some(Endpoint)` for channel types that support multiple
@@ -484,51 +335,69 @@ pub struct OutboundEnvelope {
 }
 
 impl OutboundEnvelope {
-    /// Create an error envelope with `BroadcastAll` routing.
-    /// TODO: what is used for ?
-    pub fn error(
+    /// Build a `BroadcastAll`-routed envelope from a payload.
+    ///
+    /// Private — `error`/`reply`/`progress` are the public entry points.
+    /// They exist only to keep payload construction colocated with the
+    /// envelope shell so callers don't have to spell out the variant.
+    fn broadcast(
         in_reply_to: MessageId,
         user: UserId,
-        session_id: SessionKey,
-        code: impl Into<String>,
-        message: impl Into<String>,
+        session_key: SessionKey,
+        payload: OutboundPayload,
     ) -> Self {
         Self {
             id: MessageId::new(),
             in_reply_to,
             user,
-            session_key: session_id,
+            session_key,
             routing: OutboundRouting::BroadcastAll,
-            payload: OutboundPayload::Error {
-                code:    code.into(),
-                message: message.into(),
-            },
+            payload,
             timestamp: jiff::Timestamp::now(),
             origin_endpoint: None,
         }
+    }
+
+    /// Create an error envelope with `BroadcastAll` routing.
+    ///
+    /// Used by the kernel when an inbound message cannot be processed
+    /// (rate limit, agent panic, internal error). Delivered to all
+    /// active endpoints for the user so they see the failure.
+    pub fn error(
+        in_reply_to: MessageId,
+        user: UserId,
+        session_key: SessionKey,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::broadcast(
+            in_reply_to,
+            user,
+            session_key,
+            OutboundPayload::Error {
+                code:    code.into(),
+                message: message.into(),
+            },
+        )
     }
 
     /// Create a reply envelope with `BroadcastAll` routing.
     pub fn reply(
         in_reply_to: MessageId,
         user: UserId,
-        session_id: SessionKey,
+        session_key: SessionKey,
         content: crate::channel::types::MessageContent,
         attachments: Vec<Attachment>,
     ) -> Self {
-        Self {
-            id: MessageId::new(),
+        Self::broadcast(
             in_reply_to,
             user,
-            session_key: session_id,
-            routing: OutboundRouting::BroadcastAll,
-            payload: OutboundPayload::Reply {
+            session_key,
+            OutboundPayload::Reply {
                 content,
                 attachments,
             },
-            timestamp: jiff::Timestamp::now(),
-            origin_endpoint: None,
-        }
+        )
     }
 
     /// Create a progress envelope with `BroadcastAll` routing.
@@ -539,42 +408,15 @@ impl OutboundEnvelope {
         stage: impl Into<String>,
         detail: Option<String>,
     ) -> Self {
-        Self {
-            id: MessageId::new(),
+        Self::broadcast(
             in_reply_to,
             user,
             session_key,
-            routing: OutboundRouting::BroadcastAll,
-            payload: OutboundPayload::Progress {
+            OutboundPayload::Progress {
                 stage: stage.into(),
                 detail,
             },
-            timestamp: jiff::Timestamp::now(),
-            origin_endpoint: None,
-        }
-    }
-
-    /// Create a state-change envelope with `BroadcastAll` routing.
-    pub fn state_change(
-        in_reply_to: MessageId,
-        user: UserId,
-        session_id: SessionKey,
-        event_type: impl Into<String>,
-        data: serde_json::Value,
-    ) -> Self {
-        Self {
-            id: MessageId::new(),
-            in_reply_to,
-            user,
-            session_key: session_id,
-            routing: OutboundRouting::BroadcastAll,
-            payload: OutboundPayload::StateChange {
-                event_type: event_type.into(),
-                data,
-            },
-            timestamp: jiff::Timestamp::now(),
-            origin_endpoint: None,
-        }
+        )
     }
 
     /// Set the origin endpoint for session-scoped routing.
@@ -602,9 +444,6 @@ impl OutboundEnvelope {
                 content:       format!("Error [{}]: {}", code, message),
                 attachments:   vec![],
                 reply_context: None,
-            },
-            OutboundPayload::StateChange { .. } => PlatformOutbound::Progress {
-                text: String::new(),
             },
         }
     }
@@ -643,11 +482,6 @@ pub enum OutboundPayload {
     Progress {
         stage:  String,
         detail: Option<String>,
-    },
-    /// State change notification.
-    StateChange {
-        event_type: String,
-        data:       Value,
     },
     /// Error response.
     Error { code: String, message: String },
@@ -770,7 +604,10 @@ impl PipeReader {
 // ---------------------------------------------------------------------------
 
 /// Error returned when writing to a pipe whose reader has been dropped.
-/// TODO: use a better way
+///
+/// Carries no data — the only meaningful information is "the receiver
+/// is gone", which is binary. Mirrors `mpsc::error::SendError` minus the
+/// returned payload (we drop it because callers always discard it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipeSendError;
 
@@ -1697,10 +1534,7 @@ impl IOSubsystem {
             user_id,
         )
     )]
-    pub async fn resolve(
-        &self,
-        raw: RawPlatformMessage,
-    ) -> Result<InboundMessage<Unresolved>, IOError> {
+    pub async fn resolve(&self, raw: RawPlatformMessage) -> Result<InboundMessage, IOError> {
         let span = tracing::Span::current();
 
         // 1. Rate-limit ingress before any expensive operations.
@@ -1740,7 +1574,7 @@ impl IOSubsystem {
             None => None,
         };
 
-        // 4. Build InboundMessage<Unresolved>
+        // 4. Build InboundMessage with optional session_key
         let msg = InboundMessage::unresolved(
             MessageId::new(),
             ChannelSource {
@@ -1785,7 +1619,6 @@ impl IOSubsystem {
         let payload_type = match &envelope.payload {
             OutboundPayload::Reply { .. } => "reply",
             OutboundPayload::Progress { .. } => "progress",
-            OutboundPayload::StateChange { .. } => "state_change",
             OutboundPayload::Error { .. } => "error",
         };
         let span = tracing::info_span!(
@@ -1846,7 +1679,7 @@ impl IOSubsystem {
     /// Connection-oriented channels (Web) register on WS/SSE connect.
     /// Stateless channels have no persistent connection, so we register on
     /// every inbound message (idempotent — EndpointRegistry uses a HashSet).
-    pub fn register_stateless_endpoint<S>(&self, msg: &InboundMessage<S>) {
+    pub fn register_stateless_endpoint(&self, msg: &InboundMessage) {
         let endpoint = match msg.source.channel_type {
             ChannelType::Telegram => {
                 let chat_id_str = msg.source.platform_chat_id.as_ref();
@@ -1912,9 +1745,13 @@ impl IOSubsystem {
             "deliver_to_endpoints"
         );
 
+        // Build the platform outbound once — `to_platform_outbound` clones
+        // payload content + attachments, so doing it per-target multiplies
+        // copy work for nothing.
+        let outbound = envelope.to_platform_outbound();
         let futs = targets.into_iter().map(|endpoint| {
             let adapter = self.adapters.get(&endpoint.channel_type).cloned();
-            let outbound = envelope.to_platform_outbound();
+            let outbound = outbound.clone();
             async move {
                 if let Some(adapter) = adapter {
                     tracing::info!(?endpoint, "delivering to adapter");
