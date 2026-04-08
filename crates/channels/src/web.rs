@@ -420,6 +420,43 @@ impl WebAdapter {
             .with_state(state)
     }
 
+    /// Test-only entry point that mirrors the inbound code path exercised by
+    /// the WebSocket and `POST /messages` handlers, without requiring an HTTP
+    /// round-trip. The adapter must have been `start`ed first so `sink` is
+    /// populated.
+    ///
+    /// Runs audio transcription (if any), constructs the `RawPlatformMessage`,
+    /// resolves identity + session, and submits the resulting message into
+    /// the kernel's event queue — mirroring the WebSocket / `POST /messages`
+    /// code path without requiring an HTTP round-trip.
+    ///
+    /// On first contact from a new `session_key` the kernel auto-creates a
+    /// session; callers can discover the resulting `SessionKey` by polling
+    /// `KernelHandle::list_processes` after this returns.
+    #[doc(hidden)]
+    pub async fn handle_inbound_for_test(
+        &self,
+        session_key: &str,
+        user_id: &str,
+        content: MessageContent,
+    ) -> Result<(), String> {
+        let content = transcribe_audio_blocks(content, &self.stt_service).await;
+        let raw = build_raw_platform_message(session_key, user_id, content);
+
+        let handle = {
+            let guard = self.sink.read().await;
+            guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| "adapter not started".to_owned())?
+        };
+
+        let msg = handle.resolve(raw).await.map_err(|e| e.to_string())?;
+        handle.submit_message(msg).map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
     /// Get or create a broadcast channel for the given session key.
     fn get_or_create_session(
         sessions: &DashMap<String, broadcast::Sender<String>>,
