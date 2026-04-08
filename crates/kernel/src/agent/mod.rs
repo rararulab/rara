@@ -2131,6 +2131,25 @@ pub(crate) async fn run_agent_loop(
                     if let Some(tool) = tool {
                         let args_snapshot = args.to_string();
                         let per_tool_timeout = tool.execution_timeout().unwrap_or(default_tool_timeout);
+
+                        // Semantic validation runs after the security guard
+                        // and before execute. This is the place to surface
+                        // cross-field invariants ("old != new") or refuse
+                        // no-op edits without spending the execute budget.
+                        if let Err(e) = tool.validate(&args).await {
+                            tool_span.record("success", false);
+                            warn!(tool = %name, args = %args_snapshot, error = %e, "tool validation failed");
+                            let dur = tool_start.elapsed().as_millis() as u64;
+                            return (
+                                false,
+                                crate::tool::ToolOutput::from(
+                                    serde_json::json!({ "error": e.to_string() }),
+                                ),
+                                Some(e.to_string()),
+                                dur,
+                            );
+                        }
+
                         let tool_result = tokio::select! {
                             result = tokio::time::timeout(per_tool_timeout, tool.execute(args, &tc)) => {
                                 match result {

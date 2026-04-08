@@ -23,6 +23,17 @@ Single file: `src/lib.rs`.
 | `params_schema = "..."` | `execute_fn = "..."` | Both custom, no `ToolExecute` needed |
 | `manual_impl = true` | — | Only generates constants, user writes full `impl AgentTool` |
 
+### Validation bridging
+
+The macro auto-bridges `ToolExecute::validate` → `AgentTool::validate`:
+
+| Mode | validate behaviour |
+|---|---|
+| Default (ToolExecute) | Deserialises params, calls `ToolExecute::validate(&typed)` |
+| `validate_fn = "..."` | Calls user fn with `&serde_json::Value` directly |
+| `execute_fn` without `validate_fn` | Omitted — trait default (no-op) applies |
+| `manual_impl = true` | User writes `validate` manually if needed |
+
 ## Critical Invariants
 
 - Generated `AgentTool::parameters_schema()` output must be **semantically equivalent** to the hand-written `serde_json::json!()` it replaces. Field ordering may differ.
