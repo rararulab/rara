@@ -17,6 +17,7 @@ bon.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+snafu.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

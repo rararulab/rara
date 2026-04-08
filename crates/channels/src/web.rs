@@ -614,17 +614,13 @@ async fn transcribe_single_audio(
     };
 
     match stt.transcribe(audio_bytes, media_type).await {
-        Ok(text) if !text.trim().is_empty() => {
+        Ok(text) => {
             info!(len = text.len(), "voice message transcribed");
             text
         }
-        Ok(_) => {
-            warn!("STT returned empty transcription");
-            String::new()
-        }
         Err(e) => {
             warn!(error = %e, "STT transcription failed");
-            "[voice message]".to_owned()
+            "[voice message \u{2014} transcription failed]".to_owned()
         }
     }
 }

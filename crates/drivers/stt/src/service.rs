@@ -1,10 +1,19 @@
 //! STT service — HTTP client for OpenAI-compatible transcription endpoints.
 
-use anyhow::Context;
 use reqwest::multipart;
+use snafu::ResultExt;
 use tracing::instrument;
 
-use super::SttConfig;
+use crate::{
+    SttConfig,
+    error::{self, HttpSnafu, ParseSnafu, Result},
+};
+
+/// Maximum number of retries for transient failures.
+const MAX_RETRIES: u32 = 1;
+
+/// Delay between retries — matches the whisper supervisor's restart delay.
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// HTTP client for an OpenAI-compatible `/v1/audio/transcriptions` endpoint
 /// (e.g. whisper.cpp server).
@@ -43,15 +52,47 @@ impl SttService {
     /// `mime_type` should be the audio MIME type (e.g. `"audio/ogg"`,
     /// `"audio/mpeg"`). The file extension is inferred from the MIME type
     /// for the multipart form field.
+    ///
+    /// Transient failures (timeout, 429, 5xx) are retried once after a 2 s
+    /// delay before returning an error.
     #[instrument(skip_all, fields(audio_len = audio_data.len(), mime_type))]
-    pub async fn transcribe(&self, audio_data: Vec<u8>, mime_type: &str) -> anyhow::Result<String> {
+    pub async fn transcribe(&self, audio_data: Vec<u8>, mime_type: &str) -> Result<String> {
+        let mut last_err = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                tracing::info!(
+                    attempt,
+                    "retrying STT transcription after transient failure"
+                );
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+
+            match self.transcribe_once(&audio_data, mime_type).await {
+                Ok(text) => return Ok(text),
+                Err(e) if e.is_transient() && attempt < MAX_RETRIES => {
+                    tracing::warn!(error = %e, attempt, "transient STT error, will retry");
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Unreachable in practice — the loop always returns — but the
+        // compiler cannot prove it.
+        Err(last_err.expect("retry loop must have recorded an error"))
+    }
+
+    /// Single-shot transcription attempt (no retry logic).
+    async fn transcribe_once(&self, audio_data: &[u8], mime_type: &str) -> Result<String> {
         let ext = extension_from_mime(mime_type);
         let filename = format!("voice.{ext}");
 
-        let file_part = multipart::Part::bytes(audio_data)
+        let file_part = multipart::Part::bytes(audio_data.to_vec())
             .file_name(filename)
             .mime_str(mime_type)
-            .context("invalid MIME type")?;
+            // mime_str only fails on invalid MIME — treat as HTTP-level error.
+            .map_err(|e| error::SttError::Http { source: e })?;
 
         let mut form = multipart::Form::new()
             .part("file", file_part)
@@ -69,16 +110,19 @@ impl SttService {
             .multipart(form)
             .send()
             .await
-            .context("STT request failed")?;
+            .context(HttpSnafu)?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
+            let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("STT server returned {status}: {body}");
+            return Err(error::SttError::ServerError { status, body });
         }
 
-        let result: TranscriptionResponse =
-            resp.json().await.context("failed to parse STT response")?;
+        let result: TranscriptionResponse = resp.json().await.context(ParseSnafu)?;
+
+        if result.text.trim().is_empty() {
+            return Err(error::SttError::EmptyResponse);
+        }
 
         Ok(result.text)
     }
