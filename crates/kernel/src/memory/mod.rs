@@ -156,6 +156,39 @@ pub use tree::{AnchorNode, AnchorTree, ForkEdge, SessionBranch};
 
 pub(crate) const TAPE_FILE_SUFFIX: &str = ".jsonl";
 
+/// Locate the on-disk tape file for a given session name without booting
+/// the [`TapeService`] / [`FileTapeStore`] cache layer.
+///
+/// Each tape is stored under `{memory_dir}/tapes/{workspace_hash}__{encoded
+/// session}.jsonl`.  This helper walks `tapes/` once, matches by the
+/// `__{encoded}.jsonl` suffix (workspace-agnostic), and returns the first
+/// hit.  Used by the `rara debug` CLI which must avoid the FileTapeStore
+/// cache (it would open every tape and trip macOS' 256-fd ulimit).
+pub fn find_tape_file(
+    memory_dir: &std::path::Path,
+    session_name: &str,
+) -> Option<std::path::PathBuf> {
+    let tapes_dir = memory_dir.join("tapes");
+    let suffix = format!(
+        "__{}{}",
+        urlencoding::encode(session_name),
+        TAPE_FILE_SUFFIX
+    );
+
+    let read_dir = std::fs::read_dir(&tapes_dir).ok()?;
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(&suffix))
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// Kinds of persisted tape entries.
 #[derive(
     Debug,
