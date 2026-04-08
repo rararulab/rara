@@ -15,14 +15,11 @@
 //! `rara debug <message_id>` — print the full execution context for a
 //! message without booting the chat UI or kernel runtime.
 //!
-//! Two-stage lookup keeps fd usage at O(1):
-//! 1. **Index** — query the `execution_traces` SQLite table for the
-//!    `session_id` that produced the turn (single indexed row read).
-//! 2. **Content** — open exactly one tape JSONL file, stream-grep it for the
-//!    message ID, then close the fd.
-//!
-//! The previous implementation walked every tape file via the
-//! `FileTapeStore` cache and tripped macOS' 256-fd ulimit (EMFILE).
+//! The `execution_traces` SQLite table is the single source of truth: each
+//! turn writes a fully aggregated [`ExecutionTrace`] (model, tokens,
+//! iterations, thinking, tools, plan, rationale) keyed by
+//! `rara_message_id`.  We render that directly.  The on-disk tape is opened
+//! only as a *supplementary* timeline — one fd, streamed line-by-line.
 
 use std::{
     fmt::Write as _,
@@ -33,9 +30,8 @@ use std::{
 
 use clap::Args;
 use rara_kernel::{
-    debug::MessageDebugSummary,
     memory::{TapEntry, find_tape_file},
-    trace::TraceService,
+    trace::{ExecutionTrace, TraceService},
 };
 use snafu::{ResultExt, Whatever};
 use sqlx::sqlite::SqlitePoolOptions;
@@ -43,10 +39,9 @@ use sqlx::sqlite::SqlitePoolOptions;
 #[derive(Debug, Clone, Args)]
 #[command(about = "Inspect a message by its rara_message_id")]
 #[command(
-    long_about = "Inspect a message by its rara_message_id.\n\nUses the execution_traces SQLite \
-                  index to locate the originating session, then streams that one tape JSONL file \
-                  to print execution metrics, tool calls, and a chronological timeline. Does not \
-                  boot the kernel.\n\nExamples:\n  rara debug 01J4M8VW9XYZAB..."
+    long_about = "Inspect a message by its rara_message_id.\n\nLooks up the execution trace in \
+                  the SQLite index, then attaches a chronological timeline from the on-disk tape.  \
+                  Does not boot the kernel.\n\nExamples:\n  rara debug 01J4M8VW9XYZAB..."
 )]
 pub struct DebugCmd {
     /// The rara_message_id to inspect.
@@ -55,39 +50,48 @@ pub struct DebugCmd {
 
 impl DebugCmd {
     pub async fn run(self) -> Result<(), Whatever> {
-        // Stage 1: SQL index lookup → session_id.
         let pool = open_db()
             .await
             .whatever_context("failed to open trace database")?;
         let trace_service = TraceService::new(pool);
-        let session_id = trace_service
-            .find_session_for_message(&self.message_id)
-            .await
-            .whatever_context("trace index lookup failed")?;
 
-        let Some(session_id) = session_id else {
+        let lookup = trace_service
+            .find_trace_by_message_id(&self.message_id)
+            .await
+            .whatever_context("trace lookup failed")?;
+
+        let Some((session_id, trace)) = lookup else {
             println!("🔍 Debug: {}", self.message_id);
             println!("{}", "─".repeat(60));
             println!(
                 "No execution trace found for this message ID.\nThe trace may have expired (30 \
-                 day retention), the turn may have failed before persistence, or the ID is \
-                 incorrect."
+                 day retention), the turn may have failed before persistence, or the ID is for a \
+                 slash command (which does not produce a turn)."
             );
             return Ok(());
         };
 
-        // Stage 2: resolve tape path and stream the one matching file.
-        let Some(tape_path) = find_tape_file(rara_paths::memory_dir(), &session_id) else {
-            return Err(snafu::FromString::without_source(format!(
-                "session {session_id} found in trace index but tape file is missing on disk",
-            )));
+        // Walk the one matching tape file for the timeline. The trace
+        // already has all aggregated stats; the tape only contributes a
+        // chronological event view.
+        let tape_path = find_tape_file(rara_paths::memory_dir(), &session_id);
+        let timeline = match tape_path.as_deref() {
+            Some(path) => {
+                collect_timeline(path, &self.message_id).whatever_context("failed to read tape")?
+            }
+            None => Vec::new(),
         };
 
-        let entries = scan_tape_for_message(&tape_path, &self.message_id)
-            .whatever_context("failed to read tape file")?;
-
-        let summary = MessageDebugSummary::from_entries(&self.message_id, entries);
-        println!("{}", render_text(&summary, &session_id, &tape_path));
+        println!(
+            "{}",
+            render(
+                &self.message_id,
+                &session_id,
+                tape_path.as_deref(),
+                &trace,
+                &timeline
+            )
+        );
         Ok(())
     }
 }
@@ -103,103 +107,170 @@ async fn open_db() -> Result<sqlx::SqlitePool, sqlx::Error> {
         .await
 }
 
-/// Stream a single tape file line-by-line. The substring check is the hot
-/// path — we only invoke `serde_json` on lines that already contain the
-/// message ID, which avoids parsing the rest of the session history.
-fn scan_tape_for_message(path: &Path, message_id: &str) -> std::io::Result<Vec<TapEntry>> {
+/// Single chronological event extracted from the tape.
+struct TimelineEvent {
+    timestamp: String,
+    kind:      String,
+    detail:    String,
+}
+
+/// Stream a single tape file and pull entries that mention `message_id`.
+/// Substring filtering is the hot path; we only invoke `serde_json` on
+/// lines that already match.
+fn collect_timeline(path: &Path, message_id: &str) -> std::io::Result<Vec<TimelineEvent>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
-    let mut out = Vec::new();
+    let mut events = Vec::new();
     for line in reader.lines() {
         let line = line?;
         if !line.contains(message_id) {
             continue;
         }
-        match serde_json::from_str::<TapEntry>(&line) {
-            Ok(entry) => out.push(entry),
-            Err(e) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %e,
-                    "skipping malformed tape entry"
-                );
+        let Ok(entry) = serde_json::from_str::<TapEntry>(&line) else {
+            continue;
+        };
+
+        let kind = entry.kind.to_string();
+        let detail = match kind.as_str() {
+            "message" => entry
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().take(200).collect::<String>())
+                .unwrap_or_default(),
+            "tool_call" => {
+                let name = entry
+                    .payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                format!("→ {name}")
             }
-        }
+            "tool_result" => {
+                let name = entry
+                    .payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let success = entry
+                    .payload
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let icon = if success { "✓" } else { "✗" };
+                format!("{icon} {name}")
+            }
+            _ => String::new(),
+        };
+
+        events.push(TimelineEvent {
+            timestamp: entry.timestamp.strftime("%H:%M:%S").to_string(),
+            kind,
+            detail,
+        });
     }
-    Ok(out)
+    Ok(events)
 }
 
-/// Render a [`MessageDebugSummary`] as plain text for terminal output.
-fn render_text(summary: &MessageDebugSummary, session_id: &str, tape_path: &Path) -> String {
+/// Render the full debug view as plain text for terminal output.
+fn render(
+    message_id: &str,
+    session_id: &str,
+    tape_path: Option<&Path>,
+    trace: &ExecutionTrace,
+    timeline: &[TimelineEvent],
+) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "🔍 Debug: {}", summary.message_id);
+    let _ = writeln!(out, "🔍 Debug: {message_id}");
     let _ = writeln!(out, "  Session: {session_id}");
-    let _ = writeln!(out, "  Tape:    {}", tape_path.display());
-    let _ = writeln!(out, "{}", "─".repeat(60));
-
-    if summary.is_empty() {
-        out.push_str(
-            "Trace index pointed at this session but no matching tape entries were found.\nThe \
-             tape may have been compacted/folded since the trace was written.\n",
-        );
-        return out;
+    if let Some(path) = tape_path {
+        let _ = writeln!(out, "  Tape:    {}", path.display());
+    } else {
+        let _ = writeln!(out, "  Tape:    [missing on disk]");
     }
+    let _ = writeln!(out, "{}", "─".repeat(60));
 
     // -- Summary ---------------------------------------------------------------
     let _ = writeln!(out, "\n📊 Summary");
-    let _ = writeln!(out, "  Entries:    {}", summary.entries.len());
-    if let Some(ref model) = summary.model {
-        let _ = writeln!(out, "  Model:      {model}");
+    let _ = writeln!(out, "  Duration:   {}s", trace.duration_secs);
+    if !trace.model.is_empty() {
+        let _ = writeln!(out, "  Model:      {}", trace.model);
     }
-    if summary.iterations > 0 {
-        let _ = writeln!(out, "  Iterations: {}", summary.iterations);
+    if trace.iterations > 0 {
+        let _ = writeln!(out, "  Iterations: {}", trace.iterations);
     }
-    if summary.stream_ms > 0 {
-        let _ = writeln!(
-            out,
-            "  Stream:     {:.1}s",
-            summary.stream_ms as f64 / 1000.0
-        );
+    if trace.thinking_ms > 0 {
+        let _ = writeln!(out, "  Thinking:   {}s", trace.thinking_ms / 1000);
     }
-    if summary.input_tokens > 0 || summary.output_tokens > 0 {
+    if trace.input_tokens > 0 || trace.output_tokens > 0 {
         let _ = writeln!(
             out,
             "  Tokens:     ↑{} ↓{}",
-            format_tokens(summary.input_tokens),
-            format_tokens(summary.output_tokens)
+            format_tokens(u64::from(trace.input_tokens)),
+            format_tokens(u64::from(trace.output_tokens))
         );
     }
-    if !summary.tools.is_empty() {
+    if !trace.tools.is_empty() {
+        let failures = trace.tools.iter().filter(|t| !t.success).count();
         let _ = writeln!(
             out,
-            "  Tool calls: {} ({} failed)",
-            summary.tools.len(),
-            summary.tool_failures
+            "  Tool calls: {} ({failures} failed)",
+            trace.tools.len()
         );
     }
 
+    // -- Rationale -------------------------------------------------------------
+    if let Some(ref rationale) = trace.turn_rationale {
+        let _ = writeln!(out, "\n💭 Rationale");
+        for line in rationale.lines() {
+            let _ = writeln!(out, "  {line}");
+        }
+    }
+
+    // -- Thinking preview ------------------------------------------------------
+    if !trace.thinking_preview.is_empty() {
+        let _ = writeln!(out, "\n🧠 Thinking");
+        for line in trace.thinking_preview.lines() {
+            let _ = writeln!(out, "  {line}");
+        }
+    }
+
+    // -- Plan steps ------------------------------------------------------------
+    if !trace.plan_steps.is_empty() {
+        let _ = writeln!(out, "\n📋 Plan");
+        for step in &trace.plan_steps {
+            let _ = writeln!(out, "  • {step}");
+        }
+    }
+
     // -- Tools -----------------------------------------------------------------
-    if !summary.tools.is_empty() {
+    if !trace.tools.is_empty() {
         let _ = writeln!(out, "\n🔧 Tools");
-        for tool in &summary.tools {
+        for tool in &trace.tools {
             let duration = tool
                 .duration_ms
                 .map(|ms| format!("{ms}ms"))
                 .unwrap_or_else(|| "—".to_owned());
             let icon = if tool.success { "✓" } else { "✗" };
             let _ = writeln!(out, "  {icon} {} ({duration})", tool.name);
+            if !tool.summary.is_empty() {
+                let preview: String = tool.summary.chars().take(150).collect();
+                let _ = writeln!(out, "    → {preview}");
+            }
             if let Some(ref err) = tool.error {
-                let preview: String = err.chars().take(150).collect();
+                let preview: String = err.chars().take(200).collect();
                 let _ = writeln!(out, "    ⚠ {preview}");
             }
         }
     }
 
     // -- Timeline --------------------------------------------------------------
-    let _ = writeln!(out, "\n📝 Timeline");
-    for item in &summary.timeline {
-        let _ = writeln!(out, "  {} [{}] {}", item.timestamp, item.kind, item.detail);
+    if !timeline.is_empty() {
+        let _ = writeln!(out, "\n📝 Timeline ({} entries)", timeline.len());
+        for ev in timeline {
+            let _ = writeln!(out, "  {} [{}] {}", ev.timestamp, ev.kind, ev.detail);
+        }
     }
 
     out
