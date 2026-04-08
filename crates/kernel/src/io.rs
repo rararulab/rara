@@ -48,7 +48,6 @@ use serde_json::Value;
 use snafu::Snafu;
 use tokio::sync::{broadcast, mpsc};
 use tracing::Instrument;
-use uuid::Uuid;
 
 use crate::{
     channel::types::{ChannelType, MessageContent},
@@ -1229,7 +1228,7 @@ impl StreamHub {
         // Clean up any zombie streams from previous (hung) agent runs.
         self.close_session(&session_key);
         let stream_id = StreamId::new();
-        tracing::Span::current().record("stream_id", tracing::field::display(&stream_id.0));
+        tracing::Span::current().record("stream_id", tracing::field::display(&stream_id));
         let (tx, _) = broadcast::channel(self.capacity);
         let entry = StreamEntry {
             session_key,

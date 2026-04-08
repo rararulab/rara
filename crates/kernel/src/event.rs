@@ -21,9 +21,8 @@ use std::sync::Arc;
 
 use derive_more::Debug;
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::oneshot;
-use uuid::Uuid;
 
 use crate::{
     agent::{AgentManifest, AgentTurnResult},

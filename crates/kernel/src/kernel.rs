@@ -1102,8 +1102,10 @@ impl Kernel {
                     .get("scheduled_job_id")
                     .and_then(|v| v.as_str())
                 {
-                    if let Ok(uuid) = uuid::Uuid::parse_str(job_id_str) {
-                        let job_id = crate::schedule::JobId(uuid);
+                    if let Some(job_id) = uuid::Uuid::parse_str(job_id_str)
+                        .ok()
+                        .and_then(crate::schedule::JobId::from_uuid)
+                    {
                         self.syscall.job_wheel().lock().complete_in_flight(&job_id);
                     }
                 }
