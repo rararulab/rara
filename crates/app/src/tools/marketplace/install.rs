@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rara_kernel::tool::{ToolContext, ToolExecute};
+use rara_kernel::tool::{ToolContext, ToolExecute, ToolHint};
 use rara_skills::{clawhub::ClawhubClient, marketplace::MarketplaceService};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
@@ -65,6 +65,14 @@ impl MarketplaceInstallTool {
 impl ToolExecute for MarketplaceInstallTool {
     type Output = Value;
     type Params = MarketplaceInstallParams;
+
+    /// Installation produces large output (download logs, skill listings);
+    /// suggest context folding so subsequent turns aren't polluted.
+    fn hints(&self) -> Vec<ToolHint> {
+        vec![ToolHint::SuggestFold {
+            reason: Some("marketplace install produces large output".into()),
+        }]
+    }
 
     #[tracing::instrument(skip_all)]
     async fn run(

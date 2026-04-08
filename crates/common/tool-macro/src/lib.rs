@@ -202,7 +202,11 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             // (serde_json::to_value on a Value is a clone). Acceptable tradeoff
             // for uniform codegen; typed Output structs serialize exactly once.
             let output = crate::tool::ToolExecute::run(self, typed, context).await?;
-            crate::tool::ToolOutput::from_serialize(&output)
+            let mut tool_output = crate::tool::ToolOutput::from_serialize(&output)?;
+            for hint in crate::tool::ToolExecute::hints(self) {
+                tool_output = tool_output.with_hint(hint);
+            }
+            Ok(tool_output)
         }
     };
 

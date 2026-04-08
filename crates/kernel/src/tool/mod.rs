@@ -110,6 +110,18 @@ pub trait ToolExecute: Send + Sync {
     /// Bridged into [`AgentTool::validate`] by the `ToolDef` derive macro.
     async fn validate(&self, _params: &Self::Params) -> anyhow::Result<()> { Ok(()) }
 
+    /// Hints to attach to every successful output of this tool. Default:
+    /// empty (no hints).
+    ///
+    /// The `ToolDef` macro calls this after [`run`](Self::run) and attaches
+    /// the returned hints to the [`ToolOutput`]. This bridges the gap where
+    /// [`ToolOutput::from_serialize`] always returns empty hints.
+    ///
+    /// Override this to declare static hints — e.g. tools that produce
+    /// large output should return `[ToolHint::SuggestFold { .. }]` so the
+    /// agent loop auto-folds context.
+    fn hints(&self) -> Vec<ToolHint> { vec![] }
+
     /// Execute the tool with typed parameters.
     async fn run(
         &self,
@@ -128,12 +140,9 @@ pub struct EmptyParams {}
 /// after execution and acts accordingly. This keeps orchestration decisions
 /// in the loop while letting tools signal intent declaratively.
 ///
-/// **Current limitation**: The `ToolDef` derive macro calls
-/// [`ToolOutput::from_serialize`] which always returns empty hints. Tools
-/// using the macro cannot set hints via `ToolExecute::run()`. The agent loop
-/// therefore uses tool-name detection as a pragmatic workaround for known
-/// hint-worthy tools (e.g. `marketplace-install` → `SuggestFold`). Once the
-/// macro supports hint propagation, tool-name checks should be replaced.
+/// Tools using `ToolExecute` declare static hints via
+/// [`ToolExecute::hints()`]; the `ToolDef` macro bridges these into the
+/// generated `AgentTool::execute` output automatically.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ToolHint {

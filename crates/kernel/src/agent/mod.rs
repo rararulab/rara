@@ -2344,29 +2344,21 @@ pub(crate) async fn run_agent_loop(
                 });
             }
             // Check tool output hints for SuggestFold.
+            // The ToolDef macro now bridges ToolExecute::hints() into
+            // ToolOutput, so tool-name fallbacks are no longer needed.
             for ((success, output, _err, _dur), (_id, name, _args)) in
                 results.iter().zip(valid_tool_calls.iter())
             {
                 if !success {
                     continue;
                 }
-                // Primary: read hints from ToolOutput (tools that bypass ToolDef
-                // or manually construct ToolOutput can set hints directly).
                 let has_suggest_fold = output
                     .hints
                     .iter()
                     .any(|h| matches!(h, crate::tool::ToolHint::SuggestFold { .. }));
-                // Fallback: the ToolDef macro calls from_serialize() which always
-                // returns empty hints, so known heavy-context tools are matched
-                // by name until the macro supports hint propagation.
-                let is_known_heavy = name == "marketplace-install";
-                if has_suggest_fold || is_known_heavy {
+                if has_suggest_fold {
                     force_fold_next_iteration = true;
-                    info!(
-                        tool = %name,
-                        via_hint = has_suggest_fold,
-                        "setting force_fold_next_iteration"
-                    );
+                    info!(tool = %name, "setting force_fold_next_iteration via ToolHint");
                 }
             }
 
