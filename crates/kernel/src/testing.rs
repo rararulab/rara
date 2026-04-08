@@ -170,10 +170,14 @@ async fn stub_knowledge_service() -> crate::memory::knowledge::KnowledgeServiceR
         .build();
 
     let embedder: crate::llm::LlmEmbedderRef = Arc::new(NoopEmbedder);
-    let embedding_svc = crate::memory::knowledge::EmbeddingService::new(
+    let index_path = std::env::temp_dir()
+        .join(format!("rara-test-{}", uuid::Uuid::new_v4()))
+        .join("memory.usearch");
+    let embedding_svc = crate::memory::knowledge::EmbeddingService::with_path(
         config.clone(),
         embedder,
         "noop".to_string(),
+        index_path,
     )
     .expect("noop embedding service");
 
