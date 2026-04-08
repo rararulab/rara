@@ -753,16 +753,15 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                     // instead of creating a duplicate.
                     match s.resolve(raw).await {
                         Ok(mut msg) => {
-                            if msg.session_key.is_none() {
+                            if msg.session_key_opt().is_none() {
                                 if let Ok(sk) =
                                     rara_kernel::session::SessionKey::try_from_raw(&session_key)
                                 {
-                                    msg.session_key = Some(sk);
+                                    msg.set_session_key(sk);
                                 }
                             }
                             let resolved_key = msg
-                                .session_key
-                                .as_ref()
+                                .session_key_opt()
                                 .map(|k| k.to_string())
                                 .unwrap_or_else(|| session_key.clone());
                             if let Err(e) = s.submit_message(msg) {

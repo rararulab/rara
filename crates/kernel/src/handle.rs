@@ -35,7 +35,7 @@ use crate::{
     identity::Principal,
     io::{
         AgentHandle, EndpointRegistryRef, IOError, IOSubsystem, InboundMessage, PipeReader,
-        PipeWriter, RawPlatformMessage, StreamHubRef,
+        PipeWriter, RawPlatformMessage, StreamHubRef, Unresolved,
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
@@ -225,7 +225,7 @@ impl KernelHandle {
     ///
     /// Uses `try_push` (non-async) so this can be called from synchronous
     /// contexts.
-    pub fn submit_message(&self, msg: InboundMessage) -> Result<()> {
+    pub fn submit_message(&self, msg: InboundMessage<Unresolved>) -> Result<()> {
         self.event_queue
             .try_push(KernelEventEnvelope::user_message(msg))
             .map_err(|_| KernelError::Other {
@@ -237,7 +237,7 @@ impl KernelHandle {
     ///
     /// The kernel will record the message to tape, run a lightweight LLM
     /// judgment, and only promote to a full agent turn if approved.
-    pub fn submit_group_message(&self, msg: InboundMessage) -> Result<()> {
+    pub fn submit_group_message(&self, msg: InboundMessage<Unresolved>) -> Result<()> {
         self.event_queue
             .try_push(KernelEventEnvelope::group_message(msg))
             .map_err(|_| KernelError::Other {
@@ -274,13 +274,16 @@ impl KernelHandle {
     /// Access the process table for querying.
     pub fn process_table(&self) -> &Arc<SessionTable> { &self.process_table }
 
-    /// Resolve identity and session for a raw platform message.
+    /// Resolve identity and (possibly) session for a raw platform message.
+    ///
+    /// Returns an [`InboundMessage<Unresolved>`] — the caller must still
+    /// promote it to `Resolved` before routing.
     ///
     /// Delegates to [`IOSubsystem::resolve`].
     pub async fn resolve(
         &self,
         raw: RawPlatformMessage,
-    ) -> std::result::Result<InboundMessage, IOError> {
+    ) -> std::result::Result<InboundMessage<crate::io::Unresolved>, IOError> {
         self.io.resolve(raw).await
     }
 
@@ -818,6 +821,6 @@ impl KernelHandle {
     pub async fn deliver_internal(&self, msg: crate::io::InboundMessage) {
         let _ = self
             .event_queue
-            .push(KernelEventEnvelope::user_message(msg));
+            .push(KernelEventEnvelope::user_message(msg.into_unresolved()));
     }
 }

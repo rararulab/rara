@@ -56,7 +56,10 @@ use crate::{
     channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
-    io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
+    io::{
+        IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId,
+        Unresolved,
+    },
     kv::SharedKv,
     llm::DriverRegistryRef,
     memory::TapeService,
@@ -815,7 +818,7 @@ impl Kernel {
             InboundMessage::synthetic_content(input, principal.user_id.clone(), msg_session);
         if let Err(e) = &self
             .event_queue
-            .try_push(KernelEventEnvelope::user_message(inbound))
+            .try_push(KernelEventEnvelope::user_message(inbound.into_unresolved()))
         {
             error!(%e, "failed to push initial UserMessage for spawned agent");
         }
@@ -1145,14 +1148,10 @@ impl Kernel {
     ///
     /// ## Session resolution (before routing)
     ///
-    /// `msg.session_key` arrives as `Option<SessionKey>` from the I/O layer:
-    /// - `Some` — channel binding already exists, reuse the session.
-    /// - `None` — first message from this chat. Creates a new `SessionEntry`
-    ///   + `ChannelBinding` so future messages are routed automatically, then
-    ///   patches `msg.session_key = Some(new_key)`.
-    ///
-    /// After resolution, `session_id` is always a valid key and all
-    /// downstream code sees `Some`.
+    /// The message arrives as `InboundMessage<Unresolved>` from the event
+    /// queue. The `session_key` may be `None` for first-contact messages.
+    /// This method resolves the session (creating one if needed) and
+    /// transitions the message to `InboundMessage<Resolved>` before routing.
     ///
     /// ## 3-path routing
     ///
@@ -1165,13 +1164,13 @@ impl Kernel {
     #[tracing::instrument(
         skip(self, msg),
         fields(
-            session_id = ?msg.session_key,
+            session_id = ?msg.session_key_opt(),
             user_id = %msg.user.0,
             channel = ?msg.source.channel_type,
             routing_path,
         )
     )]
-    async fn handle_user_message(&self, msg: InboundMessage) {
+    async fn handle_user_message(&self, msg: InboundMessage<Unresolved>) {
         let span = tracing::Span::current();
 
         // -- Session resolution --------------------------------------------------
@@ -1186,7 +1185,7 @@ impl Kernel {
         //      routed to this session automatically.
         //
         // After this block, `session_id` is always a valid SessionKey.
-        let session_id = match msg.session_key.clone() {
+        let session_id = match msg.session_key_opt().copied() {
             Some(key) => key,
             None => {
                 let now = chrono::Utc::now();
@@ -1226,10 +1225,9 @@ impl Kernel {
             }
         };
 
-        // Patch msg so downstream code (routing, LLM turn, stream forwarder)
-        // always sees Some(session_key). See InboundMessage doc for lifecycle.
-        let mut msg = msg;
-        msg.session_key = Some(session_id.clone());
+        // Transition to Resolved — downstream code gets a type-safe guarantee
+        // that session_key is always present.
+        let msg = msg.resolve(session_id.clone());
 
         let user = msg.user.clone();
 
@@ -1462,14 +1460,14 @@ impl Kernel {
     #[tracing::instrument(
         skip(self, msg),
         fields(
-            session_id = ?msg.session_key,
+            session_id = ?msg.session_key_opt(),
             user_id = %msg.user.0,
             channel = ?msg.source.channel_type,
         )
     )]
-    async fn handle_group_message(&self, msg: InboundMessage) {
+    async fn handle_group_message(&self, msg: InboundMessage<Unresolved>) {
         // -- Session resolution (same as handle_user_message) ------------------
-        let session_id = match msg.session_key.clone() {
+        let session_id = match msg.session_key_opt().copied() {
             Some(key) => key,
             None => {
                 let now = chrono::Utc::now();
@@ -1507,10 +1505,10 @@ impl Kernel {
             }
         };
 
-        let mut msg = msg;
-        msg.session_key = Some(session_id.clone());
-
         self.io.register_stateless_endpoint(&msg);
+
+        // Transition to Resolved for downstream code.
+        let msg = msg.resolve(session_id.clone());
 
         // -- Record message to tape -------------------------------------------
         let tape_name = session_id.to_string();
@@ -1586,7 +1584,7 @@ impl Kernel {
         );
         if let Err(e) = self
             .event_queue
-            .try_push(KernelEventEnvelope::user_message(msg))
+            .try_push(KernelEventEnvelope::user_message(msg.into_unresolved()))
         {
             error!(%e, "group: failed to push promoted UserMessage");
         }
@@ -1691,13 +1689,15 @@ impl Kernel {
 
         let should_buffer = self.process_table.with_mut(&session_key, |rt| {
             if rt.paused {
-                rt.pause_buffer
-                    .push(KernelEventEnvelope::user_message(msg.clone()));
+                rt.pause_buffer.push(KernelEventEnvelope::user_message(
+                    msg.clone().into_unresolved(),
+                ));
                 return true;
             }
             if is_active {
-                rt.pause_buffer
-                    .push(KernelEventEnvelope::user_message(msg.clone()));
+                rt.pause_buffer.push(KernelEventEnvelope::user_message(
+                    msg.clone().into_unresolved(),
+                ));
                 return true;
             }
             false
@@ -1781,7 +1781,7 @@ impl Kernel {
     /// Tape forking provides transactional semantics: the agent writes to a
     /// fork during its turn. On success the fork is merged back; on failure
     /// it is discarded, keeping the main tape clean.
-    #[tracing::instrument(skip_all, fields(session_key = %session_key, msg_session_key = ?msg.session_key))]
+    #[tracing::instrument(skip_all, fields(session_key = %session_key, msg_session_key = %msg.session_key()))]
     async fn start_llm_turn(&self, session_key: SessionKey, msg: InboundMessage) {
         // -- TurnGuard: RAII safety net ------------------------------------------
         //

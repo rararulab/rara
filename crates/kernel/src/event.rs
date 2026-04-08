@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::{
     agent::{AgentManifest, AgentTurnResult},
     identity::{Principal, UserId},
-    io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter},
+    io::{InboundMessage, MessageId, OutboundEnvelope, PipeReader, PipeWriter, Unresolved},
     kv::KvScope,
     schedule::JobEntry,
     session::{AgentRunLoopResult, SessionKey, Signal},
@@ -272,16 +272,16 @@ impl Syscall {
 pub enum KernelEvent {
     // === Input: from external sources ===
     /// A new user message from a channel adapter (via IngressPipeline).
-    #[debug("UserMessage(session={:?})", _0.session_key)]
-    UserMessage(InboundMessage),
+    #[debug("UserMessage(session={:?})", _0.session_key_opt())]
+    UserMessage(InboundMessage<Unresolved>),
 
     /// A group-chat message where the bot was **not** directly mentioned.
     ///
     /// Handled separately from `UserMessage`: the kernel records the message
     /// to the session tape, runs a lightweight LLM judgment to decide whether
     /// to reply, and only promotes to a full `UserMessage` turn on approval.
-    #[debug("GroupMessage(session={:?})", _0.session_key)]
-    GroupMessage(InboundMessage),
+    #[debug("GroupMessage(session={:?})", _0.session_key_opt())]
+    GroupMessage(InboundMessage<Unresolved>),
 
     // === Session control ===
     /// Request to create (or reactivate) a session.
@@ -429,8 +429,8 @@ pub struct KernelEventEnvelope {
 
 impl KernelEventEnvelope {
     /// Create a `UserMessage` event.
-    pub fn user_message(msg: InboundMessage) -> Self {
-        let base_key = msg.session_key.clone().unwrap_or_default();
+    pub fn user_message(msg: InboundMessage<Unresolved>) -> Self {
+        let base_key = msg.session_key_opt().copied().unwrap_or_default();
         Self {
             base: EventBase::from(base_key),
             kind: KernelEvent::UserMessage(msg),
@@ -438,8 +438,8 @@ impl KernelEventEnvelope {
     }
 
     /// Create a `GroupMessage` event.
-    pub fn group_message(msg: InboundMessage) -> Self {
-        let base_key = msg.session_key.clone().unwrap_or_default();
+    pub fn group_message(msg: InboundMessage<Unresolved>) -> Self {
+        let base_key = msg.session_key_opt().copied().unwrap_or_default();
         Self {
             base: EventBase::from(base_key),
             kind: KernelEvent::GroupMessage(msg),
@@ -629,11 +629,11 @@ impl KernelEventEnvelope {
     /// Human-readable summary for observability.
     pub fn summary(&self) -> String {
         match &self.kind {
-            KernelEvent::UserMessage(msg) => match &msg.session_key {
+            KernelEvent::UserMessage(msg) => match msg.session_key_opt() {
                 Some(key) => format!("user message queued for session {key}"),
                 None => "user message queued (no session yet)".to_string(),
             },
-            KernelEvent::GroupMessage(msg) => match &msg.session_key {
+            KernelEvent::GroupMessage(msg) => match msg.session_key_opt() {
                 Some(key) => format!("group message queued for session {key}"),
                 None => "group message queued (no session yet)".to_string(),
             },

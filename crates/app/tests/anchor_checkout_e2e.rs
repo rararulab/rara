@@ -4,7 +4,7 @@ use rara_app::{AppConfig, StartOptions, start_with_options};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     identity::{Principal, UserId},
-    io::{ChannelSource, InboundMessage, MessageId},
+    io::{ChannelSource, InboundMessage, MessageId, Unresolved},
     memory::{FileTapeStore, TapEntryKind, TapeService},
     session::SessionKey,
 };
@@ -16,23 +16,23 @@ fn build_test_message(
     session_key: Option<SessionKey>,
     chat_id: &str,
     text: &str,
-) -> InboundMessage {
-    InboundMessage {
-        id: MessageId::new(),
-        source: ChannelSource {
+) -> InboundMessage<Unresolved> {
+    InboundMessage::unresolved(
+        MessageId::new(),
+        ChannelSource {
             channel_type:        ChannelType::Internal,
             platform_message_id: None,
             platform_user_id:    "ryan".to_string(),
             platform_chat_id:    Some(chat_id.to_string()),
         },
-        user: UserId("ryan".to_string()),
+        UserId("ryan".to_string()),
         session_key,
-        target_session_key: None,
-        content: MessageContent::Text(text.to_string()),
-        reply_context: None,
-        timestamp: jiff::Timestamp::now(),
-        metadata: Default::default(),
-    }
+        None,
+        MessageContent::Text(text.to_string()),
+        None,
+        jiff::Timestamp::now(),
+        Default::default(),
+    )
 }
 
 async fn wait_for_turn_count(

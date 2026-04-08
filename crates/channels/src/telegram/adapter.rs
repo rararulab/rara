@@ -2765,7 +2765,7 @@ async fn handle_update(
         }
     };
 
-    let session_id = msg.session_key.clone();
+    let session_id = msg.session_key_opt().copied();
     let rara_message_id = msg.id.to_string();
 
     // Route: group proactive candidates go through GroupMessage event for
