@@ -52,15 +52,20 @@ pub fn derive_tool_def(input: TokenStream) -> TokenStream {
 }
 
 /// Parsed `#[tool(...)]` attributes.
+#[allow(clippy::struct_excessive_bools)]
 struct ToolAttrs {
-    name:          LitStr,
-    description:   LitStr,
-    params_schema: Option<Expr>,
-    execute_fn:    Option<Expr>,
-    validate_fn:   Option<Expr>,
-    manual_impl:   bool,
-    tier:          Option<LitStr>,
-    timeout_secs:  Option<syn::LitInt>,
+    name:             LitStr,
+    description:      LitStr,
+    params_schema:    Option<Expr>,
+    execute_fn:       Option<Expr>,
+    validate_fn:      Option<Expr>,
+    manual_impl:      bool,
+    tier:             Option<LitStr>,
+    timeout_secs:     Option<syn::LitInt>,
+    read_only:        bool,
+    destructive:      bool,
+    concurrency_safe: bool,
+    user_interaction: bool,
 }
 
 fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
@@ -72,6 +77,10 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
     let mut manual_impl = false;
     let mut tier: Option<LitStr> = None;
     let mut timeout_secs: Option<syn::LitInt> = None;
+    let mut read_only = false;
+    let mut destructive = false;
+    let mut concurrency_safe = false;
+    let mut user_interaction = false;
 
     for attr in &input.attrs {
         if !attr.path().is_ident("tool") {
@@ -106,6 +115,14 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
             } else if meta.path.is_ident("timeout_secs") {
                 meta.input.parse::<Token![=]>()?;
                 timeout_secs = Some(meta.input.parse::<syn::LitInt>()?);
+            } else if meta.path.is_ident("read_only") {
+                read_only = true;
+            } else if meta.path.is_ident("destructive") {
+                destructive = true;
+            } else if meta.path.is_ident("concurrency_safe") {
+                concurrency_safe = true;
+            } else if meta.path.is_ident("user_interaction") {
+                user_interaction = true;
             } else {
                 return Err(meta.error(format!(
                     "unknown tool attribute: `{}`",
@@ -133,6 +150,10 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
         manual_impl,
         tier,
         timeout_secs,
+        read_only,
+        destructive,
+        concurrency_safe,
+        user_interaction,
     })
 }
 
@@ -243,6 +264,37 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         None => quote! {},
     };
 
+    // Safety axes — only override when the flag is set (otherwise trait
+    // default `false` applies, which is the fail-closed behaviour we want).
+    let read_only_impl = if attrs.read_only {
+        quote! {
+            fn is_read_only(&self, _args: &serde_json::Value) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+    let destructive_impl = if attrs.destructive {
+        quote! {
+            fn is_destructive(&self, _args: &serde_json::Value) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+    let concurrency_safe_impl = if attrs.concurrency_safe {
+        quote! {
+            fn is_concurrency_safe(&self, _args: &serde_json::Value) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+    let user_interaction_impl = if attrs.user_interaction {
+        quote! {
+            fn requires_user_interaction(&self) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+
     let expanded = quote! {
         #constants
 
@@ -257,6 +309,11 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             }
 
             #validate_impl
+
+            #read_only_impl
+            #destructive_impl
+            #concurrency_safe_impl
+            #user_interaction_impl
 
             async fn execute(
                 &self,
