@@ -20,7 +20,7 @@
 //! traces and tape entries.
 
 use std::{
-    path::Path,
+    path::PathBuf,
     sync::{Arc, Once},
     time::Duration,
 };
@@ -39,11 +39,19 @@ use tokio::time::{Instant, sleep};
 
 /// Override rara_paths directories to a writable temp path so tests
 /// don't touch `~/.config/rara` (which may not exist on CI runners).
-fn init_test_env(tmp: &Path) {
+fn init_test_env() {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     static INIT: Once = Once::new();
-    let data = tmp.join("rara_data");
-    let config = tmp.join("rara_config");
+    let root = ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("rara-test-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create stable test env root");
+        dir
+    });
     INIT.call_once(move || {
+        let data = root.join("rara_data");
+        let config = root.join("rara_config");
+        std::fs::create_dir_all(&data).expect("create stable test data dir");
+        std::fs::create_dir_all(&config).expect("create stable test config dir");
         rara_paths::set_custom_data_dir(&data);
         rara_paths::set_custom_config_dir(&config);
     });
@@ -103,7 +111,7 @@ async fn wait_for_turn_count(
 #[tokio::test]
 async fn simple_text_reply() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
     let tk = TestKernelBuilder::new(tmp.path())
         .responses(vec![
             scripted_response("Hi there!"),
@@ -144,7 +152,7 @@ async fn simple_text_reply() {
 #[tokio::test]
 async fn multi_turn_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
     // Use a uniform response so the test is order-insensitive. The kernel
     // may make auxiliary LLM calls (knowledge extraction) between user
     // turns, consuming extra scripted responses.
@@ -221,7 +229,7 @@ async fn multi_turn_conversation() {
 #[tokio::test]
 async fn empty_llm_response_handled() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     // Script an empty response (no content, no tool calls).
     let empty_response = rara_kernel::llm::CompletionResponse {
@@ -270,7 +278,7 @@ async fn empty_llm_response_handled() {
 #[tokio::test]
 async fn tool_call_round_trip() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     // The FakeTool echoes back a single scripted result.
     let fake_tool = Arc::new(FakeTool::new(
@@ -349,7 +357,7 @@ async fn tool_call_round_trip() {
 #[tokio::test]
 async fn tape_records_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
     let tk = TestKernelBuilder::new(tmp.path())
         .responses(vec![
             scripted_response("Recorded reply"),
@@ -395,7 +403,7 @@ async fn tape_records_conversation() {
 #[tokio::test]
 async fn llm_error_does_not_crash_session() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     // First call: non-retryable provider error. The agent loop surfaces this
     // as an AgentExecution error (no TurnTrace is pushed for hard errors).
@@ -465,7 +473,7 @@ async fn llm_error_does_not_crash_session() {
 #[tokio::test]
 async fn max_iterations_terminates() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     let fake_tool = Arc::new(FakeTool::new(
         "loopy",
@@ -532,7 +540,7 @@ async fn max_iterations_terminates() {
 #[tokio::test]
 async fn tool_not_found_surfaces_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     // First response: call a nonexistent tool.
     // Second response: normal text (the LLM "recovers" after seeing the error).
@@ -595,7 +603,7 @@ async fn tool_not_found_surfaces_error() {
 #[tokio::test]
 async fn consecutive_empty_responses_terminate() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     let empty = || CompletionResponse {
         content:           None,

@@ -23,7 +23,7 @@
 //! real `KernelHandle` to submit to, and assertions read from real turn
 //! traces.
 
-use std::{path::Path, sync::Once, time::Duration};
+use std::{path::PathBuf, sync::Once, time::Duration};
 
 use rara_channels::web::WebAdapter;
 use rara_kernel::{
@@ -44,11 +44,19 @@ use wiremock::{
 
 /// Override rara_paths directories to a writable temp path so tests
 /// don't touch `~/.config/rara`.
-fn init_test_env(tmp: &Path) {
+fn init_test_env() {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     static INIT: Once = Once::new();
-    let data = tmp.join("rara_data");
-    let config = tmp.join("rara_config");
+    let root = ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("rara-test-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create stable test env root");
+        dir
+    });
     INIT.call_once(move || {
+        let data = root.join("rara_data");
+        let config = root.join("rara_config");
+        std::fs::create_dir_all(&data).expect("create stable test data dir");
+        std::fs::create_dir_all(&config).expect("create stable test config dir");
         rara_paths::set_custom_data_dir(&data);
         rara_paths::set_custom_config_dir(&config);
     });
@@ -103,7 +111,7 @@ async fn wait_for_turn_count(
 #[tokio::test]
 async fn web_text_message_reaches_kernel() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     let tk = TestKernelBuilder::new(tmp.path())
         .responses(vec![
@@ -156,7 +164,7 @@ async fn web_text_message_reaches_kernel() {
 #[tokio::test]
 async fn web_audio_message_is_transcribed_via_stt() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env(tmp.path());
+    init_test_env();
 
     // Spin up a fake STT server that returns a known transcription.
     let mock_stt = MockServer::start().await;
