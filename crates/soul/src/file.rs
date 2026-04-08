@@ -17,7 +17,10 @@
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
-use crate::error::{ParseFrontmatterSnafu, Result};
+use crate::{
+    error::{ParseFrontmatterSnafu, Result},
+    score::StyleScore,
+};
 
 /// Parsed soul file: frontmatter metadata + markdown body.
 #[derive(Debug, Clone)]
@@ -47,8 +50,8 @@ fn default_version() -> u32 { 1 }
 pub struct Boundaries {
     #[serde(default)]
     pub immutable_traits: Vec<String>,
-    pub min_formality:    Option<u8>,
-    pub max_formality:    Option<u8>,
+    pub min_formality:    Option<StyleScore>,
+    pub max_formality:    Option<StyleScore>,
 }
 
 /// Evolution feature flags.
@@ -192,8 +195,14 @@ Natural and friendly.
         assert_eq!(soul.frontmatter.version, 2);
         assert_eq!(soul.frontmatter.personality, vec!["温暖", "好奇"]);
         assert_eq!(soul.frontmatter.boundaries.immutable_traits, vec!["诚实"]);
-        assert_eq!(soul.frontmatter.boundaries.min_formality, Some(2));
-        assert_eq!(soul.frontmatter.boundaries.max_formality, Some(7));
+        assert_eq!(
+            soul.frontmatter.boundaries.min_formality,
+            Some(StyleScore::new(2).unwrap()),
+        );
+        assert_eq!(
+            soul.frontmatter.boundaries.max_formality,
+            Some(StyleScore::new(7).unwrap()),
+        );
         assert!(soul.frontmatter.evolution.enabled);
         assert!(soul.frontmatter.evolution.mood_tracking);
         assert!(soul.body.contains("## Background"));
