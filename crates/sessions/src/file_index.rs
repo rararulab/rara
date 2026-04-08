@@ -22,7 +22,10 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use rara_kernel::session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey};
+use rara_kernel::{
+    channel::types::ChannelType,
+    session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey},
+};
 use tokio::fs;
 
 /// File-based implementation of [`SessionIndex`].
@@ -185,11 +188,12 @@ impl SessionIndex for FileSessionIndex {
     }
 
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
-        let path = self.binding_path(&binding.channel_type, &binding.chat_id);
-        let tmp = self.index_dir.join("bindings").join(format!(
-            "{}_{}.json.tmp",
-            binding.channel_type, binding.chat_id
-        ));
+        let ct = binding.channel_type.to_string();
+        let path = self.binding_path(&ct, &binding.chat_id);
+        let tmp = self
+            .index_dir
+            .join("bindings")
+            .join(format!("{}_{}.json.tmp", ct, binding.chat_id));
 
         let data =
             serde_json::to_vec_pretty(binding).map_err(|source| SessionError::Json { source })?;
@@ -199,10 +203,10 @@ impl SessionIndex for FileSessionIndex {
 
     async fn get_channel_binding(
         &self,
-        channel_type: &str,
+        channel_type: ChannelType,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError> {
-        let path = self.binding_path(channel_type, chat_id);
+        let path = self.binding_path(&channel_type.to_string(), chat_id);
         self.read_json(&path).await
     }
 

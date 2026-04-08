@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
     Serialize,
     Deserialize,
     strum::Display,
+    strum::EnumString,
     strum::IntoStaticStr,
 )]
 #[serde(rename_all = "snake_case")]
@@ -349,7 +350,7 @@ pub struct ChannelMessage {
     /// The user who sent this message.
     pub user:         ChannelUser,
     /// Session key for conversation continuity.
-    pub session_key:  String,
+    pub session_key:  crate::session::SessionKey,
     /// Message role.
     pub role:         MessageRole,
     /// Message content.

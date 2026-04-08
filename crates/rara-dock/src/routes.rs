@@ -253,7 +253,7 @@ async fn ensure_dock_kernel_session(
     index.create_session(&entry).await?;
 
     let binding = ChannelBinding {
-        channel_type: "web".to_string(),
+        channel_type: rara_kernel::channel::types::ChannelType::Web,
         chat_id: dock_session_id.to_string(),
         session_key,
         created_at: now,
