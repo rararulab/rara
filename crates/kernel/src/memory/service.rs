@@ -658,6 +658,30 @@ impl TapeService {
         Ok(entries.last().map(|e| e.id).unwrap_or(0))
     }
 
+    /// Find all tape entries (any kind) whose `metadata.rara_message_id`
+    /// matches the given ID. Unlike [`Self::search`], this is an exact metadata
+    /// filter — no text ranking, no kind restriction.
+    ///
+    /// Used by the `/debug` command to retrieve the full execution context
+    /// (messages + tool calls + tool results) for a single turn.
+    pub async fn entries_by_message_id(
+        &self,
+        tape_name: &str,
+        message_id: &str,
+    ) -> TapResult<Vec<TapEntry>> {
+        let entries = self.store.read(tape_name).await?.unwrap_or_default();
+        Ok(entries
+            .into_iter()
+            .filter(|e| {
+                e.metadata.as_ref().is_some_and(|m| {
+                    m.get("rara_message_id")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|id| id == message_id)
+                })
+            })
+            .collect())
+    }
+
     /// Search message entries using ranked Unicode-aware text matching.
     pub async fn search(
         &self,

@@ -162,6 +162,46 @@ pub enum ToolKind {
     #[strum(serialize = "evolve-soul")]
     #[strum(message = "自我进化", detailed_message = "soul-evolve")]
     EvolveSoul,
+
+    #[strum(serialize = "discover-tools")]
+    #[strum(message = "发现工具", detailed_message = "discover")]
+    DiscoverTools,
+
+    #[strum(serialize = "tape-search")]
+    #[strum(message = "搜索记录", detailed_message = "tape-search")]
+    TapeSearch,
+
+    #[strum(serialize = "tape-anchor")]
+    #[strum(message = "创建锚点", detailed_message = "tape-anchor")]
+    TapeAnchor,
+
+    #[strum(serialize = "browser-fetch")]
+    #[strum(message = "获取网页", detailed_message = "browser")]
+    BrowserFetch,
+
+    #[strum(serialize = "ctx_fetch_and_index")]
+    #[strum(message = "获取网页", detailed_message = "ctx-fetch")]
+    CtxFetchAndIndex,
+
+    #[strum(serialize = "ctx_search")]
+    #[strum(message = "搜索内容", detailed_message = "ctx-search")]
+    CtxSearch,
+
+    #[strum(serialize = "debug_trace")]
+    #[strum(message = "调试追踪", detailed_message = "debug")]
+    DebugTrace,
+
+    #[strum(serialize = "ask-user")]
+    #[strum(message = "询问用户", detailed_message = "ask")]
+    AskUser,
+
+    #[strum(serialize = "multi-edit")]
+    #[strum(message = "批量编辑", detailed_message = "multi-edit")]
+    MultiEdit,
+
+    #[strum(serialize = "walk-directory")]
+    #[strum(message = "遍历目录", detailed_message = "walk")]
+    WalkDirectory,
 }
 
 impl ToolKind {
@@ -177,10 +217,13 @@ pub fn tool_display_name(raw: &str) -> &str {
 }
 
 /// Map raw tool names to Chinese activity phrases for user-facing progress.
+///
+/// Falls back to the raw tool name so the user always sees *something*
+/// meaningful rather than the generic "处理中".
 pub fn tool_activity_label(raw: &str) -> &str {
     ToolKind::parse(raw)
         .and_then(|k| k.get_message())
-        .unwrap_or("处理中")
+        .unwrap_or(raw)
 }
 
 /// Extract a one-line summary from tool arguments based on the tool name.
@@ -356,7 +399,7 @@ mod tests {
         assert_eq!(tool_activity_label("web_search"), "搜索网页");
         assert_eq!(tool_activity_label("list-mcp-servers"), "检查 MCP");
         assert_eq!(tool_activity_label("remove-mcp-server"), "移除 MCP");
-        assert_eq!(tool_activity_label("unknown_tool"), "处理中");
+        assert_eq!(tool_activity_label("unknown_tool"), "unknown_tool");
     }
 
     #[test]

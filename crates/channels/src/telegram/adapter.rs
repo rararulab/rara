@@ -428,6 +428,27 @@ fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
 
 /// Render tool progress lines for display in Telegram.
 ///
+/// Build a thinking hint: show the first line of reasoning preview if
+/// available, otherwise fall back to the poetic loading hint.
+fn thinking_hint(progress: &ProgressMessage) -> String {
+    let preview = progress.reasoning_preview.trim();
+    if preview.is_empty() {
+        return format!("🧠 {}", progress.loading_hint);
+    }
+    // Take the first non-empty line, truncated to 60 chars for Telegram.
+    let first_line = preview
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or(preview);
+    let truncated: String = first_line.chars().take(60).collect();
+    let ellipsis = if first_line.chars().count() > 60 {
+        "…"
+    } else {
+        ""
+    };
+    format!("🧠 {truncated}{ellipsis}")
+}
+
 /// Consecutive tools with the same activity label are aggregated into a single
 /// line to avoid noisy repetition (e.g. 3x "检查 MCP" becomes one line).
 fn render_progress(
@@ -439,10 +460,8 @@ fn render_progress(
         if !progress.thinking {
             return String::new();
         }
-        // Thinking phase with no tools yet — show the loading hint so the
-        // user sees immediate feedback instead of silence.
-        let mut lines = vec![progress.loading_hint.clone()];
-        lines.push(format!("✳ {}", format_duration_compact(turn_elapsed)));
+        let mut lines = vec![thinking_hint(progress)];
+        lines.push(format!("✳️ {}", format_duration_compact(turn_elapsed)));
         return lines.join("\n");
     }
 
@@ -492,8 +511,15 @@ fn render_progress(
         }
     }
 
+    // If all tools are done and LLM is thinking again, show a thinking
+    // hint so the user knows the agent is still working.
+    let all_done = phases.iter().all(|p| p.all_finished);
+    if all_done && progress.thinking {
+        lines.push(thinking_hint(progress));
+    }
+
     // Footer: elapsed + tokens + thinking
-    if phases.iter().any(|p| !p.all_finished) || progress.input_tokens > 0 {
+    {
         let mut parts = vec![format_duration_compact(turn_elapsed)];
 
         if progress.input_tokens > 0 || progress.output_tokens > 0 {
@@ -509,7 +535,7 @@ fn render_progress(
             }
         }
 
-        lines.push(format!("✳ {}", parts.join(" · ")));
+        lines.push(format!("✳️ {}", parts.join(" · ")));
     }
 
     lines.join("\n")
@@ -3362,6 +3388,10 @@ fn spawn_stream_forwarder(
                                     progress.reasoning_preview.push('\u{2026}');
                                 }
                             }
+
+                            // Mark dirty so the periodic flush updates the
+                            // progress message with the reasoning preview.
+                            progress_dirty = true;
                         }
                         Ok(StreamEvent::TurnMetrics { model, iterations, .. }) => {
                             // TurnMetrics arrives just before stream close —
