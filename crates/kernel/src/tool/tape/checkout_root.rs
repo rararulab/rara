@@ -41,7 +41,9 @@ pub struct TapeCheckoutRootResult {
 #[tool(
     name = "tape-checkout-root",
     description = "Return to the root session from a forked session.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub(crate) struct TapeCheckoutRootTool {
     tape_service: TapeService,

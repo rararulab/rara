@@ -49,7 +49,9 @@ pub struct MarketplaceBrowseParams {
     description = "List available plugins and skills from GitHub marketplace sources or \
                    clawhub.ai. Use `source: \"clawhub\"` to browse clawhub.ai skills (supports \
                    `sort` and `limit`), or omit `source` to browse GitHub marketplace indexes.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub struct MarketplaceBrowseTool {
     service: Arc<MarketplaceService>,

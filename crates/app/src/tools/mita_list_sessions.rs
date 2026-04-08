@@ -47,7 +47,9 @@ pub struct ListSessionsParams {
     name = "list-sessions",
     description = "List all live sessions currently running in the kernel process table. Returns \
                    session key, agent name, state, metrics, and timestamps. Use this to discover \
-                   sessions worth inspecting."
+                   sessions worth inspecting.",
+    read_only,
+    concurrency_safe
 )]
 pub struct ListSessionsTool {
     kernel_handle: Arc<RwLock<Option<KernelHandle>>>,

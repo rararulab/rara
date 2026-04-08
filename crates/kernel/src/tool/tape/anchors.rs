@@ -47,7 +47,9 @@ pub struct TapeAnchorsResult {
 #[tool(
     name = "tape-anchors",
     description = "List recent tape anchors.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub(crate) struct TapeAnchorsTool {
     tape_service: TapeService,

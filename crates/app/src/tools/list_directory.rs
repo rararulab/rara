@@ -52,7 +52,9 @@ pub struct ListDirectoryResult {
 #[derive(ToolDef)]
 #[tool(
     name = "list-directory",
-    description = "List directory contents with name, type, and size per entry."
+    description = "List directory contents with name, type, and size per entry.",
+    read_only,
+    concurrency_safe
 )]
 pub struct ListDirectoryTool;
 impl ListDirectoryTool {

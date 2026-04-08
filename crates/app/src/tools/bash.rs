@@ -133,7 +133,8 @@ pub struct BashResult {
     name = "bash",
     description = "Execute a shell command via /bin/bash -c; returns exit code, stdout/stderr \
                    (truncated to 50KB).",
-    timeout_secs = 150
+    timeout_secs = 150,
+    destructive
 )]
 pub struct BashTool;
 

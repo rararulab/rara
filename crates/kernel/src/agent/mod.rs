@@ -2011,8 +2011,22 @@ pub(crate) async fn run_agent_loop(
             .ok()
             .flatten();
 
-        // Execute all tool calls concurrently via FuturesUnordered so we
-        // can harvest partial results if the global wave timeout fires.
+        // Partition tool calls by concurrency safety. Adjacent safe calls
+        // run in parallel; unsafe calls each run in isolation. This prevents
+        // read-after-write / write-after-write races (e.g. [Read, Edit, Read]
+        // on the same file). Tools that don't opt in via `is_concurrency_safe`
+        // default to sequential execution (fail-closed).
+        let call_batches = crate::tool::partition_tool_calls(
+            valid_tool_calls.iter().enumerate().collect::<Vec<_>>(),
+            |&(_, (_, name, args))| {
+                tools
+                    .get(name)
+                    .map(|t| (t.as_ref() as &dyn crate::tool::AgentTool, args))
+            },
+        );
+
+        // Build one future per tool call (same as before — the partitioning
+        // only changes how these futures are *scheduled*, not how they're built).
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
             .map(|(id, name, args)| {
@@ -2215,45 +2229,65 @@ pub(crate) async fn run_agent_loop(
             })
             .collect();
 
-        // Use FuturesUnordered so we can harvest partial results if the
-        // global wave timeout fires (completed tools keep their real results).
+        // Execute tool calls batch-by-batch. Concurrent batches run via
+        // FuturesUnordered; sequential batches run one at a time.
         use futures::stream::{FuturesUnordered, StreamExt};
         let num_tools = tool_futures.len();
-        let mut futs: FuturesUnordered<_> = tool_futures
-            .into_iter()
-            .enumerate()
-            .map(|(idx, fut)| async move { (idx, fut.await) })
-            .collect();
-
+        // Convert to Option so we can take futures by index without copying.
+        let mut tool_futures: Vec<Option<_>> = tool_futures.into_iter().map(Some).collect();
         let mut indexed_results: Vec<Option<(bool, crate::tool::ToolOutput, Option<String>, u64)>> =
             (0..num_tools).map(|_| None).collect();
         let deadline = tokio::time::sleep(tool_execution_timeout);
         tokio::pin!(deadline);
+        let mut wave_timed_out = false;
 
-        let timed_out = loop {
-            tokio::select! {
-                item = futs.next() => {
-                    match item {
-                        Some((idx, result)) => { indexed_results[idx] = Some(result); }
-                        None => break false, // all futures completed
+        'batch: for batch in &call_batches {
+            let indices: Vec<usize> = match batch {
+                crate::tool::ToolCallBatch::Concurrent(items) => {
+                    items.iter().map(|&(idx, _)| idx).collect()
+                }
+                crate::tool::ToolCallBatch::Sequential((idx, _)) => vec![*idx],
+            };
+
+            let batch_futs: FuturesUnordered<_> = indices
+                .iter()
+                .filter_map(|&idx| {
+                    tool_futures[idx]
+                        .take()
+                        .map(|fut| async move { (idx, fut.await) })
+                })
+                .collect();
+            tokio::pin!(batch_futs);
+
+            loop {
+                tokio::select! {
+                    item = batch_futs.next() => {
+                        match item {
+                            Some((idx, result)) => { indexed_results[idx] = Some(result); }
+                            None => break, // batch complete
+                        }
+                    }
+                    _ = &mut deadline => {
+                        warn!(
+                            "global tool wave timeout exceeded after {}s",
+                            tool_execution_timeout.as_secs()
+                        );
+                        wave_timed_out = true;
+                        break 'batch;
+                    }
+                    _ = turn_cancel.cancelled() => {
+                        return Err(KernelError::Interrupted);
                     }
                 }
-                _ = &mut deadline => {
-                    warn!("global tool wave timeout exceeded after {}s", tool_execution_timeout.as_secs());
-                    break true;
-                }
-                _ = turn_cancel.cancelled() => {
-                    return Err(KernelError::Interrupted);
-                }
             }
-        };
+        }
 
         // Fill missing slots with synthetic timeout errors.
         let results: Vec<_> = indexed_results
             .into_iter()
             .map(|slot| {
                 slot.unwrap_or_else(|| {
-                    let msg = if timed_out {
+                    let msg = if wave_timed_out {
                         format!(
                             "tool wave timed out after {}s",
                             tool_execution_timeout.as_secs()

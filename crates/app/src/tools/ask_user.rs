@@ -49,7 +49,8 @@ pub struct AskUserParams {
                    information that only the user can provide (e.g. API keys, preferences, \
                    clarifications). The agent will pause until the user responds or the request \
                    times out.",
-    tier = "deferred"
+    tier = "deferred",
+    user_interaction
 )]
 pub struct AskUserTool {
     manager: UserQuestionManagerRef,

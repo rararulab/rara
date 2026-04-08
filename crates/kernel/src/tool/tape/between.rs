@@ -52,7 +52,9 @@ pub struct TapeBetweenResult {
 #[tool(
     name = "tape-between",
     description = "Read entries between two named anchors.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub(crate) struct TapeBetweenTool {
     tape_service: TapeService,
