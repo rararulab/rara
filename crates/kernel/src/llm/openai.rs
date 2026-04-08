@@ -117,7 +117,7 @@ pub fn is_local_url(url: &str) -> bool {
 }
 
 /// Maximum number of retries for rate-limited (429) requests.
-const RATE_LIMIT_MAX_RETRIES: u32 = 4;
+const RATE_LIMIT_MAX_RETRIES: u32 = 2;
 /// Initial backoff delay for rate-limited retries.
 const RATE_LIMIT_INITIAL_DELAY: Duration = Duration::from_secs(5);
 /// Maximum backoff delay for rate-limited retries.

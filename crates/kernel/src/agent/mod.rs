@@ -1541,6 +1541,28 @@ pub(crate) async fn run_agent_loop(
         };
 
         if let Some(Err(ref e)) = driver_result {
+            // Rate limit (429): immediately answer with available context —
+            // do not keep retrying, the limit won't lift in time.
+            if crate::error::is_rate_limit_error(e) && tool_calls_made > 0 {
+                warn!(
+                    iteration,
+                    model = model.as_str(),
+                    error = %e,
+                    tool_calls_made,
+                    "rate limited — answering with available context"
+                );
+                llm_error_recovery_message = Some(
+                    "[System] You hit a rate limit. Do NOT call any more tools. Summarize the \
+                     information you already have and answer the user's question now."
+                        .to_string(),
+                );
+                tool_defs = vec![];
+                in_llm_error_recovery = true;
+                // Force fold to shrink context for the final answer call.
+                force_fold_next_iteration = true;
+                continue;
+            }
+
             if llm_error_recovery_count < MAX_LLM_ERROR_RECOVERIES
                 && crate::error::is_retryable_provider_error(e)
             {

@@ -230,6 +230,17 @@ pub fn is_fallback_eligible(err: &KernelError) -> bool {
     )
 }
 
+/// Returns `true` when the error originates from an HTTP 429 rate limit.
+pub fn is_rate_limit_error(err: &KernelError) -> bool {
+    let msg = match err {
+        KernelError::Provider { message } | KernelError::RetryableServer { message } => {
+            message.as_ref()
+        }
+        _ => return false,
+    };
+    msg.contains("429") || msg.to_lowercase().contains("rate limit")
+}
+
 pub fn is_retryable_provider_error(err: &KernelError) -> bool {
     match err {
         KernelError::Provider { message } => {
