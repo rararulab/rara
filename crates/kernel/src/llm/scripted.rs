@@ -112,10 +112,29 @@ impl LlmDriver for ScriptedLlmDriver {
         request: CompletionRequest,
         tx: mpsc::Sender<StreamDelta>,
     ) -> Result<CompletionResponse> {
-        // Emit the full text as a single delta, then Done.
+        // Emit the full text as a single delta, then any tool calls as
+        // ToolCallStart + ToolCallArgumentsDelta pairs, then Done. The
+        // agent loop aggregates these into the in-flight tool-call state,
+        // so omitting them would cause scripted tool calls to be silently
+        // dropped.
         let response = self.complete(request).await?;
         if let Some(ref text) = response.content {
             let _ = tx.send(StreamDelta::TextDelta { text: text.clone() }).await;
+        }
+        for (index, call) in response.tool_calls.iter().enumerate() {
+            let _ = tx
+                .send(StreamDelta::ToolCallStart {
+                    index: index as u32,
+                    id:    call.id.clone(),
+                    name:  call.name.clone(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::ToolCallArgumentsDelta {
+                    index:     index as u32,
+                    arguments: call.arguments.clone(),
+                })
+                .await;
         }
         let _ = tx
             .send(StreamDelta::Done {
