@@ -292,7 +292,7 @@ pub enum KernelEvent {
         #[debug("{}", manifest.name)]
         manifest:            AgentManifest,
         input:               String,
-        principal:           Principal,
+        principal:           Principal<crate::identity::Lookup>,
         parent_id:           Option<SessionKey>,
         desired_session_key: Option<SessionKey>,
         #[debug(skip)]
@@ -459,7 +459,7 @@ impl KernelEventEnvelope {
     pub fn create_session(
         manifest: AgentManifest,
         input: String,
-        principal: Principal,
+        principal: Principal<crate::identity::Lookup>,
         parent_id: Option<SessionKey>,
         desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
@@ -481,7 +481,7 @@ impl KernelEventEnvelope {
     pub fn spawn_agent(
         manifest: AgentManifest,
         input: String,
-        principal: Principal,
+        principal: Principal<crate::identity::Lookup>,
         parent_id: Option<SessionKey>,
         desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,

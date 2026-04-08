@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -81,21 +81,100 @@ impl KernelUser {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Principal — type-state marker types
+// ---------------------------------------------------------------------------
+
+/// Marker: principal only carries the user id; permissions have not yet
+/// been resolved from the user store. Never safe to use for permission
+/// checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Lookup;
+
+/// Marker: principal was fully populated from the user store with a real
+/// role and permission list. Safe for authorization decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Resolved;
+
 /// The identity under which an agent process runs.
+///
+/// Parameterised over a type state:
+///
+/// - [`Principal<Lookup>`] — produced by [`Principal::lookup`]. Only the
+///   `user_id` is populated; `role` and `permissions` are placeholders.
+///   Intended purely as a query key for
+///   [`crate::security::SecuritySubsystem::resolve_principal`]. Calling
+///   authorization methods is a **compile error**.
+/// - [`Principal<Resolved>`] (the default) — produced by
+///   [`Principal::from_user`] or
+///   [`crate::security::SecuritySubsystem::resolve_principal`]. Carries the
+///   full role + permission list from the database and is the only form that
+///   exposes `has_permission`, `is_admin`, and `role`.
+///
+/// The default type parameter is `Resolved` so that downstream code that
+/// stores or passes around fully-resolved principals stays unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Principal {
-    pub user_id:     UserId,
-    pub role:        Role,
-    pub permissions: Vec<Permission>,
+pub struct Principal<State = Resolved> {
+    pub user_id: UserId,
+    role:        Role,
+    permissions: Vec<Permission>,
+    #[serde(skip)]
+    _state:      PhantomData<State>,
 }
 
-impl Principal {
-    /// Create a principal from a [`KernelUser`].
+impl<State> PartialEq for Principal<State> {
+    fn eq(&self, other: &Self) -> bool {
+        self.user_id == other.user_id
+            && self.role == other.role
+            && self.permissions == other.permissions
+    }
+}
+
+impl<State> Eq for Principal<State> {}
+
+// -- Constructors common to any state --------------------------------------
+
+impl Principal<Lookup> {
+    /// Create a lookup-key principal for identity resolution.
+    ///
+    /// The returned value only carries the user id — role and permissions
+    /// are placeholders. Pass it to
+    /// [`crate::security::SecuritySubsystem::resolve_principal`] to obtain a
+    /// [`Principal<Resolved>`] before storing it in a session or performing
+    /// any permission check.
+    pub fn lookup(user_id: impl Into<String>) -> Self {
+        Self {
+            user_id:     UserId(user_id.into()),
+            role:        Role::User,
+            permissions: Vec::new(),
+            _state:      PhantomData,
+        }
+    }
+}
+
+impl Principal<Resolved> {
+    /// Downgrade a resolved principal back to a lookup key, discarding the
+    /// cached role and permissions. Used when re-validating a principal
+    /// through [`crate::security::SecuritySubsystem::resolve_principal`].
+    pub fn into_lookup(self) -> Principal<Lookup> {
+        Principal {
+            user_id:     self.user_id,
+            role:        Role::User,
+            permissions: Vec::new(),
+            _state:      PhantomData,
+        }
+    }
+
+    /// Create a resolved principal from a [`KernelUser`] record.
+    ///
+    /// This is the canonical entry point for producing a principal that is
+    /// safe to use for permission checks.
     pub fn from_user(user: &KernelUser) -> Self {
         Self {
             user_id:     UserId(user.name.clone()),
             role:        user.role,
             permissions: user.permissions.clone(),
+            _state:      PhantomData,
         }
     }
 
@@ -106,22 +185,14 @@ impl Principal {
             || self.permissions.contains(perm)
     }
 
-    /// Create a lookup-key principal for identity resolution.
-    ///
-    /// The returned `Principal` only carries the user id — role and
-    /// permissions are placeholders. Call
-    /// `SecuritySubsystem::resolve_principal` to obtain a fully-populated
-    /// principal before storing it in a session.
-    pub fn lookup(user_id: impl Into<String>) -> Self {
-        Self {
-            user_id:     UserId(user_id.into()),
-            role:        Role::User,
-            permissions: vec![],
-        }
-    }
-
     /// Whether this principal has admin privileges.
     pub fn is_admin(&self) -> bool { self.role == Role::Admin || self.role == Role::Root }
+
+    /// Access this principal's role.
+    pub fn role(&self) -> Role { self.role }
+
+    /// Access this principal's permission list.
+    pub fn permissions(&self) -> &[Permission] { &self.permissions }
 }
 
 pub type UserStoreRef = Arc<dyn UserStore>;
@@ -213,5 +284,22 @@ mod tests {
         };
         assert!(user.can_use_tool("bash"));
         assert!(user.can_use_tool("write-file"));
+    }
+
+    #[test]
+    fn resolved_principal_exposes_permissions() {
+        let user = root_user();
+        let principal = Principal::from_user(&user);
+        assert!(principal.has_permission(&Permission::Spawn));
+        assert!(principal.is_admin());
+        assert_eq!(principal.role(), Role::Root);
+    }
+
+    #[test]
+    fn lookup_principal_only_carries_user_id() {
+        let p = Principal::<Lookup>::lookup("alice");
+        assert_eq!(p.user_id, UserId("alice".into()));
+        // Compile-time: p.has_permission(...), p.is_admin(), p.role() do NOT
+        // exist on Principal<Lookup> — only Principal<Resolved>.
     }
 }

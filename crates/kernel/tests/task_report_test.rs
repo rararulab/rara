@@ -486,7 +486,13 @@ fn test_in_flight_recovery() {
     let jobs_path = tmp.path().join("jobs.json");
     let in_flight_path = tmp.path().join("in_flight.json");
 
-    let principal = rara_kernel::identity::Principal::lookup("test-user".to_string());
+    let test_user = rara_kernel::identity::KernelUser {
+        name:        "test-user".into(),
+        role:        rara_kernel::identity::Role::User,
+        permissions: vec![rara_kernel::identity::Permission::Spawn],
+        enabled:     true,
+    };
+    let principal = rara_kernel::identity::Principal::from_user(&test_user);
     let session = SessionKey::new();
     let now = jiff::Timestamp::now();
     let past = now
@@ -596,7 +602,13 @@ fn test_complete_in_flight() {
     let tmp = tempfile::tempdir().unwrap();
     let jobs_path = tmp.path().join("jobs.json");
 
-    let principal = rara_kernel::identity::Principal::lookup("test-user".to_string());
+    let test_user = rara_kernel::identity::KernelUser {
+        name:        "test-user".into(),
+        role:        rara_kernel::identity::Role::User,
+        permissions: vec![rara_kernel::identity::Permission::Spawn],
+        enabled:     true,
+    };
+    let principal = rara_kernel::identity::Principal::from_user(&test_user);
     let session = SessionKey::new();
     let past = jiff::Timestamp::now()
         .checked_sub(jiff::SignedDuration::from_secs(10))
