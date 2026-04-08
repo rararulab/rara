@@ -61,56 +61,68 @@ pub mod user_question;
 /// Tool name constants for kernel-provided tools.
 ///
 /// External crates use these for manifest construction without
-/// accessing internal tool modules or structs.
+/// accessing internal tool modules or structs. Each constant is a
+/// [`ToolName`](tool::ToolName) wrapped in `LazyLock` for zero-cost
+/// reuse.
 pub mod tool_names {
-    pub const TAPE_INFO: &str = "tape-info";
-    pub const TAPE_SEARCH: &str = "tape-search";
-    pub const TAPE_ANCHOR: &str = "tape-anchor";
-    pub const TAPE_ANCHORS: &str = "tape-anchors";
-    pub const TAPE_ENTRIES: &str = "tape-entries";
-    pub const TAPE_BETWEEN: &str = "tape-between";
-    pub const TAPE_CHECKOUT: &str = "tape-checkout";
-    pub const TAPE_CHECKOUT_ROOT: &str = "tape-checkout-root";
-    pub const CREATE_PLAN: &str = "create-plan";
-    pub const KERNEL: &str = "kernel";
-    pub const MEMORY: &str = "memory";
-    pub const SCHEDULE_ONCE: &str = "schedule-once";
-    pub const SCHEDULE_INTERVAL: &str = "schedule-interval";
-    pub const SCHEDULE_CRON: &str = "schedule-cron";
-    pub const SCHEDULE_REMOVE: &str = "schedule-remove";
-    pub const SCHEDULE_LIST: &str = "schedule-list";
-    pub const SPAWN_BACKGROUND: &str = "spawn-background";
-    pub const CANCEL_BACKGROUND: &str = "cancel-background";
-    pub const TASK: &str = "task";
-    pub const FOLD_BRANCH: &str = "fold-branch";
+    use std::sync::LazyLock;
+
+    use super::tool::ToolName;
+
+    macro_rules! tool {
+        ($name:ident, $val:expr) => {
+            pub static $name: LazyLock<ToolName> = LazyLock::new(|| ToolName::new($val));
+        };
+    }
+
+    tool!(TAPE_INFO, "tape-info");
+    tool!(TAPE_SEARCH, "tape-search");
+    tool!(TAPE_ANCHOR, "tape-anchor");
+    tool!(TAPE_ANCHORS, "tape-anchors");
+    tool!(TAPE_ENTRIES, "tape-entries");
+    tool!(TAPE_BETWEEN, "tape-between");
+    tool!(TAPE_CHECKOUT, "tape-checkout");
+    tool!(TAPE_CHECKOUT_ROOT, "tape-checkout-root");
+    tool!(CREATE_PLAN, "create-plan");
+    tool!(KERNEL, "kernel");
+    tool!(MEMORY, "memory");
+    tool!(SCHEDULE_ONCE, "schedule-once");
+    tool!(SCHEDULE_INTERVAL, "schedule-interval");
+    tool!(SCHEDULE_CRON, "schedule-cron");
+    tool!(SCHEDULE_REMOVE, "schedule-remove");
+    tool!(SCHEDULE_LIST, "schedule-list");
+    tool!(SPAWN_BACKGROUND, "spawn-background");
+    tool!(CANCEL_BACKGROUND, "cancel-background");
+    tool!(TASK, "task");
+    tool!(FOLD_BRANCH, "fold-branch");
 
     // App-layer tools referenced by kernel presets
-    pub const BASH: &str = "bash";
-    pub const READ_FILE: &str = "read-file";
-    pub const WRITE_FILE: &str = "write-file";
-    pub const EDIT_FILE: &str = "edit-file";
-    pub const LIST_DIRECTORY: &str = "list-directory";
-    pub const GREP: &str = "grep";
-    pub const FIND_FILES: &str = "find-files";
-    pub const WALK_DIRECTORY: &str = "walk-directory";
+    tool!(BASH, "bash");
+    tool!(READ_FILE, "read-file");
+    tool!(WRITE_FILE, "write-file");
+    tool!(EDIT_FILE, "edit-file");
+    tool!(LIST_DIRECTORY, "list-directory");
+    tool!(GREP, "grep");
+    tool!(FIND_FILES, "find-files");
+    tool!(WALK_DIRECTORY, "walk-directory");
 
     // Browser tools
-    pub const BROWSER_NAVIGATE: &str = "browser-navigate";
-    pub const BROWSER_NAVIGATE_BACK: &str = "browser-navigate-back";
-    pub const BROWSER_SNAPSHOT: &str = "browser-snapshot";
-    pub const BROWSER_CLICK: &str = "browser-click";
-    pub const BROWSER_TYPE: &str = "browser-type";
-    pub const BROWSER_PRESS_KEY: &str = "browser-press-key";
-    pub const BROWSER_EVALUATE: &str = "browser-evaluate";
-    pub const BROWSER_WAIT_FOR: &str = "browser-wait-for";
-    pub const BROWSER_TABS: &str = "browser-tabs";
-    pub const BROWSER_CLOSE: &str = "browser-close";
+    tool!(BROWSER_NAVIGATE, "browser-navigate");
+    tool!(BROWSER_NAVIGATE_BACK, "browser-navigate-back");
+    tool!(BROWSER_SNAPSHOT, "browser-snapshot");
+    tool!(BROWSER_CLICK, "browser-click");
+    tool!(BROWSER_TYPE, "browser-type");
+    tool!(BROWSER_PRESS_KEY, "browser-press-key");
+    tool!(BROWSER_EVALUATE, "browser-evaluate");
+    tool!(BROWSER_WAIT_FOR, "browser-wait-for");
+    tool!(BROWSER_TABS, "browser-tabs");
+    tool!(BROWSER_CLOSE, "browser-close");
 
     // ACP delegation
-    pub const ACP_DELEGATE: &str = "acp-delegate";
+    tool!(ACP_DELEGATE, "acp-delegate");
 
     // User interaction
-    pub const ASK_USER: &str = "ask-user";
+    tool!(ASK_USER, "ask-user");
 }
 
 pub use error::{KernelError, Result};

@@ -226,14 +226,14 @@ pub struct AgentManifest {
     /// Tool names this agent is allowed to use (empty = inherit parent's
     /// tools).
     #[serde(default)]
-    pub tools:                  Vec<String>,
+    pub tools:                  Vec<crate::tool::ToolName>,
     /// Tool names the agent is NOT allowed to use (denylist).
     ///
     /// Applied after `tools` allowlist filtering. If `tools` is empty (inherit
     /// all), excluded tools are removed from the full set. If `tools` is
     /// explicit, excluded tools are additionally removed.
     #[serde(default)]
-    pub excluded_tools:         Vec<String>,
+    pub excluded_tools:         Vec<crate::tool::ToolName>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
     pub max_children:           Option<usize>,
@@ -991,7 +991,7 @@ pub(crate) async fn run_agent_loop(
 
     // Deferred tool activation state — persists across turns within the same
     // session so the LLM does not need to re-discover tools after each message.
-    let mut activated_deferred: std::collections::HashSet<String> = handle
+    let mut activated_deferred: std::collections::HashSet<crate::tool::ToolName> = handle
         .process_table()
         .with(&session_key, |s| s.activated_deferred.clone())
         .unwrap_or_default();
@@ -2069,11 +2069,11 @@ pub(crate) async fn run_agent_loop(
                             "tool call blocked by guard, requesting user approval"
                         );
 
-                        let risk_level = crate::security::ApprovalManager::classify_risk(&blocked_tool);
+                        let risk_level = crate::security::ApprovalManager::classify_risk(blocked_tool.as_str());
                         let approval_req = crate::security::ApprovalRequest {
                             id:           uuid::Uuid::new_v4(),
                             session_key:  session_key_for_guard,
-                            tool_name:    blocked_tool.clone(),
+                            tool_name:    blocked_tool.to_string(),
                             tool_args:    args.clone(),
                             summary:      format!("Guard blocked ({layer}): {reason}"),
                             risk_level,
@@ -2107,7 +2107,7 @@ pub(crate) async fn run_agent_loop(
                                 notification_bus
                                     .publish(KernelNotification::GuardDenied {
                                         agent_id,
-                                        tool_name: blocked_tool.clone(),
+                                        tool_name: blocked_tool.to_string(),
                                         reason: reason.clone(),
                                         timestamp: jiff::Timestamp::now(),
                                     })
@@ -2309,7 +2309,7 @@ pub(crate) async fn run_agent_loop(
                             result.clone(),
                         ) {
                             for entry in &parsed.tools {
-                                activated_deferred.insert(entry.name.clone());
+                                activated_deferred.insert(crate::tool::ToolName::new(&entry.name));
                             }
                         }
                     }

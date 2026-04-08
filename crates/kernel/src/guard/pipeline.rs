@@ -60,7 +60,7 @@ pub enum GuardVerdict {
         /// Human-readable reason.
         reason:    String,
         /// The tool that was blocked.
-        tool_name: String,
+        tool_name: crate::tool::ToolName,
     },
 }
 
@@ -99,7 +99,7 @@ impl GuardPipeline {
             return GuardVerdict::Blocked {
                 layer:     GuardLayer::Taint,
                 reason:    violation.to_string(),
-                tool_name: tool_name.to_string(),
+                tool_name: crate::tool::ToolName::new(tool_name),
             };
         }
 
@@ -117,7 +117,7 @@ impl GuardPipeline {
                     "{}: matched '{}'",
                     critical.rule_name, critical.matched_pattern
                 ),
-                tool_name: tool_name.to_string(),
+                tool_name: crate::tool::ToolName::new(tool_name),
             };
         }
 
@@ -126,7 +126,7 @@ impl GuardPipeline {
             return GuardVerdict::Blocked {
                 layer: GuardLayer::PathScope,
                 reason,
-                tool_name: tool_name.to_string(),
+                tool_name: crate::tool::ToolName::new(tool_name),
             };
         }
 

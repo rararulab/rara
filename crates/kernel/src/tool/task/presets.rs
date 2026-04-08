@@ -20,7 +20,10 @@
 
 use std::sync::LazyLock;
 
-use crate::{tool::RECURSIVE_TOOL_DENYLIST, tool_names};
+use crate::{
+    tool::{ToolName, recursive_tool_denylist},
+    tool_names,
+};
 
 /// Configuration for a predefined task type.
 ///
@@ -36,9 +39,9 @@ pub struct TaskTypeConfig {
     pub system_prompt:    &'static str,
     /// Tools the child agent is allowed to use. Empty means inherit all
     /// parent tools (minus `disallowed_tools`).
-    pub allowed_tools:    Vec<String>,
+    pub allowed_tools:    Vec<ToolName>,
     /// Tools the child agent must never use (e.g. recursive spawning tools).
-    pub disallowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<ToolName>,
     /// Maximum number of agent loop iterations before the task is stopped.
     pub max_iterations:   usize,
 }
@@ -84,10 +87,7 @@ Rules:
 - Respond in the same language as the task description.";
 
 static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
-    let disallowed: Vec<String> = RECURSIVE_TOOL_DENYLIST
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect();
+    let disallowed = recursive_tool_denylist();
 
     vec![
         TaskTypeConfig {
@@ -103,12 +103,12 @@ static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
             description:      "Shell/CLI specialist for command-line tasks",
             system_prompt:    BASH_PROMPT,
             allowed_tools:    vec![
-                tool_names::BASH.into(),
-                tool_names::READ_FILE.into(),
-                tool_names::WRITE_FILE.into(),
-                tool_names::EDIT_FILE.into(),
-                tool_names::LIST_DIRECTORY.into(),
-                tool_names::GREP.into(),
+                tool_names::BASH.clone(),
+                tool_names::READ_FILE.clone(),
+                tool_names::WRITE_FILE.clone(),
+                tool_names::EDIT_FILE.clone(),
+                tool_names::LIST_DIRECTORY.clone(),
+                tool_names::GREP.clone(),
             ],
             disallowed_tools: disallowed.clone(),
             max_iterations:   15,
@@ -118,11 +118,11 @@ static PRESETS: LazyLock<Vec<TaskTypeConfig>> = LazyLock::new(|| {
             description:      "Read-only codebase exploration and analysis specialist",
             system_prompt:    EXPLORE_PROMPT,
             allowed_tools:    vec![
-                tool_names::READ_FILE.into(),
-                tool_names::GREP.into(),
-                tool_names::FIND_FILES.into(),
-                tool_names::WALK_DIRECTORY.into(),
-                tool_names::LIST_DIRECTORY.into(),
+                tool_names::READ_FILE.clone(),
+                tool_names::GREP.clone(),
+                tool_names::FIND_FILES.clone(),
+                tool_names::WALK_DIRECTORY.clone(),
+                tool_names::LIST_DIRECTORY.clone(),
             ],
             disallowed_tools: disallowed,
             max_iterations:   20,
@@ -154,7 +154,7 @@ mod tests {
         );
         assert_eq!(preset.max_iterations, 25);
         assert!(
-            preset.disallowed_tools.contains(&"task".to_owned()),
+            preset.disallowed_tools.contains(&ToolName::new("task")),
             "must disallow recursive task spawning"
         );
         assert!(
@@ -169,21 +169,23 @@ mod tests {
         assert_eq!(preset.name, "bash");
         assert_eq!(preset.max_iterations, 15);
         assert!(
-            preset.allowed_tools.contains(&"bash".to_owned()),
+            preset.allowed_tools.contains(&ToolName::new("bash")),
             "bash preset must include the bash tool"
         );
         assert!(
-            preset.allowed_tools.contains(&"read-file".to_owned()),
+            preset.allowed_tools.contains(&ToolName::new("read-file")),
             "bash preset must include read-file"
         );
         assert!(
             preset
                 .disallowed_tools
-                .contains(&"spawn-background".to_owned()),
+                .contains(&ToolName::new("spawn-background")),
             "must disallow spawn-background"
         );
         assert!(
-            preset.disallowed_tools.contains(&"create-plan".to_owned()),
+            preset
+                .disallowed_tools
+                .contains(&ToolName::new("create-plan")),
             "must disallow create-plan"
         );
     }
@@ -194,26 +196,28 @@ mod tests {
         assert_eq!(preset.name, "explore");
         assert_eq!(preset.max_iterations, 20);
         assert!(
-            preset.allowed_tools.contains(&"read-file".to_owned()),
+            preset.allowed_tools.contains(&ToolName::new("read-file")),
             "explore preset must include read-file"
         );
         assert!(
-            preset.allowed_tools.contains(&"grep".to_owned()),
+            preset.allowed_tools.contains(&ToolName::new("grep")),
             "explore preset must include grep"
         );
         assert!(
-            preset.allowed_tools.contains(&"find-files".to_owned()),
+            preset.allowed_tools.contains(&ToolName::new("find-files")),
             "explore preset must include find-files"
         );
         assert!(
-            preset.allowed_tools.contains(&"walk-directory".to_owned()),
+            preset
+                .allowed_tools
+                .contains(&ToolName::new("walk-directory")),
             "explore preset must include walk-directory"
         );
-        assert!(!preset.allowed_tools.contains(&"bash".to_owned()));
-        assert!(!preset.allowed_tools.contains(&"write-file".to_owned()));
-        assert!(!preset.allowed_tools.contains(&"edit-file".to_owned()));
+        assert!(!preset.allowed_tools.contains(&ToolName::new("bash")));
+        assert!(!preset.allowed_tools.contains(&ToolName::new("write-file")));
+        assert!(!preset.allowed_tools.contains(&ToolName::new("edit-file")));
         assert!(
-            preset.disallowed_tools.contains(&"task".to_owned()),
+            preset.disallowed_tools.contains(&ToolName::new("task")),
             "must disallow recursive task spawning"
         );
     }

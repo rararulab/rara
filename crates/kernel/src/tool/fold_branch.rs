@@ -114,7 +114,7 @@ pub struct FoldBranchParams {
     /// Detailed instruction for the child agent.
     instruction:    String,
     /// Tool names the child agent can use (inherits parent if omitted).
-    tools:          Option<Vec<String>>,
+    tools:          Option<Vec<crate::tool::ToolName>>,
     /// Maximum LLM iterations for the child agent.
     max_iterations: Option<usize>,
     /// Timeout in seconds for the child agent (default: 120).

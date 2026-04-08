@@ -1021,7 +1021,7 @@ async fn execute_worker_step(
         soul_prompt:            None,
         provider_hint:          None,
         max_iterations:         Some(WORKER_MAX_ITERATIONS),
-        tools:                  vec!["*".to_string()], // inherit all tools
+        tools:                  vec![crate::tool::ToolName::new("*")], // inherit all tools
         excluded_tools:         vec![],
         max_children:           None,
         max_context_tokens:     None,

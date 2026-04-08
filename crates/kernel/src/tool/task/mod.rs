@@ -181,11 +181,15 @@ mod tests {
         };
         assert_eq!(manifest.role, AgentRole::Worker);
         assert_eq!(manifest.max_children, Some(0));
-        assert!(manifest.excluded_tools.contains(&"task".to_string()));
         assert!(
             manifest
                 .excluded_tools
-                .contains(&"spawn-background".to_string())
+                .contains(&crate::tool::ToolName::new("task"))
+        );
+        assert!(
+            manifest
+                .excluded_tools
+                .contains(&crate::tool::ToolName::new("spawn-background"))
         );
         // general-purpose inherits all tools
         assert!(manifest.tools.is_empty());
@@ -195,9 +199,9 @@ mod tests {
     fn bash_preset_has_explicit_tools() {
         let preset = presets::get_preset("bash").unwrap();
         let manifest_tools = &preset.allowed_tools;
-        assert!(manifest_tools.contains(&"bash".to_string()));
-        assert!(manifest_tools.contains(&"read-file".to_string()));
+        assert!(manifest_tools.contains(&crate::tool::ToolName::new("bash")));
+        assert!(manifest_tools.contains(&crate::tool::ToolName::new("read-file")));
         // bash preset should NOT include task
-        assert!(!manifest_tools.contains(&"task".to_string()));
+        assert!(!manifest_tools.contains(&crate::tool::ToolName::new("task")));
     }
 }

@@ -31,7 +31,10 @@
 
 use std::sync::LazyLock;
 
-use rara_kernel::agent::{AgentManifest, AgentRole, Priority};
+use rara_kernel::{
+    agent::{AgentManifest, AgentRole, Priority},
+    tool::ToolName,
+};
 
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     name:                   "rara".to_string(),
@@ -70,7 +73,7 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     soul_prompt:            None,
     provider_hint:          None,
     max_iterations:         Some(10),
-    tools:                  vec!["tape".to_string()],
+    tools:                  vec![ToolName::new("tape")],
     excluded_tools:         vec![],
     max_children:           Some(0),
     max_context_tokens:     None,
@@ -130,16 +133,16 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     provider_hint:          None,
     max_iterations:         Some(20),
     tools:                  vec![
-        "tape".to_string(),
-        "list-sessions".to_string(),
-        "read-tape".to_string(),
-        "dispatch-rara".to_string(),
-        "write-user-note".to_string(),
-        "distill-user-notes".to_string(),
-        "update-soul-state".to_string(),
-        "evolve-soul".to_string(),
-        "update-session-title".to_string(),
-        "write-skill-draft".to_string(),
+        ToolName::new("tape"),
+        ToolName::new("list-sessions"),
+        ToolName::new("read-tape"),
+        ToolName::new("dispatch-rara"),
+        ToolName::new("write-user-note"),
+        ToolName::new("distill-user-notes"),
+        ToolName::new("update-soul-state"),
+        ToolName::new("evolve-soul"),
+        ToolName::new("update-session-title"),
+        ToolName::new("write-skill-draft"),
     ],
     excluded_tools:         vec![],
     max_children:           Some(0),

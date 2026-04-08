@@ -19,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rara_kernel::{agent::AgentManifest, handle::KernelHandle};
+use rara_kernel::{agent::AgentManifest, handle::KernelHandle, tool::ToolName};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ impl AgentResponse {
             role: Some(format!("{:?}", m.role)),
             provider_hint: m.provider_hint.clone(),
             max_iterations: m.max_iterations,
-            tools: m.tools.clone(),
+            tools: m.tools.iter().map(|t| t.to_string()).collect(),
             builtin,
         }
     }
@@ -164,7 +164,7 @@ async fn create_agent(
         soul_prompt:            req.soul_prompt,
         provider_hint:          req.provider_hint,
         max_iterations:         req.max_iterations,
-        tools:                  req.tools,
+        tools:                  req.tools.into_iter().map(ToolName::from).collect(),
         excluded_tools:         vec![],
         max_children:           None,
         max_context_tokens:     None,
