@@ -885,7 +885,7 @@ mod state_transition_tests {
     use super::*;
     use crate::{
         agent::{AgentEnv, AgentManifest, AgentRole, Priority},
-        identity::Principal,
+        identity::{KernelUser, Principal, Role},
     };
 
     fn make_manifest() -> AgentManifest {
@@ -920,7 +920,12 @@ mod state_transition_tests {
             session_key: SessionKey::new(),
             parent_id: None,
             manifest: make_manifest(),
-            principal: Principal::lookup("test-user"),
+            principal: Principal::from_user(&KernelUser {
+                name:        "test-user".into(),
+                role:        Role::User,
+                permissions: vec![],
+                enabled:     true,
+            }),
             env: AgentEnv::default(),
             state,
             created_at: Timestamp::now(),
