@@ -83,12 +83,29 @@ pub type LlmModelListerRef = Arc<dyn LlmModelLister>;
 pub type LlmEmbedderRef = Arc<dyn LlmEmbedder>;
 
 /// Credential resolved by a [`LlmCredentialResolver`].
+///
+/// Fields are private so that callers go through accessor methods,
+/// making it straightforward to add auditing or redaction later.
 #[derive(Debug, Clone)]
 pub struct LlmCredential {
+    base_url: String,
+    api_key:  String,
+}
+
+impl LlmCredential {
+    /// Create a new credential pair.
+    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            api_key:  api_key.into(),
+        }
+    }
+
     /// Provider base URL (e.g. `https://api.openai.com/v1`).
-    pub base_url: String,
+    pub fn base_url(&self) -> &str { &self.base_url }
+
     /// Bearer token or API key.
-    pub api_key:  String,
+    pub fn api_key(&self) -> &str { &self.api_key }
 }
 
 /// Dynamic credential resolver for LLM providers that need runtime

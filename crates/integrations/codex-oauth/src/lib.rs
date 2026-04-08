@@ -430,10 +430,10 @@ impl LlmCredentialResolver for CodexCredentialResolver {
             }
         }
 
-        Ok(LlmCredential {
-            base_url: "https://api.openai.com/v1".to_owned(),
-            api_key:  tokens.access_token,
-        })
+        Ok(LlmCredential::new(
+            "https://api.openai.com/v1",
+            tokens.access_token,
+        ))
     }
 }
 

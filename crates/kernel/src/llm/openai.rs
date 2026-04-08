@@ -291,8 +291,8 @@ impl OpenAiDriver {
             OpenAiDriverConfigSource::Dynamic { resolver } => {
                 let cred = resolver.resolve().await?;
                 Ok(ResolvedConfig {
-                    base_url: cred.base_url,
-                    api_key:  cred.api_key,
+                    base_url: cred.base_url().to_owned(),
+                    api_key:  cred.api_key().to_owned(),
                 })
             }
         }
