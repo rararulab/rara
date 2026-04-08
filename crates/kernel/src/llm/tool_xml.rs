@@ -284,8 +284,8 @@ mod tests {
     #[test]
     fn streaming_partial_close_tag() {
         let (text, calls) = collect_stream(&[
-            r#"<invoke name="x"><parameter name="a">1</parameter></inv"#,
-            ">done",
+            r#"<invoke name="x"><parameter name="a">1</parameter></invo"#,
+            "ke>done",
         ]);
         assert_eq!(text, "done");
         assert_eq!(calls.len(), 1);
