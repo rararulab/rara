@@ -100,7 +100,7 @@ static TOOL_CALL_TAG_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 
 use async_trait::async_trait;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
@@ -909,6 +909,11 @@ pub struct TelegramAdapter {
     user_question_manager: Option<UserQuestionManagerRef>,
     /// Optional STT service for transcribing voice messages to text.
     stt_service:           Option<rara_stt::SttService>,
+    /// Optional TTS service for synthesizing voice replies.
+    tts_service:           Option<rara_tts::TtsService>,
+    /// Chat IDs whose most recent inbound message was a voice note.
+    /// Checked at egress to decide whether to reply with a voice note.
+    voice_chat_ids:        Arc<DashSet<i64>>,
 }
 
 impl TelegramAdapter {
@@ -935,6 +940,8 @@ impl TelegramAdapter {
             active_streams: Arc::new(DashMap::new()),
             user_question_manager: None,
             stt_service: None,
+            tts_service: None,
+            voice_chat_ids: Arc::new(DashSet::new()),
         }
     }
 
@@ -1055,6 +1062,13 @@ impl TelegramAdapter {
         self
     }
 
+    /// Attach a TTS service for synthesizing voice replies.
+    #[must_use]
+    pub fn with_tts_service(mut self, tts: Option<rara_tts::TtsService>) -> Self {
+        self.tts_service = tts;
+        self
+    }
+
     /// Return a shared handle to the runtime config.
     ///
     /// Callers can use this to update configuration at runtime (e.g. change the
@@ -1106,6 +1120,33 @@ impl TelegramAdapter {
                     .map_err(|e| warn!("failed to send document: {e}"));
             }
         }
+    }
+
+    /// Synthesize speech from `text` and send it as a Telegram voice note.
+    ///
+    /// Returns `true` if the voice note was sent successfully. On any failure
+    /// the caller should fall back to a plain text message (graceful
+    /// degradation).
+    async fn try_send_voice_reply(&self, chat_id: i64, text: &str) -> bool {
+        let Some(ref tts) = self.tts_service else {
+            return false;
+        };
+
+        let audio = match tts.synthesize(text).await {
+            Ok(a) => a,
+            Err(e) => {
+                warn!(error = %e, "TTS synthesis failed, falling back to text");
+                return false;
+            }
+        };
+
+        let input_file = teloxide::types::InputFile::memory(audio.data).file_name("reply.ogg");
+        if let Err(e) = self.bot.send_voice(ChatId(chat_id), input_file).await {
+            warn!(error = %e, "failed to send voice note, falling back to text");
+            return false;
+        }
+
+        true
     }
 }
 
@@ -1205,6 +1246,12 @@ impl ChannelAdapter for TelegramAdapter {
                             }
                         }
                     }
+                }
+
+                // If the inbound was a voice message and TTS is configured,
+                // reply with a voice note (graceful degradation on failure).
+                if self.voice_chat_ids.remove(&chat_id).is_some() && !content.is_empty() {
+                    self.try_send_voice_reply(chat_id, &content).await;
                 }
 
                 if !content.is_empty() {
@@ -1307,6 +1354,7 @@ impl ChannelAdapter for TelegramAdapter {
             .clone()
             .into();
         let stt_service = self.stt_service.clone();
+        let voice_chat_ids = Arc::clone(&self.voice_chat_ids);
 
         // Register slash-menu with Telegram so '/' shows available commands.
         {
@@ -1379,6 +1427,7 @@ impl ChannelAdapter for TelegramAdapter {
                 command_handlers,
                 callback_handlers,
                 stt_service,
+                voice_chat_ids,
             )
             .await;
         });
@@ -1432,6 +1481,7 @@ async fn polling_loop(
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
     callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
     stt_service: Option<rara_stt::SttService>,
+    voice_chat_ids: Arc<DashSet<i64>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1489,6 +1539,7 @@ async fn polling_loop(
                     let command_handlers = Arc::clone(&command_handlers);
                     let callback_handlers = Arc::clone(&callback_handlers);
                     let stt = stt_service.clone();
+                    let voice_ids = Arc::clone(&voice_chat_ids);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1502,6 +1553,7 @@ async fn polling_loop(
                             &command_handlers,
                             &callback_handlers,
                             &stt,
+                            &voice_ids,
                         )
                         .await;
                     });
@@ -2273,6 +2325,7 @@ async fn handle_update(
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
     stt_service: &Option<rara_stt::SttService>,
+    voice_chat_ids: &Arc<DashSet<i64>>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -2705,6 +2758,8 @@ async fn handle_update(
                 Ok((audio_data, mime_type)) => match stt.transcribe(audio_data, &mime_type).await {
                     Ok(text) => {
                         tracing::info!(len = text.len(), "voice message transcribed");
+                        // Mark this chat so egress replies with a voice note.
+                        voice_chat_ids.insert(chat_id);
                         let combined = match raw.content {
                             MessageContent::Text(ref caption) if !caption.trim().is_empty() => {
                                 format!("{caption}\n\n{text}")

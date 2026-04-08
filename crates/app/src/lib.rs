@@ -99,6 +99,10 @@ pub struct AppConfig {
     /// When present, `base_url` is required — startup fails if missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt:                    Option<rara_stt::SttConfig>,
+    /// Text-to-Speech configuration (optional).
+    /// When present, voice replies are enabled for channels that support it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts:                    Option<rara_tts::TtsConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:                Option<GatewayConfig>,
@@ -301,6 +305,16 @@ pub async fn start_with_options(
 
     let stt_service = config.stt.as_ref().map(rara_stt::SttService::from_config);
 
+    // Build TTS service when configured — symmetric to STT.
+    if let Some(ref tts) = config.tts {
+        snafu::ensure_whatever!(
+            !tts.base_url.trim().is_empty(),
+            "tts.base_url is required when tts section is configured"
+        );
+        info!(base_url = %tts.base_url, model = %tts.model, "TTS service configured");
+    }
+    let tts_service = config.tts.as_ref().map(rara_tts::TtsService::from_config);
+
     let db_store = init_infra(&config)
         .await
         .whatever_context("Failed to initialize infrastructure services")?;
@@ -374,6 +388,7 @@ pub async fn start_with_options(
         &backend.settings_svc,
         rara.user_question_manager.clone(),
         stt_service,
+        tts_service,
     )
     .await
     {
@@ -722,6 +737,7 @@ async fn try_build_telegram(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
     user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
     stt_service: Option<rara_stt::SttService>,
+    tts_service: Option<rara_tts::TtsService>,
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
 
@@ -769,7 +785,8 @@ async fn try_build_telegram(
             .whatever_context("failed to build telegram adapter")?
             .with_config(tg_config)
             .with_user_question_manager(user_question_manager)
-            .with_stt_service(stt_service),
+            .with_stt_service(stt_service)
+            .with_tts_service(tts_service),
     );
 
     let config_handle = adapter.config_handle();
