@@ -202,6 +202,7 @@ pub fn find_tape_file(
     strum::Display,
     strum::EnumString,
     derive_more::IsVariant,
+    Hash,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]

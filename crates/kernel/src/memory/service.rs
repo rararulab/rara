@@ -382,27 +382,30 @@ impl TapeService {
     /// Read all note entries from a user tape.
     pub async fn read_user_notes(&self, user_id: &str) -> TapResult<Vec<TapEntry>> {
         let user_tape = super::user_tape_name(user_id);
-        let entries = self.entries(&user_tape).await?;
-        Ok(entries
-            .into_iter()
-            .filter(|e| e.kind == TapEntryKind::Note)
-            .collect())
+        // Use the store's kind index so this is O(k) in the number of notes
+        // rather than O(n) over the whole user tape.
+        self.store
+            .entries_by_kind(&user_tape, TapEntryKind::Note)
+            .await
     }
 
     /// Inspect current tape state without mutating it.
     pub async fn info(&self, tape_name: &str) -> TapResult<TapeInfo> {
         let entries = self.entries(tape_name).await?;
-        let anchors = entries
+        // Pull the anchor list once via the kind index, then borrow into it
+        // for the remainder of the function so the linear `filter` calls
+        // disappear.
+        let anchor_entries: Vec<&TapEntry> = entries
             .iter()
             .filter(|entry| entry.kind == TapEntryKind::Anchor)
-            .collect::<Vec<_>>();
-        let last_anchor = anchors
+            .collect();
+        let last_anchor = anchor_entries
             .last()
             .and_then(|entry| entry.payload.get("name"))
             .and_then(Value::as_str)
             .map(str::to_owned);
 
-        let entries_since_last_anchor = if let Some(last) = anchors.last() {
+        let entries_since_last_anchor = if let Some(last) = anchor_entries.last() {
             entries.iter().filter(|entry| entry.id > last.id).count()
         } else {
             entries.len()
@@ -427,7 +430,7 @@ impl TapeService {
         });
 
         // Compute estimated context tokens for entries since last anchor.
-        let anchor_id = anchors.last().map(|a| a.id).unwrap_or(0);
+        let anchor_id = anchor_entries.last().map(|a| a.id).unwrap_or(0);
         let since_anchor: Vec<&TapEntry> = entries.iter().filter(|e| e.id > anchor_id).collect();
 
         // Find the last assistant entry with usage metadata.
@@ -471,7 +474,7 @@ impl TapeService {
         Ok(TapeInfo {
             name: tape_name.to_owned(),
             entries: entries.len(),
-            anchors: anchors.len(),
+            anchors: anchor_entries.len(),
             last_anchor,
             entries_since_last_anchor,
             last_token_usage,
@@ -525,19 +528,17 @@ impl TapeService {
         anchor_name: &str,
         target: &str,
     ) -> TapResult<()> {
-        let entries = self.entries(source).await?;
-
-        let anchor_id = entries
-            .iter()
-            .rev()
-            .find(|e| {
-                e.kind == TapEntryKind::Anchor
-                    && e.payload.get("name").and_then(|v| v.as_str()) == Some(anchor_name)
-            })
-            .map(|e| e.id)
+        // O(1) lookup via the anchor-name index instead of a reverse linear
+        // scan over every cached entry on the source tape.
+        let anchor_id = self
+            .store
+            .last_anchor_id_by_name(source, anchor_name)
+            .await?
             .ok_or_else(|| super::TapError::State {
                 message: format!("anchor not found: {anchor_name}"),
             })?;
+
+        let entries = self.entries(source).await?;
 
         for entry in entries.iter().filter(|e| e.id <= anchor_id) {
             self.store
@@ -556,11 +557,11 @@ impl TapeService {
     /// Return the most recent `limit` anchors, oldest-to-newest within the
     /// returned window.
     pub async fn anchors(&self, tape_name: &str, limit: usize) -> TapResult<Vec<AnchorSummary>> {
-        let entries = self.entries(tape_name).await?;
-        let anchor_entries: Vec<_> = entries
-            .iter()
-            .filter(|entry| entry.kind == TapEntryKind::Anchor)
-            .collect();
+        // O(k) over the anchor entries via the kind index.
+        let anchor_entries = self
+            .store
+            .entries_by_kind(tape_name, TapEntryKind::Anchor)
+            .await?;
         let start = anchor_entries.len().saturating_sub(limit);
         Ok(anchor_entries[start..]
             .iter()
@@ -590,9 +591,10 @@ impl TapeService {
         end: &str,
         kinds: Option<&[TapEntryKind]>,
     ) -> TapResult<Vec<TapEntry>> {
+        // Resolve both anchor IDs via the index, then load entries once.
+        let start_id = self.store.last_anchor_id_by_name(tape_name, start).await?;
+        let end_id = self.store.last_anchor_id_by_name(tape_name, end).await?;
         let entries = self.entries(tape_name).await?;
-        let start_id = anchor_id(&entries, start);
-        let end_id = anchor_id(&entries, end);
         Ok(entries
             .into_iter()
             .filter(|entry| start_id.is_some_and(|id| entry.id > id))
@@ -608,8 +610,8 @@ impl TapeService {
         anchor: &str,
         kinds: Option<&[TapEntryKind]>,
     ) -> TapResult<Vec<TapEntry>> {
+        let anchor_id = self.store.last_anchor_id_by_name(tape_name, anchor).await?;
         let entries = self.entries(tape_name).await?;
-        let anchor_id = anchor_id(&entries, anchor);
         Ok(entries
             .into_iter()
             .filter(|entry| anchor_id.is_none_or(|id| entry.id > id))
@@ -623,12 +625,10 @@ impl TapeService {
         tape_name: &str,
         kinds: Option<&[TapEntryKind]>,
     ) -> TapResult<Vec<TapEntry>> {
+        // O(1) anchor lookup via the store's kind index, instead of a full
+        // reverse scan over every cached entry.
+        let last_anchor_id = self.store.last_anchor_id(tape_name).await?;
         let entries = self.entries(tape_name).await?;
-        let last_anchor_id = entries
-            .iter()
-            .rev()
-            .find(|entry| entry.kind == TapEntryKind::Anchor)
-            .map(|entry| entry.id);
         Ok(entries
             .into_iter()
             .filter(|entry| last_anchor_id.is_none_or(|id| entry.id >= id))
@@ -814,10 +814,14 @@ impl TapeService {
     }
 
     async fn load_anchor_nodes(&self, session_key: &str) -> TapResult<Vec<AnchorNode>> {
-        let entries = self.entries(session_key).await?;
+        // Use the kind index so this is O(k) in the number of anchor entries
+        // rather than O(n) over the whole tape.
+        let entries = self
+            .store
+            .entries_by_kind(session_key, TapEntryKind::Anchor)
+            .await?;
         Ok(entries
             .into_iter()
-            .filter(|entry| entry.kind == TapEntryKind::Anchor)
             .map(|entry| {
                 // Be permissive with malformed payloads to avoid dropping the
                 // entire tree for one bad anchor record.
@@ -897,18 +901,6 @@ fn map_session_error(error: SessionError) -> super::TapError {
     super::TapError::State {
         message: error.to_string(),
     }
-}
-
-/// Find the most recent anchor ID for a named anchor.
-fn anchor_id(entries: &[TapEntry], name: &str) -> Option<u64> {
-    entries
-        .iter()
-        .rev()
-        .find(|entry| {
-            entry.kind == TapEntryKind::Anchor
-                && entry.payload.get("name").and_then(Value::as_str) == Some(name)
-        })
-        .map(|entry| entry.id)
 }
 
 /// Apply an optional kind filter to one entry.
@@ -1406,6 +1398,163 @@ mod tests {
         assert!(!entries.iter().any(|e| {
             e.payload.get("content").and_then(|v| v.as_str()) == Some("after anchor")
         }));
+    }
+
+    #[tokio::test]
+    async fn tape_index_matches_linear_scan() {
+        // Build a small tape with mixed kinds and several anchors, then assert
+        // the store's index-backed query methods return the same results as a
+        // hand-written linear scan over the full entry list.  This guards the
+        // index against drifting from `read_entries`.
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "index-roundtrip";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.append_message(tape, json!({"role": "user", "content": "one"}), None)
+            .await
+            .unwrap();
+        svc.handoff(tape, "topic/alpha", HandoffState::default())
+            .await
+            .unwrap();
+        svc.append_message(tape, json!({"role": "user", "content": "two"}), None)
+            .await
+            .unwrap();
+        svc.append_user_note("alice", "fact", "likes Rust")
+            .await
+            .unwrap();
+        svc.handoff(tape, "topic/beta", HandoffState::default())
+            .await
+            .unwrap();
+        svc.append_message(tape, json!({"role": "user", "content": "three"}), None)
+            .await
+            .unwrap();
+        // A repeated anchor name to make sure we resolve to the most recent
+        // occurrence rather than the first.
+        svc.handoff(tape, "topic/alpha", HandoffState::default())
+            .await
+            .unwrap();
+        svc.append_message(tape, json!({"role": "user", "content": "four"}), None)
+            .await
+            .unwrap();
+
+        let entries = svc.entries(tape).await.unwrap();
+
+        // Linear-scan reference values.
+        let expected_last_anchor_id = entries
+            .iter()
+            .rev()
+            .find(|e| e.kind == TapEntryKind::Anchor)
+            .map(|e| e.id);
+        let expected_alpha_id = entries
+            .iter()
+            .rev()
+            .find(|e| {
+                e.kind == TapEntryKind::Anchor
+                    && e.payload.get("name").and_then(Value::as_str) == Some("topic/alpha")
+            })
+            .map(|e| e.id);
+        let expected_beta_id = entries
+            .iter()
+            .rev()
+            .find(|e| {
+                e.kind == TapEntryKind::Anchor
+                    && e.payload.get("name").and_then(Value::as_str) == Some("topic/beta")
+            })
+            .map(|e| e.id);
+        let expected_anchor_count = entries
+            .iter()
+            .filter(|e| e.kind == TapEntryKind::Anchor)
+            .count();
+        let expected_message_ids: Vec<u64> = entries
+            .iter()
+            .filter(|e| e.kind == TapEntryKind::Message)
+            .map(|e| e.id)
+            .collect();
+
+        // Index-backed values.
+        let store = svc.store();
+        let actual_last_anchor_id = store.last_anchor_id(tape).await.unwrap();
+        let actual_alpha_id = store
+            .last_anchor_id_by_name(tape, "topic/alpha")
+            .await
+            .unwrap();
+        let actual_beta_id = store
+            .last_anchor_id_by_name(tape, "topic/beta")
+            .await
+            .unwrap();
+        let actual_missing = store
+            .last_anchor_id_by_name(tape, "topic/nope")
+            .await
+            .unwrap();
+        let actual_anchors = store
+            .entries_by_kind(tape, TapEntryKind::Anchor)
+            .await
+            .unwrap();
+        let actual_messages = store
+            .entries_by_kind(tape, TapEntryKind::Message)
+            .await
+            .unwrap();
+
+        assert_eq!(actual_last_anchor_id, expected_last_anchor_id);
+        assert_eq!(actual_alpha_id, expected_alpha_id);
+        assert_eq!(actual_beta_id, expected_beta_id);
+        assert_eq!(actual_missing, None);
+        assert_eq!(actual_anchors.len(), expected_anchor_count);
+        assert!(
+            actual_anchors
+                .iter()
+                .all(|e| e.kind == TapEntryKind::Anchor)
+        );
+        assert_eq!(
+            actual_messages.iter().map(|e| e.id).collect::<Vec<_>>(),
+            expected_message_ids
+        );
+    }
+
+    #[tokio::test]
+    async fn tape_index_survives_fork_merge() {
+        // Forking clones the cache via `copy_to`; merging copies fork-local
+        // entries back via `copy_from`.  Both paths must keep the index in
+        // sync — verify by exercising fork_tape and querying the parent
+        // afterwards.
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+        let tape = "index-fork-merge";
+
+        svc.ensure_bootstrap_anchor(tape).await.unwrap();
+        svc.handoff(tape, "topic/before-fork", HandoffState::default())
+            .await
+            .unwrap();
+
+        let svc_for_fork = svc.clone();
+        svc.fork_tape(tape, None, |fork| async move {
+            svc_for_fork
+                .append_message(&fork, json!({"role": "user", "content": "in fork"}), None)
+                .await?;
+            svc_for_fork
+                .handoff(&fork, "topic/in-fork", HandoffState::default())
+                .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // After merge, the parent tape's index must know about the new anchor
+        // that was created on the fork and copied back.
+        let store = svc.store();
+        let in_fork = store
+            .last_anchor_id_by_name(tape, "topic/in-fork")
+            .await
+            .unwrap();
+        assert!(
+            in_fork.is_some(),
+            "anchor created in fork should be visible via index after merge"
+        );
+
+        // The most recent anchor on the parent should now be the merged one.
+        let last = store.last_anchor_id(tape).await.unwrap();
+        assert_eq!(last, in_fork);
     }
 
     #[tokio::test]

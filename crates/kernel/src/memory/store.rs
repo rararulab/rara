@@ -31,13 +31,68 @@ use std::{
 };
 
 use rustix::{fs as rustix_fs, io as rustix_io};
+use serde_json::Value;
 use snafu::ResultExt;
 use tokio::sync::oneshot;
 use urlencoding::{decode, encode};
 
-use super::{TAPE_FILE_SUFFIX, TapEntry, TapError, TapResult};
+use super::{TAPE_FILE_SUFFIX, TapEntry, TapEntryKind, TapError, TapResult};
 
 type Job = Box<dyn FnOnce(&mut WorkerState) + Send + 'static>;
+
+/// In-memory secondary index over a tape's cached entries.
+///
+/// The index lets `TapeFile` answer kind-filter and anchor-name queries in
+/// O(1)/O(k) instead of O(n) linear scans across `read_entries`.  All maps
+/// store **offsets into `read_entries`** rather than entry IDs so the lookup
+/// remains O(1) even after the cache is partially invalidated and rebuilt.
+///
+/// # Consistency invariant
+///
+/// `TapeIndex` MUST stay in lockstep with `TapeFile::read_entries`:
+///
+/// - Every `push` to `read_entries` is paired with `TapeIndex::insert_entry`.
+/// - Every `clear`/`reset_cache` is paired with `TapeIndex::clear`.
+///
+/// All mutation paths (`append_many`, `ensure_cached`, `copy_to`, `copy_from`,
+/// `reset_cache`) funnel through these helpers — see `TapeFile::push_entry`
+/// and `TapeFile::reset_cache` for the single points of update.
+#[derive(Debug, Default)]
+struct TapeIndex {
+    /// Maps an entry ID to its offset in `read_entries`.
+    by_id:          HashMap<u64, usize>,
+    /// Maps each entry kind to the offsets of entries with that kind, in
+    /// append order.
+    by_kind:        HashMap<TapEntryKind, Vec<usize>>,
+    /// Maps an anchor name to the offsets of every anchor entry with that
+    /// name, in append order.  Most lookups want the most recent occurrence,
+    /// so callers consult `.last()`.
+    anchor_by_name: HashMap<String, Vec<usize>>,
+}
+
+impl TapeIndex {
+    /// Drop every indexed entry.
+    fn clear(&mut self) {
+        self.by_id.clear();
+        self.by_kind.clear();
+        self.anchor_by_name.clear();
+    }
+
+    /// Insert one entry already pushed into the parent `read_entries` vec.
+    /// `offset` must be the index of `entry` inside `read_entries`.
+    fn insert_entry(&mut self, offset: usize, entry: &TapEntry) {
+        self.by_id.insert(entry.id, offset);
+        self.by_kind.entry(entry.kind).or_default().push(offset);
+        if entry.kind == TapEntryKind::Anchor
+            && let Some(name) = entry.payload.get("name").and_then(Value::as_str)
+        {
+            self.anchor_by_name
+                .entry(name.to_owned())
+                .or_default()
+                .push(offset);
+        }
+    }
+}
 
 /// Mutable helper for one on-disk tape file.
 ///
@@ -51,6 +106,9 @@ struct TapeFile {
     fork_start_id: Option<u64>,
     /// Fully decoded entries cached in append order.
     read_entries:  Vec<TapEntry>,
+    /// Secondary index built from `read_entries` and kept in sync on every
+    /// mutation path.  See [`TapeIndex`] for the consistency invariant.
+    index:         TapeIndex,
     /// Number of bytes already consumed from the file.
     read_offset:   u64,
     /// Trailing bytes that do not yet end in a full JSONL record.
@@ -66,10 +124,20 @@ impl TapeFile {
             path,
             fork_start_id: None,
             read_entries: Vec::new(),
+            index: TapeIndex::default(),
             read_offset: 0,
             tail_bytes: Vec::new(),
             file: None,
         }
+    }
+
+    /// Append `entry` to `read_entries` and update the secondary index in
+    /// the same step.  This is the **only** allowed way to grow the cache so
+    /// the index can never drift from `read_entries`.
+    fn push_entry(&mut self, entry: TapEntry) {
+        let offset = self.read_entries.len();
+        self.index.insert_entry(offset, &entry);
+        self.read_entries.push(entry);
     }
 
     /// Copy entries into `target`.  If `at_entry_id` is `Some`, only copy
@@ -100,7 +168,10 @@ impl TapeFile {
                     File::create(&target.path).context(super::error::IoSnafu)?;
                 }
                 self.ensure_cached()?;
-                target.read_entries = self.read_entries.clone();
+                target.reset_cache();
+                for entry in &self.read_entries {
+                    target.push_entry(entry.clone());
+                }
                 target.read_offset = self.read_offset;
                 target.fork_start_id = Some(self.next_id());
             }
@@ -128,9 +199,10 @@ impl TapeFile {
             .map_or(1, |entry| entry.id.saturating_add(1))
     }
 
-    /// Drop the cached entries and byte offset.
+    /// Drop the cached entries, secondary index, and byte offset.
     fn reset_cache(&mut self) {
         self.read_entries.clear();
+        self.index.clear();
         self.read_offset = 0;
         self.tail_bytes.clear();
     }
@@ -186,7 +258,7 @@ impl TapeFile {
             }
             let entry = serde_json::from_slice::<TapEntry>(trimmed)
                 .map_err(|source| TapError::JsonDecode { source })?;
-            self.read_entries.push(entry);
+            self.push_entry(entry);
         }
 
         self.read_offset = self.read_offset.saturating_add(bytes_read as u64);
@@ -198,6 +270,48 @@ impl TapeFile {
     fn read(&mut self) -> TapResult<Vec<TapEntry>> {
         self.ensure_cached()?;
         Ok(self.read_entries.clone())
+    }
+
+    /// Return the entry ID of the most recent `Anchor` entry, if any.
+    /// O(1) via the secondary index instead of an O(n) reverse linear scan.
+    fn last_anchor_id(&mut self) -> TapResult<Option<u64>> {
+        self.ensure_cached()?;
+        Ok(self
+            .index
+            .by_kind
+            .get(&TapEntryKind::Anchor)
+            .and_then(|offsets| offsets.last())
+            .map(|&offset| self.read_entries[offset].id))
+    }
+
+    /// Return the entry ID of the most recent `Anchor` whose payload `name`
+    /// matches `anchor_name`.  O(1) via the secondary index.
+    fn last_anchor_id_by_name(&mut self, anchor_name: &str) -> TapResult<Option<u64>> {
+        self.ensure_cached()?;
+        Ok(self
+            .index
+            .anchor_by_name
+            .get(anchor_name)
+            .and_then(|offsets| offsets.last())
+            .map(|&offset| self.read_entries[offset].id))
+    }
+
+    /// Clone every cached entry whose kind is `kind`, in append order.
+    /// O(k) in the number of matching entries via the secondary index instead
+    /// of O(n) over the whole tape.
+    fn entries_by_kind(&mut self, kind: TapEntryKind) -> TapResult<Vec<TapEntry>> {
+        self.ensure_cached()?;
+        Ok(self
+            .index
+            .by_kind
+            .get(&kind)
+            .map(|offsets| {
+                offsets
+                    .iter()
+                    .map(|&offset| self.read_entries[offset].clone())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Append one entry, assigning its persisted ID first.
@@ -231,7 +345,9 @@ impl TapeFile {
         self.write_all_at(&encoded_batch, offset)?;
         self.sync_file()?;
         offset = offset.saturating_add(encoded_batch.len() as u64);
-        self.read_entries.extend(stored.iter().cloned());
+        for entry in &stored {
+            self.push_entry(entry.clone());
+        }
         self.read_offset = offset;
         Ok(stored)
     }
@@ -453,6 +569,49 @@ impl WorkerState {
             .map(Some)
     }
 
+    /// O(1) lookup for the most recent anchor ID on `tape`, or `None` if the
+    /// tape has no anchors (or does not yet exist).
+    fn last_anchor_id(&mut self, tape: &str) -> TapResult<Option<u64>> {
+        let path = self.tape_path(tape);
+        if !path.exists() {
+            return Ok(None);
+        }
+        self.tape_files
+            .entry(tape.to_owned())
+            .or_insert_with(|| TapeFile::new(path))
+            .last_anchor_id()
+    }
+
+    /// O(1) lookup for the most recent anchor ID matching `anchor_name`,
+    /// or `None` if no such anchor exists on this tape.
+    fn last_anchor_id_by_name(&mut self, tape: &str, anchor_name: &str) -> TapResult<Option<u64>> {
+        let path = self.tape_path(tape);
+        if !path.exists() {
+            return Ok(None);
+        }
+        self.tape_files
+            .entry(tape.to_owned())
+            .or_insert_with(|| TapeFile::new(path))
+            .last_anchor_id_by_name(anchor_name)
+    }
+
+    /// Read every entry whose kind matches `kind`, using the secondary
+    /// index to skip linear filtering.
+    fn entries_by_kind(
+        &mut self,
+        tape: &str,
+        kind: super::TapEntryKind,
+    ) -> TapResult<Vec<TapEntry>> {
+        let path = self.tape_path(tape);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        self.tape_files
+            .entry(tape.to_owned())
+            .or_insert_with(|| TapeFile::new(path))
+            .entries_by_kind(kind)
+    }
+
     /// Persist one new entry to the requested tape.
     fn append(
         &mut self,
@@ -624,6 +783,50 @@ impl FileTapeStore {
     pub async fn read(&self, tape: &str) -> TapResult<Option<Vec<TapEntry>>> {
         let tape = tape.to_owned();
         self.worker.call(move |state| state.read(&tape)).await
+    }
+
+    /// Return the entry ID of the most recent anchor on `tape`, if any.
+    ///
+    /// Backed by an in-memory secondary index, so this is O(1) once the tape
+    /// is loaded — much cheaper than reading every entry only to scan the
+    /// result on the caller side.
+    pub async fn last_anchor_id(&self, tape: &str) -> TapResult<Option<u64>> {
+        let tape = tape.to_owned();
+        self.worker
+            .call(move |state| state.last_anchor_id(&tape))
+            .await
+    }
+
+    /// Return the entry ID of the most recent anchor on `tape` whose payload
+    /// `name` field matches `anchor_name`.
+    ///
+    /// Backed by the in-memory anchor-name index, so this is O(1) lookup
+    /// rather than O(n) linear scan over all tape entries.
+    pub async fn last_anchor_id_by_name(
+        &self,
+        tape: &str,
+        anchor_name: &str,
+    ) -> TapResult<Option<u64>> {
+        let tape = tape.to_owned();
+        let name = anchor_name.to_owned();
+        self.worker
+            .call(move |state| state.last_anchor_id_by_name(&tape, &name))
+            .await
+    }
+
+    /// Read every entry on `tape` whose kind matches `kind`, in append order.
+    ///
+    /// Backed by the kind index so this is O(k) in the number of matches
+    /// instead of O(n) over the whole tape.
+    pub async fn entries_by_kind(
+        &self,
+        tape: &str,
+        kind: super::TapEntryKind,
+    ) -> TapResult<Vec<TapEntry>> {
+        let tape = tape.to_owned();
+        self.worker
+            .call(move |state| state.entries_by_kind(&tape, kind))
+            .await
     }
 
     /// Append one entry to a tape, creating the tape file if needed.
