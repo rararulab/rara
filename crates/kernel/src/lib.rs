@@ -53,6 +53,7 @@ pub mod security;
 pub mod session;
 pub(crate) mod syscall;
 pub mod task_report;
+pub mod testing;
 pub mod tool;
 pub mod trace;
 pub mod user_question;

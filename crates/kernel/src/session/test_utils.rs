@@ -25,7 +25,7 @@ use crate::channel::types::ChannelType;
 
 /// A minimal in-memory [`SessionIndex`] for unit tests.
 #[derive(Default)]
-pub(crate) struct InMemorySessionIndex {
+pub struct InMemorySessionIndex {
     pub sessions: DashMap<String, SessionEntry>,
     pub bindings: DashMap<(ChannelType, String), ChannelBinding>,
 }
@@ -114,7 +114,7 @@ impl SessionIndex for InMemorySessionIndex {
 }
 
 /// Helper to create a test session with optional metadata.
-pub(crate) async fn create_test_session(
+pub async fn create_test_session(
     sessions: &Arc<InMemorySessionIndex>,
     key: &SessionKey,
     metadata: Option<serde_json::Value>,

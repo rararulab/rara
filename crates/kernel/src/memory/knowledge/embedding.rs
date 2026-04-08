@@ -76,6 +76,19 @@ impl EmbeddingService {
         embedding_model: String,
     ) -> Result<Self> {
         let index_path = rara_paths::data_dir().join("knowledge/memory.usearch");
+        Self::with_path(config, embedder, embedding_model, index_path)
+    }
+
+    /// Create an embedding service with a custom index path.
+    ///
+    /// Useful for tests that need a writable temporary directory instead of
+    /// the global data dir.
+    pub fn with_path(
+        config: KnowledgeConfig,
+        embedder: LlmEmbedderRef,
+        embedding_model: String,
+        index_path: PathBuf,
+    ) -> Result<Self> {
         if let Some(parent) = index_path.parent() {
             std::fs::create_dir_all(parent).context(IoSnafu)?;
         }
