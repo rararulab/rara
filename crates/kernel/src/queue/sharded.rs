@@ -177,7 +177,7 @@ impl ShardedEventQueue {
         }
         match event.shard_key() {
             Some(session_key) => {
-                let shard_idx = session_key.0.as_u128() as usize % self.shards.len();
+                let shard_idx = session_key.as_uuid().as_u128() as usize % self.shards.len();
                 ShardTarget::Shard(shard_idx)
             }
             None => ShardTarget::Global,

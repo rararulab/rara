@@ -502,7 +502,7 @@ fn test_in_flight_recovery() {
     // 1. Create a wheel with one Once job and one Interval job, both expired.
     let mut wheel = JobWheel::load(jobs_path.clone());
     let once_job = JobEntry {
-        id:          JobId(uuid::Uuid::new_v4()),
+        id:          JobId::new(),
         trigger:     Trigger::Once { run_at: past },
         message:     "once task".into(),
         session_key: session,
@@ -511,7 +511,7 @@ fn test_in_flight_recovery() {
         tags:        vec!["test".into()],
     };
     let interval_job = JobEntry {
-        id:          JobId(uuid::Uuid::new_v4()),
+        id:          JobId::new(),
         trigger:     Trigger::Interval {
             every_secs: 60,
             next_at:    past,
@@ -616,7 +616,7 @@ fn test_complete_in_flight() {
 
     let mut wheel = JobWheel::load(jobs_path);
     let job = JobEntry {
-        id: JobId(uuid::Uuid::new_v4()),
+        id: JobId::new(),
         trigger: Trigger::Once { run_at: past },
         message: "task".into(),
         session_key: session,
@@ -654,7 +654,7 @@ async fn test_job_result_store_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let store = JobResultStore::new(tmp.path().join("results"));
 
-    let job_id = JobId(uuid::Uuid::new_v4());
+    let job_id = JobId::new();
 
     // Append two results for the same job (simulates recurring execution).
     let r1 = JobResult {
@@ -691,7 +691,7 @@ async fn test_job_result_store_roundtrip() {
     assert_eq!(results[1].status, TaskReportStatus::Failed);
 
     // A different job_id returns empty.
-    let other_id = JobId(uuid::Uuid::new_v4());
+    let other_id = JobId::new();
     let results = store.read(&other_id).await;
     assert!(results.is_empty());
 }

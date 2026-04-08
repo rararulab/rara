@@ -536,7 +536,7 @@ impl SyscallDispatcher {
                             .get("scheduled_job_id")
                             .and_then(|v| v.as_str())
                             .and_then(|s| uuid::Uuid::parse_str(s).ok())
-                            .map(crate::schedule::JobId);
+                            .and_then(crate::schedule::JobId::from_uuid);
                         (uid, jid)
                     })
                     .unwrap_or((crate::identity::UserId("unknown".into()), None));
@@ -566,13 +566,13 @@ impl SyscallDispatcher {
         key: &str,
         value: serde_json::Value,
     ) -> crate::error::Result<()> {
-        let namespaced = format!("agent:{}:{}", session_key.0, key);
+        let namespaced = format!("agent:{}:{}", session_key, key);
 
         // Check quota before inserting — only if this is a new key.
         if !self.shared_kv.contains_key(&namespaced).await {
             let max = memory_quota;
             if max > 0 {
-                let prefix = format!("agent:{}:", session_key.0);
+                let prefix = format!("agent:{}:", session_key);
                 let count = self.shared_kv.count_prefix(&prefix).await;
                 if count >= max {
                     return Err(KernelError::MemoryQuotaExceeded {
@@ -613,7 +613,7 @@ impl SyscallDispatcher {
                 }
             }
             KvScope::Agent(target_id) => {
-                if *target_id != session_key.0 && !principal.is_admin() {
+                if *target_id != session_key.as_uuid() && !principal.is_admin() {
                     return Err(KernelError::MemoryScopeDenied {
                         reason: format!(
                             "agent {} cannot access agent {}'s scope — not admin",
@@ -1298,9 +1298,7 @@ struct SpawnRequest {
 // ============================================================================
 
 fn parse_session_key(s: &str) -> anyhow::Result<SessionKey> {
-    let uuid =
-        uuid::Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid session key '{s}': {e}"))?;
-    Ok(SessionKey(uuid))
+    SessionKey::try_from_raw(s).map_err(|e| anyhow::anyhow!("invalid session key '{s}': {e}"))
 }
 
 fn parse_scope(scope: &str) -> anyhow::Result<KvScope> {

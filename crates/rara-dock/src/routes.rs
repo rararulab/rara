@@ -229,8 +229,7 @@ async fn ensure_dock_kernel_session(
 ) -> Result<rara_kernel::session::SessionKey, anyhow::Error> {
     use rara_kernel::session::{ChannelBinding, SessionEntry, SessionKey};
 
-    let session_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, dock_session_id.as_bytes());
-    let session_key = SessionKey::from(session_uuid);
+    let session_key = SessionKey::deterministic(dock_session_id);
 
     let index = kernel.session_index();
 

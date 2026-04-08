@@ -35,7 +35,6 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::{
     agent::{AgentEnv, AgentManifest, ExecutionMode, TurnTrace},

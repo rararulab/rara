@@ -148,7 +148,9 @@ pub struct JobWheel {
 
 impl JobWheel {
     /// Build a wheel key from a job entry.
-    fn key(entry: &JobEntry) -> WheelKey { (entry.trigger.next_at().as_second(), entry.id.0) }
+    fn key(entry: &JobEntry) -> WheelKey {
+        (entry.trigger.next_at().as_second(), entry.id.as_uuid())
+    }
 
     /// Derive the in-flight ledger path from the jobs.json path.
     fn in_flight_path(jobs_path: &std::path::Path) -> PathBuf {
@@ -446,11 +448,7 @@ impl JobResultStore {
     ///
     /// Object key: `{job_id}/{completed_at_epoch}.json`
     pub async fn append(&self, result: &JobResult) -> anyhow::Result<()> {
-        let key = format!(
-            "{}/{}.json",
-            result.job_id.0,
-            result.completed_at.as_second()
-        );
+        let key = format!("{}/{}.json", result.job_id, result.completed_at.as_second());
         let bytes = serde_json::to_vec_pretty(result)?;
         self.op.write(&key, bytes).await?;
         Ok(())
@@ -459,7 +457,7 @@ impl JobResultStore {
     /// Read all execution results for a given job, ordered by completion
     /// time (lexicographic on the epoch filename).
     pub async fn read(&self, job_id: &JobId) -> Vec<JobResult> {
-        let prefix = format!("{}/", job_id.0);
+        let prefix = format!("{job_id}/");
         let mut entries = match self.op.list(&prefix).await {
             Ok(v) => v,
             Err(_) => return Vec::new(),
