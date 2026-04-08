@@ -27,6 +27,7 @@ pub mod openai;
 pub mod registry;
 pub mod stream;
 mod think_tag;
+mod tool_xml;
 pub mod types;
 
 pub use driver::{

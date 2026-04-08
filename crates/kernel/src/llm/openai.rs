@@ -733,12 +733,16 @@ impl LlmEmbedder for OpenAiDriver {
 // ---------------------------------------------------------------------------
 
 struct StreamAccumulator {
-    text:         String,
-    reasoning:    String,
-    think_parser: super::think_tag::ThinkTagParser,
-    tools:        HashMap<u32, PendingToolCall>,
-    stop_reason:  StopReason,
-    usage:        Option<Usage>,
+    text:            String,
+    reasoning:       String,
+    think_parser:    super::think_tag::ThinkTagParser,
+    tool_xml_parser: super::tool_xml::ToolXmlParser,
+    /// Auto-incrementing index for XML-extracted tool calls so they get
+    /// unique slots in the agent loop's `pending_tool_calls` HashMap.
+    xml_tool_index:  u32,
+    tools:           HashMap<u32, PendingToolCall>,
+    stop_reason:     StopReason,
+    usage:           Option<Usage>,
 }
 
 struct PendingToolCall {
@@ -751,12 +755,14 @@ struct PendingToolCall {
 impl StreamAccumulator {
     fn new() -> Self {
         Self {
-            text:         String::new(),
-            reasoning:    String::new(),
-            think_parser: super::think_tag::ThinkTagParser::new(),
-            tools:        HashMap::new(),
-            stop_reason:  StopReason::Stop,
-            usage:        None,
+            text:            String::new(),
+            reasoning:       String::new(),
+            think_parser:    super::think_tag::ThinkTagParser::new(),
+            tool_xml_parser: super::tool_xml::ToolXmlParser::new(),
+            xml_tool_index:  1000, // offset from JSON tool_calls (0-based)
+            tools:           HashMap::new(),
+            stop_reason:     StopReason::Stop,
+            usage:           None,
         }
     }
 
@@ -767,13 +773,25 @@ impl StreamAccumulator {
                 if !text.is_empty() {
                     for segment in self.think_parser.push(text) {
                         match segment {
-                            super::think_tag::Segment::Text(t) => {
-                                self.text.push_str(&t);
-                                let _ = tx.send(StreamDelta::TextDelta { text: t }).await;
-                            }
                             super::think_tag::Segment::Thinking(t) => {
                                 self.reasoning.push_str(&t);
                                 let _ = tx.send(StreamDelta::ReasoningDelta { text: t }).await;
+                            }
+                            super::think_tag::Segment::Text(t) => {
+                                // Second pass: intercept XML tool calls
+                                // that some models (MiniMax) embed in text.
+                                for part in self.tool_xml_parser.push(&t) {
+                                    match part {
+                                        super::tool_xml::Segment::Text(t) => {
+                                            self.text.push_str(&t);
+                                            let _ =
+                                                tx.send(StreamDelta::TextDelta { text: t }).await;
+                                        }
+                                        super::tool_xml::Segment::ToolCall { name, arguments } => {
+                                            self.emit_xml_tool_call(&name, arguments, tx).await;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -890,22 +908,88 @@ impl StreamAccumulator {
             .collect()
     }
 
+    /// Convert an XML-extracted tool call into the same `StreamDelta`
+    /// sequence that JSON tool_calls produce.
+    async fn emit_xml_tool_call(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+        tx: &mpsc::Sender<StreamDelta>,
+    ) {
+        let idx = self.xml_tool_index;
+        self.xml_tool_index += 1;
+        let id = format!("xml-tool-{idx}");
+        let args_str = serde_json::to_string(&arguments).unwrap_or_default();
+
+        tracing::debug!(
+            tool_name = name,
+            index = idx,
+            "intercepted XML tool call from content stream"
+        );
+
+        self.tools.insert(
+            idx,
+            PendingToolCall {
+                id:        id.clone(),
+                name:      name.to_owned(),
+                arguments: args_str.clone(),
+                started:   true,
+            },
+        );
+
+        let _ = tx
+            .send(StreamDelta::ToolCallStart {
+                index: idx,
+                id,
+                name: name.to_owned(),
+            })
+            .await;
+        let _ = tx
+            .send(StreamDelta::ToolCallArgumentsDelta {
+                index:     idx,
+                arguments: args_str,
+            })
+            .await;
+    }
+
     async fn finalize(
         mut self,
         tx: &mpsc::Sender<StreamDelta>,
         model: String,
     ) -> CompletionResponse {
         // Flush trailing partial content that was buffered for tag boundary
-        // detection.
+        // detection.  Think tags first, then XML tool calls.
         for segment in self.think_parser.flush() {
             match segment {
                 super::think_tag::Segment::Text(t) => {
-                    self.text.push_str(&t);
-                    let _ = tx.send(StreamDelta::TextDelta { text: t }).await;
+                    // Run flushed text through tool_xml_parser too.
+                    for part in self.tool_xml_parser.push(&t) {
+                        match part {
+                            super::tool_xml::Segment::Text(t) => {
+                                self.text.push_str(&t);
+                                let _ = tx.send(StreamDelta::TextDelta { text: t }).await;
+                            }
+                            super::tool_xml::Segment::ToolCall { name, arguments } => {
+                                self.emit_xml_tool_call(&name, arguments, tx).await;
+                            }
+                        }
+                    }
                 }
                 super::think_tag::Segment::Thinking(t) => {
                     self.reasoning.push_str(&t);
                     let _ = tx.send(StreamDelta::ReasoningDelta { text: t }).await;
+                }
+            }
+        }
+        // Flush any remaining XML tool parser buffer.
+        for part in self.tool_xml_parser.flush() {
+            match part {
+                super::tool_xml::Segment::Text(t) => {
+                    self.text.push_str(&t);
+                    let _ = tx.send(StreamDelta::TextDelta { text: t }).await;
+                }
+                super::tool_xml::Segment::ToolCall { name, arguments } => {
+                    self.emit_xml_tool_call(&name, arguments, tx).await;
                 }
             }
         }
