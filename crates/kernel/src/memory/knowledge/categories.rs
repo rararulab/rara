@@ -20,7 +20,24 @@
 
 use std::path::PathBuf;
 
+use snafu::prelude::*;
 use tokio::fs;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Typed errors for category file operations.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum CategoryError {
+    /// Filesystem I/O failed.
+    #[snafu(display("category io error: {source}"))]
+    Io { source: std::io::Error },
+}
+
+/// Result alias for [`CategoryError`].
+pub type Result<T> = std::result::Result<T, CategoryError>;
 
 /// Return the base directory for a user's knowledge categories.
 fn user_knowledge_dir(username: &str) -> PathBuf {
@@ -33,15 +50,15 @@ fn category_path(username: &str, category: &str) -> PathBuf {
 }
 
 /// List all category names for a user by scanning the knowledge directory.
-pub async fn list_categories(username: &str) -> anyhow::Result<Vec<String>> {
+pub async fn list_categories(username: &str) -> Result<Vec<String>> {
     let dir = user_knowledge_dir(username);
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut entries = fs::read_dir(&dir).await?;
+    let mut entries = fs::read_dir(&dir).await.context(IoSnafu)?;
     let mut categories = Vec::new();
-    while let Some(entry) = entries.next_entry().await? {
+    while let Some(entry) = entries.next_entry().await.context(IoSnafu)? {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("md") {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -54,20 +71,20 @@ pub async fn list_categories(username: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Read the content of a category markdown file.
-pub async fn read_category(username: &str, category: &str) -> anyhow::Result<Option<String>> {
+pub async fn read_category(username: &str, category: &str) -> Result<Option<String>> {
     let path = category_path(username, category);
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(&path).await?;
+    let content = fs::read_to_string(&path).await.context(IoSnafu)?;
     Ok(Some(content))
 }
 
 /// Write (overwrite) a category markdown file.
-pub async fn write_category(username: &str, category: &str, content: &str) -> anyhow::Result<()> {
+pub async fn write_category(username: &str, category: &str, content: &str) -> Result<()> {
     let dir = user_knowledge_dir(username);
-    fs::create_dir_all(&dir).await?;
+    fs::create_dir_all(&dir).await.context(IoSnafu)?;
     let path = category_path(username, category);
-    fs::write(&path, content).await?;
+    fs::write(&path, content).await.context(IoSnafu)?;
     Ok(())
 }
