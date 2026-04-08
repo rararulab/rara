@@ -296,15 +296,26 @@ fn preprocess_blocks(md: &str) -> String {
             && idx + 1 < raw_lines.len()
             && is_markdown_table_separator(raw_lines[idx + 1])
         {
-            let mut table_rows = vec![format_table_row(line)];
+            let mut table_rows: Vec<Vec<String>> = vec![
+                parse_table_cells(line)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            ];
             idx += 2; // skip header + separator
             while idx < raw_lines.len() && is_markdown_table_row(raw_lines[idx]) {
-                table_rows.push(format_table_row(raw_lines[idx]));
+                table_rows.push(
+                    parse_table_cells(raw_lines[idx])
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                );
                 idx += 1;
             }
 
+            let rendered_rows = render_table_rows(&table_rows);
             lines.push("```".to_owned());
-            lines.extend(table_rows);
+            lines.extend(rendered_rows);
             lines.push("```".to_owned());
             continue;
         }
@@ -374,14 +385,72 @@ fn is_markdown_table_row(line: &str) -> bool {
     cells.len() >= 2 && !is_markdown_table_separator(line)
 }
 
-/// Format a markdown table row for monospace rendering.
-fn format_table_row(line: &str) -> String {
-    let cells = parse_table_cells(line);
-    if cells.is_empty() {
-        line.trim().to_owned()
-    } else {
-        cells.join(" | ")
+/// Render parsed table rows into aligned monospace lines.
+///
+/// The first row is treated as header. Output format stays ASCII-only so it
+/// renders consistently in Telegram `<pre>` blocks.
+fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
+    if rows.is_empty() {
+        return Vec::new();
     }
+
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+
+    let mut normalized: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            let mut r = row.clone();
+            while r.len() < column_count {
+                r.push(String::new());
+            }
+            r
+        })
+        .collect();
+
+    let widths: Vec<usize> = (0..column_count)
+        .map(|column| {
+            normalized
+                .iter()
+                .map(|row| row[column].chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let render_row = |row: &[String]| -> String {
+        let mut line = String::new();
+        line.push('|');
+        for (idx, width) in widths.iter().enumerate() {
+            let cell = row.get(idx).map_or("", String::as_str);
+            let pad = width.saturating_sub(cell.chars().count());
+            line.push(' ');
+            line.push_str(cell);
+            line.push_str(&" ".repeat(pad));
+            line.push(' ');
+            line.push('|');
+        }
+        line
+    };
+
+    let mut out = Vec::new();
+    out.push(render_row(&normalized[0]));
+
+    let mut separator = String::new();
+    separator.push('|');
+    for width in &widths {
+        separator.push_str(&"-".repeat(*width + 2));
+        separator.push('|');
+    }
+    out.push(separator);
+
+    for row in normalized.drain(1..) {
+        out.push(render_row(&row));
+    }
+
+    out
 }
 
 /// Strip a Markdown heading prefix (`# ` through `###### `), returning the
@@ -614,9 +683,10 @@ mod tests {
         let input = "| 作品 | 评分 |\n|---|---|\n| Witch Hat Atelier | 8.80 |";
         let html = markdown_to_telegram_html(input);
         assert!(html.contains("<pre>"));
-        assert!(html.contains("作品 | 评分"));
-        assert!(html.contains("Witch Hat Atelier | 8.80"));
+        assert!(html.contains("| 作品"));
+        assert!(html.contains("Witch Hat Atelier"));
         assert!(!html.contains("|---|---|"));
+        assert!(html.contains("|-------------------"));
     }
 
     #[test]
