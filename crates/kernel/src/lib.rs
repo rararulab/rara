@@ -32,6 +32,7 @@ pub mod agent;
 pub mod browser;
 pub mod cascade;
 pub mod channel;
+pub mod debug;
 pub mod error;
 pub mod event;
 pub mod guard;
