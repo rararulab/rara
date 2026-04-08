@@ -19,11 +19,44 @@
 
 use std::{path::PathBuf, sync::Mutex};
 
+use snafu::prelude::*;
 use tracing::{debug, info, warn};
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 use super::config::KnowledgeConfig;
 use crate::llm::{EmbeddingRequest, LlmEmbedderRef};
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Typed errors for [`EmbeddingService`] operations.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum EmbeddingError {
+    /// Filesystem I/O failed (e.g. creating the index directory).
+    #[snafu(display("io error: {source}"))]
+    Io { source: std::io::Error },
+
+    /// usearch index operation failed.
+    #[snafu(display("usearch index error: {message}"))]
+    Index { message: String },
+
+    /// Embedding API call to the LLM provider failed.
+    #[snafu(display("embedding request failed: {source}"))]
+    EmbedRequest { source: crate::error::KernelError },
+
+    /// Embedding response count did not match input count.
+    #[snafu(display("embedding response count mismatch: expected {expected}, got {actual}"))]
+    CountMismatch { expected: usize, actual: usize },
+
+    /// Internal mutex was poisoned.
+    #[snafu(display("index lock poisoned"))]
+    LockPoisoned,
+}
+
+/// Result alias for [`EmbeddingError`].
+pub type Result<T> = std::result::Result<T, EmbeddingError>;
 
 /// Manages embedding generation (via [`LlmEmbedderRef`]) and vector search
 /// (usearch).
@@ -41,10 +74,10 @@ impl EmbeddingService {
         config: KnowledgeConfig,
         embedder: LlmEmbedderRef,
         embedding_model: String,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let index_path = rara_paths::data_dir().join("knowledge/memory.usearch");
         if let Some(parent) = index_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).context(IoSnafu)?;
         }
 
         let options = IndexOptions {
@@ -53,14 +86,23 @@ impl EmbeddingService {
             quantization: ScalarKind::F32,
             ..Default::default()
         };
-        let index = Index::new(&options)
-            .map_err(|e| anyhow::anyhow!("failed to create usearch index: {e}"))?;
+        let index = Index::new(&options).map_err(|e| {
+            IndexSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
         // Load existing index from disk if available.
         if index_path.exists() {
             index
                 .load(index_path.to_str().unwrap_or_default())
-                .map_err(|e| anyhow::anyhow!("failed to load usearch index: {e}"))?;
+                .map_err(|e| {
+                    IndexSnafu {
+                        message: e.to_string(),
+                    }
+                    .build()
+                })?;
             info!(
                 size = index.size(),
                 capacity = index.capacity(),
@@ -68,9 +110,12 @@ impl EmbeddingService {
             );
         } else {
             // Reserve initial capacity.
-            index
-                .reserve(1024)
-                .map_err(|e| anyhow::anyhow!("failed to reserve usearch capacity: {e}"))?;
+            index.reserve(1024).map_err(|e| {
+                IndexSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         }
 
         Ok(Self {
@@ -84,7 +129,7 @@ impl EmbeddingService {
 
     /// Generate embeddings for one or more texts via the configured
     /// [`LlmEmbedderRef`].
-    pub async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+    pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -99,38 +144,41 @@ impl EmbeddingService {
             .embedder
             .embed(request)
             .await
-            .map_err(|e| anyhow::anyhow!("embedding request failed: {e}"))?;
+            .context(EmbedRequestSnafu)?;
 
-        if response.embeddings.len() != texts.len() {
-            anyhow::bail!(
-                "embedding response count mismatch: expected {}, got {}",
-                texts.len(),
-                response.embeddings.len()
-            );
-        }
+        ensure!(
+            response.embeddings.len() == texts.len(),
+            CountMismatchSnafu {
+                expected: texts.len(),
+                actual:   response.embeddings.len(),
+            }
+        );
 
         debug!(count = response.embeddings.len(), "generated embeddings");
         Ok(response.embeddings)
     }
 
     /// Add a vector to the usearch index with the given key (memory_item id).
-    pub fn add_to_index(&self, key: u64, vector: &[f32]) -> anyhow::Result<()> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+    pub fn add_to_index(&self, key: u64, vector: &[f32]) -> Result<()> {
+        let index = self.index.lock().map_err(|_| LockPoisonedSnafu.build())?;
 
         // Grow capacity if needed.
         if index.size() >= index.capacity() {
             let new_cap = index.capacity() * 2;
-            index
-                .reserve(new_cap)
-                .map_err(|e| anyhow::anyhow!("failed to reserve capacity: {e}"))?;
+            index.reserve(new_cap).map_err(|e| {
+                IndexSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         }
 
-        index
-            .add(key, vector)
-            .map_err(|e| anyhow::anyhow!("failed to add vector: {e}"))?;
+        index.add(key, vector).map_err(|e| {
+            IndexSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
         Ok(())
     }
 
@@ -138,33 +186,35 @@ impl EmbeddingService {
     /// vector.
     ///
     /// Returns `(key, distance)` pairs sorted by increasing distance.
-    pub fn search(&self, query: &[f32], top_k: usize) -> anyhow::Result<Vec<(u64, f32)>> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+    pub fn search(&self, query: &[f32], top_k: usize) -> Result<Vec<(u64, f32)>> {
+        let index = self.index.lock().map_err(|_| LockPoisonedSnafu.build())?;
 
         if index.size() == 0 {
             return Ok(Vec::new());
         }
 
-        let matches = index
-            .search(query, top_k)
-            .map_err(|e| anyhow::anyhow!("search failed: {e}"))?;
+        let matches = index.search(query, top_k).map_err(|e| {
+            IndexSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
         Ok(matches.keys.into_iter().zip(matches.distances).collect())
     }
 
     /// Persist the usearch index to disk.
-    pub fn save_index(&self) -> anyhow::Result<()> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+    pub fn save_index(&self) -> Result<()> {
+        let index = self.index.lock().map_err(|_| LockPoisonedSnafu.build())?;
 
         index
             .save(self.index_path.to_str().unwrap_or_default())
-            .map_err(|e| anyhow::anyhow!("failed to save usearch index: {e}"))?;
+            .map_err(|e| {
+                IndexSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
 
         info!(size = index.size(), "saved usearch index to disk");
         Ok(())
@@ -174,23 +224,26 @@ impl EmbeddingService {
     ///
     /// Each `(id, blob)` pair contains a memory-item id and its raw f32
     /// embedding bytes (little-endian).
-    pub fn rebuild_index(&self, items: &[(i64, Vec<u8>)]) -> anyhow::Result<()> {
-        let index = self
-            .index
-            .lock()
-            .map_err(|e| anyhow::anyhow!("index lock poisoned: {e}"))?;
+    pub fn rebuild_index(&self, items: &[(i64, Vec<u8>)]) -> Result<()> {
+        let index = self.index.lock().map_err(|_| LockPoisonedSnafu.build())?;
 
-        index
-            .reset()
-            .map_err(|e| anyhow::anyhow!("failed to reset index: {e}"))?;
+        index.reset().map_err(|e| {
+            IndexSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
         if items.is_empty() {
             return Ok(());
         }
 
-        index
-            .reserve(items.len().max(1024))
-            .map_err(|e| anyhow::anyhow!("failed to reserve capacity: {e}"))?;
+        index.reserve(items.len().max(1024)).map_err(|e| {
+            IndexSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
 
         for (id, blob) in items {
             let floats = blob_to_f32s(blob);
@@ -203,9 +256,12 @@ impl EmbeddingService {
                 );
                 continue;
             }
-            index
-                .add(*id as u64, &floats)
-                .map_err(|e| anyhow::anyhow!("failed to add vector {id}: {e}"))?;
+            index.add(*id as u64, &floats).map_err(|e| {
+                IndexSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         }
 
         info!(count = items.len(), "rebuilt usearch index from database");

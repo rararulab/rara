@@ -21,6 +21,7 @@
 //! embedding similarity, persists new items, and regenerates category files.
 
 use serde::{Deserialize, Serialize};
+use snafu::prelude::*;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
@@ -33,6 +34,38 @@ use crate::{
     llm::{CompletionRequest, LlmDriver, Message, ToolChoice},
     memory::{TapEntry, TapEntryKind},
 };
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Typed errors for the knowledge extraction pipeline.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum ExtractorError {
+    /// LLM completion call failed.
+    #[snafu(display("LLM call failed: {source}"))]
+    Llm { source: crate::error::KernelError },
+
+    /// Embedding operation failed.
+    #[snafu(display("embedding failed: {source}"))]
+    Embedding {
+        source: super::embedding::EmbeddingError,
+    },
+
+    /// Database operation failed.
+    #[snafu(display("database error: {source}"))]
+    Database { source: sqlx::Error },
+
+    /// Category file I/O failed.
+    #[snafu(display("category error: {source}"))]
+    Category {
+        source: super::categories::CategoryError,
+    },
+}
+
+/// Result alias for [`ExtractorError`].
+pub type Result<T> = std::result::Result<T, ExtractorError>;
 
 /// A raw extracted memory from LLM output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +92,7 @@ pub async fn extract_knowledge(
     driver: &dyn LlmDriver,
     extractor_model: &str,
     similarity_threshold: f32,
-) -> anyhow::Result<usize> {
+) -> Result<usize> {
     // Step 1: Build conversation text from tape entries.
     let conversation = build_conversation_text(entries);
     if conversation.is_empty() {
@@ -82,11 +115,14 @@ pub async fn extract_knowledge(
     // Step 3 + 4: Deduplicate and persist.
     let mut new_count = 0;
     let contents: Vec<String> = extracted.iter().map(|e| e.content.clone()).collect();
-    let embeddings = embedding_svc.embed(&contents).await?;
+    let embeddings = embedding_svc
+        .embed(&contents)
+        .await
+        .context(EmbeddingSnafu)?;
 
     for (item, emb) in extracted.iter().zip(embeddings.iter()) {
         // Check for duplicates via vector similarity.
-        let similar = embedding_svc.search(emb, 1)?;
+        let similar = embedding_svc.search(emb, 1).context(EmbeddingSnafu)?;
         if let Some(&(_, distance)) = similar.first() {
             // usearch cosine distance: 0.0 = identical, 2.0 = opposite.
             // Convert to similarity: 1.0 - distance/2.0
@@ -107,14 +143,18 @@ pub async fn extract_knowledge(
             embedding:       Some(blob),
         };
 
-        let row_id = items::insert_item(pool, &new_item).await?;
-        embedding_svc.add_to_index(row_id as u64, emb)?;
+        let row_id = items::insert_item(pool, &new_item)
+            .await
+            .context(DatabaseSnafu)?;
+        embedding_svc
+            .add_to_index(row_id as u64, emb)
+            .context(EmbeddingSnafu)?;
         new_count += 1;
     }
 
     // Save usearch index after batch insert.
     if new_count > 0 {
-        embedding_svc.save_index()?;
+        embedding_svc.save_index().context(EmbeddingSnafu)?;
     }
 
     if new_count == 0 {
@@ -158,7 +198,7 @@ async fn llm_extract_items(
     driver: &dyn LlmDriver,
     model: &str,
     conversation: &str,
-) -> anyhow::Result<Vec<ExtractedMemory>> {
+) -> Result<Vec<ExtractedMemory>> {
     let system_prompt = r#"You are a memory extraction agent. Given a conversation, extract key facts, preferences, events, habits, and skills about the user.
 
 Output a JSON array where each element has:
@@ -186,10 +226,7 @@ Output ONLY the JSON array, no markdown fences or explanation."#;
         frequency_penalty:   None,
     };
 
-    let response = driver
-        .complete(request)
-        .await
-        .map_err(|e| anyhow::anyhow!("LLM extraction call failed: {e}"))?;
+    let response = driver.complete(request).await.context(LlmSnafu)?;
     let text = response.content.unwrap_or_default();
 
     // Parse JSON array from response.
@@ -207,8 +244,10 @@ async fn update_category_files(
     model: &str,
     username: &str,
     pool: &SqlitePool,
-) -> anyhow::Result<()> {
-    let all_items = items::list_items_by_username(pool, username).await?;
+) -> Result<()> {
+    let all_items = items::list_items_by_username(pool, username)
+        .await
+        .context(DatabaseSnafu)?;
     if all_items.is_empty() {
         return Ok(());
     }
@@ -226,7 +265,7 @@ async fn update_category_files(
     for (category, cat_items) in &by_category {
         let existing = categories::read_category(username, category)
             .await
-            .unwrap_or(None)
+            .context(CategorySnafu)?
             .unwrap_or_default();
 
         let items_text: String = cat_items
@@ -258,13 +297,12 @@ async fn update_category_files(
             frequency_penalty:   None,
         };
 
-        let response = driver
-            .complete(request)
-            .await
-            .map_err(|e| anyhow::anyhow!("LLM category update failed: {e}"))?;
+        let response = driver.complete(request).await.context(LlmSnafu)?;
         let content = response.content.unwrap_or_default();
         if !content.is_empty() {
-            categories::write_category(username, category, &content).await?;
+            categories::write_category(username, category, &content)
+                .await
+                .context(CategorySnafu)?;
         }
     }
 

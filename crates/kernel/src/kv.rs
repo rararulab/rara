@@ -22,6 +22,27 @@
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use snafu::prelude::*;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Typed errors for [`SharedKv`] operations.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum KvError {
+    /// JSON serialization/deserialization failed.
+    #[snafu(display("serialization failed: {source}"))]
+    Serialize { source: serde_json::Error },
+
+    /// Underlying OpenDAL storage operation failed.
+    #[snafu(display("storage operation failed: {source}"))]
+    Storage { source: opendal::Error },
+}
+
+/// Result alias for [`KvError`].
+pub type Result<T> = std::result::Result<T, KvError>;
 
 /// Cross-agent shared KV store backed by an [`opendal::Operator`].
 pub struct SharedKv {
@@ -54,15 +75,15 @@ impl SharedKv {
     }
 
     /// Set a JSON value. Creates or overwrites.
-    pub async fn set(&self, key: &str, value: Value) -> anyhow::Result<()> {
-        let bytes = serde_json::to_vec(&value)?;
-        self.op.write(key, bytes).await?;
+    pub async fn set(&self, key: &str, value: Value) -> Result<()> {
+        let bytes = serde_json::to_vec(&value).context(SerializeSnafu)?;
+        self.op.write(key, bytes).await.context(StorageSnafu)?;
         Ok(())
     }
 
     /// Delete a key (no-op if absent).
-    pub async fn delete(&self, key: &str) -> anyhow::Result<()> {
-        self.op.delete(key).await?;
+    pub async fn delete(&self, key: &str) -> Result<()> {
+        self.op.delete(key).await.context(StorageSnafu)?;
         Ok(())
     }
 
