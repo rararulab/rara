@@ -23,7 +23,7 @@ base.workspace = true
 base64.workspace = true
 bon.workspace = true
 chrono.workspace = true
-cron = "0.15"
+cron = "0.16"
 crossbeam-queue.workspace = true
 dashmap = "6"
 derive_more = { workspace = true }
