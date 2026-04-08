@@ -106,27 +106,24 @@ use write_file::WriteFileTool;
 /// Only **Core** tools appear here. All other tools are registered in the
 /// [`ToolRegistry`] but marked `tier = "deferred"` and discovered on demand
 /// via the `discover-tools` tool.
-pub fn rara_tool_names() -> Vec<String> {
-    use rara_kernel::tool_names;
+pub fn rara_tool_names() -> Vec<rara_kernel::tool::ToolName> {
+    use rara_kernel::{tool::ToolName, tool_names};
 
     vec![
         // File operations
-        BashTool::TOOL_NAME,
-        GrepTool::TOOL_NAME,
-        ReadFileTool::TOOL_NAME,
-        WriteFileTool::TOOL_NAME,
-        EditFileTool::TOOL_NAME,
-        ListDirectoryTool::TOOL_NAME,
-        FindFilesTool::TOOL_NAME,
+        ToolName::new(BashTool::TOOL_NAME),
+        ToolName::new(GrepTool::TOOL_NAME),
+        ToolName::new(ReadFileTool::TOOL_NAME),
+        ToolName::new(WriteFileTool::TOOL_NAME),
+        ToolName::new(EditFileTool::TOOL_NAME),
+        ToolName::new(ListDirectoryTool::TOOL_NAME),
+        ToolName::new(FindFilesTool::TOOL_NAME),
         // Tape memory (2 Core; info/anchors/entries/between/checkout are Deferred)
-        tool_names::TAPE_ANCHOR,
-        tool_names::TAPE_SEARCH,
+        tool_names::TAPE_ANCHOR.clone(),
+        tool_names::TAPE_SEARCH.clone(),
         // Discovery
-        DiscoverToolsTool::TOOL_NAME,
+        ToolName::new(DiscoverToolsTool::TOOL_NAME),
     ]
-    .into_iter()
-    .map(String::from)
-    .collect()
 }
 
 /// Dependencies required to construct all tools.

@@ -336,7 +336,7 @@ pub struct Session {
     /// Deferred tools activated via `discover-tools` during this session.
     /// Persists across turns so the LLM does not need to re-discover tools
     /// after each user message.
-    pub activated_deferred: std::collections::HashSet<String>,
+    pub activated_deferred: std::collections::HashSet<crate::tool::ToolName>,
     /// Per-session semaphore limiting concurrent child sessions.
     pub child_semaphore: Arc<Semaphore>,
     /// Permit from the *parent*'s `child_semaphore`.

@@ -26,16 +26,63 @@ mod background_common;
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+/// Type-safe wrapper for tool identifiers.
+///
+/// Replaces bare `String` / `&str` in tool registries, manifests, and
+/// permission checks so the compiler can distinguish tool names from
+/// other string-typed fields.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct ToolName(String);
+
+impl ToolName {
+    /// Create a new `ToolName` from anything that can become a `String`.
+    pub fn new(name: impl Into<String>) -> Self { Self(name.into()) }
+
+    /// Borrow the inner string slice.
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+impl std::fmt::Display for ToolName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) }
+}
+
+impl AsRef<str> for ToolName {
+    fn as_ref(&self) -> &str { &self.0 }
+}
+
+impl From<String> for ToolName {
+    fn from(s: String) -> Self { Self(s) }
+}
+
+impl From<&str> for ToolName {
+    fn from(s: &str) -> Self { Self(s.to_owned()) }
+}
+
+impl std::borrow::Borrow<str> for ToolName {
+    fn borrow(&self) -> &str { &self.0 }
+}
+
+impl PartialEq<str> for ToolName {
+    fn eq(&self, other: &str) -> bool { self.0 == other }
+}
+
+impl PartialEq<&str> for ToolName {
+    fn eq(&self, other: &&str) -> bool { self.0 == *other }
+}
 
 /// Tool names that background/child agents must never have access to,
 /// preventing recursive subagent spawning.
-pub(crate) const RECURSIVE_TOOL_DENYLIST: &[&str] = &[
-    crate::tool_names::TASK,
-    crate::tool_names::SPAWN_BACKGROUND,
-    crate::tool_names::CREATE_PLAN,
-    crate::tool_names::ASK_USER,
-];
+pub(crate) fn recursive_tool_denylist() -> Vec<ToolName> {
+    vec![
+        crate::tool_names::TASK.clone(),
+        crate::tool_names::SPAWN_BACKGROUND.clone(),
+        crate::tool_names::CREATE_PLAN.clone(),
+        crate::tool_names::ASK_USER.clone(),
+    ]
+}
 
 /// Typed tool execution trait.
 ///
@@ -342,7 +389,7 @@ pub trait AgentTool: Send + Sync {
 /// Registry of available tools for an agent run.
 #[derive(Clone)]
 pub struct ToolRegistry {
-    tools: HashMap<String, AgentToolRef>,
+    tools: HashMap<ToolName, AgentToolRef>,
 }
 
 impl ToolRegistry {
@@ -356,10 +403,11 @@ impl ToolRegistry {
     /// Register a tool. Returns the previously registered tool with the same
     /// name, if any.
     pub fn register(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
-        let name = tool.name().to_owned();
+        let name = ToolName::new(tool.name());
         self.tools.insert(name, tool)
     }
 
+    /// Look up a tool by name.
     pub fn get(&self, name: &str) -> Option<&AgentToolRef> { self.tools.get(name) }
 
     #[must_use]
@@ -368,6 +416,7 @@ impl ToolRegistry {
     #[must_use]
     pub fn len(&self) -> usize { self.tools.len() }
 
+    /// Iterate over `(name, tool)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &AgentToolRef)> {
         self.tools.iter().map(|(name, tool)| (name.as_str(), tool))
     }
@@ -377,11 +426,13 @@ impl ToolRegistry {
     #[must_use]
     pub fn to_llm_tool_definitions_active(
         &self,
-        activated: &std::collections::HashSet<String>,
+        activated: &std::collections::HashSet<ToolName>,
     ) -> Vec<crate::llm::ToolDefinition> {
         self.tools
             .values()
-            .filter(|tool| tool.tier() == ToolTier::Core || activated.contains(tool.name()))
+            .filter(|tool| {
+                tool.tier() == ToolTier::Core || activated.contains(&ToolName::new(tool.name()))
+            })
             .map(|tool| crate::llm::ToolDefinition {
                 name:        tool.name().to_string(),
                 description: tool.description().to_string(),
@@ -395,11 +446,14 @@ impl ToolRegistry {
     #[must_use]
     pub fn deferred_catalog(
         &self,
-        activated: &std::collections::HashSet<String>,
+        activated: &std::collections::HashSet<ToolName>,
     ) -> Vec<(String, String)> {
         self.tools
             .values()
-            .filter(|tool| tool.tier() == ToolTier::Deferred && !activated.contains(tool.name()))
+            .filter(|tool| {
+                tool.tier() == ToolTier::Deferred
+                    && !activated.contains(&ToolName::new(tool.name()))
+            })
             .map(|tool| (tool.name().to_string(), tool.description().to_string()))
             .collect()
     }
@@ -420,7 +474,7 @@ impl ToolRegistry {
 
     /// Return the names of all registered tools.
     #[must_use]
-    pub fn tool_names(&self) -> Vec<String> { self.tools.keys().cloned().collect() }
+    pub fn tool_names(&self) -> Vec<ToolName> { self.tools.keys().cloned().collect() }
 
     /// Create a new registry containing only tools the user is authorized to
     /// use (based on `KernelUser::can_use_tool`).
@@ -428,7 +482,7 @@ impl ToolRegistry {
     pub fn filtered_by_user(&self, user: &crate::identity::KernelUser) -> Self {
         let mut new = Self::new();
         for (name, tool) in &self.tools {
-            if user.can_use_tool(name) {
+            if user.can_use_tool(name.as_str()) {
                 new.register(Arc::clone(tool));
             }
         }
@@ -441,12 +495,12 @@ impl ToolRegistry {
     ///   tools (no filtering).
     /// - Otherwise only tools whose name appears in `tool_names` are kept.
     #[must_use]
-    pub fn filtered(&self, tool_names: &[String]) -> Self {
-        if tool_names.is_empty() || tool_names.iter().any(|n| n == "*") {
+    pub fn filtered(&self, tool_names: &[ToolName]) -> Self {
+        if tool_names.is_empty() || tool_names.iter().any(|n| n.as_str() == "*") {
             return self.clone();
         }
         let allow: std::collections::HashSet<&str> =
-            tool_names.iter().map(String::as_str).collect();
+            tool_names.iter().map(ToolName::as_str).collect();
         let mut new = Self::new();
         for (name, tool) in &self.tools {
             if allow.contains(name.as_str()) {
@@ -462,12 +516,12 @@ impl ToolRegistry {
     /// if the manifest allowlist includes `discover-tools`, all deferred tools
     /// are retained so they can be discovered and activated at runtime.
     #[must_use]
-    pub fn filtered_for_manifest(&self, tool_names: &[String]) -> Self {
-        if tool_names.is_empty() || tool_names.iter().any(|n| n == "*") {
+    pub fn filtered_for_manifest(&self, tool_names: &[ToolName]) -> Self {
+        if tool_names.is_empty() || tool_names.iter().any(|n| n.as_str() == "*") {
             return self.clone();
         }
         let allow: std::collections::HashSet<&str> =
-            tool_names.iter().map(String::as_str).collect();
+            tool_names.iter().map(ToolName::as_str).collect();
         let keep_deferred = allow.contains("discover-tools");
         let mut new = Self::new();
         for (name, tool) in &self.tools {
@@ -481,8 +535,8 @@ impl ToolRegistry {
 
     /// Create a new registry excluding the named tools.
     #[must_use]
-    pub fn without(&self, excluded: &[String]) -> Self {
-        let deny: std::collections::HashSet<&str> = excluded.iter().map(String::as_str).collect();
+    pub fn without(&self, excluded: &[ToolName]) -> Self {
+        let deny: std::collections::HashSet<&str> = excluded.iter().map(ToolName::as_str).collect();
         let mut new = Self::new();
         for (name, tool) in &self.tools {
             if !deny.contains(name.as_str()) {
@@ -655,8 +709,8 @@ mod tests {
             role:        Role::User,
             permissions: vec![
                 Permission::Spawn,
-                Permission::UseTool("http-fetch".into()),
-                Permission::UseTool("read-file".into()),
+                Permission::UseTool(ToolName::new("http-fetch")),
+                Permission::UseTool(ToolName::new("read-file")),
             ],
             enabled:     true,
         };
@@ -678,14 +732,14 @@ mod tests {
     #[test]
     fn filtered_wildcard_returns_all() {
         let reg = build_registry();
-        let filtered = reg.filtered(&["*".to_string()]);
+        let filtered = reg.filtered(&[ToolName::new("*")]);
         assert_eq!(filtered.len(), 4, "wildcard '*' should return all tools");
     }
 
     #[test]
     fn filtered_specific_names() {
         let reg = build_registry();
-        let filtered = reg.filtered(&["bash".to_string(), "read-file".to_string()]);
+        let filtered = reg.filtered(&[ToolName::new("bash"), ToolName::new("read-file")]);
         assert_eq!(filtered.len(), 2);
         assert!(filtered.get("bash").is_some());
         assert!(filtered.get("read-file").is_some());
@@ -695,7 +749,7 @@ mod tests {
     #[test]
     fn without_excludes_named_tools() {
         let reg = build_registry();
-        let filtered = reg.without(&["bash".to_string(), "http-fetch".to_string()]);
+        let filtered = reg.without(&[ToolName::new("bash"), ToolName::new("http-fetch")]);
         assert_eq!(filtered.len(), 2);
         assert!(filtered.get("bash").is_none());
         assert!(filtered.get("http-fetch").is_none());
@@ -713,7 +767,7 @@ mod tests {
     #[test]
     fn filtered_unknown_names_ignored() {
         let reg = build_registry();
-        let filtered = reg.filtered(&["nonexistent".to_string()]);
+        let filtered = reg.filtered(&[ToolName::new("nonexistent")]);
         assert!(
             filtered.is_empty(),
             "unknown tool names should result in empty registry"
@@ -829,7 +883,7 @@ mod tests {
 
         // With activation: both tools
         let mut activated = HashSet::new();
-        activated.insert("deferred-tool".to_string());
+        activated.insert(ToolName::new("deferred-tool"));
         let defs = reg.to_llm_tool_definitions_active(&activated);
         assert_eq!(defs.len(), 2);
 

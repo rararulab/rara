@@ -21,7 +21,7 @@ use crate::{
     agent::{AgentManifest, AgentRole, Priority},
     handle::KernelHandle,
     session::SessionKey,
-    tool::{RECURSIVE_TOOL_DENYLIST, ToolContext, ToolExecute},
+    tool::{ToolContext, ToolExecute, ToolName, recursive_tool_denylist},
 };
 
 /// Builtin tool that spawns a background agent for long-running tasks.
@@ -69,7 +69,7 @@ pub struct SpawnBackgroundParams {
     name:           Option<String>,
     /// Tool names the agent can use (empty = inherit parent's tools).
     #[serde(default)]
-    tools:          Vec<String>,
+    tools:          Vec<ToolName>,
     /// LLM model override (uses the system default if omitted).
     #[serde(default)]
     model:          Option<String>,
@@ -92,10 +92,7 @@ impl ToolExecute for SpawnBackgroundTool {
             .name
             .unwrap_or_else(|| slug_from_description(&p.description));
 
-        let excluded_tools: Vec<String> = RECURSIVE_TOOL_DENYLIST
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
+        let excluded_tools = recursive_tool_denylist();
 
         // Build manifest from flat params + sensible defaults.
         let manifest = AgentManifest {

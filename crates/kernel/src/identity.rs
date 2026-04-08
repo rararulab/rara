@@ -47,7 +47,7 @@ pub enum Permission {
     /// Can use all tools without restriction.
     UseAllTools,
     /// Can use a specific named tool.
-    UseTool(String),
+    UseTool(crate::tool::ToolName),
     /// Can manage skills.
     ManageSkills,
     /// Can manage MCP servers.
@@ -74,7 +74,10 @@ impl KernelUser {
     pub fn can_use_tool(&self, tool_name: &str) -> bool {
         self.has_permission(&Permission::All)
             || self.has_permission(&Permission::UseAllTools)
-            || self.has_permission(&Permission::UseTool(tool_name.to_string()))
+            || self
+                .permissions
+                .iter()
+                .any(|p| matches!(p, Permission::UseTool(n) if n.as_str() == tool_name))
     }
 }
 
@@ -190,7 +193,10 @@ mod tests {
         let user = KernelUser {
             name:        "limited".into(),
             role:        Role::User,
-            permissions: vec![Permission::Spawn, Permission::UseTool("http-fetch".into())],
+            permissions: vec![
+                Permission::Spawn,
+                Permission::UseTool(crate::tool::ToolName::new("http-fetch")),
+            ],
             enabled:     true,
         };
         assert!(user.can_use_tool("http-fetch"));
