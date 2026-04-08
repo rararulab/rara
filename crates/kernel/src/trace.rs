@@ -142,6 +142,30 @@ impl TraceService {
         Ok(row.map(|(s,)| s))
     }
 
+    /// Find an execution trace by its `rara_message_id` (stored inside the
+    /// JSON `trace_data`).
+    pub async fn find_by_rara_message_id(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<ExecutionTrace>, sqlx::Error> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT trace_data FROM execution_traces WHERE json_extract(trace_data, \
+             '$.rara_message_id') = ?",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some((data,)) => {
+                let trace = serde_json::from_str(&data)
+                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                Ok(Some(trace))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Delete traces older than `retention_days`. Returns the number of rows
     /// removed.
     pub async fn cleanup(&self, retention_days: u32) -> Result<u64, sqlx::Error> {
