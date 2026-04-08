@@ -99,6 +99,17 @@ pub trait ToolExecute: Send + Sync {
     /// The result struct for this tool. Must derive `serde::Serialize`.
     type Output: serde::Serialize;
 
+    /// Optional semantic validation, runs after schema parse but before
+    /// [`run`](Self::run). Default: no-op.
+    ///
+    /// Use this for checks that go beyond JSON Schema (e.g. "old_string must
+    /// not equal new_string", "path must not be inside /etc"). Returning an
+    /// error short-circuits execution and surfaces the message back to the
+    /// LLM as a tool error — the agent loop never calls [`run`](Self::run).
+    ///
+    /// Bridged into [`AgentTool::validate`] by the `ToolDef` derive macro.
+    async fn validate(&self, _params: &Self::Params) -> anyhow::Result<()> { Ok(()) }
+
     /// Execute the tool with typed parameters.
     async fn run(
         &self,
@@ -366,6 +377,20 @@ pub trait AgentTool: Send + Sync {
 
     /// JSON Schema describing the accepted parameters.
     fn parameters_schema(&self) -> serde_json::Value;
+
+    /// Optional semantic validation step, runs after schema parse but before
+    /// [`execute`](Self::execute). Default: no-op (`Ok(())`).
+    ///
+    /// The agent loop calls this *after* the security guard pipeline and
+    /// *before* `execute`. Returning an error short-circuits the call: the
+    /// error message is returned to the LLM as a tool error and `execute` is
+    /// never invoked. Tools using `#[derive(ToolDef)]` get an automatic bridge
+    /// to [`ToolExecute::validate`] (deserialise once, dispatch typed).
+    ///
+    /// Use for checks beyond JSON Schema — e.g. cross-field invariants,
+    /// path-allowlist enforcement, or refusing no-op edits. Do not use for
+    /// security checks (those belong in the guard pipeline).
+    async fn validate(&self, _params: &serde_json::Value) -> anyhow::Result<()> { Ok(()) }
 
     /// Execute the tool with the given parameters and execution context.
     async fn execute(

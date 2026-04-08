@@ -504,6 +504,60 @@ impl AgentTool for FakeTool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ValidatingFakeTool
+// ---------------------------------------------------------------------------
+
+/// A [`FakeTool`] variant whose [`validate`](AgentTool::validate) rejects
+/// inputs containing a `"reject"` key set to `true`.
+///
+/// Used to test that the agent loop correctly short-circuits on validation
+/// failures without calling `execute`.
+pub struct ValidatingFakeTool {
+    inner: FakeTool,
+}
+
+impl ValidatingFakeTool {
+    /// Create a `ValidatingFakeTool` with the given name and scripted
+    /// responses.
+    pub fn new(name: impl Into<String>, responses: Vec<serde_json::Value>) -> Self {
+        Self {
+            inner: FakeTool::new(name, responses),
+        }
+    }
+
+    /// Return captured inputs that made it through validation to `execute`.
+    pub fn captured_inputs(&self) -> Vec<serde_json::Value> { self.inner.captured_inputs() }
+}
+
+#[async_trait]
+impl AgentTool for ValidatingFakeTool {
+    fn name(&self) -> &str { self.inner.name() }
+
+    fn description(&self) -> &str { self.inner.description() }
+
+    fn parameters_schema(&self) -> serde_json::Value { self.inner.parameters_schema() }
+
+    async fn validate(&self, params: &serde_json::Value) -> anyhow::Result<()> {
+        if params
+            .get("reject")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            anyhow::bail!("validation rejected: 'reject' flag is set");
+        }
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        context: &ToolContext,
+    ) -> anyhow::Result<ToolOutput> {
+        self.inner.execute(params, context).await
+    }
+}
+
 /// Convenience helper: build a [`CompletionResponse`] with tool calls.
 pub fn scripted_tool_call_response(
     tool_calls: Vec<crate::llm::ToolCallRequest>,

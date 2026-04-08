@@ -36,6 +36,10 @@ use syn::{DeriveInput, Expr, LitBool, LitStr, Token, parse_macro_input};
 /// - `execute_fn` (optional): Path to a custom execute function with signature
 ///   `async fn(&self, Value, &ToolContext) -> Result<ToolOutput>`. Defaults to
 ///   deserializing params and calling `ToolExecute::run`.
+/// - `validate_fn` (optional): Path to a custom validate function with
+///   signature `async fn(&Value) -> anyhow::Result<()>`. Use this with
+///   `execute_fn` mode (no `ToolExecute` impl). When `ToolExecute` is present,
+///   `ToolExecute::validate` is auto-bridged and this attribute is not needed.
 /// - `manual_impl` (optional): If `true`, only generates `TOOL_NAME` and
 ///   `TOOL_DESCRIPTION` constants; user writes `impl AgentTool` manually.
 #[proc_macro_derive(ToolDef, attributes(tool))]
@@ -53,6 +57,7 @@ struct ToolAttrs {
     description:   LitStr,
     params_schema: Option<Expr>,
     execute_fn:    Option<Expr>,
+    validate_fn:   Option<Expr>,
     manual_impl:   bool,
     tier:          Option<LitStr>,
     timeout_secs:  Option<syn::LitInt>,
@@ -63,6 +68,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
     let mut description: Option<LitStr> = None;
     let mut params_schema: Option<Expr> = None;
     let mut execute_fn: Option<Expr> = None;
+    let mut validate_fn: Option<Expr> = None;
     let mut manual_impl = false;
     let mut tier: Option<LitStr> = None;
     let mut timeout_secs: Option<syn::LitInt> = None;
@@ -86,6 +92,10 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
                 meta.input.parse::<Token![=]>()?;
                 let lit: LitStr = meta.input.parse()?;
                 execute_fn = Some(lit.parse::<Expr>()?);
+            } else if meta.path.is_ident("validate_fn") {
+                meta.input.parse::<Token![=]>()?;
+                let lit: LitStr = meta.input.parse()?;
+                validate_fn = Some(lit.parse::<Expr>()?);
             } else if meta.path.is_ident("manual_impl") {
                 meta.input.parse::<Token![=]>()?;
                 let lit: LitBool = meta.input.parse()?;
@@ -119,6 +129,7 @@ fn parse_tool_attrs(input: &DeriveInput) -> syn::Result<ToolAttrs> {
         description,
         params_schema,
         execute_fn,
+        validate_fn,
         manual_impl,
         tier,
         timeout_secs,
@@ -174,6 +185,38 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         }
     };
 
+    // Build validate body. Three modes:
+    //   1. `validate_fn = "..."` set       → call user fn directly
+    //   2. otherwise, if execute uses ToolExecute → bridge to ToolExecute::validate
+    //      (deserialise once for the typed call; we accept the parse cost because
+    //      validate is the right place to surface schema errors)
+    //   3. otherwise (execute_fn mode without validate_fn) → omit, trait default
+    //      applies
+    let validate_impl = if let Some(expr) = &attrs.validate_fn {
+        quote! {
+            async fn validate(
+                &self,
+                params: &serde_json::Value,
+            ) -> anyhow::Result<()> {
+                #expr(params).await
+            }
+        }
+    } else if attrs.execute_fn.is_none() {
+        quote! {
+            async fn validate(
+                &self,
+                params: &serde_json::Value,
+            ) -> anyhow::Result<()> {
+                let typed: <Self as crate::tool::ToolExecute>::Params =
+                    serde_json::from_value(params.clone())
+                        .map_err(|e| anyhow::anyhow!("invalid params for '{}': {e}", self.name()))?;
+                crate::tool::ToolExecute::validate(self, &typed).await
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let timeout_impl = match &attrs.timeout_secs {
         Some(lit) => quote! {
             fn execution_timeout(&self) -> Option<std::time::Duration> {
@@ -212,6 +255,8 @@ fn expand_tool_def(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             fn parameters_schema(&self) -> serde_json::Value {
                 #schema_body
             }
+
+            #validate_impl
 
             async fn execute(
                 &self,
