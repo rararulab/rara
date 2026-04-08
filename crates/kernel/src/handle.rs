@@ -34,7 +34,7 @@ use crate::{
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
-    queue::ShardedQueueRef,
+    queue::{ShardedQueueRef, push_with_retry},
     security::SecurityRef,
     session::{
         SessionIndex, SessionKey, SessionState, SessionStats, SessionTable, Signal, SystemStats,
@@ -212,12 +212,20 @@ impl KernelHandle {
     /// Ingest a raw platform message: resolve identity + session, then push
     /// the resulting [`InboundMessage`] into the event queue.
     ///
-    /// This is the primary entry point for channel adapters.
+    /// This is the primary entry point for channel adapters. Push errors go
+    /// through [`push_with_retry`], which applies bounded exponential backoff
+    /// on `IOError::Full` and routes exhausted envelopes to the dead-letter
+    /// sink (or a structured error log).
     pub async fn ingest(&self, raw: RawPlatformMessage) -> std::result::Result<(), IOError> {
         let msg = self.io.resolve(raw).await?;
         let channel_label = format!("{:?}", msg.source.channel_type);
 
-        self.submit_message(msg).map_err(|_| IOError::SystemBusy)?;
+        push_with_retry(
+            &self.event_queue,
+            KernelEventEnvelope::user_message(msg),
+            &self.config.ingress,
+        )
+        .await?;
 
         crate::metrics::record_message_inbound(&channel_label);
 
@@ -227,7 +235,9 @@ impl KernelHandle {
     /// Submit an inbound user message (fire-and-forget).
     ///
     /// Uses `try_push` (non-async) so this can be called from synchronous
-    /// contexts.
+    /// contexts. Prefer [`ingest_user_message`](Self::ingest_user_message)
+    /// from async ingress paths so backpressure is retried instead of
+    /// silently dropped.
     pub fn submit_message(&self, msg: InboundMessage<Unresolved>) -> Result<()> {
         self.event_queue
             .try_push(KernelEventEnvelope::user_message(msg))
@@ -240,12 +250,50 @@ impl KernelHandle {
     ///
     /// The kernel will record the message to tape, run a lightweight LLM
     /// judgment, and only promote to a full agent turn if approved.
+    ///
+    /// Synchronous variant — async ingress callers should use
+    /// [`ingest_group_message`](Self::ingest_group_message) so transient
+    /// `Full` errors are retried instead of dropping the message.
     pub fn submit_group_message(&self, msg: InboundMessage<Unresolved>) -> Result<()> {
         self.event_queue
             .try_push(KernelEventEnvelope::group_message(msg))
             .map_err(|_| KernelError::Other {
                 message: "event queue full for group message".into(),
             })
+    }
+
+    /// Async ingress entry point for an already-resolved user message.
+    ///
+    /// Same payload as [`submit_message`](Self::submit_message), but routes
+    /// the push through [`push_with_retry`] so backpressure (`IOError::Full`)
+    /// is retried with bounded exponential backoff and exhausted messages
+    /// land in the dead-letter sink rather than being dropped silently.
+    pub async fn ingest_user_message(
+        &self,
+        msg: InboundMessage<Unresolved>,
+    ) -> std::result::Result<(), IOError> {
+        push_with_retry(
+            &self.event_queue,
+            KernelEventEnvelope::user_message(msg),
+            &self.config.ingress,
+        )
+        .await
+    }
+
+    /// Async ingress entry point for a group-chat candidate message.
+    ///
+    /// Mirrors [`ingest_user_message`](Self::ingest_user_message) but
+    /// produces a `GroupMessage` event for the proactive-judgment path.
+    pub async fn ingest_group_message(
+        &self,
+        msg: InboundMessage<Unresolved>,
+    ) -> std::result::Result<(), IOError> {
+        push_with_retry(
+            &self.event_queue,
+            KernelEventEnvelope::group_message(msg),
+            &self.config.ingress,
+        )
+        .await
     }
 
     /// Dispatch a Mita directive to a target session.
