@@ -24,7 +24,7 @@ use std::{path::Path, sync::Once, time::Duration};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     identity::{Principal, UserId},
-    io::{ChannelSource, InboundMessage, MessageId, Unresolved},
+    io::{ChannelSource, InboundMessage, MessageId},
     session::SessionKey,
     testing::{TestKernelBuilder, scripted_response},
 };
@@ -42,12 +42,12 @@ fn init_test_env(tmp: &Path) {
     });
 }
 
-/// Build an [`InboundMessage<Unresolved>`] for test submission.
+/// Build an [`InboundMessage`] for test submission.
 fn build_test_message(
     session_key: Option<SessionKey>,
     chat_id: &str,
     text: &str,
-) -> InboundMessage<Unresolved> {
+) -> InboundMessage {
     InboundMessage::unresolved(
         MessageId::new(),
         ChannelSource {

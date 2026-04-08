@@ -56,10 +56,7 @@ use crate::{
     channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
     identity::Principal,
-    io::{
-        IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId,
-        Unresolved,
-    },
+    io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
     kv::SharedKv,
     llm::DriverRegistryRef,
     memory::TapeService,
@@ -837,7 +834,7 @@ impl Kernel {
             InboundMessage::synthetic_content(input, principal.user_id.clone(), msg_session);
         if let Err(e) = &self
             .event_queue
-            .try_push(KernelEventEnvelope::user_message(inbound.into_unresolved()))
+            .try_push(KernelEventEnvelope::user_message(inbound))
         {
             error!(%e, "failed to push initial UserMessage for spawned agent");
         }
@@ -861,15 +858,12 @@ impl Kernel {
                     error!(session_key = %target, "cannot send interrupt notification: process not found");
                     return;
                 }
-                let envelope = OutboundEnvelope::state_change(
+                let envelope = OutboundEnvelope::progress(
                     MessageId::new(),
                     crate::identity::UserId("system".to_string()),
                     target.clone(),
                     "interrupted",
-                    serde_json::json!({
-                        "session_key": target.to_string(),
-                        "message": "Agent interrupted by user",
-                    }),
+                    Some("Agent interrupted by user".to_string()),
                 );
                 if let Err(e) = &self
                     .event_queue
@@ -1190,10 +1184,10 @@ impl Kernel {
     ///
     /// ## Session resolution (before routing)
     ///
-    /// The message arrives as `InboundMessage<Unresolved>` from the event
+    /// The message arrives as an `InboundMessage` from the event
     /// queue. The `session_key` may be `None` for first-contact messages.
     /// This method resolves the session (creating one if needed) and
-    /// transitions the message to `InboundMessage<Resolved>` before routing.
+    /// populates `session_key` before routing.
     ///
     /// ## 3-path routing
     ///
@@ -1212,7 +1206,7 @@ impl Kernel {
             routing_path,
         )
     )]
-    async fn handle_user_message(&self, msg: InboundMessage<Unresolved>) {
+    async fn handle_user_message(&self, msg: InboundMessage) {
         let span = tracing::Span::current();
 
         // -- Session resolution --------------------------------------------------
@@ -1267,7 +1261,7 @@ impl Kernel {
             }
         };
 
-        // Transition to Resolved — downstream code gets a type-safe guarantee
+        // Resolve session — downstream code can call require_session_key()
         // that session_key is always present.
         let msg = msg.resolve(session_id.clone());
 
@@ -1507,7 +1501,7 @@ impl Kernel {
             channel = ?msg.source.channel_type,
         )
     )]
-    async fn handle_group_message(&self, msg: InboundMessage<Unresolved>) {
+    async fn handle_group_message(&self, msg: InboundMessage) {
         // -- Session resolution (same as handle_user_message) ------------------
         let session_id = match msg.session_key_opt().copied() {
             Some(key) => key,
@@ -1549,7 +1543,7 @@ impl Kernel {
 
         self.io.register_stateless_endpoint(&msg);
 
-        // Transition to Resolved for downstream code.
+        // Populate session_key for downstream code.
         let msg = msg.resolve(session_id.clone());
 
         // -- Record message to tape -------------------------------------------
@@ -1626,7 +1620,7 @@ impl Kernel {
         );
         if let Err(e) = self
             .event_queue
-            .try_push(KernelEventEnvelope::user_message(msg.into_unresolved()))
+            .try_push(KernelEventEnvelope::user_message(msg))
         {
             error!(%e, "group: failed to push promoted UserMessage");
         }
@@ -1731,15 +1725,13 @@ impl Kernel {
 
         let should_buffer = self.process_table.with_mut(&session_key, |rt| {
             if rt.paused {
-                rt.pause_buffer.push(KernelEventEnvelope::user_message(
-                    msg.clone().into_unresolved(),
-                ));
+                rt.pause_buffer
+                    .push(KernelEventEnvelope::user_message(msg.clone()));
                 return true;
             }
             if is_active {
-                rt.pause_buffer.push(KernelEventEnvelope::user_message(
-                    msg.clone().into_unresolved(),
-                ));
+                rt.pause_buffer
+                    .push(KernelEventEnvelope::user_message(msg.clone()));
                 return true;
             }
             false
@@ -1823,7 +1815,7 @@ impl Kernel {
     /// Tape forking provides transactional semantics: the agent writes to a
     /// fork during its turn. On success the fork is merged back; on failure
     /// it is discarded, keeping the main tape clean.
-    #[tracing::instrument(skip_all, fields(session_key = %session_key, msg_session_key = %msg.session_key()))]
+    #[tracing::instrument(skip_all, fields(session_key = %session_key, msg_session_key = %msg.require_session_key()))]
     async fn start_llm_turn(&self, session_key: SessionKey, msg: InboundMessage) {
         // -- TurnGuard: RAII safety net ------------------------------------------
         //

@@ -36,7 +36,6 @@ md5.workspace = true
 opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace", "metrics"] }
 parking_lot.workspace = true
-rand.workspace = true
 rapidfuzz.workspace = true
 rara-browser.workspace = true
 rara-domain-shared.workspace = true

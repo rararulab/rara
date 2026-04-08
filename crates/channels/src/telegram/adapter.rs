@@ -277,7 +277,7 @@ impl ProgressMessage {
             iterations: 0,
             rara_message_id,
             saved_plan_steps: Vec::new(),
-            loading_hint: rara_kernel::io::loading_hints::random_hint().to_string(),
+            loading_hint: super::loading_hints::random_hint().to_string(),
             plan_steps: None,
             plan_goal: None,
             plan_current_step: None,

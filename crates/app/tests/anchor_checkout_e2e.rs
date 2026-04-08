@@ -4,7 +4,7 @@ use rara_app::{AppConfig, StartOptions, start_with_options};
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     identity::{Principal, UserId},
-    io::{ChannelSource, InboundMessage, MessageId, Unresolved},
+    io::{ChannelSource, InboundMessage, MessageId},
     memory::{FileTapeStore, TapEntryKind, TapeService},
     session::SessionKey,
 };
@@ -16,7 +16,7 @@ fn build_test_message(
     session_key: Option<SessionKey>,
     chat_id: &str,
     text: &str,
-) -> InboundMessage<Unresolved> {
+) -> InboundMessage {
     InboundMessage::unresolved(
         MessageId::new(),
         ChannelSource {
