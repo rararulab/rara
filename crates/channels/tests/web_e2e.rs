@@ -42,6 +42,10 @@ use wiremock::{
     matchers::{method, path},
 };
 
+/// CI runners can be noisy under full-workspace `nextest`; keep a generous
+/// upper bound for end-to-end completion checks.
+const TURN_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Override rara_paths directories to a writable temp path so tests
 /// don't touch `~/.config/rara`.
 fn init_test_env() {
@@ -64,7 +68,7 @@ fn init_test_env() {
 
 /// Poll `list_processes` until at least one session exists, returning its key.
 async fn wait_for_first_session(handle: &rara_kernel::handle::KernelHandle) -> SessionKey {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + TURN_WAIT_TIMEOUT;
     loop {
         let processes = handle.list_processes();
         if let Some(first) = processes.first() {
@@ -84,7 +88,7 @@ async fn wait_for_turn_count(
     session_key: SessionKey,
     expected_turns: usize,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + TURN_WAIT_TIMEOUT;
     loop {
         let traces = handle.get_process_turns(session_key);
         if traces.len() >= expected_turns {
@@ -108,7 +112,7 @@ async fn wait_for_turn_count(
 /// A text message handed to the web adapter must reach the kernel as a
 /// resolved user message, spawn a session, and produce a turn whose reply
 /// matches the scripted LLM response.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_text_message_reaches_kernel() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -161,7 +165,7 @@ async fn web_text_message_reaches_kernel() {
 /// An inbound message carrying a base64 audio block must be routed through
 /// the STT service (mocked by wiremock) before reaching the kernel. The
 /// kernel should then see the transcribed text, not raw audio bytes.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_audio_message_is_transcribed_via_stt() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();

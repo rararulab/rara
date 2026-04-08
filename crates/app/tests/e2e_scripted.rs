@@ -37,6 +37,10 @@ use rara_kernel::{
 use serde_json::json;
 use tokio::time::{Instant, sleep};
 
+/// CI runners can be noisy under full-workspace `nextest`; keep a generous
+/// upper bound for end-to-end turn completion.
+const TURN_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Override rara_paths directories to a writable temp path so tests
 /// don't touch `~/.config/rara` (which may not exist on CI runners).
 fn init_test_env() {
@@ -87,7 +91,7 @@ async fn wait_for_turn_count(
     session_key: SessionKey,
     expected_turns: usize,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + TURN_WAIT_TIMEOUT;
     loop {
         let traces = handle.get_process_turns(session_key);
         if traces.len() >= expected_turns {
@@ -108,7 +112,7 @@ async fn wait_for_turn_count(
 // Tests
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn simple_text_reply() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -149,7 +153,7 @@ async fn simple_text_reply() {
     tk.shutdown();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_turn_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -226,7 +230,7 @@ async fn multi_turn_conversation() {
     tk.shutdown();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_llm_response_handled() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -275,7 +279,7 @@ async fn empty_llm_response_handled() {
     tk.shutdown();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_round_trip() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -354,7 +358,7 @@ async fn tool_call_round_trip() {
     tk.shutdown();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tape_records_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -400,7 +404,7 @@ async fn tape_records_conversation() {
 
 /// LLM returns a non-retryable error on the first call. The session should
 /// handle the error and return to Ready state — not crash or hang.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn llm_error_does_not_crash_session() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -430,7 +434,7 @@ async fn llm_error_does_not_crash_session() {
     // The agent loop returns Err for non-retryable errors, so no TurnTrace
     // is pushed. Instead, poll until the session transitions back to Ready
     // (meaning the error was handled and the session is alive).
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + TURN_WAIT_TIMEOUT;
     loop {
         if let Some(stats) = tk.handle.session_stats(session_key) {
             if matches!(stats.state, SessionState::Ready) {
@@ -470,7 +474,7 @@ async fn llm_error_does_not_crash_session() {
 
 /// With max_iterations=3 in the default test manifest, scripting infinite
 /// tool calls should terminate after 3 iterations rather than looping forever.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn max_iterations_terminates() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -537,7 +541,7 @@ async fn max_iterations_terminates() {
 /// LLM calls a tool that is not registered. The kernel should feed the
 /// error back to the LLM, which then produces a text response on the
 /// second call.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_not_found_surfaces_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -600,7 +604,7 @@ async fn tool_not_found_surfaces_error() {
 /// Script several consecutive empty responses (no text, no tool calls).
 /// The kernel's recovery logic should eventually terminate rather than
 /// looping indefinitely.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consecutive_empty_responses_terminate() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
