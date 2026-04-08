@@ -28,7 +28,6 @@ use std::sync::Arc;
 use crossbeam_queue::SegQueue;
 use tokio::sync;
 
-use super::EventQueue;
 use crate::{event::KernelEventEnvelope, io::IOError};
 
 /// A single lock-free FIFO shard with async notification.
@@ -127,8 +126,8 @@ fn num_cpus() -> usize {
 
 /// Sharded event queue with N agent shards + 1 global queue.
 ///
-/// Implements [`EventQueue`] and provides internal access to individual
-/// shards for the multi-processor event loop.
+/// Provides the push ingress path and internal access to individual shards
+/// for the multi-processor event loop.
 ///
 /// All shard queues are stored as `Arc<ShardQueue>` so that
 /// `EventProcessor` tasks can
@@ -186,17 +185,20 @@ impl ShardedEventQueue {
                 .map(|shard| shard.pending_count())
                 .sum::<usize>()
     }
-}
 
-impl EventQueue for ShardedEventQueue {
-    fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.try_push(event) }
-
-    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
+    /// Push an event into the queue, routing it to the correct shard or the
+    /// global queue. Returns `IOError::Full` if the target queue is at
+    /// capacity.
+    pub fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
         match self.classify(&event) {
             ShardTarget::Global => self.global.push(event),
             ShardTarget::Shard(idx) => self.shards[idx].push(event),
         }
     }
+
+    /// Non-blocking push — identical to [`push`](Self::push) for this
+    /// in-memory queue.
+    pub fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.push(event) }
 }
 
 #[cfg(test)]
