@@ -463,7 +463,7 @@ impl BotServiceClient for KernelBotServiceClient {
             let pt = handle.process_table();
             let is_active = pt
                 .with(&sk, |s| {
-                    s.state == rara_kernel::session::SessionState::Active
+                    s.state() == rara_kernel::session::SessionState::Active
                 })
                 .unwrap_or(false);
 
@@ -475,7 +475,7 @@ impl BotServiceClient for KernelBotServiceClient {
                 for _ in 0..50 {
                     let still_active = pt
                         .with(&sk, |s| {
-                            s.state == rara_kernel::session::SessionState::Active
+                            s.state() == rara_kernel::session::SessionState::Active
                         })
                         .unwrap_or(false);
                     if !still_active {
@@ -485,10 +485,12 @@ impl BotServiceClient for KernelBotServiceClient {
                 }
             }
 
-            // Prevent new work and mark as suspended.
+            // Prevent new work and mark as suspended. The session may still be
+            // in Active here (poll bounded), so we use the unconditional
+            // escape hatch rather than the validated `suspend` transition.
             if pt.contains(&sk) {
                 pt.cancel_process(&sk);
-                let _ = pt.set_state(sk.clone(), rara_kernel::session::SessionState::Suspended);
+                let _ = pt.force_state(sk.clone(), rara_kernel::session::SessionState::Suspended);
             }
         }
         // Delete tape (message history).

@@ -862,13 +862,30 @@ impl Kernel {
             Signal::Pause => {
                 info!(session_key = %target, "pause signal");
                 self.process_table.set_paused(&target, true);
-                let _ = self.process_table.set_state(target, SessionState::Paused);
+                // Pause is a validated transition: Ready/Suspended -> Paused.
+                // If the session is currently Active, fall back to force_state
+                // because we still want to honour the user-issued pause signal.
+                let pause_result = self
+                    .process_table
+                    .with_mut(&target, |s| s.pause())
+                    .transpose();
+                if let Err(err) = pause_result {
+                    warn!(?err, %target, "validated pause failed; forcing state");
+                    let _ = self.process_table.force_state(target, SessionState::Paused);
+                }
             }
             Signal::Resume => {
                 info!(session_key = %target, "resume signal");
                 self.process_table.set_paused(&target, false);
                 let buffered = self.process_table.drain_pause_buffer(&target);
-                let _ = self.process_table.set_state(target, SessionState::Ready);
+                let resume_result = self
+                    .process_table
+                    .with_mut(&target, |s| s.resume())
+                    .transpose();
+                if let Err(err) = resume_result {
+                    warn!(?err, %target, "validated resume failed; forcing state");
+                    let _ = self.process_table.force_state(target, SessionState::Ready);
+                }
                 for event in buffered {
                     if let Err(e) = &self.event_queue.try_push(event) {
                         warn!(%e, "failed to re-inject buffered event on resume");
@@ -879,11 +896,14 @@ impl Kernel {
                 info!(session_key = %target, "terminate signal — graceful shutdown");
                 let was_active = self
                     .process_table
-                    .with(&target, |p| p.state == SessionState::Active)
+                    .with(&target, |p| p.state() == SessionState::Active)
                     .unwrap_or(false);
+                // Terminate must move *any* state -> Suspended, including
+                // Active. The validated `suspend` method only allows Ready ->
+                // Suspended, so use the unconditional escape hatch here.
                 let _ = self
                     .process_table
-                    .set_state(target, SessionState::Suspended);
+                    .force_state(target, SessionState::Suspended);
                 self.process_table.cancel_turn(&target);
                 // Grace period then force-kill via process_cancel token.
                 if let Some(token) = self.process_table.clone_process_cancel(&target) {
@@ -899,9 +919,10 @@ impl Kernel {
             Signal::Kill => {
                 info!(session_key = %target, "kill signal");
                 self.process_table.cancel_process(&target);
+                // Kill must succeed regardless of current state.
                 let _ = self
                     .process_table
-                    .set_state(target, SessionState::Suspended);
+                    .force_state(target, SessionState::Suspended);
                 self.cleanup_process(target).await;
             }
         }
@@ -1091,7 +1112,7 @@ impl Kernel {
             .await;
         if let Some(rt) = self.process_table.remove(session_key) {
             let manifest_name = rt.manifest.name.clone();
-            let state = rt.state;
+            let state = rt.state();
             let parent_id = rt.parent_id;
 
             // Clear in-flight ledger entry for scheduled job agents.
@@ -1238,7 +1259,7 @@ impl Kernel {
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_session_key {
             span.record("routing_path", "id_addressing");
-            let target_state = self.process_table.with(&target_id, |p| p.state);
+            let target_state = self.process_table.with(&target_id, |p| p.state());
             match target_state {
                 Some(state) if state.is_terminal() => {
                     let envelope = OutboundEnvelope::error(
@@ -1285,7 +1306,7 @@ impl Kernel {
         let mut resume_session_id = None;
         let path2_info = self
             .process_table
-            .with(&session_id, |p| (p.session_key, p.state));
+            .with(&session_id, |p| (p.session_key, p.state()));
         if let Some((session_key_found, state)) = path2_info {
             span.record("routing_path", "session_addressing");
 
@@ -1684,7 +1705,7 @@ impl Kernel {
         // Check process state outside the runtime closure to avoid nested locks.
         let is_active = self
             .process_table
-            .with(&session_key, |p| p.state == SessionState::Active)
+            .with(&session_key, |p| p.state() == SessionState::Active)
             .unwrap_or(false);
 
         let should_buffer = self.process_table.with_mut(&session_key, |rt| {
@@ -1951,9 +1972,12 @@ impl Kernel {
             });
         }
 
-        let _ = self
-            .process_table
-            .set_state(session_key, SessionState::Active);
+        // Validated transition: Ready -> Active. Any other source state would
+        // indicate a logic bug (e.g. starting a turn on a Paused session), so
+        // log loudly but do not abort message processing.
+        if let Some(Err(err)) = self.process_table.with_mut(&session_key, |s| s.activate()) {
+            warn!(?err, %session_key, "session activate failed");
+        }
 
         // -- Phase 3: UX feedback ------------------------------------------------
         //
@@ -2485,7 +2509,7 @@ impl Kernel {
 
         if self
             .process_table
-            .with(&session_key, |p| p.state.is_terminal())
+            .with(&session_key, |p| p.state().is_terminal())
             .unwrap_or(false)
         {
             info!(
@@ -2772,9 +2796,13 @@ impl Kernel {
         let buffered = self.process_table.drain_pause_buffer(&session_key);
 
         // Transition to Ready (idle, awaiting next message).
-        let _ = self
+        // Validated transition: Active -> Ready.
+        if let Some(Err(err)) = self
             .process_table
-            .set_state(session_key, SessionState::Ready);
+            .with_mut(&session_key, |s| s.finish_turn())
+        {
+            warn!(?err, %session_key, "session finish_turn failed");
+        }
 
         // Re-inject buffered events so they trigger a new turn on this session.
         for event in buffered {
