@@ -222,6 +222,22 @@ impl SessionState {
     pub fn is_terminal(self) -> bool { false }
 }
 
+/// Error returned when a requested [`SessionState`] transition is not
+/// allowed from the current state.
+///
+/// Transitions are validated by the `Session::{activate, finish_turn, pause,
+/// resume, suspend}` methods. Callers that need an unconditional override
+/// (e.g. kernel `Kill`/`Terminate` signals) should use
+/// [`SessionTable::force_state`] instead of the validated methods.
+#[derive(Debug, Snafu)]
+#[snafu(display("invalid session state transition: {from} -> {to}"))]
+pub struct InvalidTransitionError {
+    /// The current state that rejected the transition.
+    pub from: SessionState,
+    /// The target state that was requested.
+    pub to:   SessionState,
+}
+
 /// Result of a completed agent process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRunLoopResult {
@@ -292,7 +308,15 @@ pub struct Session {
     /// Per-session environment.
     pub env: AgentEnv,
     /// Current lifecycle state.
-    pub state: SessionState,
+    ///
+    /// Crate-private on purpose: external callers must read via
+    /// [`Session::state`] and transition via the validated methods
+    /// (`activate`, `finish_turn`, `pause`, `resume`, `suspend`) or the
+    /// unconditional [`SessionTable::force_state`] escape hatch. Direct
+    /// assignment is only permitted within `rara-kernel` itself, where the
+    /// `Session` is initially constructed in
+    /// `Kernel::register_process_runtime`.
+    pub(crate) state: SessionState,
     /// When this session was created.
     pub created_at: Timestamp,
     /// When this session was last active (for idle timeout).
@@ -347,6 +371,90 @@ pub struct Session {
     pub(crate) _parent_child_permit: Option<OwnedSemaphorePermit>,
     /// Global semaphore permit.
     pub(crate) _global_permit: OwnedSemaphorePermit,
+}
+
+impl Session {
+    /// Read the current lifecycle state.
+    pub fn state(&self) -> SessionState { self.state }
+
+    /// `Ready` → `Active`. Called at the start of a turn when the session
+    /// begins processing an inbound message.
+    pub fn activate(&mut self) -> Result<(), InvalidTransitionError> {
+        match self.state {
+            SessionState::Ready => {
+                self.state = SessionState::Active;
+                Ok(())
+            }
+            other => Err(InvalidTransitionError {
+                from: other,
+                to:   SessionState::Active,
+            }),
+        }
+    }
+
+    /// `Active` → `Ready`. Called at the end of a turn when the session has
+    /// finished processing an inbound message.
+    pub fn finish_turn(&mut self) -> Result<(), InvalidTransitionError> {
+        match self.state {
+            SessionState::Active => {
+                self.state = SessionState::Ready;
+                Ok(())
+            }
+            other => Err(InvalidTransitionError {
+                from: other,
+                to:   SessionState::Ready,
+            }),
+        }
+    }
+
+    /// `Ready`/`Suspended` → `Paused`. Manual pause via signal.
+    ///
+    /// Forcing a pause from `Active` requires finishing the current turn
+    /// first (or using [`SessionTable::force_state`] as an escape hatch).
+    pub fn pause(&mut self) -> Result<(), InvalidTransitionError> {
+        match self.state {
+            SessionState::Ready | SessionState::Suspended => {
+                self.state = SessionState::Paused;
+                Ok(())
+            }
+            other => Err(InvalidTransitionError {
+                from: other,
+                to:   SessionState::Paused,
+            }),
+        }
+    }
+
+    /// `Paused` → `Ready`. Resume a manually paused session.
+    pub fn resume(&mut self) -> Result<(), InvalidTransitionError> {
+        match self.state {
+            SessionState::Paused => {
+                self.state = SessionState::Ready;
+                Ok(())
+            }
+            other => Err(InvalidTransitionError {
+                from: other,
+                to:   SessionState::Ready,
+            }),
+        }
+    }
+
+    /// `Ready` → `Suspended`. Called on idle timeout when the session's
+    /// ambient resources should be released.
+    ///
+    /// Forcing suspension from `Active` (e.g. `Kill`/`Terminate` signals)
+    /// requires [`SessionTable::force_state`].
+    pub fn suspend(&mut self) -> Result<(), InvalidTransitionError> {
+        match self.state {
+            SessionState::Ready => {
+                self.state = SessionState::Suspended;
+                Ok(())
+            }
+            other => Err(InvalidTransitionError {
+                from: other,
+                to:   SessionState::Suspended,
+            }),
+        }
+    }
 }
 
 /// Per-process runtime metrics using atomic counters for lock-free updates.
@@ -521,9 +629,14 @@ impl SessionTable {
         self.runtimes.insert(session_key, sr);
     }
 
-    /// Transition a session to a new state.
+    /// Unconditionally overwrite a session's lifecycle state.
+    ///
+    /// This is the escape hatch used by signals like `Kill`/`Terminate` that
+    /// must move a session to `Suspended` regardless of its current state.
+    /// Normal lifecycle transitions MUST use the validated methods on
+    /// [`Session`] (`activate`, `finish_turn`, `pause`, `resume`, `suspend`).
     #[tracing::instrument(skip(self), fields(new_state = %state))]
-    pub fn set_state(&self, key: SessionKey, state: SessionState) -> KernelResult<()> {
+    pub fn force_state(&self, key: SessionKey, state: SessionState) -> KernelResult<()> {
         let mut entry = self
             .runtimes
             .get_mut(&key)
@@ -761,3 +874,138 @@ impl Default for SessionTable {
 
 #[cfg(test)]
 pub(crate) mod test_utils;
+
+#[cfg(test)]
+mod state_transition_tests {
+    use std::sync::Arc;
+
+    use tokio::sync::Semaphore;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::{
+        agent::{AgentEnv, AgentManifest, AgentRole, Priority},
+        identity::{KernelUser, Principal, Role},
+    };
+
+    fn make_manifest() -> AgentManifest {
+        AgentManifest {
+            name:                   "test".into(),
+            role:                   AgentRole::default(),
+            description:            "test agent".into(),
+            model:                  None,
+            system_prompt:          String::new(),
+            soul_prompt:            None,
+            provider_hint:          None,
+            max_iterations:         None,
+            tools:                  vec![],
+            excluded_tools:         vec![],
+            max_children:           None,
+            max_context_tokens:     None,
+            priority:               Priority::default(),
+            metadata:               serde_json::Value::Null,
+            sandbox:                None,
+            default_execution_mode: None,
+            tool_call_limit:        None,
+            worker_timeout_secs:    None,
+        }
+    }
+
+    fn make_session(state: SessionState) -> Session {
+        let global = Arc::new(Semaphore::new(1));
+        let permit = global
+            .try_acquire_owned()
+            .expect("global semaphore must have a free permit");
+        Session {
+            session_key: SessionKey::new(),
+            parent_id: None,
+            manifest: make_manifest(),
+            principal: Principal::from_user(&KernelUser {
+                name:        "test-user".into(),
+                role:        Role::User,
+                permissions: vec![],
+                enabled:     true,
+            }),
+            env: AgentEnv::default(),
+            state,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+            result_tx: None,
+            created_files: vec![],
+            metrics: Arc::new(RuntimeMetrics::new()),
+            turn_traces: vec![],
+            turn_cancel: CancellationToken::new(),
+            process_cancel: CancellationToken::new(),
+            execution_mode: None,
+            paused: false,
+            pause_buffer: vec![],
+            background_tasks: vec![],
+            pending_tool_call_limit: None,
+            origin_endpoint: None,
+            activated_deferred: Default::default(),
+            child_semaphore: Arc::new(Semaphore::new(1)),
+            _parent_child_permit: None,
+            _global_permit: permit,
+        }
+    }
+
+    #[test]
+    fn legal_transitions_succeed() {
+        // Ready -> Active -> Ready
+        let mut s = make_session(SessionState::Ready);
+        s.activate().expect("Ready -> Active is legal");
+        assert_eq!(s.state(), SessionState::Active);
+        s.finish_turn().expect("Active -> Ready is legal");
+        assert_eq!(s.state(), SessionState::Ready);
+
+        // Ready -> Suspended
+        s.suspend().expect("Ready -> Suspended is legal");
+        assert_eq!(s.state(), SessionState::Suspended);
+
+        // Suspended -> Paused -> Ready
+        s.pause().expect("Suspended -> Paused is legal");
+        assert_eq!(s.state(), SessionState::Paused);
+        s.resume().expect("Paused -> Ready is legal");
+        assert_eq!(s.state(), SessionState::Ready);
+
+        // Ready -> Paused
+        s.pause().expect("Ready -> Paused is legal");
+        assert_eq!(s.state(), SessionState::Paused);
+    }
+
+    #[test]
+    fn illegal_transitions_return_error() {
+        // Active cannot activate again.
+        let mut s = make_session(SessionState::Active);
+        let err = s.activate().expect_err("Active -> Active is illegal");
+        assert_eq!(err.from, SessionState::Active);
+        assert_eq!(err.to, SessionState::Active);
+        assert_eq!(s.state(), SessionState::Active, "state must be unchanged");
+
+        // Ready cannot finish a turn it never started.
+        let mut s = make_session(SessionState::Ready);
+        let err = s.finish_turn().expect_err("Ready -> Ready is illegal");
+        assert_eq!(err.from, SessionState::Ready);
+        assert_eq!(err.to, SessionState::Ready);
+
+        // Active cannot be paused directly.
+        let mut s = make_session(SessionState::Active);
+        let err = s.pause().expect_err("Active -> Paused is illegal");
+        assert_eq!(err.from, SessionState::Active);
+        assert_eq!(err.to, SessionState::Paused);
+        assert_eq!(s.state(), SessionState::Active);
+
+        // Suspended cannot resume directly (must pause first).
+        let mut s = make_session(SessionState::Suspended);
+        let err = s.resume().expect_err("Suspended -> Ready is illegal");
+        assert_eq!(err.from, SessionState::Suspended);
+        assert_eq!(err.to, SessionState::Ready);
+
+        // Active cannot suspend itself (must use force_state).
+        let mut s = make_session(SessionState::Active);
+        let err = s.suspend().expect_err("Active -> Suspended is illegal");
+        assert_eq!(err.from, SessionState::Active);
+        assert_eq!(err.to, SessionState::Suspended);
+    }
+}
