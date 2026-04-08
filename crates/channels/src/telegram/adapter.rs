@@ -1196,7 +1196,7 @@ impl ChannelAdapter for TelegramAdapter {
                 reply_context,
                 attachments,
             } => {
-                let content = if let Some(state) = self.active_streams.get(&chat_id) {
+                let mut content = if let Some(state) = self.active_streams.get(&chat_id) {
                     slice_after_char_prefix(&content, state.streamed_prefix_chars)
                 } else {
                     content
@@ -1205,10 +1205,9 @@ impl ChannelAdapter for TelegramAdapter {
                     self.active_streams.remove(&chat_id);
                     return Ok(());
                 }
-                let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
-                let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
                 if self.active_streams.contains_key(&chat_id) {
+                    let mut streamed_visible_prefix: Option<String> = None;
                     {
                         let has_msg_id = self
                             .active_streams
@@ -1234,8 +1233,13 @@ impl ChannelAdapter for TelegramAdapter {
                     }
 
                     if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
+                        streamed_visible_prefix =
+                            Some(strip_tool_call_xml(&stream_state.accumulated));
                         if let Some(&last_msg_id) = stream_state.message_ids.last() {
                             if last_msg_id != MessageId(0) {
+                                let html =
+                                    crate::telegram::markdown::markdown_to_telegram_html(&content);
+                                let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
                                 let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
                                 let edit_result = self
                                     .bot
@@ -1265,12 +1269,21 @@ impl ChannelAdapter for TelegramAdapter {
                                     self.send_attachments(chat_id, &attachments).await;
                                     return Ok(());
                                 }
-                                warn!(
-                                    chat_id,
-                                    "telegram: edit streaming message failed, falling back to send"
-                                );
+                                if let Err(e) = edit_result {
+                                    warn!(
+                                        chat_id,
+                                        error = %e,
+                                        "telegram: edit streaming message failed, falling back to suffix send"
+                                    );
+                                }
                             }
                         }
+                    }
+
+                    // If editing the streamed message failed, only send the
+                    // unsent suffix to avoid duplicated prefix messages.
+                    if let Some(prefix) = streamed_visible_prefix.as_deref() {
+                        content = slice_after_prefix_if_matches(&content, prefix);
                     }
                 }
 
@@ -1281,6 +1294,8 @@ impl ChannelAdapter for TelegramAdapter {
                 }
 
                 if !content.is_empty() {
+                    let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
+                    let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
                     for (i, chunk) in chunks.iter().enumerate() {
                         let mut req = self
                             .bot
@@ -3665,6 +3680,21 @@ fn slice_after_char_prefix(content: &str, prefix_chars: usize) -> String {
     }
 }
 
+/// Return suffix after `prefix` only when `content` actually starts with it.
+///
+/// This guards against accidental truncation when the final assembled reply
+/// diverges from streamed partial text (e.g. model self-correction).
+fn slice_after_prefix_if_matches(content: &str, prefix: &str) -> String {
+    if prefix.is_empty() {
+        return content.to_owned();
+    }
+    if let Some(rest) = content.strip_prefix(prefix) {
+        rest.to_owned()
+    } else {
+        content.to_owned()
+    }
+}
+
 /// Data extracted from [`StreamingMessage`] needed for a flush operation.
 /// Allows dropping the DashMap guard before making async Telegram API calls.
 struct FlushRequest {
@@ -4240,5 +4270,33 @@ mod render_progress_tests {
             output.contains("read_file"),
             "expected tool name in output, got: {output}"
         );
+    }
+}
+
+#[cfg(test)]
+mod stream_suffix_tests {
+    use super::{slice_after_char_prefix, slice_after_prefix_if_matches};
+
+    #[test]
+    fn slice_after_prefix_if_matches_returns_suffix() {
+        let content = "hello world and beyond";
+        let prefix = "hello world";
+        assert_eq!(
+            slice_after_prefix_if_matches(content, prefix),
+            " and beyond"
+        );
+    }
+
+    #[test]
+    fn slice_after_prefix_if_matches_keeps_content_when_not_matched() {
+        let content = "hello world and beyond";
+        let prefix = "goodbye world";
+        assert_eq!(slice_after_prefix_if_matches(content, prefix), content);
+    }
+
+    #[test]
+    fn slice_after_char_prefix_handles_multibyte_chars() {
+        let content = "你好世界abc";
+        assert_eq!(slice_after_char_prefix(content, 4), "abc");
     }
 }

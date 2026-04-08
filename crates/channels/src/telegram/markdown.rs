@@ -279,7 +279,36 @@ fn latex_preserving_code(input: &str) -> String {
 /// removes blockquote markers so the character-level parser can handle them.
 fn preprocess_blocks(md: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
-    for line in md.lines() {
+    let raw_lines: Vec<&str> = md.lines().collect();
+    let mut idx = 0usize;
+
+    while idx < raw_lines.len() {
+        let line = raw_lines[idx];
+
+        // Markdown table block:
+        // | h1 | h2 |
+        // |----|----|
+        // | v1 | v2 |
+        //
+        // Telegram doesn't support table markup, so we render it as a
+        // monospace block for readable alignment.
+        if is_markdown_table_header(line)
+            && idx + 1 < raw_lines.len()
+            && is_markdown_table_separator(raw_lines[idx + 1])
+        {
+            let mut table_rows = vec![format_table_row(line)];
+            idx += 2; // skip header + separator
+            while idx < raw_lines.len() && is_markdown_table_row(raw_lines[idx]) {
+                table_rows.push(format_table_row(raw_lines[idx]));
+                idx += 1;
+            }
+
+            lines.push("```".to_owned());
+            lines.extend(table_rows);
+            lines.push("```".to_owned());
+            continue;
+        }
+
         let trimmed = line.trim();
 
         // Headings: #{1,6} text -> **text**
@@ -298,8 +327,61 @@ fn preprocess_blocks(md: &str) -> String {
         } else {
             lines.push(line.to_string());
         }
+
+        idx += 1;
     }
     lines.join("\n")
+}
+
+/// Parse a markdown table row into trimmed cell slices.
+fn parse_table_cells(line: &str) -> Vec<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return Vec::new();
+    }
+    let core = trimmed.trim_matches('|').trim();
+    if core.is_empty() {
+        return Vec::new();
+    }
+    core.split('|').map(str::trim).collect()
+}
+
+/// Check whether a line is a markdown table header row.
+fn is_markdown_table_header(line: &str) -> bool {
+    let cells = parse_table_cells(line);
+    cells.len() >= 2 && !is_markdown_table_separator(line)
+}
+
+/// Check whether a line is a markdown table delimiter row.
+///
+/// Accepts forms like:
+/// - `|---|---|`
+/// - `| :--- | ---: |`
+fn is_markdown_table_separator(line: &str) -> bool {
+    let cells = parse_table_cells(line);
+    if cells.len() < 2 {
+        return false;
+    }
+    cells.iter().all(|cell| {
+        let stripped = cell.trim().trim_matches(':');
+        !stripped.is_empty() && stripped.len() >= 3 && stripped.chars().all(|ch| ch == '-')
+    })
+}
+
+/// Check whether a line is a markdown table body row.
+fn is_markdown_table_row(line: &str) -> bool {
+    let cells = parse_table_cells(line);
+    cells.len() >= 2 && !is_markdown_table_separator(line)
+}
+
+/// Format a markdown table row for monospace rendering.
+fn format_table_row(line: &str) -> String {
+    let cells = parse_table_cells(line);
+    if cells.is_empty() {
+        line.trim().to_owned()
+    } else {
+        cells.join(" | ")
+    }
 }
 
 /// Strip a Markdown heading prefix (`# ` through `###### `), returning the
@@ -525,5 +607,23 @@ mod tests {
         let input = "See [docs](https://example.com/path$var) here";
         let html = markdown_to_telegram_html(input);
         assert!(html.contains("https://example.com/path$var"));
+    }
+
+    #[test]
+    fn markdown_table_is_rendered_as_pre_block() {
+        let input = "| 作品 | 评分 |\n|---|---|\n| Witch Hat Atelier | 8.80 |";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("<pre>"));
+        assert!(html.contains("作品 | 评分"));
+        assert!(html.contains("Witch Hat Atelier | 8.80"));
+        assert!(!html.contains("|---|---|"));
+    }
+
+    #[test]
+    fn pipe_text_without_separator_is_not_treated_as_table() {
+        let input = "A | B\njust plain text";
+        let html = markdown_to_telegram_html(input);
+        assert!(!html.contains("<pre>"));
+        assert!(html.contains("A | B"));
     }
 }
