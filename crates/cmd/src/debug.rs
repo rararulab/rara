@@ -133,33 +133,60 @@ fn collect_timeline(path: &Path, message_id: &str) -> std::io::Result<Vec<Timeli
 
         let kind = entry.kind.to_string();
         let detail = match kind.as_str() {
-            "message" => entry
-                .payload
-                .get("content")
-                .and_then(|v| v.as_str())
-                .map(|s| s.chars().take(200).collect::<String>())
-                .unwrap_or_default(),
-            "tool_call" => {
-                let name = entry
+            "message" => {
+                let role = entry
                     .payload
-                    .get("name")
+                    .get("role")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                format!("→ {name}")
+                    .unwrap_or("unknown");
+                let content = entry
+                    .payload
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(200).collect::<String>())
+                    .unwrap_or_default();
+                format!("[{role}] {content}")
+            }
+            "tool_call" => {
+                let names: Vec<&str> = entry
+                    .payload
+                    .get("calls")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if names.is_empty() {
+                    "→ ?".to_owned()
+                } else {
+                    format!("→ {}", names.join(", "))
+                }
             }
             "tool_result" => {
-                let name = entry
-                    .payload
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                let success = entry
-                    .payload
-                    .get("success")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-                let icon = if success { "✓" } else { "✗" };
-                format!("{icon} {name}")
+                let metrics: Vec<String> = entry
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("tool_metrics"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|m| {
+                                let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                                let success =
+                                    m.get("success").and_then(|s| s.as_bool()).unwrap_or(true);
+                                let icon = if success { "✓" } else { "✗" };
+                                format!("{icon} {name}")
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if metrics.is_empty() {
+                    "✓ ?".to_owned()
+                } else {
+                    metrics.join(", ")
+                }
             }
             _ => String::new(),
         };
