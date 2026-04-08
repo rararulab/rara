@@ -142,6 +142,25 @@ impl TraceService {
         Ok(row.map(|(s,)| s))
     }
 
+    /// Find the session that produced a turn for the given `rara_message_id`.
+    ///
+    /// Used as an index for the `rara debug` CLI: SQL points us at one tape
+    /// file instead of grepping every JSONL on disk.  Only the indexed
+    /// `session_id` column is returned — content still lives in the tape.
+    pub async fn find_session_for_message(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT session_id FROM execution_traces WHERE json_extract(trace_data, \
+             '$.rara_message_id') = ? LIMIT 1",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(s,)| s))
+    }
+
     /// Delete traces older than `retention_days`. Returns the number of rows
     /// removed.
     pub async fn cleanup(&self, retention_days: u32) -> Result<u64, sqlx::Error> {
