@@ -30,7 +30,9 @@ use rara_kernel::{
     cascade::{
         CascadeTrace, build_cascade, find_turn_boundaries, load_persisted_cascade, turn_slice,
     },
-    channel::types::{ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall},
+    channel::types::{
+        ChannelType, ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall,
+    },
     llm::{Message, Role},
     memory::{TapEntry, TapEntryKind, TapeService},
     session::SessionIndexRef,
@@ -344,7 +346,7 @@ impl SessionService {
     #[instrument(skip(self))]
     pub async fn bind_channel(
         &self,
-        channel_type: String,
+        channel_type: ChannelType,
         chat_id: String,
         session_key: SessionKey,
     ) -> Result<ChannelBinding, ChatError> {
@@ -364,7 +366,7 @@ impl SessionService {
     #[instrument(skip(self))]
     pub async fn get_channel_session(
         &self,
-        channel_type: &str,
+        channel_type: ChannelType,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, ChatError> {
         let binding = self

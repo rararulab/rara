@@ -139,8 +139,10 @@ pub struct SessionEntry {
 /// a binding with the same composite key will update the target session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelBinding {
-    /// Channel type identifier, e.g. `"telegram"`, `"slack"`, `"web"`.
-    pub channel_type: String,
+    /// Channel type identifier, e.g.
+    /// [`crate::channel::types::ChannelType::Telegram`],
+    /// [`crate::channel::types::ChannelType::Web`].
+    pub channel_type: crate::channel::types::ChannelType,
     /// External chat or conversation identifier within the channel
     /// (e.g. Telegram chat id, Slack channel id).
     pub chat_id:      String,
@@ -190,7 +192,7 @@ pub trait SessionIndex: Send + Sync + 'static {
     /// Resolve a channel binding by `(channel_type, chat_id)`.
     async fn get_channel_binding(
         &self,
-        channel_type: &str,
+        channel_type: crate::channel::types::ChannelType,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError>;
 

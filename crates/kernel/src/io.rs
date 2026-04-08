@@ -1585,7 +1585,7 @@ impl IOSubsystem {
             Some(chat_id) => {
                 match self
                     .session_index
-                    .get_channel_binding(&raw.channel_type.to_string(), chat_id)
+                    .get_channel_binding(raw.channel_type, chat_id)
                     .await
                 {
                     Ok(Some(binding)) => {

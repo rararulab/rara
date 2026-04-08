@@ -568,7 +568,7 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
     // Use the short UUID prefix as the CLI alias for the new session.
     let new_alias = short_session_key(&created.key);
     let binding = ChannelBinding {
-        channel_type: "cli".to_owned(),
+        channel_type: ChannelType::Cli,
         chat_id:      new_alias.clone(),
         session_key:  created.key,
         created_at:   now,
@@ -612,7 +612,7 @@ async fn handle_list_sessions(
 
     // Resolve the current session's internal key for comparison.
     let current_internal_key = session_index
-        .get_channel_binding("cli", current_session_key)
+        .get_channel_binding(ChannelType::Cli, current_session_key)
         .await
         .ok()
         .flatten()
@@ -683,7 +683,7 @@ async fn handle_switch_session(
     let new_alias = short_session_key(&entry.key);
     let now = Utc::now();
     let binding = ChannelBinding {
-        channel_type: "cli".to_owned(),
+        channel_type: ChannelType::Cli,
         chat_id:      new_alias.clone(),
         session_key:  entry.key,
         created_at:   now,
@@ -800,7 +800,7 @@ async fn get_or_create_cli_session(
     chat_id: &str,
 ) -> Result<SessionKey, Whatever> {
     if let Some(binding) = session_index
-        .get_channel_binding("cli", chat_id)
+        .get_channel_binding(ChannelType::Cli, chat_id)
         .await
         .whatever_context("Failed to load CLI channel binding")?
     {
@@ -824,7 +824,7 @@ async fn get_or_create_cli_session(
         .await
         .whatever_context("Failed to create CLI chat session")?;
     let binding = ChannelBinding {
-        channel_type: "cli".to_owned(),
+        channel_type: ChannelType::Cli,
         chat_id:      chat_id.to_owned(),
         session_key:  created.key.clone(),
         created_at:   now,
@@ -1073,7 +1073,7 @@ async fn poll_crossterm_event() -> Option<Event> {
 mod tests {
     use rara_channels::terminal::CliEvent;
     use rara_kernel::{
-        channel::types::{ContentBlock, MessageContent},
+        channel::types::{ChannelType, ContentBlock, MessageContent},
         identity::UserId,
         io::StreamEvent,
         session::SessionIndex,
@@ -1099,7 +1099,7 @@ mod tests {
             .await
             .expect("second session");
         let binding = session_index
-            .get_channel_binding("cli", "default")
+            .get_channel_binding(ChannelType::Cli, "default")
             .await
             .expect("binding query")
             .expect("binding");

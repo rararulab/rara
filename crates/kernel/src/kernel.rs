@@ -1212,7 +1212,7 @@ impl Kernel {
                 // IOSubsystem can resolve future messages from this chat.
                 if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
                     let binding = crate::session::ChannelBinding {
-                        channel_type: msg.source.channel_type.to_string(),
+                        channel_type: msg.source.channel_type,
                         chat_id:      chat_id.to_string(),
                         session_key:  session.key.clone(),
                         created_at:   now,
@@ -1493,7 +1493,7 @@ impl Kernel {
                 };
                 if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
                     let binding = crate::session::ChannelBinding {
-                        channel_type: msg.source.channel_type.to_string(),
+                        channel_type: msg.source.channel_type,
                         chat_id:      chat_id.to_string(),
                         session_key:  session.key.clone(),
                         created_at:   now,

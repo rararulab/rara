@@ -80,7 +80,7 @@ impl SessionIndex for TestSessionIndex {
 
     async fn get_channel_binding(
         &self,
-        _channel_type: &str,
+        _channel_type: rara_kernel::channel::types::ChannelType,
         _chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(None)

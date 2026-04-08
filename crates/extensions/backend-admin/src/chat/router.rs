@@ -37,7 +37,10 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use rara_kernel::{cascade::CascadeTrace, channel::types::ChatMessage};
+use rara_kernel::{
+    cascade::CascadeTrace,
+    channel::types::{ChannelType, ChatMessage},
+};
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
 use serde::Deserialize;
 use tracing::instrument;
@@ -50,6 +53,13 @@ use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionSe
 fn parse_session_key(raw: &str) -> Result<SessionKey, ChatError> {
     SessionKey::try_from_raw(raw).map_err(|_| ChatError::InvalidRequest {
         message: format!("invalid session key: {raw}"),
+    })
+}
+
+/// Parse a channel type from a URL path / request body parameter.
+fn parse_channel_type(raw: &str) -> Result<ChannelType, ChatError> {
+    raw.parse().map_err(|_| ChatError::InvalidRequest {
+        message: format!("unknown channel type: {raw}"),
     })
 }
 
@@ -388,7 +398,7 @@ async fn bind_channel(
 ) -> Result<Json<ChannelBinding>, ChatError> {
     let binding = service
         .bind_channel(
-            req.channel_type,
+            parse_channel_type(&req.channel_type)?,
             req.chat_id,
             parse_session_key(&req.session_key)?,
         )
@@ -415,6 +425,8 @@ async fn get_channel_binding(
     State(service): State<SessionService>,
     Path((channel_type, chat_id)): Path<(String, String)>,
 ) -> Result<Json<Option<ChannelBinding>>, ChatError> {
-    let binding = service.get_channel_session(&channel_type, &chat_id).await?;
+    let binding = service
+        .get_channel_session(parse_channel_type(&channel_type)?, &chat_id)
+        .await?;
     Ok(Json(binding))
 }

@@ -21,12 +21,13 @@ use chrono::Utc;
 use dashmap::DashMap;
 
 use super::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey};
+use crate::channel::types::ChannelType;
 
 /// A minimal in-memory [`SessionIndex`] for unit tests.
 #[derive(Default)]
 pub(crate) struct InMemorySessionIndex {
     pub sessions: DashMap<String, SessionEntry>,
-    pub bindings: DashMap<(String, String), ChannelBinding>,
+    pub bindings: DashMap<(ChannelType, String), ChannelBinding>,
 }
 
 impl InMemorySessionIndex {
@@ -80,7 +81,7 @@ impl SessionIndex for InMemorySessionIndex {
 
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         self.bindings.insert(
-            (binding.channel_type.clone(), binding.chat_id.clone()),
+            (binding.channel_type, binding.chat_id.clone()),
             binding.clone(),
         );
         Ok(binding.clone())
@@ -88,12 +89,12 @@ impl SessionIndex for InMemorySessionIndex {
 
     async fn get_channel_binding(
         &self,
-        channel_type: &str,
+        channel_type: ChannelType,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(self
             .bindings
-            .get(&(channel_type.to_owned(), chat_id.to_owned()))
+            .get(&(channel_type, chat_id.to_owned()))
             .map(|entry| entry.clone()))
     }
 

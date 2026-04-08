@@ -20,6 +20,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use rara_kernel::{
+    channel::types::ChannelType,
     handle::KernelHandle,
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
@@ -110,8 +111,11 @@ impl BotServiceClient for KernelBotServiceClient {
         channel_type: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, BotServiceError> {
+        let ct: ChannelType = channel_type.parse().map_err(|_| BotServiceError::Service {
+            message: format!("unknown channel type: {channel_type}"),
+        })?;
         self.sessions
-            .get_channel_binding(channel_type, chat_id)
+            .get_channel_binding(ct, chat_id)
             .await
             .map(|opt| opt.as_ref().map(binding_to_client))
             .context(SessionSnafu)
@@ -123,12 +127,15 @@ impl BotServiceClient for KernelBotServiceClient {
         chat_id: &str,
         session_key: &str,
     ) -> Result<ChannelBinding, BotServiceError> {
+        let ct: ChannelType = channel_type.parse().map_err(|_| BotServiceError::Service {
+            message: format!("unknown channel type: {channel_type}"),
+        })?;
         let key = SessionKey::try_from_raw(session_key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
         })?;
         let now = Utc::now();
         let binding = ks::ChannelBinding {
-            channel_type: channel_type.to_owned(),
+            channel_type: ct,
             chat_id:      chat_id.to_owned(),
             session_key:  key,
             created_at:   now,
@@ -522,7 +529,7 @@ mod tests {
     #[derive(Default)]
     struct InMemorySessionIndex {
         sessions: DashMap<String, SessionEntry>,
-        bindings: DashMap<(String, String), ChannelBinding>,
+        bindings: DashMap<(ChannelType, String), ChannelBinding>,
     }
 
     #[async_trait]
@@ -578,7 +585,7 @@ mod tests {
             binding: &ChannelBinding,
         ) -> Result<ChannelBinding, SessionError> {
             self.bindings.insert(
-                (binding.channel_type.clone(), binding.chat_id.clone()),
+                (binding.channel_type, binding.chat_id.clone()),
                 binding.clone(),
             );
             Ok(binding.clone())
@@ -586,12 +593,12 @@ mod tests {
 
         async fn get_channel_binding(
             &self,
-            channel_type: &str,
+            channel_type: ChannelType,
             chat_id: &str,
         ) -> Result<Option<ChannelBinding>, SessionError> {
             Ok(self
                 .bindings
-                .get(&(channel_type.to_owned(), chat_id.to_owned()))
+                .get(&(channel_type, chat_id.to_owned()))
                 .map(|binding| binding.clone()))
         }
 
