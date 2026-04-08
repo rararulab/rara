@@ -150,7 +150,7 @@ impl KernelHandle {
         &self,
         manifest: AgentManifest,
         input: String,
-        principal: Principal,
+        principal: Principal<crate::identity::Lookup>,
         parent_id: Option<SessionKey>,
         desired_session_key: Option<SessionKey>,
     ) -> Result<SessionKey> {
@@ -180,7 +180,7 @@ impl KernelHandle {
         &self,
         agent_name: &str,
         input: String,
-        principal: Principal,
+        principal: Principal<crate::identity::Lookup>,
         parent_id: Option<SessionKey>,
     ) -> Result<SessionKey> {
         let manifest =
@@ -429,7 +429,7 @@ impl KernelHandle {
         let event = KernelEventEnvelope::spawn_agent(
             manifest,
             input,
-            principal.clone(),
+            principal.clone().into_lookup(),
             Some(session_key),
             None,
             reply_tx,

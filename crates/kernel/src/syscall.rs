@@ -605,7 +605,9 @@ impl SyscallDispatcher {
                         reason: format!(
                             "agent {} (role {:?}) cannot access {:?} scope — requires Root or \
                              Admin",
-                            session_key, principal.role, scope,
+                            session_key,
+                            principal.role(),
+                            scope,
                         ),
                     });
                 }

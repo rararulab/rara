@@ -326,7 +326,10 @@ impl SecuritySubsystem {
     ///
     /// Returns a fully-populated `Principal` with the correct role and
     /// permissions from the database — never a hollow placeholder.
-    pub async fn resolve_principal(&self, principal: &Principal) -> Result<Principal> {
+    pub async fn resolve_principal(
+        &self,
+        principal: &Principal<crate::identity::Lookup>,
+    ) -> Result<Principal> {
         let user = self
             .user_store
             .get_by_name(&principal.user_id.0)

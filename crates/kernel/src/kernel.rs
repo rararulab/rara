@@ -706,7 +706,7 @@ impl Kernel {
         &self,
         manifest: AgentManifest,
         input: crate::channel::types::MessageContent,
-        principal: Principal,
+        principal: Principal<crate::identity::Lookup>,
         parent_id: Option<SessionKey>,
         // TODO: not yet implemented — intended for restoring a previous
         // session's tape/history so the agent can resume where it left off.
