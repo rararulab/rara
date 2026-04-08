@@ -15,9 +15,8 @@
 //! `/debug <message_id>` command — retrieve full execution context for a
 //! message by walking the session tape.
 //!
-//! All data (tokens, model, tools, timings) is derived from tape entry
-//! metadata — the tape is the single source of truth, no parallel SQL
-//! lookup needed.
+//! Aggregation lives in [`rara_kernel::debug::MessageDebugSummary`]; this
+//! handler only renders the result as Telegram HTML.
 
 use std::fmt::Write;
 
@@ -26,6 +25,7 @@ use rara_kernel::{
     channel::command::{
         CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
     },
+    debug::MessageDebugSummary,
     error::KernelError,
     memory::TapeService,
 };
@@ -80,185 +80,95 @@ impl CommandHandler for DebugCommandHandler {
                 message: format!("tape search failed: {e}").into(),
             })?;
 
-        let matched: Vec<_> = entries
-            .into_iter()
-            .filter(|e| {
-                e.metadata.as_ref().is_some_and(|m| {
-                    m.get("rara_message_id")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|id| id == message_id)
-                })
-            })
-            .collect();
+        let summary = MessageDebugSummary::from_entries(message_id, entries);
+        Ok(CommandResult::Html(render_html(&summary)))
+    }
+}
 
-        let mut output = String::new();
+/// Render a [`MessageDebugSummary`] as Telegram HTML.
+fn render_html(summary: &MessageDebugSummary) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "<b>🔍 Debug: <code>{}</code></b>\n",
+        html_escape(&summary.message_id)
+    );
+
+    if summary.is_empty() {
+        output.push_str(
+            "<i>No tape entries found for this message ID. It may have expired or never \
+             existed.</i>",
+        );
+        return output;
+    }
+
+    // -- Section 1: Summary ----------------------------------------------------
+    let _ = writeln!(output, "<b>📊 Summary</b>");
+    let _ = writeln!(output, "• Entries: {}", summary.entries.len());
+    if let Some(ref model) = summary.model {
+        let _ = writeln!(output, "• Model: <code>{}</code>", html_escape(model));
+    }
+    if summary.iterations > 0 {
+        let _ = writeln!(output, "• Iterations: {}", summary.iterations);
+    }
+    if summary.stream_ms > 0 {
         let _ = writeln!(
             output,
-            "<b>🔍 Debug: <code>{}</code></b>\n",
-            html_escape(message_id)
+            "• Stream: {:.1}s",
+            summary.stream_ms as f64 / 1000.0
         );
-
-        if matched.is_empty() {
-            output.push_str(
-                "<i>No tape entries found for this message ID. It may have expired or never \
-                 existed.</i>",
-            );
-            return Ok(CommandResult::Html(output));
-        }
-
-        // Aggregate metrics from tape entry metadata.
-        let mut model = String::new();
-        let mut total_input = 0u64;
-        let mut total_output = 0u64;
-        let mut iterations = 0usize;
-        let mut total_stream_ms = 0u64;
-        let mut tool_calls = 0usize;
-        let mut tool_failures = 0usize;
-
-        for entry in &matched {
-            let Some(meta) = entry.metadata.as_ref() else {
-                continue;
-            };
-
-            // LlmEntryMetadata fields (assistant messages).
-            if let Some(m) = meta.get("model").and_then(|v| v.as_str()) {
-                if model.is_empty() {
-                    model = m.to_owned();
-                }
-            }
-            if let Some(usage) = meta.get("usage") {
-                if let Some(t) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
-                    total_input += t;
-                }
-                if let Some(t) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
-                    total_output += t;
-                }
-            }
-            if meta.get("iteration").is_some() {
-                iterations += 1;
-            }
-            if let Some(ms) = meta.get("stream_ms").and_then(|v| v.as_u64()) {
-                total_stream_ms += ms;
-            }
-
-            // ToolResultMetadata fields.
-            if let Some(metrics) = meta.get("tool_metrics").and_then(|v| v.as_array()) {
-                tool_calls += metrics.len();
-                tool_failures += metrics
-                    .iter()
-                    .filter(|m| m.get("success").and_then(|v| v.as_bool()) == Some(false))
-                    .count();
-            }
-        }
-
-        // -- Section 1: Summary ------------------------------------------------
-        let _ = writeln!(output, "<b>📊 Summary</b>");
-        let _ = writeln!(output, "• Entries: {}", matched.len());
-        if !model.is_empty() {
-            let _ = writeln!(output, "• Model: <code>{}</code>", html_escape(&model));
-        }
-        if iterations > 0 {
-            let _ = writeln!(output, "• Iterations: {iterations}");
-        }
-        if total_stream_ms > 0 {
-            let _ = writeln!(output, "• Stream: {:.1}s", total_stream_ms as f64 / 1000.0);
-        }
-        if total_input > 0 || total_output > 0 {
-            let _ = writeln!(
-                output,
-                "• Tokens: ↑{} ↓{}",
-                format_tokens(total_input),
-                format_tokens(total_output)
-            );
-        }
-        if tool_calls > 0 {
-            let _ = writeln!(
-                output,
-                "• Tool calls: {tool_calls} ({tool_failures} failed)"
-            );
-        }
-
-        // -- Section 2: Tool execution detail ----------------------------------
-        let mut tool_lines: Vec<String> = Vec::new();
-        for entry in &matched {
-            let Some(meta) = entry.metadata.as_ref() else {
-                continue;
-            };
-            let Some(metrics) = meta.get("tool_metrics").and_then(|v| v.as_array()) else {
-                continue;
-            };
-            for m in metrics {
-                let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                let duration = m
-                    .get("duration_ms")
-                    .and_then(|v| v.as_u64())
-                    .map(|ms| format!("{ms}ms"))
-                    .unwrap_or_else(|| "—".to_owned());
-                let success = m.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-                let icon = if success { "✓" } else { "✗" };
-                let mut line = format!("  {icon} <code>{}</code> ({duration})", html_escape(name));
-                if let Some(err) = m.get("error").and_then(|v| v.as_str()) {
-                    let preview: String = err.chars().take(150).collect();
-                    let _ = write!(line, "\n    ⚠️ {}", html_escape(&preview));
-                }
-                tool_lines.push(line);
-            }
-        }
-        if !tool_lines.is_empty() {
-            let _ = writeln!(output, "\n<b>🔧 Tools</b>");
-            for line in tool_lines {
-                output.push_str(&line);
-                output.push('\n');
-            }
-        }
-
-        // -- Section 3: Timeline -----------------------------------------------
-        let _ = writeln!(output, "\n<b>📝 Timeline</b>");
-        for entry in &matched {
-            let kind = entry.kind.to_string();
-            let ts = entry.timestamp.strftime("%H:%M:%S").to_string();
-
-            let detail = match kind.as_str() {
-                "message" => entry
-                    .payload
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.chars().take(100).collect::<String>())
-                    .unwrap_or_default(),
-                "tool_call" => {
-                    let name = entry
-                        .payload
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    format!("→ {name}")
-                }
-                "tool_result" => {
-                    let name = entry
-                        .payload
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let success = entry
-                        .payload
-                        .get("success")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
-                    let icon = if success { "✓" } else { "✗" };
-                    format!("{icon} {name}")
-                }
-                _ => String::new(),
-            };
-
-            let _ = writeln!(
-                output,
-                "<code>{ts}</code> [{kind}] {}",
-                html_escape(&detail)
-            );
-        }
-
-        Ok(CommandResult::Html(output))
     }
+    if summary.input_tokens > 0 || summary.output_tokens > 0 {
+        let _ = writeln!(
+            output,
+            "• Tokens: ↑{} ↓{}",
+            format_tokens(summary.input_tokens),
+            format_tokens(summary.output_tokens)
+        );
+    }
+    if !summary.tools.is_empty() {
+        let _ = writeln!(
+            output,
+            "• Tool calls: {} ({} failed)",
+            summary.tools.len(),
+            summary.tool_failures
+        );
+    }
+
+    // -- Section 2: Tool execution detail --------------------------------------
+    if !summary.tools.is_empty() {
+        let _ = writeln!(output, "\n<b>🔧 Tools</b>");
+        for tool in &summary.tools {
+            let duration = tool
+                .duration_ms
+                .map(|ms| format!("{ms}ms"))
+                .unwrap_or_else(|| "—".to_owned());
+            let icon = if tool.success { "✓" } else { "✗" };
+            let _ = writeln!(
+                output,
+                "  {icon} <code>{}</code> ({duration})",
+                html_escape(&tool.name)
+            );
+            if let Some(ref err) = tool.error {
+                let preview: String = err.chars().take(150).collect();
+                let _ = writeln!(output, "    ⚠️ {}", html_escape(&preview));
+            }
+        }
+    }
+
+    // -- Section 3: Timeline ---------------------------------------------------
+    let _ = writeln!(output, "\n<b>📝 Timeline</b>");
+    for item in &summary.timeline {
+        let _ = writeln!(
+            output,
+            "<code>{}</code> [{}] {}",
+            item.timestamp,
+            item.kind,
+            html_escape(&item.detail)
+        );
+    }
+
+    output
 }
 
 /// Format token count for display (e.g. 15200 → "15.2k").

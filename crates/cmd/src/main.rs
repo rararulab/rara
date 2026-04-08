@@ -17,6 +17,7 @@ use snafu::{ResultExt, Whatever, whatever};
 
 mod build_info;
 mod chat;
+mod debug;
 mod login;
 mod setup;
 mod top;
@@ -47,6 +48,7 @@ enum Commands {
     Login(login::LoginCmd),
     Setup(setup::SetupCmd),
     Wechat(wechat::WechatCmd),
+    Debug(debug::DebugCmd),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -379,5 +381,6 @@ async fn main() -> Result<(), Whatever> {
         Commands::Login(cmd) => cmd.run().await,
         Commands::Setup(cmd) => cmd.run().await,
         Commands::Wechat(cmd) => cmd.run().await,
+        Commands::Debug(cmd) => cmd.run().await,
     }
 }
