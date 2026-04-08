@@ -146,13 +146,23 @@ impl ToolXmlParser {
 
 /// How many bytes at the start of `text` can be safely emitted without
 /// splitting a potential partial `tag` at the tail.
+///
+/// Only iterates valid UTF-8 char boundaries via `char_indices()` to
+/// avoid panicking on multi-byte characters (e.g. CJK punctuation).
 fn safe_emit_len(text: &str, tag: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
-    for start_idx in (0..text.len()).rev() {
+    // Walk char boundaries from the end. If the tail starting at any
+    // boundary is a prefix of `tag`, we must keep it buffered.
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    for &start_idx in boundaries.iter().rev() {
         let tail = &text[start_idx..];
-        if tag.starts_with(tail) {
+        if !tail.is_empty() && tag.starts_with(tail) {
             return start_idx;
         }
     }
@@ -326,6 +336,28 @@ mod tests {
         let (text, calls) = collect_stream(&["x < y and <b>bold</b>"]);
         assert_eq!(text, "x < y and <b>bold</b>");
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn cjk_text_no_panic() {
+        // Regression: safe_emit_len used raw byte indices which panicked
+        // on multi-byte UTF-8 characters (。is 3 bytes: 862..865).
+        let cjk = "在 Memoh 里，Bot 是一个完整的 AI Agent 实例。具备专属记忆。";
+        let (text, calls) = collect_stream(&[cjk]);
+        assert_eq!(text, cjk);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn cjk_with_partial_open_tag() {
+        // CJK text ending with a partial `<invoke ` prefix.
+        let (text, calls) = collect_stream(&[
+            "你好<inv",
+            r#"oke name="t"><parameter name="k">v</parameter></invoke>"#,
+        ]);
+        assert_eq!(text, "你好");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "t");
     }
 
     #[test]
