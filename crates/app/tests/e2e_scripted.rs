@@ -19,7 +19,7 @@
 //! messages through the standard `KernelHandle` API, and asserts on turn
 //! traces and tape entries.
 
-use std::time::Duration;
+use std::{path::Path, sync::Once, time::Duration};
 
 use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
@@ -29,6 +29,18 @@ use rara_kernel::{
     testing::{TestKernelBuilder, scripted_response},
 };
 use tokio::time::{Instant, sleep};
+
+/// Override rara_paths directories to a writable temp path so tests
+/// don't touch `~/.config/rara` (which may not exist on CI runners).
+fn init_test_env(tmp: &Path) {
+    static INIT: Once = Once::new();
+    let data = tmp.join("rara_data");
+    let config = tmp.join("rara_config");
+    INIT.call_once(move || {
+        rara_paths::set_custom_data_dir(&data);
+        rara_paths::set_custom_config_dir(&config);
+    });
+}
 
 /// Build an [`InboundMessage<Unresolved>`] for test submission.
 fn build_test_message(
@@ -84,6 +96,7 @@ async fn wait_for_turn_count(
 #[tokio::test]
 async fn simple_text_reply() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
     let tk = TestKernelBuilder::new(tmp.path())
         .responses(vec![
             scripted_response("Hi there!"),
@@ -124,6 +137,7 @@ async fn simple_text_reply() {
 #[tokio::test]
 async fn multi_turn_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
     // Use a uniform response so the test is order-insensitive. The kernel
     // may make auxiliary LLM calls (knowledge extraction) between user
     // turns, consuming extra scripted responses.
@@ -200,6 +214,7 @@ async fn multi_turn_conversation() {
 #[tokio::test]
 async fn empty_llm_response_handled() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
 
     // Script an empty response (no content, no tool calls).
     let empty_response = rara_kernel::llm::CompletionResponse {
@@ -248,6 +263,7 @@ async fn empty_llm_response_handled() {
 #[tokio::test]
 async fn tape_records_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
     let tk = TestKernelBuilder::new(tmp.path())
         .responses(vec![
             scripted_response("Recorded reply"),
