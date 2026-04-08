@@ -15,14 +15,12 @@
 //! Click an element in the active browser page.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Click an element identified by its ref ID from the accessibility snapshot.
 #[derive(ToolDef)]

@@ -98,7 +98,7 @@ pub struct AppConfig {
     /// Speech-to-Text configuration (optional).
     /// When present, `base_url` is required — startup fails if missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stt:                    Option<rara_kernel::stt::SttConfig>,
+    pub stt:                    Option<rara_stt::SttConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:                Option<GatewayConfig>,
@@ -115,7 +115,7 @@ pub struct AppConfig {
     /// or when the binary is not installed, browser tools are not available and
     /// rara falls back to `http-fetch` for web access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser:                Option<rara_kernel::browser::BrowserConfig>,
+    pub browser:                Option<rara_browser::BrowserConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -286,7 +286,7 @@ pub async fn start_with_options(
     // If managed mode, spawn and wait for whisper-server before building STT
     // client.
     let whisper_process = if let Some(ref stt) = config.stt {
-        if let Some(mut wp) = rara_kernel::stt::WhisperProcess::from_config(stt) {
+        if let Some(mut wp) = rara_stt::WhisperProcess::from_config(stt) {
             wp.start().await.whatever_context(
                 "failed to start managed whisper-server (check stt.server_bin and stt.model_path)",
             )?;
@@ -299,10 +299,7 @@ pub async fn start_with_options(
         None
     };
 
-    let stt_service = config
-        .stt
-        .as_ref()
-        .map(rara_kernel::stt::SttService::from_config);
+    let stt_service = config.stt.as_ref().map(rara_stt::SttService::from_config);
 
     let db_store = init_infra(&config)
         .await
@@ -332,9 +329,9 @@ pub async fn start_with_options(
     // -- browser subsystem (optional) -------------------------------------
     // Start Lightpanda if a `browser:` section exists in config. Failure to
     // start is non-fatal — browser tools are simply not registered.
-    let browser_manager: Option<rara_kernel::browser::BrowserManagerRef> =
+    let browser_manager: Option<rara_browser::BrowserManagerRef> =
         if let Some(browser_cfg) = config.browser.clone() {
-            match rara_kernel::browser::BrowserManager::start(browser_cfg).await {
+            match rara_browser::BrowserManager::start(browser_cfg).await {
                 Ok(manager) => {
                     info!("browser subsystem initialized with Lightpanda");
                     Some(std::sync::Arc::new(manager))
@@ -724,7 +721,7 @@ pub async fn start_with_options(
 async fn try_build_telegram(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
     user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
-    stt_service: Option<rara_kernel::stt::SttService>,
+    stt_service: Option<rara_stt::SttService>,
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
 

@@ -15,14 +15,12 @@
 //! Fetch a URL and return its content as Markdown via Lightpanda.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Fetch a URL and return its rendered Markdown content via Lightpanda.
 #[derive(ToolDef)]

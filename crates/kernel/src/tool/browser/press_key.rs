@@ -15,14 +15,12 @@
 //! Press a keyboard key in the active browser page.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Press a keyboard key (e.g. Enter, Escape, ArrowDown) in the active page.
 #[derive(ToolDef)]

@@ -22,7 +22,6 @@ backon.workspace = true
 base.workspace = true
 base64.workspace = true
 bon.workspace = true
-chromiumoxide.workspace = true
 chrono.workspace = true
 cron = "0.15"
 crossbeam-queue.workspace = true
@@ -39,9 +38,11 @@ opentelemetry = { version = "0.31.0", default-features = false, features = ["tra
 parking_lot.workspace = true
 rand.workspace = true
 rapidfuzz.workspace = true
+rara-browser.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
 rara-soul.workspace = true
+rara-stt.workspace = true
 rara-tool-macro.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -56,7 +57,6 @@ sqlx.workspace = true
 strum = { workspace = true, features = ["derive"] }
 tokio.workspace = true
 tokio-util = { workspace = true }
-url.workspace = true
 tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true

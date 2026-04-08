@@ -15,14 +15,12 @@
 //! Wait for a condition in the active browser page.
 
 use async_trait::async_trait;
+use rara_browser::BrowserManagerRef;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    browser::BrowserManagerRef,
-    tool::{ToolContext, ToolExecute},
-};
+use crate::tool::{ToolContext, ToolExecute};
 
 /// Wait for text to appear, disappear, or for a time delay, then snapshot.
 #[derive(ToolDef)]

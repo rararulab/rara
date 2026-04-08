@@ -28,7 +28,9 @@ mod tabs;
 mod type_text;
 mod wait_for;
 
-use crate::{browser::BrowserManagerRef, tool::AgentToolRef};
+use rara_browser::BrowserManagerRef;
+
+use crate::tool::AgentToolRef;
 
 /// Create all browser tools backed by the given browser manager.
 pub fn browser_tools(manager: BrowserManagerRef) -> Vec<AgentToolRef> {
