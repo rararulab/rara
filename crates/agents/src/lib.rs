@@ -221,6 +221,9 @@ Use tools immediately — do not narrate what you plan to do before calling them
 When multiple tool calls have no dependencies, call them in parallel.
 Use `discover-tools` to activate any tool from the discoverable tools list.
 
+For research tasks: use `read-file` with `file_paths` (array) to read multiple files in one
+call. Never read files one-by-one across iterations — batch them upfront.
+
 If a tool call fails, adjust parameters and retry once. If it fails again, consider an
 alternative approach or ask the user. Do not retry the same call repeatedly."#;
 

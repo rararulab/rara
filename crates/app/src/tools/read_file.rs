@@ -121,33 +121,54 @@ fn read_page(all_lines: &[&str], offset: usize, limit: usize) -> PageResult {
 }
 
 /// Input parameters for the read-file tool.
+///
+/// Supports both single-file (`file_path`) and batch (`file_paths`) modes.
+/// When `file_paths` is provided, reads multiple files in one call (max 20,
+/// 500 lines each) — use this to avoid burning one LLM iteration per file.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadFileParams {
-    /// Absolute path to the file to read.
-    file_path: String,
-    /// 1-based line number to start reading from (default 1).
-    offset:    Option<u64>,
-    /// Maximum number of lines to return (default 2000).
-    limit:     Option<u64>,
+    /// Absolute path to a single file (ignored when `file_paths` is set).
+    #[serde(default)]
+    file_path:  Option<String>,
+    /// Absolute paths to multiple files (max 20). Overrides `file_path`.
+    #[serde(default)]
+    file_paths: Option<Vec<String>>,
+    /// 1-based line number to start reading from (default 1, single-file only).
+    offset:     Option<u64>,
+    /// Maximum number of lines to return (default 2000, single-file only).
+    limit:      Option<u64>,
 }
 
 /// Typed result returned by the read-file tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadFileResult {
-    /// File content with line number prefixes.
+    /// File content with line number prefixes (single-file mode), or
+    /// concatenated output of all files (batch mode).
     pub content:     String,
-    /// Total number of lines in the file.
+    /// Total number of lines in the file (single-file), or total files read
+    /// (batch).
     pub total_lines: usize,
     /// Whether the output was truncated.
     pub truncated:   bool,
 }
 
-/// Layer 1 primitive: read a file with line numbers.
+/// Maximum lines per file in batch mode.
+const BATCH_MAX_LINES_PER_FILE: usize = 500;
+
+/// Maximum total output bytes across all files in batch mode.
+const BATCH_MAX_TOTAL_BYTES: usize = 200 * 1024;
+
+/// Maximum number of files in a single batch.
+const BATCH_MAX_FILES: usize = 20;
+
+/// Layer 1 primitive: read one or more files with line numbers.
 #[derive(ToolDef)]
 #[tool(
     name = "read-file",
-    description = "Read a file with line numbers; auto-pages to fit context budget, or use \
-                   offset/limit for a specific range."
+    description = "Read files with line numbers. Single file: use `file_path` with optional \
+                   offset/limit. Multiple files: use `file_paths` (array, max 20) to read them \
+                   all in one call — always prefer this for research tasks to avoid wasting \
+                   iterations."
 )]
 pub struct ReadFileTool;
 
@@ -165,10 +186,19 @@ impl ToolExecute for ReadFileTool {
         params: ReadFileParams,
         context: &ToolContext,
     ) -> anyhow::Result<ReadFileResult> {
-        let file_path = if std::path::Path::new(&params.file_path).is_absolute() {
-            std::path::PathBuf::from(&params.file_path)
+        // Batch mode: multiple files in one call.
+        if let Some(paths) = &params.file_paths {
+            return read_batch(paths).await;
+        }
+
+        let Some(ref path_str) = params.file_path else {
+            anyhow::bail!("either `file_path` or `file_paths` must be provided");
+        };
+
+        let file_path = if std::path::Path::new(path_str).is_absolute() {
+            std::path::PathBuf::from(path_str)
         } else {
-            rara_paths::workspace_dir().join(&params.file_path)
+            rara_paths::workspace_dir().join(path_str)
         };
 
         let raw_bytes = tokio::fs::read(&file_path)
@@ -246,6 +276,94 @@ impl ToolExecute for ReadFileTool {
             truncated: !file_fully_read || any_content_truncated,
         })
     }
+}
+
+/// Read multiple files, concatenating results with headers.
+async fn read_batch(paths: &[String]) -> anyhow::Result<ReadFileResult> {
+    let paths = if paths.len() > BATCH_MAX_FILES {
+        tracing::warn!(
+            requested = paths.len(),
+            max = BATCH_MAX_FILES,
+            "read-file batch: clamping to max files"
+        );
+        &paths[..BATCH_MAX_FILES]
+    } else {
+        paths
+    };
+
+    let mut output = String::new();
+    let mut total_bytes = 0usize;
+    let mut files_read = 0usize;
+    let mut truncated = false;
+
+    for path_str in paths {
+        if total_bytes >= BATCH_MAX_TOTAL_BYTES {
+            truncated = true;
+            output.push_str(&format!(
+                "\n── {path_str} ──\n[skipped — output budget reached]\n"
+            ));
+            continue;
+        }
+
+        let file_path = if std::path::Path::new(path_str).is_absolute() {
+            std::path::PathBuf::from(path_str)
+        } else {
+            rara_paths::workspace_dir().join(path_str)
+        };
+
+        output.push_str(&format!("\n── {path_str} ──\n"));
+
+        let raw_bytes = match tokio::fs::read(&file_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                output.push_str(&format!("[error: {e}]\n"));
+                continue;
+            }
+        };
+
+        let check_len = raw_bytes.len().min(BINARY_CHECK_BYTES);
+        if raw_bytes[..check_len].contains(&0) {
+            output.push_str("[binary file detected]\n");
+            continue;
+        }
+
+        let content = String::from_utf8_lossy(&raw_bytes);
+        let all_lines: Vec<&str> = content.lines().collect();
+        let remaining = BATCH_MAX_TOTAL_BYTES.saturating_sub(total_bytes);
+        let limit = BATCH_MAX_LINES_PER_FILE.min(all_lines.len());
+
+        let mut file_truncated = false;
+        for (i, line) in all_lines.iter().take(limit).enumerate() {
+            let line_no = i + 1;
+            let display = if line.len() > MAX_LINE_CHARS {
+                file_truncated = true;
+                format!("{}... [truncated]", &line[..MAX_LINE_CHARS])
+            } else {
+                (*line).to_owned()
+            };
+            let formatted = format!("{line_no:>6}\t{display}\n");
+            if output.len() + formatted.len() - total_bytes > remaining {
+                file_truncated = true;
+                break;
+            }
+            output.push_str(&formatted);
+        }
+
+        if all_lines.len() > limit {
+            file_truncated = true;
+            output.push_str(&format!("[{limit} of {} lines shown]\n", all_lines.len()));
+        }
+
+        truncated |= file_truncated;
+        total_bytes = output.len();
+        files_read += 1;
+    }
+
+    Ok(ReadFileResult {
+        content: output,
+        total_lines: files_read,
+        truncated,
+    })
 }
 
 #[cfg(test)]
