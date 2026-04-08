@@ -875,6 +875,81 @@ impl Default for SessionTable {
 pub(crate) mod test_utils;
 
 #[cfg(test)]
+impl Session {
+    /// Build a minimal `Session` for unit tests that exercise the per-session
+    /// child concurrency semaphore. All other fields are zeroed/empty.
+    pub(crate) fn test_stub(
+        session_key: SessionKey,
+        parent_id: Option<SessionKey>,
+        child_limit: usize,
+        global_semaphore: Arc<Semaphore>,
+    ) -> Self {
+        use crate::{
+            agent::{AgentEnv, AgentManifest, AgentRole, Priority},
+            identity::{KernelUser, Permission, Principal, Role},
+        };
+
+        let global_permit = global_semaphore
+            .try_acquire_owned()
+            .expect("global semaphore must have capacity for test stubs");
+
+        let principal = Principal::from_user(&KernelUser {
+            name:        "test".into(),
+            role:        Role::Root,
+            permissions: vec![Permission::All],
+            enabled:     true,
+        });
+
+        Self {
+            session_key,
+            parent_id,
+            manifest: AgentManifest {
+                name:                   "test".into(),
+                role:                   AgentRole::default(),
+                description:            "test stub".into(),
+                model:                  None,
+                system_prompt:          String::new(),
+                soul_prompt:            None,
+                provider_hint:          None,
+                max_iterations:         None,
+                tools:                  vec![],
+                excluded_tools:         vec![],
+                max_children:           Some(child_limit),
+                max_context_tokens:     None,
+                priority:               Priority::default(),
+                metadata:               serde_json::Value::Null,
+                sandbox:                None,
+                default_execution_mode: None,
+                tool_call_limit:        None,
+                worker_timeout_secs:    None,
+            },
+            principal,
+            env: AgentEnv::default(),
+            state: SessionState::Ready,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+            result_tx: None,
+            created_files: vec![],
+            metrics: Arc::new(RuntimeMetrics::new()),
+            turn_traces: vec![],
+            turn_cancel: CancellationToken::new(),
+            process_cancel: CancellationToken::new(),
+            execution_mode: None,
+            paused: false,
+            pause_buffer: Vec::new(),
+            background_tasks: Vec::new(),
+            pending_tool_call_limit: None,
+            origin_endpoint: None,
+            activated_deferred: std::collections::HashSet::new(),
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            _parent_child_permit: None,
+            _global_permit: global_permit,
+        }
+    }
+}
+
+#[cfg(test)]
 mod state_transition_tests {
     use std::sync::Arc;
 

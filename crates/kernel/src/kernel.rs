@@ -745,6 +745,14 @@ impl Kernel {
                 message: "global concurrency limit reached".to_string(),
             })?;
 
+        // Acquire a permit from the *parent*'s child_semaphore when this is a
+        // child spawn. Fail fast with `SpawnLimitReached` so runaway child
+        // recursion in one session cannot starve the global pool. The permit
+        // is stored on the child Session and released automatically on drop.
+        let parent_child_permit = parent_id
+            .map(|pid| acquire_parent_child_permit(&self.process_table, pid))
+            .transpose()?;
+
         let session_key = desired_session_key.unwrap_or_default();
         tracing::Span::current().record("session_key", tracing::field::display(&session_key));
 
@@ -800,7 +808,7 @@ impl Kernel {
             pending_tool_call_limit: None,
             activated_deferred: std::collections::HashSet::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            _parent_child_permit: None,
+            _parent_child_permit: parent_child_permit,
             _global_permit: global_permit,
         };
         self.process_table.insert(process);
@@ -2946,4 +2954,72 @@ async fn generate_session_title(
     }
 
     Ok(())
+}
+
+/// Acquire a permit from the parent session's `child_semaphore` to enforce
+/// the per-session child concurrency limit.
+///
+/// Returns `SessionNotFound` if the parent does not exist in the table, and
+/// `SpawnLimitReached` when the parent's child slots are exhausted. The
+/// returned permit must be stored on the child `Session` so it is released
+/// automatically when the child is dropped.
+fn acquire_parent_child_permit(
+    process_table: &SessionTable,
+    parent_id: SessionKey,
+) -> crate::Result<tokio::sync::OwnedSemaphorePermit> {
+    let sem = process_table
+        .with(&parent_id, |p| p.child_semaphore.clone())
+        .ok_or(KernelError::SessionNotFound { key: parent_id })?;
+    sem.try_acquire_owned()
+        .map_err(|_| KernelError::SpawnLimitReached {
+            message: format!("parent session {parent_id} reached its child concurrency limit"),
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A parent session with `max_children = 2` allows two child permits to
+    /// be acquired and rejects the third with `SpawnLimitReached`. Releasing
+    /// one permit re-opens a slot.
+    #[test]
+    fn per_session_child_limit_blocks_third_spawn() {
+        let table = SessionTable::new();
+        let global = Arc::new(Semaphore::new(8));
+        let parent_key = SessionKey::new();
+        table.insert(Session::test_stub(parent_key, None, 2, global.clone()));
+
+        let p1 = acquire_parent_child_permit(&table, parent_key)
+            .expect("first child permit must be granted");
+        let p2 = acquire_parent_child_permit(&table, parent_key)
+            .expect("second child permit must be granted");
+
+        let err = acquire_parent_child_permit(&table, parent_key)
+            .expect_err("third spawn must fail with SpawnLimitReached");
+        assert!(
+            matches!(err, KernelError::SpawnLimitReached { .. }),
+            "expected SpawnLimitReached, got {err:?}"
+        );
+
+        // Drop one permit and the next acquire succeeds.
+        drop(p1);
+        let _p3 = acquire_parent_child_permit(&table, parent_key)
+            .expect("permit slot must reopen after drop");
+        drop(p2);
+    }
+
+    /// Looking up a parent that does not exist in the session table fails
+    /// with `SessionNotFound`.
+    #[test]
+    fn missing_parent_returns_session_not_found() {
+        let table = SessionTable::new();
+        let missing = SessionKey::new();
+        let err =
+            acquire_parent_child_permit(&table, missing).expect_err("missing parent must error");
+        assert!(
+            matches!(err, KernelError::SessionNotFound { .. }),
+            "expected SessionNotFound, got {err:?}"
+        );
+    }
 }

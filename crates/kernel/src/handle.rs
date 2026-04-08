@@ -454,9 +454,11 @@ impl KernelHandle {
 
     /// Spawn a child agent via the unified event queue.
     ///
-    /// Acquires a permit from the parent session's `child_semaphore` before
-    /// spawning. The permit is stored in the child session and released
-    /// automatically when the child is removed from the process table.
+    /// The per-session child concurrency limit is enforced inside
+    /// `Kernel::handle_spawn_agent`, which acquires a permit from the
+    /// parent's `child_semaphore` and stores it on the child session so it
+    /// is released automatically when the child session is dropped. Spawns
+    /// that exceed the limit fail fast with `KernelError::SpawnLimitReached`.
     pub async fn spawn_child(
         &self,
         session_key: SessionKey,
@@ -464,21 +466,6 @@ impl KernelHandle {
         manifest: AgentManifest,
         input: String,
     ) -> Result<AgentHandle> {
-        // Acquire a permit from the parent's child_semaphore to enforce the
-        // per-session child limit.
-        let child_sem = self
-            .process_table
-            .with(&session_key, |p| p.child_semaphore.clone())
-            .ok_or_else(|| KernelError::SessionNotFound { key: session_key })?;
-
-        let child_permit =
-            child_sem
-                .acquire_owned()
-                .await
-                .map_err(|_| KernelError::SpawnFailed {
-                    message: format!("parent session {} child semaphore closed", session_key),
-                })?;
-
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let event = KernelEventEnvelope::spawn_agent(
             manifest,
@@ -496,12 +483,10 @@ impl KernelHandle {
 
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
 
-        // Store result_tx and child_permit in the child session so
-        // cleanup_process can send the result. The permit is released
-        // automatically when the child session is dropped.
+        // Store result_tx in the child session so cleanup_process can send
+        // the result back to the awaiting parent.
         self.process_table.with_mut(&child_key, |session| {
             session.result_tx = Some(result_tx);
-            session._parent_child_permit = Some(child_permit);
         });
 
         Ok(AgentHandle {
