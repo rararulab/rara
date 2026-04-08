@@ -57,16 +57,32 @@ use crate::error::{KernelError, Result};
 /// All incoming [`CompletionRequest`]s are captured for post-hoc
 /// assertions.
 pub struct ScriptedLlmDriver {
-    responses: Mutex<VecDeque<CompletionResponse>>,
+    responses: Mutex<VecDeque<Result<CompletionResponse>>>,
     /// All requests received, in order.
     captured:  Mutex<Vec<CompletionRequest>>,
 }
 
 impl ScriptedLlmDriver {
-    /// Create a driver pre-loaded with the given response sequence.
+    /// Create a driver pre-loaded with the given success response sequence.
+    ///
+    /// Each response is wrapped in `Ok`. For failure-mode tests where
+    /// individual completions need to return [`KernelError`], use
+    /// [`Self::new_with_results`] instead.
     pub fn new(responses: Vec<CompletionResponse>) -> Self {
         Self {
-            responses: Mutex::new(VecDeque::from(responses)),
+            responses: Mutex::new(responses.into_iter().map(Ok).collect()),
+            captured:  Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Create a driver pre-loaded with scripted `Result`s.
+    ///
+    /// Each call to [`complete`](LlmDriver::complete) pops the next entry and
+    /// returns it verbatim — success or error. Primary constructor for
+    /// failure-mode E2E tests.
+    pub fn new_with_results(results: Vec<Result<CompletionResponse>>) -> Self {
+        Self {
+            responses: Mutex::new(VecDeque::from(results)),
             captured:  Mutex::new(Vec::new()),
         }
     }
@@ -96,15 +112,13 @@ impl LlmDriver for ScriptedLlmDriver {
             .expect("ScriptedLlmDriver: captured lock poisoned")
             .push(request);
 
-        let response = self
-            .responses
+        self.responses
             .lock()
             .expect("ScriptedLlmDriver: responses lock poisoned")
             .pop_front()
             .ok_or_else(|| KernelError::Provider {
                 message: "ScriptedLlmDriver: no more scripted responses".into(),
-            })?;
-        Ok(response)
+            })?
     }
 
     async fn stream(

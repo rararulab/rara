@@ -228,6 +228,7 @@ impl crate::llm::LlmEmbedder for NoopEmbedder {
 pub struct TestKernelBuilder {
     tmp_dir:   PathBuf,
     responses: Vec<CompletionResponse>,
+    results:   Option<Vec<crate::error::Result<CompletionResponse>>>,
     manifest:  Option<AgentManifest>,
     config:    KernelConfig,
     tools:     Vec<AgentToolRef>,
@@ -249,6 +250,7 @@ impl TestKernelBuilder {
         Self {
             tmp_dir: tmp_dir.to_path_buf(),
             responses: Vec::new(),
+            results: None,
             manifest: None,
             config,
             tools: Vec::new(),
@@ -265,10 +267,20 @@ impl TestKernelBuilder {
         self
     }
 
-    /// Set the scripted LLM responses.
+    /// Set the scripted LLM responses (all succeed).
     #[must_use]
     pub fn responses(mut self, responses: Vec<CompletionResponse>) -> Self {
         self.responses = responses;
+        self
+    }
+
+    /// Set scripted LLM results that may include errors.
+    ///
+    /// When set, takes precedence over [`responses`](Self::responses).
+    /// Use this to exercise the kernel's LLM error recovery paths.
+    #[must_use]
+    pub fn with_results(mut self, results: Vec<crate::error::Result<CompletionResponse>>) -> Self {
+        self.results = Some(results);
         self
     }
 
@@ -293,8 +305,13 @@ impl TestKernelBuilder {
         std::fs::create_dir_all(&tape_dir).expect("create tape dir");
         std::fs::create_dir_all(&agents_dir).expect("create agents dir");
 
-        // LLM driver
-        let driver: LlmDriverRef = Arc::new(ScriptedLlmDriver::new(self.responses));
+        // LLM driver — use pre-built Result queue when provided, otherwise
+        // wrap all responses in Ok.
+        let driver: LlmDriverRef = if let Some(results) = self.results {
+            Arc::new(ScriptedLlmDriver::new_with_results(results))
+        } else {
+            Arc::new(ScriptedLlmDriver::new(self.responses))
+        };
         let driver_registry = Arc::new(DriverRegistry::new("scripted"));
         driver_registry.register_driver("scripted", driver);
         driver_registry.set_provider_model("scripted", "scripted-model", vec![]);
@@ -445,19 +462,38 @@ pub fn scripted_response(text: &str) -> CompletionResponse {
 pub struct FakeTool {
     name:        String,
     description: String,
-    responses:   Mutex<VecDeque<serde_json::Value>>,
+    responses:   Mutex<VecDeque<std::result::Result<serde_json::Value, String>>>,
     captured:    Mutex<Vec<serde_json::Value>>,
 }
 
 impl FakeTool {
-    /// Create a `FakeTool` with the given name and scripted responses.
+    /// Create a `FakeTool` with the given name and scripted success responses.
     ///
-    /// Each call to `execute` pops one response from the front of the queue.
+    /// Each call to `execute` pops one response from the front of the queue
+    /// and returns it as `Ok`. For failure-mode tests that need the tool to
+    /// return errors, use [`Self::with_results`] instead.
     pub fn new(name: impl Into<String>, responses: Vec<serde_json::Value>) -> Self {
         Self {
             name:        name.into(),
             description: "Test tool (FakeTool)".to_string(),
-            responses:   Mutex::new(VecDeque::from(responses)),
+            responses:   Mutex::new(responses.into_iter().map(Ok).collect()),
+            captured:    Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Create a `FakeTool` whose scripted queue may contain errors.
+    ///
+    /// An `Err(message)` entry causes the matching `execute` call to surface a
+    /// tool failure with the given message — the canonical way to exercise
+    /// the kernel's tool-error feedback path.
+    pub fn with_results(
+        name: impl Into<String>,
+        results: Vec<std::result::Result<serde_json::Value, String>>,
+    ) -> Self {
+        Self {
+            name:        name.into(),
+            description: "Test tool (FakeTool)".to_string(),
+            responses:   Mutex::new(VecDeque::from(results)),
             captured:    Mutex::new(Vec::new()),
         }
     }
@@ -494,13 +530,16 @@ impl AgentTool for FakeTool {
             .lock()
             .expect("FakeTool captured mutex poisoned")
             .push(params);
-        let output = self
+        let entry = self
             .responses
             .lock()
             .expect("FakeTool responses mutex poisoned")
             .pop_front()
             .expect("FakeTool: no more scripted responses");
-        Ok(ToolOutput::from(output))
+        match entry {
+            Ok(value) => Ok(ToolOutput::from(value)),
+            Err(message) => Err(anyhow::anyhow!(message)),
+        }
     }
 }
 
