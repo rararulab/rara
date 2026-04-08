@@ -279,7 +279,47 @@ fn latex_preserving_code(input: &str) -> String {
 /// removes blockquote markers so the character-level parser can handle them.
 fn preprocess_blocks(md: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
-    for line in md.lines() {
+    let raw_lines: Vec<&str> = md.lines().collect();
+    let mut idx = 0usize;
+
+    while idx < raw_lines.len() {
+        let line = raw_lines[idx];
+
+        // Markdown table block:
+        // | h1 | h2 |
+        // |----|----|
+        // | v1 | v2 |
+        //
+        // Telegram doesn't support table markup, so we render it as a
+        // monospace block for readable alignment.
+        if is_markdown_table_header(line)
+            && idx + 1 < raw_lines.len()
+            && is_markdown_table_separator(raw_lines[idx + 1])
+        {
+            let mut table_rows: Vec<Vec<String>> = vec![
+                parse_table_cells(line)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            ];
+            idx += 2; // skip header + separator
+            while idx < raw_lines.len() && is_markdown_table_row(raw_lines[idx]) {
+                table_rows.push(
+                    parse_table_cells(raw_lines[idx])
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                );
+                idx += 1;
+            }
+
+            let rendered_rows = render_table_rows(&table_rows);
+            lines.push("```".to_owned());
+            lines.extend(rendered_rows);
+            lines.push("```".to_owned());
+            continue;
+        }
+
         let trimmed = line.trim();
 
         // Headings: #{1,6} text -> **text**
@@ -298,8 +338,119 @@ fn preprocess_blocks(md: &str) -> String {
         } else {
             lines.push(line.to_string());
         }
+
+        idx += 1;
     }
     lines.join("\n")
+}
+
+/// Parse a markdown table row into trimmed cell slices.
+fn parse_table_cells(line: &str) -> Vec<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return Vec::new();
+    }
+    let core = trimmed.trim_matches('|').trim();
+    if core.is_empty() {
+        return Vec::new();
+    }
+    core.split('|').map(str::trim).collect()
+}
+
+/// Check whether a line is a markdown table header row.
+fn is_markdown_table_header(line: &str) -> bool {
+    let cells = parse_table_cells(line);
+    cells.len() >= 2 && !is_markdown_table_separator(line)
+}
+
+/// Check whether a line is a markdown table delimiter row.
+///
+/// Accepts forms like:
+/// - `|---|---|`
+/// - `| :--- | ---: |`
+fn is_markdown_table_separator(line: &str) -> bool {
+    let cells = parse_table_cells(line);
+    if cells.len() < 2 {
+        return false;
+    }
+    cells.iter().all(|cell| {
+        let stripped = cell.trim().trim_matches(':');
+        !stripped.is_empty() && stripped.len() >= 3 && stripped.chars().all(|ch| ch == '-')
+    })
+}
+
+/// Check whether a line is a markdown table body row.
+fn is_markdown_table_row(line: &str) -> bool {
+    let cells = parse_table_cells(line);
+    cells.len() >= 2 && !is_markdown_table_separator(line)
+}
+
+/// Render parsed table rows into aligned monospace lines.
+///
+/// The first row is treated as header. Output format stays ASCII-only so it
+/// renders consistently in Telegram `<pre>` blocks.
+fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+
+    let mut normalized: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            let mut r = row.clone();
+            while r.len() < column_count {
+                r.push(String::new());
+            }
+            r
+        })
+        .collect();
+
+    let widths: Vec<usize> = (0..column_count)
+        .map(|column| {
+            normalized
+                .iter()
+                .map(|row| row[column].chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let render_row = |row: &[String]| -> String {
+        let mut line = String::new();
+        line.push('|');
+        for (idx, width) in widths.iter().enumerate() {
+            let cell = row.get(idx).map_or("", String::as_str);
+            let pad = width.saturating_sub(cell.chars().count());
+            line.push(' ');
+            line.push_str(cell);
+            line.push_str(&" ".repeat(pad));
+            line.push(' ');
+            line.push('|');
+        }
+        line
+    };
+
+    let mut out = Vec::new();
+    out.push(render_row(&normalized[0]));
+
+    let mut separator = String::new();
+    separator.push('|');
+    for width in &widths {
+        separator.push_str(&"-".repeat(*width + 2));
+        separator.push('|');
+    }
+    out.push(separator);
+
+    for row in normalized.drain(1..) {
+        out.push(render_row(&row));
+    }
+
+    out
 }
 
 /// Strip a Markdown heading prefix (`# ` through `###### `), returning the
@@ -525,5 +676,24 @@ mod tests {
         let input = "See [docs](https://example.com/path$var) here";
         let html = markdown_to_telegram_html(input);
         assert!(html.contains("https://example.com/path$var"));
+    }
+
+    #[test]
+    fn markdown_table_is_rendered_as_pre_block() {
+        let input = "| 作品 | 评分 |\n|---|---|\n| Witch Hat Atelier | 8.80 |";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("<pre>"));
+        assert!(html.contains("| 作品"));
+        assert!(html.contains("Witch Hat Atelier"));
+        assert!(!html.contains("|---|---|"));
+        assert!(html.contains("|-------------------"));
+    }
+
+    #[test]
+    fn pipe_text_without_separator_is_not_treated_as_table() {
+        let input = "A | B\njust plain text";
+        let html = markdown_to_telegram_html(input);
+        assert!(!html.contains("<pre>"));
+        assert!(html.contains("A | B"));
     }
 }
