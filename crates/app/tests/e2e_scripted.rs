@@ -26,11 +26,12 @@ use std::{
 };
 
 use rara_kernel::{
+    KernelError,
     channel::types::{ChannelType, MessageContent},
     identity::{Principal, UserId},
     io::{ChannelSource, InboundMessage, MessageId},
-    llm::ToolCallRequest,
-    session::SessionKey,
+    llm::{CompletionResponse, StopReason, ToolCallRequest},
+    session::{SessionKey, SessionState},
     testing::{FakeTool, TestKernelBuilder, scripted_response, scripted_tool_call_response},
 };
 use serde_json::json;
@@ -381,6 +382,261 @@ async fn tape_records_conversation() {
         !entries.is_empty(),
         "tape should have recorded entries for the session"
     );
+
+    tk.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Failure-mode tests (#1179)
+// ---------------------------------------------------------------------------
+
+/// LLM returns a non-retryable error on the first call. The session should
+/// handle the error and return to Ready state — not crash or hang.
+#[tokio::test]
+async fn llm_error_does_not_crash_session() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
+
+    // First call: non-retryable provider error. The agent loop surfaces this
+    // as an AgentExecution error (no TurnTrace is pushed for hard errors).
+    // Subsequent calls: normal responses so a follow-up turn can succeed.
+    let tk = TestKernelBuilder::new(tmp.path())
+        .with_results(vec![
+            Err(KernelError::NonRetryable {
+                message: "simulated provider failure".into(),
+            }),
+            Ok(scripted_response("recovered")),
+            Ok(scripted_response("(padding)")),
+            Ok(scripted_response("(padding)")),
+        ])
+        .build()
+        .await;
+
+    let principal = Principal::lookup("test".to_string());
+    let session_key = tk
+        .handle
+        .spawn_named(&tk.agent_name, "trigger error".to_string(), principal, None)
+        .await
+        .expect("spawn session");
+
+    // The agent loop returns Err for non-retryable errors, so no TurnTrace
+    // is pushed. Instead, poll until the session transitions back to Ready
+    // (meaning the error was handled and the session is alive).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(stats) = tk.handle.session_stats(session_key) {
+            if matches!(stats.state, SessionState::Ready) {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for session to return to Ready after LLM error"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    // Session is alive and Ready — send a second message to prove it
+    // did not crash.
+    let chat_id = "error-recovery-test";
+    tk.handle
+        .submit_message(build_test_message(
+            Some(session_key),
+            chat_id,
+            "Are you still there?",
+        ))
+        .expect("submit follow-up message");
+
+    wait_for_turn_count(&tk.handle, session_key, 1).await;
+
+    let traces = tk.handle.get_process_turns(session_key);
+    assert_eq!(traces.len(), 1, "follow-up turn should produce a trace");
+    assert!(
+        traces[0].success,
+        "follow-up turn should succeed: {:?}",
+        traces[0].error
+    );
+
+    tk.shutdown();
+}
+
+/// With max_iterations=3 in the default test manifest, scripting infinite
+/// tool calls should terminate after 3 iterations rather than looping forever.
+#[tokio::test]
+async fn max_iterations_terminates() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
+
+    let fake_tool = Arc::new(FakeTool::new(
+        "loopy",
+        vec![
+            json!({"status": "ok"}),
+            json!({"status": "ok"}),
+            json!({"status": "ok"}),
+        ],
+    ));
+
+    // Every LLM response requests another tool call. The manifest's
+    // max_iterations=3 should terminate the loop.
+    let tool_call = |id: &str| {
+        scripted_tool_call_response(vec![ToolCallRequest {
+            id:        id.to_string(),
+            name:      "loopy".to_string(),
+            arguments: json!({"x": 1}).to_string(),
+        }])
+    };
+    let tk = TestKernelBuilder::new(tmp.path())
+        .with_tool(fake_tool.clone())
+        .responses(vec![
+            tool_call("c1"),
+            tool_call("c2"),
+            tool_call("c3"),
+            // Extra padding in case the loop consumes more.
+            scripted_response("(overflow)"),
+            scripted_response("(overflow)"),
+        ])
+        .build()
+        .await;
+
+    let principal = Principal::lookup("test".to_string());
+    let session_key = tk
+        .handle
+        .spawn_named(&tk.agent_name, "loop forever".to_string(), principal, None)
+        .await
+        .expect("spawn session");
+
+    wait_for_turn_count(&tk.handle, session_key, 1).await;
+
+    let traces = tk.handle.get_process_turns(session_key);
+    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
+    let turn = &traces[0];
+
+    // Max iterations reached — the turn should be marked as failed with
+    // an error mentioning "max iterations".
+    assert!(
+        !turn.success,
+        "turn should fail when max iterations exhausted"
+    );
+    let err_msg = turn.error.as_deref().unwrap_or("");
+    assert!(
+        err_msg.contains("max iterations"),
+        "error should mention max iterations, got: {err_msg}"
+    );
+
+    tk.shutdown();
+}
+
+/// LLM calls a tool that is not registered. The kernel should feed the
+/// error back to the LLM, which then produces a text response on the
+/// second call.
+#[tokio::test]
+async fn tool_not_found_surfaces_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
+
+    // First response: call a nonexistent tool.
+    // Second response: normal text (the LLM "recovers" after seeing the error).
+    let tk = TestKernelBuilder::new(tmp.path())
+        .responses(vec![
+            scripted_tool_call_response(vec![ToolCallRequest {
+                id:        "call_ghost".to_string(),
+                name:      "nonexistent_tool".to_string(),
+                arguments: json!({"q": "hello"}).to_string(),
+            }]),
+            scripted_response("I could not find that tool, here is a direct answer."),
+            scripted_response("(padding)"),
+            scripted_response("(padding)"),
+        ])
+        .build()
+        .await;
+
+    let principal = Principal::lookup("test".to_string());
+    let session_key = tk
+        .handle
+        .spawn_named(
+            &tk.agent_name,
+            "call missing tool".to_string(),
+            principal,
+            None,
+        )
+        .await
+        .expect("spawn session");
+
+    wait_for_turn_count(&tk.handle, session_key, 1).await;
+
+    let traces = tk.handle.get_process_turns(session_key);
+    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
+    let turn = &traces[0];
+
+    // The turn should succeed — tool-not-found is fed back as a tool
+    // result error, then the LLM produces a valid text response.
+    assert!(turn.success, "turn should succeed: {:?}", turn.error);
+    assert!(
+        turn.iterations.len() >= 2,
+        "expected at least 2 iterations (tool call + text reply), got {}",
+        turn.iterations.len()
+    );
+    let preview = turn
+        .iterations
+        .last()
+        .map(|i| i.text_preview.as_str())
+        .unwrap_or("");
+    assert!(
+        preview.contains("direct answer"),
+        "final reply should contain the scripted text, got: {preview}"
+    );
+
+    tk.shutdown();
+}
+
+/// Script several consecutive empty responses (no text, no tool calls).
+/// The kernel's recovery logic should eventually terminate rather than
+/// looping indefinitely.
+#[tokio::test]
+async fn consecutive_empty_responses_terminate() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env(tmp.path());
+
+    let empty = || CompletionResponse {
+        content:           None,
+        reasoning_content: None,
+        tool_calls:        vec![],
+        stop_reason:       StopReason::Stop,
+        usage:             None,
+        model:             "scripted".to_string(),
+    };
+
+    // 5 consecutive empty responses. The kernel's MAX_LLM_ERROR_RECOVERIES
+    // (3) + max_iterations (3) should bound the total iterations.
+    let tk = TestKernelBuilder::new(tmp.path())
+        .responses(vec![
+            empty(),
+            empty(),
+            empty(),
+            empty(),
+            empty(),
+            // Extra padding so the driver doesn't run out prematurely.
+            scripted_response("(padding)"),
+            scripted_response("(padding)"),
+        ])
+        .build()
+        .await;
+
+    let principal = Principal::lookup("test".to_string());
+    let session_key = tk
+        .handle
+        .spawn_named(&tk.agent_name, "say something".to_string(), principal, None)
+        .await
+        .expect("spawn session");
+
+    // The turn must complete within the timeout — no infinite loop.
+    wait_for_turn_count(&tk.handle, session_key, 1).await;
+
+    let traces = tk.handle.get_process_turns(session_key);
+    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
+
+    // We don't assert success/failure — the important property is that
+    // the turn terminated rather than hanging.
 
     tk.shutdown();
 }
