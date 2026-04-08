@@ -13,7 +13,11 @@
 // limitations under the License.
 
 //! `/debug <message_id>` command — retrieve full execution context for a
-//! message, including tape entries, token usage, tool calls, and errors.
+//! message by walking the session tape.
+//!
+//! All data (tokens, model, tools, timings) is derived from tape entry
+//! metadata — the tape is the single source of truth, no parallel SQL
+//! lookup needed.
 
 use std::fmt::Write;
 
@@ -24,25 +28,21 @@ use rara_kernel::{
     },
     error::KernelError,
     memory::TapeService,
-    trace::TraceService,
 };
 
 use super::session::html_escape;
 
+/// Maximum tape entries to scan per debug request.
+const MAX_ENTRIES: usize = 200;
+
 /// Handles the `/debug` command.
 pub struct DebugCommandHandler {
-    tape_service:  TapeService,
-    trace_service: TraceService,
+    tape_service: TapeService,
 }
 
 impl DebugCommandHandler {
-    /// Create a new handler with tape and trace services.
-    pub fn new(tape_service: TapeService, trace_service: TraceService) -> Self {
-        Self {
-            tape_service,
-            trace_service,
-        }
-    }
+    /// Create a new handler that reads from the given tape service.
+    pub fn new(tape_service: TapeService) -> Self { Self { tape_service } }
 }
 
 #[async_trait]
@@ -69,159 +69,192 @@ impl CommandHandler for DebugCommandHandler {
             ));
         }
 
+        // Cross-tape search: find any entry whose metadata.rara_message_id
+        // matches. The empty tape_name argument plus all_tapes=true causes
+        // TapeService::search to scan all session tapes.
+        let entries = self
+            .tape_service
+            .search("", message_id, MAX_ENTRIES, true)
+            .await
+            .map_err(|e| KernelError::Other {
+                message: format!("tape search failed: {e}").into(),
+            })?;
+
+        let matched: Vec<_> = entries
+            .into_iter()
+            .filter(|e| {
+                e.metadata.as_ref().is_some_and(|m| {
+                    m.get("rara_message_id")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|id| id == message_id)
+                })
+            })
+            .collect();
+
         let mut output = String::new();
-        let _ = writeln!(output, "<b>🔍 Debug: {}</b>\n", html_escape(message_id));
+        let _ = writeln!(
+            output,
+            "<b>🔍 Debug: <code>{}</code></b>\n",
+            html_escape(message_id)
+        );
 
-        // -- Section 1: ExecutionTrace from SQLite -----------------------------
-        match self.trace_service.find_by_rara_message_id(message_id).await {
-            Ok(Some(trace)) => {
-                let _ = writeln!(output, "<b>📊 Execution Summary</b>");
-                let _ = writeln!(output, "• Duration: {}s", trace.duration_secs);
-                let _ = writeln!(
-                    output,
-                    "• Model: <code>{}</code>",
-                    html_escape(&trace.model)
-                );
-                let _ = writeln!(output, "• Iterations: {}", trace.iterations);
-                let _ = writeln!(
-                    output,
-                    "• Tokens: ↑{} ↓{}",
-                    format_tokens(trace.input_tokens),
-                    format_tokens(trace.output_tokens)
-                );
-                if trace.thinking_ms > 0 {
-                    let _ = writeln!(output, "• Thinking: {}s", trace.thinking_ms / 1000);
-                }
-                if let Some(ref rationale) = trace.turn_rationale {
-                    let preview: String = rationale.chars().take(300).collect();
-                    let _ = writeln!(
-                        output,
-                        "\n<b>💭 Rationale</b>\n<i>{}</i>",
-                        html_escape(&preview)
-                    );
-                }
-                if !trace.thinking_preview.is_empty() {
-                    let _ = writeln!(
-                        output,
-                        "\n<b>🧠 Thinking</b>\n<i>{}</i>",
-                        html_escape(&trace.thinking_preview)
-                    );
-                }
+        if matched.is_empty() {
+            output.push_str(
+                "<i>No tape entries found for this message ID. It may have expired or never \
+                 existed.</i>",
+            );
+            return Ok(CommandResult::Html(output));
+        }
 
-                // Tools
-                if !trace.tools.is_empty() {
-                    let _ = writeln!(output, "\n<b>🔧 Tools ({} calls)</b>", trace.tools.len());
-                    for tool in &trace.tools {
-                        let duration = tool
-                            .duration_ms
-                            .map(|ms| format!("{}ms", ms))
-                            .unwrap_or_else(|| "—".to_owned());
-                        let status = if tool.success { "✓" } else { "✗" };
-                        let _ = writeln!(
-                            output,
-                            "  {status} <code>{}</code> ({duration})",
-                            html_escape(&tool.name)
-                        );
-                        if let Some(ref err) = tool.error {
-                            let preview: String = err.chars().take(200).collect();
-                            let _ = writeln!(output, "    ⚠️ {}", html_escape(&preview));
-                        }
-                        if !tool.summary.is_empty() {
-                            let preview: String = tool.summary.chars().take(100).collect();
-                            let _ = writeln!(output, "    → {}", html_escape(&preview));
-                        }
-                    }
+        // Aggregate metrics from tape entry metadata.
+        let mut model = String::new();
+        let mut total_input = 0u64;
+        let mut total_output = 0u64;
+        let mut iterations = 0usize;
+        let mut total_stream_ms = 0u64;
+        let mut tool_calls = 0usize;
+        let mut tool_failures = 0usize;
+
+        for entry in &matched {
+            let Some(meta) = entry.metadata.as_ref() else {
+                continue;
+            };
+
+            // LlmEntryMetadata fields (assistant messages).
+            if let Some(m) = meta.get("model").and_then(|v| v.as_str()) {
+                if model.is_empty() {
+                    model = m.to_owned();
                 }
             }
-            Ok(None) => {
-                let _ = writeln!(
-                    output,
-                    "<i>No execution trace found (may have expired or ID is incorrect).</i>"
-                );
+            if let Some(usage) = meta.get("usage") {
+                if let Some(t) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+                    total_input += t;
+                }
+                if let Some(t) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                    total_output += t;
+                }
             }
-            Err(e) => {
-                let _ = writeln!(
-                    output,
-                    "<i>Trace lookup failed: {}</i>",
-                    html_escape(&e.to_string())
-                );
+            if meta.get("iteration").is_some() {
+                iterations += 1;
+            }
+            if let Some(ms) = meta.get("stream_ms").and_then(|v| v.as_u64()) {
+                total_stream_ms += ms;
+            }
+
+            // ToolResultMetadata fields.
+            if let Some(metrics) = meta.get("tool_metrics").and_then(|v| v.as_array()) {
+                tool_calls += metrics.len();
+                tool_failures += metrics
+                    .iter()
+                    .filter(|m| m.get("success").and_then(|v| v.as_bool()) == Some(false))
+                    .count();
             }
         }
 
-        // -- Section 2: Tape entries -------------------------------------------
-        let _ = writeln!(output, "\n<b>📝 Tape Entries</b>");
-        match self.tape_service.search("", message_id, 50, true).await {
-            Ok(entries) => {
-                let matched: Vec<_> = entries
-                    .into_iter()
-                    .filter(|e| {
-                        e.metadata.as_ref().map_or(false, |m| {
-                            m.get("rara_message_id")
-                                .and_then(|v| v.as_str())
-                                .map_or(false, |id| id == message_id)
-                        })
-                    })
-                    .collect();
+        // -- Section 1: Summary ------------------------------------------------
+        let _ = writeln!(output, "<b>📊 Summary</b>");
+        let _ = writeln!(output, "• Entries: {}", matched.len());
+        if !model.is_empty() {
+            let _ = writeln!(output, "• Model: <code>{}</code>", html_escape(&model));
+        }
+        if iterations > 0 {
+            let _ = writeln!(output, "• Iterations: {iterations}");
+        }
+        if total_stream_ms > 0 {
+            let _ = writeln!(output, "• Stream: {:.1}s", total_stream_ms as f64 / 1000.0);
+        }
+        if total_input > 0 || total_output > 0 {
+            let _ = writeln!(
+                output,
+                "• Tokens: ↑{} ↓{}",
+                format_tokens(total_input),
+                format_tokens(total_output)
+            );
+        }
+        if tool_calls > 0 {
+            let _ = writeln!(
+                output,
+                "• Tool calls: {tool_calls} ({tool_failures} failed)"
+            );
+        }
 
-                if matched.is_empty() {
-                    let _ = writeln!(output, "<i>No tape entries found.</i>");
-                } else {
-                    let _ = writeln!(output, "Found {} entries:\n", matched.len());
-                    for entry in &matched {
-                        let kind = entry.kind.to_string();
-                        let ts = entry.timestamp.strftime("%H:%M:%S").to_string();
-
-                        // Extract key info based on entry kind.
-                        let detail = match kind.as_str() {
-                            "message" => entry
-                                .payload
-                                .get("content")
-                                .and_then(|v| v.as_str())
-                                .map(|s| {
-                                    let preview: String = s.chars().take(100).collect();
-                                    preview
-                                })
-                                .unwrap_or_default(),
-                            "tool_call" => {
-                                let name = entry
-                                    .payload
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("?");
-                                format!("→ {name}")
-                            }
-                            "tool_result" => {
-                                let name = entry
-                                    .payload
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("?");
-                                let success = entry
-                                    .payload
-                                    .get("success")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(true);
-                                let status = if success { "✓" } else { "✗" };
-                                format!("{status} {name}")
-                            }
-                            _ => String::new(),
-                        };
-
-                        let _ = writeln!(
-                            output,
-                            "<code>{ts}</code> [{kind}] {}",
-                            html_escape(&detail)
-                        );
-                    }
+        // -- Section 2: Tool execution detail ----------------------------------
+        let mut tool_lines: Vec<String> = Vec::new();
+        for entry in &matched {
+            let Some(meta) = entry.metadata.as_ref() else {
+                continue;
+            };
+            let Some(metrics) = meta.get("tool_metrics").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for m in metrics {
+                let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                let duration = m
+                    .get("duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .map(|ms| format!("{ms}ms"))
+                    .unwrap_or_else(|| "—".to_owned());
+                let success = m.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
+                let icon = if success { "✓" } else { "✗" };
+                let mut line = format!("  {icon} <code>{}</code> ({duration})", html_escape(name));
+                if let Some(err) = m.get("error").and_then(|v| v.as_str()) {
+                    let preview: String = err.chars().take(150).collect();
+                    let _ = write!(line, "\n    ⚠️ {}", html_escape(&preview));
                 }
+                tool_lines.push(line);
             }
-            Err(e) => {
-                let _ = writeln!(
-                    output,
-                    "<i>Tape search failed: {}</i>",
-                    html_escape(&e.to_string())
-                );
+        }
+        if !tool_lines.is_empty() {
+            let _ = writeln!(output, "\n<b>🔧 Tools</b>");
+            for line in tool_lines {
+                output.push_str(&line);
+                output.push('\n');
             }
+        }
+
+        // -- Section 3: Timeline -----------------------------------------------
+        let _ = writeln!(output, "\n<b>📝 Timeline</b>");
+        for entry in &matched {
+            let kind = entry.kind.to_string();
+            let ts = entry.timestamp.strftime("%H:%M:%S").to_string();
+
+            let detail = match kind.as_str() {
+                "message" => entry
+                    .payload
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(100).collect::<String>())
+                    .unwrap_or_default(),
+                "tool_call" => {
+                    let name = entry
+                        .payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    format!("→ {name}")
+                }
+                "tool_result" => {
+                    let name = entry
+                        .payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let success = entry
+                        .payload
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let icon = if success { "✓" } else { "✗" };
+                    format!("{icon} {name}")
+                }
+                _ => String::new(),
+            };
+
+            let _ = writeln!(
+                output,
+                "<code>{ts}</code> [{kind}] {}",
+                html_escape(&detail)
+            );
         }
 
         Ok(CommandResult::Html(output))
@@ -229,7 +262,7 @@ impl CommandHandler for DebugCommandHandler {
 }
 
 /// Format token count for display (e.g. 15200 → "15.2k").
-fn format_tokens(tokens: u32) -> String {
+fn format_tokens(tokens: u64) -> String {
     if tokens >= 1000 {
         format!("{:.1}k", tokens as f64 / 1000.0)
     } else {

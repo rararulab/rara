@@ -454,8 +454,6 @@ pub async fn start_with_options(
         })
     };
 
-    let trace_service = rara_kernel::trace::TraceService::new(pool.clone());
-
     let kernel = rara_kernel::kernel::Kernel::new(
         kernel_config,
         rara.driver_registry.clone(),
@@ -473,7 +471,7 @@ pub async fn start_with_options(
         io,
         rara.knowledge_service.clone(),
         mcp_tool_provider,
-        trace_service.clone(),
+        rara_kernel::trace::TraceService::new(pool.clone()),
         skill_prompt_provider,
     );
 
@@ -595,10 +593,8 @@ pub async fn start_with_options(
             kernel_handle.clone(),
         ));
         let tape_handler = std::sync::Arc::new(TapeCommandHandler::new(bot_client.clone()));
-        let debug_handler = std::sync::Arc::new(DebugCommandHandler::new(
-            rara.tape_service.clone(),
-            trace_service.clone(),
-        ));
+        let debug_handler =
+            std::sync::Arc::new(DebugCommandHandler::new(rara.tape_service.clone()));
         // Collect all command definitions so /help can list them.
         use rara_kernel::channel::command::CommandHandler as _;
         let all_commands: Vec<rara_kernel::channel::command::CommandDefinition> = [
