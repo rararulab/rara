@@ -169,6 +169,7 @@ pub(crate) const TAPE_FILE_SUFFIX: &str = ".jsonl";
     strum::Display,
     strum::EnumString,
     derive_more::IsVariant,
+    Hash,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
