@@ -25,6 +25,7 @@ pub mod driver;
 pub mod image;
 pub mod openai;
 pub mod registry;
+pub mod scripted;
 pub mod stream;
 mod think_tag;
 pub mod types;
@@ -35,5 +36,6 @@ pub use driver::{
 };
 pub use openai::{OpenAiDriver, is_local_url};
 pub use registry::{DriverRegistry, DriverRegistryRef, ProviderModelConfig};
+pub use scripted::ScriptedLlmDriver;
 pub use stream::StreamDelta;
 pub use types::*;

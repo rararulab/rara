@@ -871,8 +871,7 @@ impl Default for SessionTable {
     fn default() -> Self { Self::new() }
 }
 
-#[cfg(test)]
-pub(crate) mod test_utils;
+pub mod test_utils;
 
 #[cfg(test)]
 impl Session {

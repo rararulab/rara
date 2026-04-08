@@ -72,7 +72,9 @@ yunara-store = { workspace = true }
 
 [dev-dependencies]
 common-telemetry.workspace = true
+rara-kernel = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true
