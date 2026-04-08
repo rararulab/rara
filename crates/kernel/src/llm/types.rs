@@ -313,6 +313,9 @@ pub struct CompletionRequest {
     pub tool_choice:         ToolChoice,
     pub parallel_tool_calls: bool,
     pub frequency_penalty:   Option<f32>,
+    /// Nucleus sampling threshold. GLM defaults to 0.95; pass through for all
+    /// providers.
+    pub top_p:               Option<f32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +368,8 @@ pub enum LlmProviderFamily {
     OpenRouter,
     Ollama,
     Codex,
+    /// 智谱 BigModel (GLM series).
+    Glm,
     Unknown,
 }
 
@@ -451,13 +456,22 @@ pub struct ToolCall {
 // Helper functions (migrated from model.rs)
 // ---------------------------------------------------------------------------
 
-fn detect_provider_family(provider_hint: Option<&str>, model_name: &str) -> LlmProviderFamily {
+pub(super) fn detect_provider_family(
+    provider_hint: Option<&str>,
+    model_name: &str,
+) -> LlmProviderFamily {
     let provider_hint = provider_hint.map(str::trim).map(str::to_ascii_lowercase);
     match provider_hint.as_deref() {
         Some("ollama") => return LlmProviderFamily::Ollama,
         Some("openrouter") => return LlmProviderFamily::OpenRouter,
         Some("codex") => return LlmProviderFamily::Codex,
+        Some("glm" | "zhipu" | "bigmodel") => return LlmProviderFamily::Glm,
         _ => {}
+    }
+
+    let lower = model_name.to_ascii_lowercase();
+    if lower.starts_with("glm-") || lower.starts_with("glm4") {
+        return LlmProviderFamily::Glm;
     }
 
     let trimmed = model_name.trim();

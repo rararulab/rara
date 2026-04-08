@@ -764,6 +764,7 @@ async fn create_plan_via_llm(
         tool_choice: llm::ToolChoice::Required,
         parallel_tool_calls: false,
         frequency_penalty: None,
+        top_p: None,
     };
 
     info!(session_key = %session_key, "plan executor: calling LLM for plan creation");
@@ -906,6 +907,7 @@ async fn replan_via_llm(
         tool_choice: llm::ToolChoice::Required,
         parallel_tool_calls: false,
         frequency_penalty: None,
+        top_p: None,
     };
 
     info!(session_key = %session_key, "plan executor: calling LLM for replan");

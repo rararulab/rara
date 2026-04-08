@@ -109,6 +109,7 @@ impl ContextFolder {
             tool_choice:         ToolChoice::None,
             parallel_tool_calls: false,
             frequency_penalty:   None,
+            top_p:               None,
         };
 
         let response = self.driver.complete(request).await?;
@@ -140,6 +141,7 @@ impl ContextFolder {
             tool_choice:         ToolChoice::None,
             parallel_tool_calls: false,
             frequency_penalty:   None,
+            top_p:               None,
         };
 
         let response = self.driver.complete(request).await?;

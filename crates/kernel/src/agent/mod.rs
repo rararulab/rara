@@ -1356,6 +1356,7 @@ pub(crate) async fn run_agent_loop(
             // a penalty. 0.3 is a conservative value that curbs repetition without
             // degrading output quality. See #317.
             frequency_penalty:   Some(0.3),
+            top_p:               None,
         };
 
         // Start streaming via LlmDriver
