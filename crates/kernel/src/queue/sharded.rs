@@ -56,6 +56,22 @@ impl ShardQueue {
         Ok(())
     }
 
+    /// Push an event, returning the rejected event back to the caller on
+    /// `Full`. Used by retry helpers that need to keep ownership of the
+    /// envelope across attempts (events are not `Clone` because they may
+    /// carry oneshot reply channels).
+    pub fn push_returning(
+        &self,
+        event: KernelEventEnvelope,
+    ) -> Result<(), (IOError, KernelEventEnvelope)> {
+        if self.queue.len() >= self.capacity {
+            return Err((IOError::Full, event));
+        }
+        self.queue.push(event);
+        self.notify.notify_one();
+        Ok(())
+    }
+
     /// Lazy iterator that pops up to `max` events. Zero allocation.
     pub fn drain(&self, max: usize) -> impl Iterator<Item = KernelEventEnvelope> + '_ {
         let mut remaining = max;
@@ -187,8 +203,12 @@ impl ShardedEventQueue {
     }
 
     /// Push an event into the queue, routing it to the correct shard or the
-    /// global queue. Returns `IOError::Full` if the target queue is at
-    /// capacity.
+    /// global queue.
+    ///
+    /// Returns `Err(IOError::Full)` if the target queue is at capacity.
+    /// Callers in the ingress path SHOULD use
+    /// [`push_with_retry`](crate::queue::push_with_retry) to handle
+    /// backpressure — silent drops are a reliability bug (see issue #1148).
     pub fn push(&self, event: KernelEventEnvelope) -> Result<(), IOError> {
         match self.classify(&event) {
             ShardTarget::Global => self.global.push(event),
@@ -199,6 +219,22 @@ impl ShardedEventQueue {
     /// Non-blocking push — identical to [`push`](Self::push) for this
     /// in-memory queue.
     pub fn try_push(&self, event: KernelEventEnvelope) -> Result<(), IOError> { self.push(event) }
+
+    /// Push an event, returning the rejected envelope back to the caller on
+    /// `Full` so it can be reused across retry attempts.
+    ///
+    /// This is the entry point used by
+    /// [`push_with_retry`](crate::queue::push_with_retry); direct callers
+    /// should keep using [`push`](Self::push)/[`try_push`](Self::try_push).
+    pub fn push_returning(
+        &self,
+        event: KernelEventEnvelope,
+    ) -> Result<(), (IOError, KernelEventEnvelope)> {
+        match self.classify(&event) {
+            ShardTarget::Global => self.global.push_returning(event),
+            ShardTarget::Shard(idx) => self.shards[idx].push_returning(event),
+        }
+    }
 }
 
 #[cfg(test)]

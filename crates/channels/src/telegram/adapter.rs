@@ -2770,11 +2770,14 @@ async fn handle_update(
 
     // Route: group proactive candidates go through GroupMessage event for
     // lightweight LLM judgment; directly-addressed messages go through the
-    // normal UserMessage path.
+    // normal UserMessage path. Both use the async ingest variants so
+    // `IOError::Full` is retried with bounded backoff (and exhausted
+    // envelopes routed to the dead-letter sink) rather than being silently
+    // dropped — see issue #1148.
     let submit_result = if is_group_proactive {
-        handle.submit_group_message(msg)
+        handle.ingest_group_message(msg).await
     } else {
-        handle.submit_message(msg)
+        handle.ingest_user_message(msg).await
     };
 
     match submit_result {

@@ -17,10 +17,19 @@
 //! The kernel uses a single concrete sharded queue — [`ShardedEventQueue`] —
 //! as its ingress sink. The drain/wait hot path goes through `ShardQueue`
 //! directly.
+//!
+//! ## Backpressure
+//!
+//! The queue is bounded. When all retries fail, the in-process callers in the
+//! ingress path MUST use [`push_with_retry`] rather than
+//! [`ShardedEventQueue::push`] directly so that transient backpressure does not
+//! silently drop user messages — see issue #1148.
 
+mod retry;
 mod sharded;
 
 pub(crate) use sharded::ShardQueue;
 pub use sharded::{ShardedEventQueue, ShardedEventQueueConfig, ShardedQueueRef};
 
+pub use self::retry::{IngressConfig, push_with_retry};
 pub use crate::event::{EventPriority, KernelEvent, KernelEventEnvelope};

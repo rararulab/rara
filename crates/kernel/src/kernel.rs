@@ -137,6 +137,12 @@ pub struct KernelConfig {
     pub event_queue:             ShardedEventQueueConfig,
     /// Context folding (auto-anchor) configuration.
     pub context_folding:         ContextFoldingConfig,
+    /// Ingress retry / dead-letter configuration.
+    ///
+    /// Controls how `push_with_retry` handles `IOError::Full` from the
+    /// sharded queue when channel adapters publish messages. See
+    /// [`crate::queue::push_with_retry`].
+    pub ingress:                 crate::queue::IngressConfig,
 }
 
 /// Shared reference to a
