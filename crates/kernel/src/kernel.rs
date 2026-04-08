@@ -493,20 +493,25 @@ impl Kernel {
 
             tokio::select! {
                 _ = queue.wait() => {
+                    // Drain and handle events sequentially within this shard.
+                    //
+                    // Handlers that would block the loop (LLM turns, child
+                    // agent execution) must spawn their own background task
+                    // and reply via a follow-up event (e.g. `TurnCompleted`,
+                    // `ChildSessionDone`) — see `start_llm_turn`. Processing
+                    // sequentially here preserves per-shard FIFO ordering and
+                    // avoids a per-event `tokio::spawn` tax.
                     loop {
                         let mut events = queue.drain(32).peekable();
                         if events.peek().is_none() { break; }
                         for event in events {
-                            let this = Arc::clone(self);
                             let event_type: &'static str = (&event.kind).into();
                             let span = info_span!(
                                 "handle_event",
                                 processor_id = id,
                                 event_type,
                             );
-                            tokio::spawn(async move {
-                                this.handle_event(event).instrument(span).await;
-                            });
+                            self.handle_event(event).instrument(span).await;
                         }
                     }
                 }
