@@ -2703,7 +2703,7 @@ async fn handle_update(
         if let (Some(file_id), Some(stt)) = (file_id, stt_service) {
             match download_voice_file(bot, file_id, mime_hint).await {
                 Ok((audio_data, mime_type)) => match stt.transcribe(audio_data, &mime_type).await {
-                    Ok(text) if !text.trim().is_empty() => {
+                    Ok(text) => {
                         tracing::info!(len = text.len(), "voice message transcribed");
                         let combined = match raw.content {
                             MessageContent::Text(ref caption) if !caption.trim().is_empty() => {
@@ -2716,13 +2716,18 @@ async fn handle_update(
                             ..raw
                         }
                     }
-                    Ok(_) => {
-                        tracing::warn!("STT returned empty transcription, skipping");
-                        return;
-                    }
                     Err(e) => {
-                        tracing::warn!(error = %e, "STT transcription failed, skipping voice message");
-                        return;
+                        tracing::warn!(
+                            error = %e,
+                            msg_id = msg.id.0,
+                            "STT transcription failed, sending placeholder",
+                        );
+                        RawPlatformMessage {
+                            content: MessageContent::Text(
+                                "[voice message \u{2014} transcription failed]".to_owned(),
+                            ),
+                            ..raw
+                        }
                     }
                 },
                 Err(e) => {
