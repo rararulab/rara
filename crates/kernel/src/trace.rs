@@ -142,23 +142,33 @@ impl TraceService {
         Ok(row.map(|(s,)| s))
     }
 
-    /// Find the session that produced a turn for the given `rara_message_id`.
+    /// Find the session and full execution trace for a `rara_message_id`.
     ///
-    /// Used as an index for the `rara debug` CLI: SQL points us at one tape
-    /// file instead of grepping every JSONL on disk.  Only the indexed
-    /// `session_id` column is returned — content still lives in the tape.
-    pub async fn find_session_for_message(
+    /// Returns the indexed `session_id` column plus the parsed
+    /// [`ExecutionTrace`] from `trace_data` — the trace already aggregates
+    /// model, tokens, iterations, thinking, tools, plan steps, and
+    /// rationale, so callers do not need to re-derive these from tape
+    /// entries.
+    pub async fn find_trace_by_message_id(
         &self,
         message_id: &str,
-    ) -> Result<Option<String>, sqlx::Error> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT session_id FROM execution_traces WHERE json_extract(trace_data, \
+    ) -> Result<Option<(String, ExecutionTrace)>, sqlx::Error> {
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT session_id, trace_data FROM execution_traces WHERE json_extract(trace_data, \
              '$.rara_message_id') = ? LIMIT 1",
         )
         .bind(message_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|(s,)| s))
+
+        match row {
+            Some((session_id, data)) => {
+                let trace = serde_json::from_str(&data)
+                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                Ok(Some((session_id, trace)))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Delete traces older than `retention_days`. Returns the number of rows
