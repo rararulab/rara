@@ -36,6 +36,7 @@ pub mod evolution;
 pub mod file;
 pub mod loader;
 pub mod render;
+pub mod score;
 pub mod state;
 
 // Re-export key types for convenience.
@@ -44,4 +45,5 @@ pub use evolution::{create_snapshot, list_snapshots, load_snapshot, validate_bou
 pub use file::{Boundaries, EvolutionConfig, SoulFile, SoulFrontmatter};
 pub use loader::{LoadedSoul, SoulSource, load_and_render, load_soul, soul_path};
 pub use render::render;
+pub use score::{StyleScore, StyleScoreError};
 pub use state::{MoodLabel, RelationshipStage, SoulState, StyleDrift};

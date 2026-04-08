@@ -221,8 +221,10 @@ mod tests {
     fn validate_boundaries_formality_violation() {
         let soul = test_soul();
         let mut proposed = test_soul();
-        proposed.frontmatter.boundaries.min_formality = Some(1); // lower than original 2
-        proposed.frontmatter.boundaries.max_formality = Some(10); // higher than original 8
+        proposed.frontmatter.boundaries.min_formality =
+            Some(crate::score::StyleScore::new(1).unwrap()); // lower than original 2
+        proposed.frontmatter.boundaries.max_formality =
+            Some(crate::score::StyleScore::new(10).unwrap()); // higher than original 8
 
         let violations = validate_boundaries(&soul.frontmatter, &proposed.frontmatter);
         assert_eq!(violations.len(), 2);

@@ -20,7 +20,10 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
-use crate::error::{IoSnafu, ParseStateSnafu, Result, SerializeStateSnafu};
+use crate::{
+    error::{IoSnafu, ParseStateSnafu, Result, SerializeStateSnafu},
+    score::StyleScore,
+};
 
 /// Maximum history entries kept in state file.
 const MAX_HISTORY_ENTRIES: usize = 10;
@@ -101,25 +104,23 @@ pub struct EmergedTrait {
 /// Style drift parameters (1-10 scale).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StyleDrift {
-    #[serde(default = "default_style_5")]
-    pub formality:       u8,
-    #[serde(default = "default_style_5")]
-    pub verbosity:       u8,
-    #[serde(default = "default_style_5")]
-    pub humor_frequency: u8,
+    #[serde(default)]
+    pub formality:       StyleScore,
+    #[serde(default)]
+    pub verbosity:       StyleScore,
+    #[serde(default)]
+    pub humor_frequency: StyleScore,
 }
 
 impl Default for StyleDrift {
     fn default() -> Self {
         Self {
-            formality:       5,
-            verbosity:       5,
-            humor_frequency: 5,
+            formality:       StyleScore::default(),
+            verbosity:       StyleScore::default(),
+            humor_frequency: StyleScore::default(),
         }
     }
 }
-
-fn default_style_5() -> u8 { 5 }
 
 /// A history entry recording a soul state change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,7 +189,7 @@ impl SoulState {
     }
 
     /// Clamp style drift formality within the given boundaries.
-    pub fn clamp_formality(&mut self, min: Option<u8>, max: Option<u8>) {
+    pub fn clamp_formality(&mut self, min: Option<StyleScore>, max: Option<StyleScore>) {
         if let Some(lo) = min {
             if self.style_drift.formality < lo {
                 self.style_drift.formality = lo;
@@ -211,7 +212,7 @@ mod tests {
         let state = SoulState::default();
         assert_eq!(state.mood.current, MoodLabel::Calm);
         assert_eq!(state.relationship_stage, RelationshipStage::Stranger);
-        assert_eq!(state.style_drift.formality, 5);
+        assert_eq!(state.style_drift.formality, StyleScore::default());
         assert!(state.emerged_traits.is_empty());
     }
 
@@ -253,12 +254,18 @@ mod tests {
     #[test]
     fn clamp_formality() {
         let mut state = SoulState::default();
-        state.style_drift.formality = 1;
-        state.clamp_formality(Some(3), Some(8));
-        assert_eq!(state.style_drift.formality, 3);
+        state.style_drift.formality = StyleScore::new(1).unwrap();
+        state.clamp_formality(
+            Some(StyleScore::new(3).unwrap()),
+            Some(StyleScore::new(8).unwrap()),
+        );
+        assert_eq!(state.style_drift.formality, StyleScore::new(3).unwrap());
 
-        state.style_drift.formality = 10;
-        state.clamp_formality(Some(3), Some(8));
-        assert_eq!(state.style_drift.formality, 8);
+        state.style_drift.formality = StyleScore::new(10).unwrap();
+        state.clamp_formality(
+            Some(StyleScore::new(3).unwrap()),
+            Some(StyleScore::new(8).unwrap()),
+        );
+        assert_eq!(state.style_drift.formality, StyleScore::new(8).unwrap());
     }
 }
