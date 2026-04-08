@@ -65,7 +65,7 @@ use crate::{
     memory::TapeService,
     notification::{BroadcastNotificationBus, NotificationBusRef},
     plan::run_plan_loop,
-    queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
+    queue::{ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::{
         AgentRunLoopResult, Session, SessionIndexRef, SessionKey, SessionState, SessionTable,
@@ -182,7 +182,7 @@ pub struct Kernel {
     /// Bundled I/O subsystem (ingress, stream hub, delivery).
     io:                    Arc<IOSubsystem>,
     /// Unified event queue for all kernel interactions.
-    event_queue:           EventQueueRef,
+    event_queue:           ShardedQueueRef,
     /// Sharded event queue backing the kernel event loop.
     ///
     /// Always present. When `num_shards == 0` (single-queue mode), all
@@ -249,7 +249,7 @@ impl Kernel {
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
             config.event_queue.clone(),
         ));
-        let event_queue: EventQueueRef = sharded_queue.clone();
+        let event_queue: ShardedQueueRef = sharded_queue.clone();
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
         let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new(
@@ -1792,7 +1792,7 @@ impl Kernel {
         //   - the response stream is closed
         //   - a TurnCompleted(Err) event is pushed so the process returns to Ready
         struct TurnGuard {
-            event_queue:     EventQueueRef,
+            event_queue:     ShardedQueueRef,
             stream_hub:      Arc<crate::io::StreamHub>,
             stream_id:       StreamId,
             typing_refresh:  Option<tokio::task::JoinHandle<()>>,

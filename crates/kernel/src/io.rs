@@ -17,7 +17,7 @@
 //! This module implements the kernel's I/O transport layer:
 //!
 //! - **Ingress**: channel adapters publish messages through `IngressPipeline`
-//!   into the unified [`EventQueue`](crate::queue::EventQueue).
+//!   into the unified [`ShardedEventQueue`](crate::queue::ShardedEventQueue).
 //! - **Egress**: the kernel event loop delivers outbound envelopes via
 //!   [`IOSubsystem::deliver`] to registered adapters.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)

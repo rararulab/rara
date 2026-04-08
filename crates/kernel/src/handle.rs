@@ -23,11 +23,6 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 
-/// Provider that generates a skills prompt block for injection into the agent
-/// system prompt. Called on each agent turn to reflect the latest registry
-/// state.
-pub type SkillPromptProvider = Arc<dyn Fn() -> String + Send + Sync>;
-
 use crate::{
     agent::{AgentManifest, AgentRegistryRef, TurnTrace},
     error::{KernelError, Result},
@@ -39,13 +34,21 @@ use crate::{
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
-    queue::EventQueueRef,
+    queue::ShardedQueueRef,
     security::SecurityRef,
     session::{
         SessionIndex, SessionKey, SessionState, SessionStats, SessionTable, Signal, SystemStats,
     },
     tool::{ToolRegistry, ToolRegistryRef},
 };
+
+/// Provider that generates a skills prompt block for injection into the agent
+/// system prompt. Called on each agent turn to reflect the latest registry
+/// state.
+///
+/// Stored as a boxed closure rather than a trait object alias so the concrete
+/// erased type is visible at the field site.
+pub type SkillPromptProvider = Arc<dyn Fn() -> String + Send + Sync>;
 /// Public entry point for interacting with the kernel.
 ///
 /// Provides both mutation methods (spawn, signal, shutdown) that flow through
@@ -68,7 +71,7 @@ use crate::{
 #[derive(Clone)]
 pub struct KernelHandle {
     /// Core: the unified event queue sender.
-    event_queue:           EventQueueRef,
+    event_queue:           ShardedQueueRef,
     /// Agent registry for resolving named agents to manifests.
     agent_registry:        AgentRegistryRef,
     /// The session table tracking all running sessions.
@@ -103,7 +106,7 @@ impl KernelHandle {
     /// Create a new `KernelHandle`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        event_queue: EventQueueRef,
+        event_queue: ShardedQueueRef,
         agent_registry: AgentRegistryRef,
         process_table: Arc<SessionTable>,
         io: Arc<IOSubsystem>,
@@ -317,7 +320,7 @@ impl KernelHandle {
     pub fn config(&self) -> &KernelConfig { &self.config }
 
     /// Access the unified event queue.
-    pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
+    pub fn event_queue(&self) -> &ShardedQueueRef { &self.event_queue }
 
     /// Access the tape service for persistent read/write.
     pub fn tape(&self) -> &crate::memory::TapeService { &self.tape }

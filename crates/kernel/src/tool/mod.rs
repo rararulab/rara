@@ -311,7 +311,7 @@ pub struct ToolContext {
     /// The originating endpoint (e.g. Telegram chat) for routing replies.
     pub origin_endpoint:       Option<crate::io::Endpoint>,
     /// Event queue for pushing outbound events.
-    pub event_queue:           crate::queue::EventQueueRef,
+    pub event_queue:           crate::queue::ShardedQueueRef,
     /// The inbound message ID that triggered the current turn.
     pub rara_message_id:       crate::io::MessageId,
     /// Context window size in tokens for the current model.
