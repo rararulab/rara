@@ -48,6 +48,11 @@ const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 /// SSE idle timeout — if no event arrives for this long, abort the stream.
 const SSE_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Absolute stream timeout — hard cap on total streaming time regardless of
+/// activity.  Prevents indefinite hangs when the server sends heartbeats but
+/// no actual data events.
+const STREAM_ABSOLUTE_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Codex driver that calls the ChatGPT backend Responses API.
 pub struct CodexDriver {
     resolver:      LlmCredentialResolverRef,
@@ -583,6 +588,7 @@ impl LlmDriver for CodexDriver {
 
         let mut event_stream = response.bytes_stream().eventsource();
         let mut state = StreamState::new();
+        let absolute_deadline = tokio::time::Instant::now() + STREAM_ABSOLUTE_TIMEOUT;
 
         loop {
             if tx.is_closed() {
@@ -590,7 +596,18 @@ impl LlmDriver for CodexDriver {
                 break;
             }
 
-            let maybe = tokio::time::timeout(SSE_IDLE_TIMEOUT, event_stream.next()).await;
+            // Two-level timeout: per-event idle timeout + absolute hard cap.
+            let maybe = tokio::select! {
+                result = tokio::time::timeout(SSE_IDLE_TIMEOUT, event_stream.next()) => result,
+                _ = tokio::time::sleep_until(absolute_deadline) => {
+                    tracing::warn!(
+                        elapsed_secs = STREAM_ABSOLUTE_TIMEOUT.as_secs(),
+                        accumulated_tokens = state.accumulated_text.len(),
+                        "Codex stream absolute timeout — returning partial response"
+                    );
+                    break;
+                }
+            };
 
             match maybe {
                 Ok(Some(Ok(event))) => {
@@ -603,8 +620,6 @@ impl LlmDriver for CodexDriver {
                         if terminal {
                             break;
                         }
-                        // Non-terminal return (parse failure) — skip this
-                        // event.
                     }
                 }
                 Ok(Some(Err(e))) => {
