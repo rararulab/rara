@@ -213,7 +213,25 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         })
         .collect();
 
-    // Determine reasoning effort from thinking config, default to "medium".
+    let instructions = instructions_parts.join("\n\n");
+
+    // Build the minimal request body that the Codex /backend-api/codex/responses
+    // endpoint actually accepts.  This endpoint is stricter than the public
+    // OpenAI Responses API — unsupported parameters (temperature, top_p,
+    // max_output_tokens, store, truncation, parallel_tool_calls, …) cause
+    // HTTP 400.  Only add fields the endpoint is known to accept.
+    let mut body = json!({
+        "model": request.model,
+        "instructions": instructions,
+        "input": input,
+        "stream": true,
+    });
+
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+
+    // Reasoning config — always send for Codex models.
     let reasoning_effort = request
         .thinking
         .as_ref()
@@ -230,29 +248,6 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         })
         .unwrap_or("medium");
 
-    let instructions = instructions_parts.join("\n\n");
-    let mut body = json!({
-        "model": request.model,
-        "instructions": instructions,
-        "input": input,
-        "stream": true,
-        "store": false,
-        "truncation": "auto",
-    });
-
-    if !tools.is_empty() {
-        body["tools"] = json!(tools);
-        body["parallel_tool_calls"] = json!(request.parallel_tool_calls);
-    }
-
-    // Note: Codex /backend-api/codex/responses does NOT accept
-    // max_output_tokens. Omit it — the model uses its own default.
-
-    if let Some(temp) = request.temperature {
-        body["temperature"] = json!(temp);
-    }
-
-    // Reasoning config — Codex models support this.
     body["reasoning"] = json!({
         "effort": reasoning_effort,
         "summary": "auto",
@@ -747,8 +742,9 @@ mod tests {
         };
 
         let body = build_codex_request(&request);
-        assert_eq!(body["store"], false);
-        assert_eq!(body["truncation"], "auto");
+        // store and truncation are NOT sent to Codex endpoint
+        assert!(body.get("store").is_none());
+        assert!(body.get("truncation").is_none());
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert_eq!(body["reasoning"]["summary"], "auto");
     }
@@ -773,8 +769,9 @@ mod tests {
         };
 
         let body = build_codex_request(&request);
-        // max_output_tokens is not sent to Codex endpoint
-        assert_eq!(body["parallel_tool_calls"], true);
+        assert!(body.get("max_output_tokens").is_none());
+        // parallel_tool_calls not sent to Codex endpoint
+        assert!(body.get("parallel_tool_calls").is_none());
         assert!(body["tools"].as_array().expect("tools array").len() == 1);
     }
 
