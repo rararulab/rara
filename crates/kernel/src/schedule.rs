@@ -361,35 +361,36 @@ impl JobWheel {
             .map(|(secs, _)| jiff::Timestamp::from_second(*secs).unwrap())
     }
 
-    /// Drain all jobs whose `next_at` is at or before `now`.
+    /// Pure query: which jobs have expired as of `now`?
     ///
-    /// - `Once` jobs are removed from the wheel.
-    /// - `Interval` jobs have their `next_at` advanced and are re-inserted.
-    /// - `Cron` jobs compute the next fire time from their expression and are
-    ///   re-inserted. If the cron expression yields no future time, the job is
-    ///   moved to [`DrainResult::cron_expired`] so the caller can notify the
-    ///   user — the wheel itself stays sans-IO.
+    /// Returns the IDs of all jobs whose `next_at <= now` without mutating
+    /// the wheel. Useful when callers need to inspect expired jobs before
+    /// committing to side effects.
+    pub fn peek_expired(&self, now: Timestamp) -> Vec<JobId> {
+        let cutoff: WheelKey = (now.as_second(), Uuid::max());
+        self.jobs.range(..=cutoff).map(|(_, e)| e.id).collect()
+    }
+
+    /// Move the given jobs from the wheel into the in-flight ledger.
     ///
-    /// All fired jobs are placed in the **in-flight ledger** so they can
-    /// be re-fired on startup if the kernel crashes before the execution
-    /// agent completes. Cron-expired jobs are NOT placed in the in-flight
-    /// ledger because they will not be re-executed.
-    pub fn drain_expired(&mut self, now: Timestamp) -> DrainResult {
+    /// Jobs whose cron expression yields no future time are separated into
+    /// [`DrainResult::cron_expired`] instead of in-flight — they are dead
+    /// and will not be re-executed.
+    ///
+    /// Returns `(fired, cron_expired)` where `fired` contains entries that
+    /// were successfully moved to in-flight, and `cron_expired` contains
+    /// cron jobs that have no future fire time.
+    pub fn mark_fired(&mut self, ids: &[JobId], now: Timestamp) -> (Vec<JobEntry>, Vec<JobEntry>) {
         let mut fired = Vec::new();
         let mut cron_expired = Vec::new();
-        let cutoff: WheelKey = (now.as_second(), Uuid::max());
 
-        // Collect all keys up to `now`.
-        let keys: Vec<WheelKey> = self.jobs.range(..=cutoff).map(|(k, _)| *k).collect();
-
-        for key in keys {
+        for id in ids {
+            let Some(key) = self.by_id.remove(id) else {
+                continue;
+            };
             let Some(entry) = self.jobs.remove(&key) else {
                 continue;
             };
-
-            // Drop the sidecar entry; rescheduled recurring jobs
-            // re-insert below with the freshly computed key.
-            self.by_id.remove(&entry.id);
 
             // For cron jobs, peek at the next fire time before committing —
             // an unsatisfiable expression means the job is dead and must be
@@ -406,12 +407,21 @@ impl JobWheel {
                 }
             }
 
-            // Record in the in-flight ledger before dispatching.
             self.in_flight.insert(entry.id, entry.clone());
-            fired.push(entry.clone());
+            fired.push(entry);
+        }
 
-            // Re-schedule recurring jobs.
-            match entry.trigger.clone() {
+        (fired, cron_expired)
+    }
+
+    /// Reschedule recurring jobs (Interval/Cron) for their next fire time.
+    ///
+    /// Once-jobs are ignored. Interval jobs use catch-up semantics anchored
+    /// on their original `anchor_at` to avoid cumulative drift. Cron jobs
+    /// recompute the next fire time from their expression.
+    pub fn reschedule_recurring(&mut self, fired: &[JobEntry], now: Timestamp) {
+        for entry in fired {
+            match &entry.trigger {
                 Trigger::Once { .. } => {
                     // One-shot — do not re-insert into the wheel.
                 }
@@ -427,8 +437,8 @@ impl JobWheel {
                     // `anchor_at` should always be Some after `load`'s
                     // backfill pass, but we tolerate None defensively by
                     // falling back to the prior `next_at` as the anchor.
-                    let anchor = anchor_at.unwrap_or(next_at);
-                    let every = jiff::SignedDuration::from_secs(every_secs as i64);
+                    let anchor = anchor_at.unwrap_or(*next_at);
+                    let every = jiff::SignedDuration::from_secs(*every_secs as i64);
                     let mut next = anchor;
                     while next <= now {
                         match next.checked_add(every) {
@@ -437,11 +447,11 @@ impl JobWheel {
                         }
                     }
 
-                    let mut rescheduled = entry;
+                    let mut rescheduled = entry.clone();
                     rescheduled.trigger = Trigger::Interval {
-                        anchor_at: Some(anchor),
-                        every_secs,
-                        next_at: next,
+                        anchor_at:  Some(anchor),
+                        every_secs: *every_secs,
+                        next_at:    next,
                     };
                     let new_key = Self::key(&rescheduled);
                     let id = rescheduled.id;
@@ -449,12 +459,13 @@ impl JobWheel {
                     self.by_id.insert(id, new_key);
                 }
                 Trigger::Cron { expr, .. } => {
-                    // We already verified `next_cron_time` is `Some` above,
-                    // but recompute defensively rather than threading state.
-                    if let Some(next) = Self::next_cron_time(&expr, now) {
-                        let mut rescheduled = entry;
+                    // We already verified `next_cron_time` is `Some` in
+                    // `mark_fired`, but recompute defensively rather than
+                    // threading state.
+                    if let Some(next) = Self::next_cron_time(expr, now) {
+                        let mut rescheduled = entry.clone();
                         rescheduled.trigger = Trigger::Cron {
-                            expr,
+                            expr:    expr.clone(),
                             next_at: next,
                         };
                         let new_key = Self::key(&rescheduled);
@@ -465,6 +476,39 @@ impl JobWheel {
                 }
             }
         }
+    }
+
+    /// Drain all jobs whose `next_at` is at or before `now`.
+    ///
+    /// Convenience wrapper that calls [`peek_expired`], [`mark_fired`], and
+    /// [`reschedule_recurring`] in sequence. This preserves backward
+    /// compatibility for callers that don't need the decomposed API.
+    ///
+    /// - `Once` jobs are removed from the wheel.
+    /// - `Interval` jobs have their `next_at` advanced and are re-inserted.
+    /// - `Cron` jobs compute the next fire time from their expression and are
+    ///   re-inserted. If the cron expression yields no future time, the job is
+    ///   moved to [`DrainResult::cron_expired`] so the caller can notify the
+    ///   user — the wheel itself stays sans-IO.
+    ///
+    /// All fired jobs are placed in the **in-flight ledger** so they can
+    /// be re-fired on startup if the kernel crashes before the execution
+    /// agent completes. Cron-expired jobs are NOT placed in the in-flight
+    /// ledger because they will not be re-executed.
+    ///
+    /// [`peek_expired`]: Self::peek_expired
+    /// [`mark_fired`]: Self::mark_fired
+    /// [`reschedule_recurring`]: Self::reschedule_recurring
+    pub fn drain_expired(&mut self, now: Timestamp) -> DrainResult {
+        let expired_ids = self.peek_expired(now);
+        let (fired, cron_expired) = self.mark_fired(&expired_ids, now);
+        self.reschedule_recurring(&fired, now);
+
+        info!(
+            fired_count = fired.len(),
+            cron_expired_count = cron_expired.len(),
+            "scheduler drain completed"
+        );
 
         DrainResult {
             fired,
@@ -474,6 +518,7 @@ impl JobWheel {
 
     /// Add a job to the wheel.
     pub fn add(&mut self, entry: JobEntry) {
+        info!(job_id = %entry.id, trigger = ?entry.trigger, "scheduled job registered");
         let key = Self::key(&entry);
         let id = entry.id;
         self.jobs.insert(key, entry);
@@ -504,6 +549,7 @@ impl JobWheel {
     pub fn complete_in_flight(&mut self, job_id: &JobId) -> bool {
         let removed = self.in_flight.remove(job_id).is_some();
         if removed {
+            info!(job_id = %job_id, "scheduled job completed, removed from in-flight");
             self.persist_in_flight();
         }
         removed
@@ -525,7 +571,7 @@ impl JobWheel {
         let jobs: Vec<JobEntry> = self.in_flight.values().cloned().collect();
         info!(
             count = jobs.len(),
-            "re-firing in-flight jobs from previous run"
+            "in-flight recovery: re-firing active leases from previous run"
         );
         jobs
     }
