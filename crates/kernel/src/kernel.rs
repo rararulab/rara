@@ -50,8 +50,7 @@ use tracing::{Instrument, error, info, info_span, warn};
 use crate::{
     KernelError,
     agent::{
-        AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, ExecutionMode,
-        Priority, run_agent_loop,
+        AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, ExecutionMode, run_agent_loop,
     },
     channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
@@ -1415,51 +1414,14 @@ impl Kernel {
             "scheduled task fired"
         );
 
-        // Build a dedicated ScheduledJobAgent manifest with job context
-        // baked into the system prompt.
-        let manifest = AgentManifest {
-            name:                   "scheduled_job".to_string(),
-            role:                   AgentRole::Worker,
-            description:            "Executes a scheduled task and summarizes the result"
-                .to_string(),
-            model:                  None,
-            system_prompt:          {
-                let tags_str = if job.tags.is_empty() {
-                    String::new()
-                } else {
-                    format!("\nRouting tags: {}\n", job.tags.join(", "))
-                };
-                format!(
-                    "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
-                     {trigger_summary}\nTask: {message}\n{tags_str}\n## Instructions\n1. Execute \
-                     the task described above using available tools.\n2. After completion, \
-                     provide a brief summary of what you did and the outcome.\n\n## After \
-                     Completion\nWhen you finish the task, call the `kernel` tool with:\n- \
-                     action: \"publish_report\"\n- report: {{ \"task_id\": \"<uuid>\", \
-                     \"task_type\": \"<type>\", \"tags\": [<routing tags>], \"status\": \
-                     \"completed\", \"summary\": \"<one-line summary>\", \"result\": \
-                     {{<structured result>}} }}\n\nAlternatively, use action: \"publish\" with \
-                     event_type: \"scheduled_task_done\" and payload: {{ \"message\": \
-                     \"<summary>\" }}\n",
-                    message = job.message,
-                )
-            },
-            soul_prompt:            None,
-            provider_hint:          None,
-            max_iterations:         Some(15),
-            tools:                  vec![],
-            excluded_tools:         vec![],
-            max_children:           Some(0),
-            max_context_tokens:     None,
-            priority:               Priority::default(),
-            metadata:               serde_json::json!({
-                "scheduled_job_id": job_id.to_string(),
-            }),
-            sandbox:                None,
-            default_execution_mode: None,
-            tool_call_limit:        None,
-            worker_timeout_secs:    None,
-        };
+        // Build a dedicated scheduled_job manifest with job context baked
+        // into the system prompt.
+        let manifest = crate::agent::scheduled::scheduled_job_manifest(
+            &job_id.to_string(),
+            &trigger_summary,
+            &job.message,
+            &job.tags,
+        );
 
         // 3. Spawn the agent.
         let principal = crate::identity::Principal::lookup(job.principal.user_id.0.clone());
