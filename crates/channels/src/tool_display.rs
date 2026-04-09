@@ -74,9 +74,9 @@ pub enum ToolKind {
     #[strum(message = "截取屏幕", detailed_message = "screenshot")]
     Screenshot,
 
-    #[strum(serialize = "send-image")]
-    #[strum(message = "发送图片", detailed_message = "send-image")]
-    SendImage,
+    #[strum(serialize = "send-file", serialize = "send-image")]
+    #[strum(message = "发送文件", detailed_message = "send-file")]
+    SendFile,
 
     #[strum(serialize = "send-email")]
     #[strum(message = "发送邮件", detailed_message = "email")]

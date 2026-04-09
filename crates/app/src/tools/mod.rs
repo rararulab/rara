@@ -48,7 +48,7 @@ mod multi_edit;
 mod notify;
 mod read_file;
 mod send_email;
-mod send_image;
+mod send_file;
 mod session_info;
 mod set_avatar;
 mod settings;
@@ -90,7 +90,7 @@ use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
 use read_file::ReadFileTool;
 use send_email::SendEmailTool;
-use send_image::SendImageTool;
+use send_file::SendFileTool;
 use session_info::SessionInfoTool;
 use set_avatar::SetAvatarTool;
 use settings::SettingsTool;
@@ -184,7 +184,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(CreateDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
         Arc::new(SendEmailTool::new(deps.settings.clone())),
-        Arc::new(SendImageTool::new()),
+        Arc::new(SendFileTool::new()),
         Arc::new(SetAvatarTool::new(deps.settings.clone())),
         Arc::new(SettingsTool::new(deps.settings.clone())),
         // Skill tools
