@@ -652,3 +652,56 @@ async fn consecutive_empty_responses_terminate() {
 
     tk.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_file_delivers_attachment() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env();
+
+    // Create a temp file to send.
+    let file_path = tmp.path().join("test.pdf");
+    std::fs::write(&file_path, b"fake pdf content").expect("write test file");
+    let file_path_str = file_path.to_str().expect("valid utf8 path");
+
+    // Script: LLM calls send-file with the temp path, then produces a reply.
+    let tk = TestKernelBuilder::new(tmp.path())
+        .responses(vec![
+            scripted_tool_call_response(vec![ToolCallRequest {
+                id:        "call_send_1".to_string(),
+                name:      "send-file".to_string(),
+                arguments: json!({"file_path": file_path_str}).to_string(),
+            }]),
+            scripted_response("File sent."),
+            scripted_response("(padding)"),
+            scripted_response("(padding)"),
+        ])
+        .build()
+        .await;
+
+    let principal = Principal::lookup("test".to_string());
+    let session_key = tk
+        .handle
+        .spawn_named(
+            &tk.agent_name,
+            "send me the test file".to_string(),
+            principal,
+            None,
+        )
+        .await
+        .expect("spawn session");
+
+    wait_for_turn_count(&tk.handle, session_key, 1).await;
+
+    let traces = tk.handle.get_process_turns(session_key);
+    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
+    let turn = &traces[0];
+    assert!(turn.success, "turn should succeed: {:?}", turn.error);
+    // The turn must have at least 2 iterations: tool call + final reply.
+    assert!(
+        turn.iterations.len() >= 2,
+        "expected at least 2 iterations (send-file + reply), got {}",
+        turn.iterations.len()
+    );
+
+    tk.shutdown();
+}
