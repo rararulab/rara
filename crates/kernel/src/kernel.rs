@@ -583,25 +583,28 @@ impl Kernel {
     /// blocking thread-pool to avoid starving the tokio runtime.
     async fn drain_scheduled_jobs(&self) {
         let wheel_ref = self.syscall.job_wheel().clone();
-        let expired = tokio::task::spawn_blocking(move || {
+        let drained = tokio::task::spawn_blocking(move || {
             let now = jiff::Timestamp::now();
             let mut wheel = wheel_ref.lock();
 
             // Re-fire any in-flight jobs from a previous run (only returns
             // entries on the first call; subsequent calls return empty).
-            let mut all = wheel.take_in_flight();
+            let mut fired = wheel.take_in_flight();
 
-            let expired = wheel.drain_expired(now);
-            if !expired.is_empty() {
+            let result = wheel.drain_expired(now);
+            let dirty = !result.fired.is_empty() || !result.cron_expired.is_empty();
+            if dirty {
                 wheel.persist();
             }
-            all.extend(expired);
-            all
+            fired.extend(result.fired);
+            (fired, result.cron_expired)
         })
         .await
         .unwrap_or_default();
 
-        for job in expired {
+        let (fired, cron_expired) = drained;
+
+        for job in fired {
             info!(
                 job_id = %job.id,
                 session = %job.session_key,
@@ -610,6 +613,31 @@ impl Kernel {
             let _ = self
                 .event_queue
                 .push(KernelEventEnvelope::scheduled_task(job));
+        }
+
+        // Surface cron jobs that died because their expression no longer
+        // yields a future time. Previously this was a silent delete + warn;
+        // the user is the only one who can fix the broken expression, so
+        // they need a visible notification.
+        for job in cron_expired {
+            let expr = match &job.trigger {
+                crate::schedule::Trigger::Cron { expr, .. } => expr.clone(),
+                _ => String::new(),
+            };
+            tracing::warn!(
+                job_id = %job.id,
+                session = %job.session_key,
+                expr = %expr,
+                "cron job removed: expression yields no future fire time"
+            );
+            let message = format!(
+                "Scheduled cron job {} was removed because its expression `{}` no longer yields a \
+                 future fire time. Original prompt: {:?}",
+                job.id, expr, job.message
+            );
+            let _ = self
+                .event_queue
+                .push(KernelEventEnvelope::send_notification(message));
         }
     }
 
