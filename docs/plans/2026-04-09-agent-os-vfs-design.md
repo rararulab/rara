@@ -253,6 +253,41 @@ pub enum RootMode {
 
 这样可以先把 **命名空间** 切换过来，再逐步收紧 host-path 兼容窗口。
 
+### Shell Boundary and Host Interop
+
+这里必须明确一个 rara 和 agent-os 的关键差异：`agent-os` 的 shell 与文件访问都运行在同一个 guest root 里，而 rara 当前的 `bash` tool 仍然直接执行宿主机进程，并且默认 `cwd` 指向真实 workspace。
+
+这意味着 v1 不能假装“guest path 已经天然对 shell 生效”。正确做法是显式定义一个 **guest-to-host bridge**：
+
+1. 结构化 file tools 先全面切到 guest path。
+2. `bash` / `shell_exec` 仍然执行 host command，但其默认 `cwd` 固定绑定到 `/workspace` 对应的 host path。
+3. runtime 在 shell 环境里注入 guest/host 对照变量，方便 agent 和脚本显式桥接。
+4. 凡是 shell 输出、trace、task report 里出现的已知 host path，都在展示层尽量归一化回 guest path。
+
+建议的 bootstrap env 如下：
+
+```bash
+RARA_GUEST_WORKSPACE=/workspace
+RARA_HOST_WORKSPACE=/path/to/git/worktree
+RARA_GUEST_DATA=/data
+RARA_HOST_DATA=/path/to/runtime/fs/<session-id>/upper
+RARA_GUEST_ARTIFACTS=/artifacts
+RARA_HOST_ARTIFACTS=/path/to/runtime/artifacts/<session-id>
+RARA_GUEST_TMP=/tmp
+RARA_HOST_TMP=/path/to/runtime/fs/<session-id>/tmp
+```
+
+这套 bridge 有两个直接收益：
+
+- 不会阻塞 `/workspace`、`/data` 先在结构化工具侧稳定下来；
+- 也不会让 shell 继续悄悄把“宿主机绝对路径”扩散成事实标准。
+
+同时要承认它的边界：在 shell 真正接入 guest-path resolver 之前，`cd /data` 这种命令不能直接假设可用。更现实的策略是：
+
+- 默认 shell `cwd` 设为 `RARA_HOST_WORKSPACE`；
+- agent 需要操作 `/data`、`/artifacts` 时，通过环境变量或显式 helper 映射到 host path；
+- 后续如果要进一步贴近 agent-os，再增加 `guest-exec` 包装层，把 shell 命令中的 guest path 解析和沙箱规则收敛到统一入口。
+
 ## Integration with Ralph Task Agent
 
 这是本方案里最重要的 rara-specific 部分。
@@ -276,6 +311,9 @@ pub enum RootMode {
 - issue runtime 私有状态目录，供 `/data` upper 使用；
 - artifacts 根目录，供 review/verify/browser 流程统一落盘；
 - 初始 `GuestPathGuard` allowlist。
+- shell bridge env（`RARA_GUEST_*` / `RARA_HOST_*`）和默认 shell cwd 策略。
+
+这一步应该由 issue runner 统一完成，而不是让单个 tool 自己拼路径。原因很简单：真实 host path、artifact root、session upper 都是 runtime 生命周期的一部分，只有 Symphony/Ralph bootstrap 层同时知道它们。
 
 ### 2. Worker Fork Semantics
 
@@ -332,7 +370,7 @@ v1 不做下面这些事情：
 | Milestone | 内容 | 优先级 |
 |-----------|------|--------|
 | M0 | 设计文档定稿，明确 guest path 语义和挂载点 | P0 |
-| M1 | 引入 `GuestPath`、`AgentFileSystem`、`MountTable`，让结构化文件工具先走虚拟层；backend 仍可直接映射 host dir | P0 |
+| M1 | 引入 `GuestPath`、`AgentFileSystem`、`MountTable`，让结构化文件工具先走虚拟层；同时定义 shell guest/host bridge 和默认 env contract | P0 |
 | M2 | 增加 session `/data` 和 `/tmp`，实现 persisted upper layer、whiteout、snapshot lineage | P1 |
 | M3 | worker fork 继承 snapshot，接入 Ralph/Symphony issue runner，补 task artifact summary | P1 |
 | M4 | 抽象 plugin registry，支持 Vault/S3/SQLite/remote mounts | P2 |
@@ -347,6 +385,7 @@ v1 不做下面这些事情：
 2. 让 `read-file`、`write-file`、`edit-file`、`delete-file`、`list-directory` 走 `AgentFileSystem`。
 3. 将当前 workspace 目录挂到 `/workspace`。
 4. 新增 `/data` 目录，先落到简单的 session-owned host path。
+5. 为 `bash` 明确默认 `cwd=/workspace` 的 host 映射，并注入 guest/host 对照环境变量。
 
 这个阶段交付后，agent prompt 和 tool schema 已经可以稳定使用 `/data`。
 
@@ -408,6 +447,7 @@ rara 当前的现实约束不同：
 - [rivet-dev/agent-os: crates/kernel/src/mount_plugin.rs](https://github.com/rivet-dev/agent-os/blob/main/crates/kernel/src/mount_plugin.rs)
 - [rivet-dev/agent-os: crates/kernel/src/root_fs.rs](https://github.com/rivet-dev/agent-os/blob/main/crates/kernel/src/root_fs.rs)
 - [rara: docs/plans/2026-03-13-plan-execute-architecture.md](../plans/2026-03-13-plan-execute-architecture.md)
+- [rara: crates/app/src/tools/bash.rs](../../crates/app/src/tools/bash.rs)
 - [rara: crates/app/src/tools/read_file.rs](../../crates/app/src/tools/read_file.rs)
 - [rara: crates/app/src/tools/write_file.rs](../../crates/app/src/tools/write_file.rs)
 - [rara: crates/kernel/src/guard/path_scope.rs](../../crates/kernel/src/guard/path_scope.rs)
