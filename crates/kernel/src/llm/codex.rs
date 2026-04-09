@@ -61,14 +61,25 @@ impl CodexDriver {
     /// The resolver must return credentials with `extra_headers` containing
     /// `chatgpt-account-id` (set up by `CodexCredentialResolver`).
     pub fn new(resolver: LlmCredentialResolverRef) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .unwrap_or_default();
-        let stream_client = Client::builder()
-            .timeout(Duration::from_secs(0)) // no total timeout for SSE
-            .build()
-            .unwrap_or_default();
+        let proxy = std::env::var("HTTPS_PROXY")
+            .or_else(|_| std::env::var("https_proxy"))
+            .or_else(|_| std::env::var("ALL_PROXY"))
+            .or_else(|_| std::env::var("all_proxy"))
+            .ok();
+
+        let mut client_builder = Client::builder().timeout(Duration::from_secs(300));
+        let mut stream_builder = Client::builder(); // no total timeout for SSE
+
+        if let Some(ref url) = proxy {
+            tracing::info!(%url, "CodexDriver: using proxy");
+            if let Ok(p) = reqwest::Proxy::all(url) {
+                client_builder = client_builder.proxy(p.clone());
+                stream_builder = stream_builder.proxy(p);
+            }
+        }
+
+        let client = client_builder.build().unwrap_or_default();
+        let stream_client = stream_builder.build().unwrap_or_default();
         Self {
             resolver,
             client,
