@@ -211,6 +211,33 @@ pub struct DrainResult {
 }
 
 // ---------------------------------------------------------------------------
+// InFlightEntry — in-flight ledger entry with lease deadline
+// ---------------------------------------------------------------------------
+
+/// Default lease duration in seconds (5 minutes). If a job's execution agent
+/// does not call `complete_in_flight` within this window, the entry is
+/// considered orphaned and will be discarded on the next restart instead of
+/// re-fired forever.
+const DEFAULT_LEASE_SECS: i64 = 300;
+
+/// An in-flight job wrapped with lease metadata.
+///
+/// Persisted to `in_flight.json` so that on restart the kernel can distinguish
+/// between jobs that are still plausibly running (lease not yet expired) and
+/// orphaned entries whose agent crashed or hung.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InFlightEntry {
+    /// The original job that was dispatched.
+    pub job:            JobEntry,
+    /// When the job was drained from the wheel and dispatched.
+    pub fired_at:       Timestamp,
+    /// Absolute deadline by which `complete_in_flight` must be called.
+    /// Entries past this deadline are discarded on recovery rather than
+    /// re-fired.
+    pub lease_deadline: Timestamp,
+}
+
+// ---------------------------------------------------------------------------
 // JobWheel — BTreeMap-backed scheduling structure
 // ---------------------------------------------------------------------------
 
@@ -238,7 +265,9 @@ pub struct JobWheel {
     /// `jobs`. All mutators of `jobs` must update `by_id` in lockstep.
     by_id:               HashMap<JobId, WheelKey>,
     /// Jobs that have been drained and dispatched but not yet completed.
-    in_flight:           HashMap<JobId, JobEntry>,
+    /// Each entry carries a lease deadline; orphaned entries past their
+    /// deadline are discarded on recovery instead of re-fired.
+    in_flight:           HashMap<JobId, InFlightEntry>,
     /// Path to the `jobs.json` persistence file.
     path:                PathBuf,
     /// Runtime-only flag: true once `take_in_flight` has returned recovered
@@ -316,15 +345,15 @@ impl JobWheel {
         let ifl_path = Self::in_flight_path(&path);
         let in_flight = match std::fs::read_to_string(&ifl_path) {
             Ok(content) => {
-                let entries: Vec<JobEntry> = match serde_json::from_str(&content) {
+                let entries: Vec<InFlightEntry> = match serde_json::from_str(&content) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!(error = %e, path = %ifl_path.display(), "failed to parse in_flight.json, starting empty");
                         Vec::new()
                     }
                 };
-                let map: HashMap<JobId, JobEntry> =
-                    entries.into_iter().map(|e| (e.id, e)).collect();
+                let map: HashMap<JobId, InFlightEntry> =
+                    entries.into_iter().map(|e| (e.job.id, e)).collect();
                 if !map.is_empty() {
                     info!(count = map.len(), "restored in-flight jobs from disk");
                 }
@@ -407,7 +436,18 @@ impl JobWheel {
                 }
             }
 
-            self.in_flight.insert(entry.id, entry.clone());
+            // Record in the in-flight ledger before dispatching.
+            let lease_deadline = now
+                .checked_add(jiff::SignedDuration::from_secs(DEFAULT_LEASE_SECS))
+                .unwrap_or(now);
+            self.in_flight.insert(
+                entry.id,
+                InFlightEntry {
+                    job: entry.clone(),
+                    fired_at: now,
+                    lease_deadline,
+                },
+            );
             fired.push(entry);
         }
 
@@ -557,6 +597,10 @@ impl JobWheel {
 
     /// Return in-flight jobs from a previous run for re-firing on startup.
     ///
+    /// Only entries whose `lease_deadline` has not yet passed are returned.
+    /// Expired entries are logged and discarded — they represent orphaned
+    /// executions whose agent crashed or hung beyond the lease window.
+    ///
     /// Returns clones on the first call and sets a flag so subsequent calls
     /// return empty. The ledger is **not** cleared here — entries are removed
     /// individually by [`JobWheel::complete_in_flight`] after each agent
@@ -568,11 +612,39 @@ impl JobWheel {
             return Vec::new();
         }
         self.in_flight_recovered = true;
-        let jobs: Vec<JobEntry> = self.in_flight.values().cloned().collect();
-        info!(
-            count = jobs.len(),
-            "in-flight recovery: re-firing active leases from previous run"
-        );
+
+        let now = self.clock.now();
+        let mut expired_ids = Vec::new();
+        let mut jobs = Vec::new();
+
+        for (id, entry) in &self.in_flight {
+            if entry.lease_deadline > now {
+                jobs.push(entry.job.clone());
+            } else {
+                warn!(
+                    job_id = %id,
+                    fired_at = %entry.fired_at,
+                    lease_deadline = %entry.lease_deadline,
+                    "discarding orphaned in-flight job (lease expired)"
+                );
+                expired_ids.push(*id);
+            }
+        }
+
+        // Remove expired entries from the ledger and persist.
+        if !expired_ids.is_empty() {
+            for id in &expired_ids {
+                self.in_flight.remove(id);
+            }
+            self.persist_in_flight();
+        }
+
+        if !jobs.is_empty() {
+            info!(
+                count = jobs.len(),
+                "re-firing in-flight jobs from previous run"
+            );
+        }
         jobs
     }
 
@@ -603,7 +675,7 @@ impl JobWheel {
     /// Persist only the in-flight ledger.
     fn persist_in_flight(&self) {
         let ifl_path = Self::in_flight_path(&self.path);
-        let entries: Vec<&JobEntry> = self.in_flight.values().collect();
+        let entries: Vec<&InFlightEntry> = self.in_flight.values().collect();
         match serde_json::to_string_pretty(&entries) {
             Ok(json) => {
                 if let Some(parent) = ifl_path.parent() {
@@ -1085,6 +1157,75 @@ mod tests {
             result.fired.len(),
             1,
             "expected one job after advancing 61s"
+        );
+    }
+
+    /// In-flight entries within the lease window are re-fired on recovery.
+    #[test]
+    fn take_in_flight_returns_jobs_within_lease() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path.clone(), clock.clone());
+
+        // Add a job in the past, drain it into in-flight.
+        let run_at = Timestamp::from_second(t0().as_second() - 10).unwrap();
+        wheel.add(make_entry(run_at));
+        let result = wheel.drain_expired_now();
+        assert_eq!(result.fired.len(), 1);
+
+        // Persist and reload — simulates a restart.
+        wheel.persist();
+        let mut reloaded = JobWheel::load_with_clock(path, clock.clone());
+
+        // Clock is still at t0 — well within the 300s lease.
+        let recovered = reloaded.take_in_flight();
+        assert_eq!(recovered.len(), 1, "job within lease should be re-fired");
+    }
+
+    /// In-flight entries past the lease deadline are discarded on recovery.
+    #[test]
+    fn take_in_flight_discards_expired_lease() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path.clone(), clock.clone());
+
+        let run_at = Timestamp::from_second(t0().as_second() - 10).unwrap();
+        wheel.add(make_entry(run_at));
+        let result = wheel.drain_expired_now();
+        assert_eq!(result.fired.len(), 1);
+
+        wheel.persist();
+
+        // Advance clock past the lease deadline (300s + margin).
+        clock.advance(std::time::Duration::from_secs(400));
+        let mut reloaded = JobWheel::load_with_clock(path, clock.clone());
+
+        let recovered = reloaded.take_in_flight();
+        assert!(
+            recovered.is_empty(),
+            "expired-lease job should be discarded, got {}",
+            recovered.len()
+        );
+    }
+
+    /// InFlightEntry round-trips through JSON.
+    #[test]
+    fn in_flight_entry_serde_roundtrip() {
+        let job = make_entry(t0());
+        let entry = InFlightEntry {
+            job:            job.clone(),
+            fired_at:       t0(),
+            lease_deadline: Timestamp::from_second(t0().as_second() + DEFAULT_LEASE_SECS).unwrap(),
+        };
+        let json = serde_json::to_string(&entry).expect("serialize InFlightEntry");
+        let back: InFlightEntry = serde_json::from_str(&json).expect("deserialize InFlightEntry");
+        assert_eq!(back.job.id, job.id);
+        assert_eq!(back.fired_at, t0());
+        assert_eq!(
+            back.lease_deadline.as_second(),
+            t0().as_second() + DEFAULT_LEASE_SECS
         );
     }
 }

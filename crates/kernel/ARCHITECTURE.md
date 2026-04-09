@@ -191,6 +191,83 @@ transition to `Suspended` instead. Transitions happen via
    heartbeat, job wheel drain, and rate-limiter GC only fire on the
    global processor (`src/kernel.rs:513`).
 
+## Scheduling
+
+The scheduling subsystem drives timed and recurring jobs. All
+scheduling logic lives in [`src/schedule.rs`](./src/schedule.rs).
+
+### Data Model
+
+- **`JobEntry`** (`src/schedule.rs:173`) — a single scheduled task:
+  job ID, trigger, message text, session key, principal, tags.
+- **`Trigger`** (`src/schedule.rs:109`) — when a job fires. Three
+  variants: `Once { run_at }`, `Interval { anchor_at, every_secs,
+  next_at }`, `Cron { expr, next_at }`.
+- **`JobWheel`** (`src/schedule.rs:259`) — the scheduling data
+  structure. A `BTreeMap<(i64, Uuid), JobEntry>` keyed by
+  `(next_fire_secs, job_uuid)` so `drain_expired` can pop all entries
+  up to `now` in O(k) where k = expired count. A sidecar
+  `HashMap<JobId, WheelKey>` provides O(1) removal by ID.
+- **`DrainResult`** (`src/schedule.rs:204`) — output of
+  `drain_expired`: `fired` (jobs to dispatch) + `cron_expired` (dead
+  cron jobs for user notification).
+
+### Persistence
+
+Three files under the kernel data directory:
+
+| File | Content |
+|---|---|
+| `jobs.json` | All registered jobs in the wheel |
+| `in_flight.json` | Jobs drained but not yet completed, as `InFlightEntry` with lease metadata |
+| `results/{job_id}/{epoch}.json` | Per-execution result log (via `JobResultStore`) |
+
+**Lease semantics**: Each in-flight entry carries `fired_at` and
+`lease_deadline` (`src/schedule.rs:229`). The default lease is 300
+seconds (`DEFAULT_LEASE_SECS`, `src/schedule.rs:221`). On recovery,
+`take_in_flight` (`src/schedule.rs:563`) only re-fires entries whose
+lease has not expired. Expired entries are logged and discarded,
+preventing orphaned jobs from re-firing forever across restarts.
+
+### Ownership
+
+Processor `id=0` is the sole scheduler owner (`src/kernel.rs:513`).
+No other processor touches the job wheel. This eliminates
+concurrency concerns — the wheel is behind `&mut self`, not
+`Arc<Mutex<_>>`.
+
+### Recovery on Restart
+
+1. `JobWheel::load_with_clock` (`src/schedule.rs:302`) restores
+   `jobs.json` and `in_flight.json` from disk.
+2. On the first scheduler tick, `take_in_flight` returns entries
+   whose `lease_deadline > now` for re-firing. Expired entries are
+   discarded with a warning log.
+3. `complete_in_flight` (`src/schedule.rs:543`) removes entries
+   individually as each agent session ends — the ledger is crash-safe
+   because incomplete entries persist until explicitly cleared.
+
+### Trigger Semantics
+
+- **`Once`** — fires at `run_at`, then removed from the wheel. Not
+  rescheduled.
+- **`Interval`** — catch-up from `anchor_at`: next fire =
+  `anchor_at + k * every_secs` for smallest k > now. Eliminates
+  cumulative drift even after missed periods. Legacy entries without
+  `anchor_at` are backfilled from `next_at` at load time.
+- **`Cron`** — `next_cron_time` (`src/schedule.rs:654`) computes the
+  next fire via the `cron` crate. If the expression yields no future
+  time, the job is moved to `DrainResult::cron_expired` and removed.
+  Registration also rejects impossible expressions upfront.
+
+### Clock Trait for Testability
+
+`Clock` (`src/schedule.rs:43`) abstracts wall-clock time.
+`SystemClock` (`src/schedule.rs:53`) delegates to
+`jiff::Timestamp::now()`. `FakeClock` (`src/schedule.rs:64`) can be
+set or advanced manually, making scheduler tests fully deterministic
+with no `tokio::time::sleep` or real wall-clock dependencies.
+
 ## See Also
 
 - [`AGENT.md`](./AGENT.md) — crate-level invariants and anti-patterns
