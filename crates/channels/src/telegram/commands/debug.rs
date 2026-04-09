@@ -32,9 +32,6 @@ use rara_kernel::{
 
 use super::session::html_escape;
 
-/// Maximum tape entries to scan per debug request.
-const MAX_ENTRIES: usize = 200;
-
 /// Handles the `/debug` command.
 pub struct DebugCommandHandler {
     tape_service: TapeService,
@@ -58,7 +55,7 @@ impl CommandHandler for DebugCommandHandler {
     async fn handle(
         &self,
         command: &CommandInfo,
-        _context: &CommandContext,
+        context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
         let message_id = command.args.trim();
         if message_id.is_empty() {
@@ -69,15 +66,15 @@ impl CommandHandler for DebugCommandHandler {
             ));
         }
 
-        // Cross-tape search: find any entry whose metadata.rara_message_id
-        // matches. The empty tape_name argument plus all_tapes=true causes
-        // TapeService::search to scan all session tapes.
+        // Exact metadata filter on the current session's tape — returns all
+        // entry kinds (messages, tool calls, tool results, events) so the
+        // debug view shows the complete execution context.
         let entries = self
             .tape_service
-            .search("", message_id, MAX_ENTRIES, true)
+            .entries_by_message_id(&context.session_key, message_id)
             .await
             .map_err(|e| KernelError::Other {
-                message: format!("tape search failed: {e}").into(),
+                message: format!("tape lookup failed: {e}").into(),
             })?;
 
         let summary = MessageDebugSummary::from_entries(message_id, entries);
