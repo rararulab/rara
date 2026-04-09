@@ -21,6 +21,7 @@
 //! - [`Message`] — conversation message type
 //! - [`OpenAiDriver`] — reqwest-based OpenAI-compatible driver with SSE parsing
 
+pub mod codex;
 pub mod driver;
 pub mod image;
 pub mod openai;
