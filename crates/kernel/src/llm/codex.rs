@@ -194,9 +194,40 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         })
         .collect();
 
+    // Extract the first system/developer message as `instructions` — the
+    // Codex backend requires this field and rejects requests without it.
+    // Remaining system messages stay in `input`.
+    let instructions = request
+        .messages
+        .iter()
+        .find(|m| {
+            matches!(
+                m.role,
+                super::types::Role::System | super::types::Role::Developer
+            )
+        })
+        .map(|m| m.content.as_text())
+        .unwrap_or_default();
+
+    // Remove the system message we extracted from input (it's now in instructions).
+    if !instructions.is_empty() {
+        if let Some(pos) = input.iter().position(|item| {
+            item.get("role")
+                .and_then(|r| r.as_str())
+                .is_some_and(|r| r == "developer" || r == "system")
+                && item
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c == instructions)
+        }) {
+            input.remove(pos);
+        }
+    }
+
     let mut body = json!({
         "model": request.model,
         "input": input,
+        "instructions": instructions,
         "stream": true,
         "store": false,
     });
