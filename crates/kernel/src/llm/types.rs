@@ -436,9 +436,57 @@ impl ModelCapabilities {
             supports_parallel_tool_calls: !matches!(provider, LlmProviderFamily::Ollama),
             tools_disabled_reason: None,
             context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
-            supports_vision: false,
+            supports_vision: is_known_vision_model(&lower),
         }
     }
+}
+
+/// Best-effort vision support detection by model name substring.
+///
+/// The OpenRouter `/models` endpoint carries authoritative modality
+/// metadata, and the driver layer overrides this via
+/// [`ModelCapabilities::with_vision`] when that cache is populated. This
+/// helper is the fallback for providers that do not publish modality
+/// metadata (local Ollama, custom OpenAI-compatible endpoints, models
+/// not yet in the OpenRouter cache).
+///
+/// Matches are lowercased substring checks so variants
+/// (`gpt-4o-mini`, `gpt-4o-2024-08-06`, `anthropic/claude-3.5-sonnet`)
+/// all resolve to the same verdict.
+fn is_known_vision_model(lower_model: &str) -> bool {
+    const VISION_MARKERS: &[&str] = &[
+        // OpenAI
+        "gpt-4o",
+        "gpt-4-vision",
+        "gpt-4-turbo",
+        "o1",
+        "o3",
+        "o4",
+        // Anthropic Claude 3+ (all support vision)
+        "claude-3",
+        "claude-opus",
+        "claude-sonnet",
+        "claude-haiku",
+        // Google Gemini
+        "gemini-1.5",
+        "gemini-2",
+        "gemini-pro-vision",
+        // Qwen vision variants
+        "qwen-vl",
+        "qwen2-vl",
+        "qwen2.5-vl",
+        // Meta Llama vision
+        "llama-3.2-vision",
+        "llama-4",
+        // Local vision models
+        "llava",
+        "bakllava",
+        "moondream",
+        "minicpm-v",
+        // MiniMax
+        "minimax-m",
+    ];
+    VISION_MARKERS.iter().any(|m| lower_model.contains(m))
 }
 
 // ---------------------------------------------------------------------------
@@ -576,5 +624,56 @@ mod tests {
     fn with_context_window_overrides_default() {
         let caps = ModelCapabilities::detect(None, "gpt-4o").with_context_window(200_000);
         assert_eq!(caps.context_window_tokens, 200_000);
+    }
+
+    #[test]
+    fn detect_identifies_vision_models_by_name() {
+        let vision_models = [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "openai/gpt-4o-2024-08-06",
+            "gpt-4-turbo",
+            "gpt-4-vision-preview",
+            "claude-3-opus-20240229",
+            "anthropic/claude-3.5-sonnet",
+            "claude-3-haiku",
+            "gemini-1.5-pro",
+            "gemini-2.0-flash",
+            "google/gemini-pro-vision",
+            "qwen2-vl-7b",
+            "qwen2.5-vl-72b-instruct",
+            "llama-3.2-vision-11b",
+            "llava",
+            "llava-1.6",
+            "MiniMax-M2.7",
+            "minimax-m1",
+        ];
+        for model in vision_models {
+            let caps = ModelCapabilities::detect(None, model);
+            assert!(
+                caps.supports_vision,
+                "{model} should be detected as vision-capable"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_does_not_flag_non_vision_models() {
+        let text_only = [
+            "gpt-3.5-turbo",
+            "claude-2",
+            "deepseek-r1",
+            "qwen2-7b",
+            "llama-3-8b",
+            "mistral-7b",
+            "some-unknown-model",
+        ];
+        for model in text_only {
+            let caps = ModelCapabilities::detect(None, model);
+            assert!(
+                !caps.supports_vision,
+                "{model} should NOT be detected as vision-capable"
+            );
+        }
     }
 }
