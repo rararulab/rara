@@ -137,6 +137,11 @@ type WheelKey = (i64, Uuid);
 pub struct JobWheel {
     /// Jobs ordered by (next_fire_time_secs, job_uuid).
     jobs:                BTreeMap<WheelKey, JobEntry>,
+    /// Sidecar index from `JobId` to its current `WheelKey`, enabling O(1)
+    /// `remove`. Invariant: `by_id` contains exactly the same job ids as
+    /// `jobs`, and each value is the key under which that job lives in
+    /// `jobs`. All mutators of `jobs` must update `by_id` in lockstep.
+    by_id:               HashMap<JobId, WheelKey>,
     /// Jobs that have been drained and dispatched but not yet completed.
     in_flight:           HashMap<JobId, JobEntry>,
     /// Path to the `jobs.json` persistence file.
@@ -184,6 +189,10 @@ impl JobWheel {
             }
         };
 
+        // Rebuild the sidecar index from the loaded BTreeMap so the
+        // O(1) `remove` invariant holds immediately after `load`.
+        let by_id: HashMap<JobId, WheelKey> = jobs.iter().map(|(k, v)| (v.id, *k)).collect();
+
         let ifl_path = Self::in_flight_path(&path);
         let in_flight = match std::fs::read_to_string(&ifl_path) {
             Ok(content) => {
@@ -206,6 +215,7 @@ impl JobWheel {
 
         Self {
             jobs,
+            by_id,
             in_flight,
             path,
             in_flight_recovered: false,
@@ -240,6 +250,10 @@ impl JobWheel {
 
         for key in keys {
             if let Some(entry) = self.jobs.remove(&key) {
+                // Drop the sidecar entry; rescheduled recurring jobs
+                // re-insert below with the freshly computed key.
+                self.by_id.remove(&entry.id);
+
                 // Record in the in-flight ledger before dispatching.
                 self.in_flight.insert(entry.id, entry.clone());
                 expired.push(entry.clone());
@@ -259,7 +273,10 @@ impl JobWheel {
                             every_secs,
                             next_at: next,
                         };
-                        self.jobs.insert(Self::key(&rescheduled), rescheduled);
+                        let new_key = Self::key(&rescheduled);
+                        let id = rescheduled.id;
+                        self.jobs.insert(new_key, rescheduled);
+                        self.by_id.insert(id, new_key);
                     }
                     Trigger::Cron { expr, .. } => match Self::next_cron_time(&expr, now) {
                         Some(next) => {
@@ -268,7 +285,10 @@ impl JobWheel {
                                 expr,
                                 next_at: next,
                             };
-                            self.jobs.insert(Self::key(&rescheduled), rescheduled);
+                            let new_key = Self::key(&rescheduled);
+                            let id = rescheduled.id;
+                            self.jobs.insert(new_key, rescheduled);
+                            self.by_id.insert(id, new_key);
                         }
                         None => {
                             warn!(job_id = %entry.id, expr = expr, "cron expression yields no future time, removing job");
@@ -284,13 +304,17 @@ impl JobWheel {
     /// Add a job to the wheel.
     pub fn add(&mut self, entry: JobEntry) {
         let key = Self::key(&entry);
+        let id = entry.id;
         self.jobs.insert(key, entry);
+        self.by_id.insert(id, key);
     }
 
     /// Remove a job by ID. Returns the removed entry if found.
+    ///
+    /// O(1) via the `by_id` sidecar index.
     pub fn remove(&mut self, id: &JobId) -> Option<JobEntry> {
-        let key = self.jobs.iter().find(|(_, v)| v.id == *id).map(|(k, _)| *k);
-        key.and_then(|k| self.jobs.remove(&k))
+        let key = self.by_id.remove(id)?;
+        self.jobs.remove(&key)
     }
 
     /// List all jobs, optionally filtered by session key.
@@ -391,6 +415,143 @@ impl JobWheel {
         let next_chrono = schedule.upcoming(chrono::Utc).find(|t| *t > after_chrono)?;
         let next_ts = Timestamp::from_second(next_chrono.timestamp()).ok()?;
         Some(next_ts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::{SignedDuration, Timestamp};
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::{
+        identity::{KernelUser, Permission, Principal, Role},
+        session::SessionKey,
+    };
+
+    fn test_principal() -> Principal {
+        let user = KernelUser {
+            name:        "test-user".into(),
+            role:        Role::User,
+            permissions: vec![Permission::Spawn],
+            enabled:     true,
+        };
+        Principal::from_user(&user)
+    }
+
+    fn make_job(message: &str, trigger: Trigger) -> JobEntry {
+        JobEntry {
+            id: JobId::new(),
+            trigger,
+            message: message.into(),
+            session_key: SessionKey::new(),
+            principal: test_principal(),
+            created_at: Timestamp::now(),
+            tags: vec![],
+        }
+    }
+
+    fn future(secs: i64) -> Timestamp {
+        Timestamp::now()
+            .checked_add(SignedDuration::from_secs(secs))
+            .expect("future timestamp should be representable")
+    }
+
+    #[test]
+    fn by_id_index_stays_in_sync() {
+        let tmp = tempdir().unwrap();
+        let mut wheel = JobWheel::load(tmp.path().join("jobs.json"));
+
+        let job1 = make_job("one", Trigger::Once { run_at: future(60) });
+        let id1 = job1.id;
+        let job2 = make_job(
+            "two",
+            Trigger::Interval {
+                every_secs: 30,
+                next_at:    future(30),
+            },
+        );
+        let id2 = job2.id;
+
+        wheel.add(job1);
+        wheel.add(job2);
+
+        assert_eq!(wheel.jobs.len(), 2);
+        assert_eq!(wheel.by_id.len(), 2);
+
+        let removed = wheel.remove(&id1);
+        assert!(removed.is_some());
+
+        assert_eq!(wheel.jobs.len(), 1);
+        assert_eq!(wheel.by_id.len(), 1);
+        assert!(!wheel.by_id.contains_key(&id1));
+        assert!(wheel.by_id.contains_key(&id2));
+    }
+
+    #[test]
+    fn drain_expired_keeps_by_id_consistent_for_recurring_jobs() {
+        let tmp = tempdir().unwrap();
+        let mut wheel = JobWheel::load(tmp.path().join("jobs.json"));
+
+        let past = Timestamp::now()
+            .checked_sub(SignedDuration::from_secs(10))
+            .unwrap();
+
+        let once = make_job("once", Trigger::Once { run_at: past });
+        let once_id = once.id;
+        let interval = make_job(
+            "interval",
+            Trigger::Interval {
+                every_secs: 60,
+                next_at:    past,
+            },
+        );
+        let interval_id = interval.id;
+
+        wheel.add(once);
+        wheel.add(interval);
+        assert_eq!(wheel.by_id.len(), 2);
+
+        let drained = wheel.drain_expired(Timestamp::now());
+        assert_eq!(drained.len(), 2);
+
+        // Once job is gone from both maps; interval is rescheduled and
+        // present in both with the new key.
+        assert_eq!(wheel.jobs.len(), 1);
+        assert_eq!(wheel.by_id.len(), 1);
+        assert!(!wheel.by_id.contains_key(&once_id));
+
+        let new_key = wheel
+            .by_id
+            .get(&interval_id)
+            .copied()
+            .expect("rescheduled interval job must be re-indexed");
+        assert!(wheel.jobs.contains_key(&new_key));
+    }
+
+    #[test]
+    fn load_rebuilds_by_id_from_disk() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("jobs.json");
+
+        let id1 = {
+            let mut wheel = JobWheel::load(path.clone());
+            let job = make_job(
+                "persisted",
+                Trigger::Once {
+                    run_at: future(120),
+                },
+            );
+            let id = job.id;
+            wheel.add(job);
+            wheel.persist();
+            id
+        };
+
+        let reloaded = JobWheel::load(path);
+        assert_eq!(reloaded.jobs.len(), 1);
+        assert_eq!(reloaded.by_id.len(), 1);
+        assert!(reloaded.by_id.contains_key(&id1));
     }
 }
 
