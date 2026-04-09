@@ -21,6 +21,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 use jiff::Timestamp;
@@ -29,6 +30,69 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{identity::Principal, session::SessionKey};
+
+// ---------------------------------------------------------------------------
+// Clock — abstraction over wall-clock time for deterministic tests
+// ---------------------------------------------------------------------------
+
+/// Abstract clock for testability.
+///
+/// Production code uses [`SystemClock`], which delegates to
+/// `jiff::Timestamp::now()`. Tests use [`FakeClock`], which can be advanced
+/// manually so scheduler behaviour does not depend on real wall-clock time.
+pub trait Clock: Send + Sync + 'static {
+    /// The current wall-clock instant according to this clock.
+    fn now(&self) -> Timestamp;
+}
+
+/// Type alias for a shared clock handle.
+pub type ClockRef = Arc<dyn Clock>;
+
+/// Real system clock wrapping `jiff::Timestamp::now()`.
+#[derive(Debug, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp { Timestamp::now() }
+}
+
+/// Test clock whose current time can be set or advanced manually.
+///
+/// Used to make scheduler tests deterministic — no `tokio::time::sleep`
+/// or wall-clock dependencies.
+#[derive(Debug)]
+pub struct FakeClock {
+    inner: Mutex<Timestamp>,
+}
+
+impl FakeClock {
+    /// Create a new `FakeClock` initialised to `start`.
+    pub fn new(start: Timestamp) -> Self {
+        Self {
+            inner: Mutex::new(start),
+        }
+    }
+
+    /// Advance the clock by `delta`.
+    ///
+    /// Panics if `delta` cannot be converted to a `SignedDuration` or if
+    /// the resulting timestamp overflows — both indicate a buggy test.
+    pub fn advance(&self, delta: std::time::Duration) {
+        let signed = jiff::SignedDuration::try_from(delta)
+            .expect("FakeClock::advance: duration must fit in SignedDuration");
+        let mut guard = self.inner.lock().expect("FakeClock mutex poisoned");
+        *guard = guard
+            .checked_add(signed)
+            .expect("FakeClock::advance: timestamp overflow");
+    }
+
+    /// Set the clock to an absolute timestamp.
+    pub fn set(&self, ts: Timestamp) { *self.inner.lock().expect("FakeClock mutex poisoned") = ts; }
+}
+
+impl Clock for FakeClock {
+    fn now(&self) -> Timestamp { *self.inner.lock().expect("FakeClock mutex poisoned") }
+}
 
 base::define_id!(
     /// Unique identifier for a scheduled job.
@@ -182,6 +246,9 @@ pub struct JobWheel {
     /// ledger prematurely — entries are removed individually by
     /// `complete_in_flight` after the agent session ends.
     in_flight_recovered: bool,
+    /// Clock used for "now" inside the wheel. Production wires
+    /// [`SystemClock`]; tests inject a [`FakeClock`].
+    clock:               ClockRef,
 }
 
 impl JobWheel {
@@ -196,7 +263,14 @@ impl JobWheel {
     }
 
     /// Load jobs and in-flight ledger from disk, or create an empty wheel.
-    pub fn load(path: PathBuf) -> Self {
+    ///
+    /// Uses [`SystemClock`] as the wall-clock source. Tests should call
+    /// [`JobWheel::load_with_clock`] with a [`FakeClock`] instead.
+    pub fn load(path: PathBuf) -> Self { Self::load_with_clock(path, Arc::new(SystemClock)) }
+
+    /// Like [`JobWheel::load`] but with an injected clock — used by tests
+    /// to make scheduling deterministic.
+    pub fn load_with_clock(path: PathBuf, clock: ClockRef) -> Self {
         let jobs = match std::fs::read_to_string(&path) {
             Ok(content) => {
                 let entries: Vec<JobEntry> = match serde_json::from_str(&content) {
@@ -265,7 +339,18 @@ impl JobWheel {
             in_flight,
             path,
             in_flight_recovered: false,
+            clock,
         }
+    }
+
+    /// Read the wheel's clock — primarily for tests and convenience methods.
+    pub fn clock(&self) -> &ClockRef { &self.clock }
+
+    /// Drain all jobs whose `next_at` is at or before the wheel's current
+    /// clock reading. Convenience wrapper over [`JobWheel::drain_expired`].
+    pub fn drain_expired_now(&mut self) -> DrainResult {
+        let now = self.clock.now();
+        self.drain_expired(now)
     }
 
     /// Return the next fire time, or `None` if the wheel is empty.
@@ -897,5 +982,63 @@ mod tests {
             }
             other => panic!("expected Interval, got {other:?}"),
         }
+    }
+
+    fn t0() -> Timestamp {
+        // Fixed reference instant: 2030-01-01T00:00:00Z.
+        Timestamp::from_second(1_893_456_000).unwrap()
+    }
+
+    fn make_entry(run_at: Timestamp) -> JobEntry {
+        JobEntry {
+            id:          JobId::new(),
+            trigger:     Trigger::Once { run_at },
+            message:     "test".to_string(),
+            session_key: SessionKey::new(),
+            principal:   test_principal(),
+            created_at:  run_at,
+            tags:        Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fake_clock_advance_and_set() {
+        let clock = FakeClock::new(t0());
+        assert_eq!(clock.now(), t0());
+
+        clock.advance(std::time::Duration::from_secs(30));
+        assert_eq!(clock.now().as_second(), t0().as_second() + 30);
+
+        let target = Timestamp::from_second(t0().as_second() + 1_000).unwrap();
+        clock.set(target);
+        assert_eq!(clock.now(), target);
+    }
+
+    #[test]
+    fn drain_uses_clock_time() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        let run_at = Timestamp::from_second(t0().as_second() + 60).unwrap();
+        wheel.add(make_entry(run_at));
+
+        // At t0 nothing should fire — the job runs 60s in the future.
+        let result = wheel.drain_expired_now();
+        assert!(
+            result.fired.is_empty(),
+            "expected no jobs at t0, got {}",
+            result.fired.len()
+        );
+
+        // Advance past the deadline and drain again.
+        clock.advance(std::time::Duration::from_secs(61));
+        let result = wheel.drain_expired_now();
+        assert_eq!(
+            result.fired.len(),
+            1,
+            "expected one job after advancing 61s"
+        );
     }
 }
