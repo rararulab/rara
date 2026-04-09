@@ -513,6 +513,7 @@ fn test_in_flight_recovery() {
     let interval_job = JobEntry {
         id:          JobId::new(),
         trigger:     Trigger::Interval {
+            anchor_at:  Some(past),
             every_secs: 60,
             next_at:    past,
         },
