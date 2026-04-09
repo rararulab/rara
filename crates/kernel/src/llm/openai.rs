@@ -84,8 +84,9 @@ enum OpenAiDriverConfigSource {
 
 #[derive(Debug)]
 struct ResolvedConfig {
-    base_url: String,
-    api_key:  String,
+    base_url:      String,
+    api_key:       String,
+    extra_headers: Vec<(String, String)>,
 }
 
 /// Check whether a URL points to a local/private-network address.
@@ -256,8 +257,9 @@ impl OpenAiDriver {
     async fn resolve_config(&self) -> Result<ResolvedConfig> {
         match &self.config_source {
             OpenAiDriverConfigSource::Static { base_url, api_key } => Ok(ResolvedConfig {
-                base_url: base_url.clone(),
-                api_key:  api_key.clone(),
+                base_url:      base_url.clone(),
+                api_key:       api_key.clone(),
+                extra_headers: Vec::new(),
             }),
             OpenAiDriverConfigSource::SettingsBacked {
                 settings,
@@ -287,13 +289,18 @@ impl OpenAiDriver {
                             .into(),
                         })?;
 
-                Ok(ResolvedConfig { base_url, api_key })
+                Ok(ResolvedConfig {
+                    base_url,
+                    api_key,
+                    extra_headers: Vec::new(),
+                })
             }
             OpenAiDriverConfigSource::Dynamic { resolver } => {
                 let cred = resolver.resolve().await?;
                 Ok(ResolvedConfig {
-                    base_url: cred.base_url().to_owned(),
-                    api_key:  cred.api_key().to_owned(),
+                    base_url:      cred.base_url().to_owned(),
+                    api_key:       cred.api_key().to_owned(),
+                    extra_headers: cred.extra_headers().to_vec(),
                 })
             }
         }
@@ -317,6 +324,9 @@ impl OpenAiDriver {
             .client
             .request(method, &url)
             .bearer_auth(&config.api_key);
+        for (name, value) in &config.extra_headers {
+            builder = builder.header(name, value);
+        }
         if let Some(b) = body {
             builder = builder.json(&b);
         }
@@ -371,9 +381,13 @@ impl OpenAiDriver {
         };
 
         loop {
-            let response = http
+            let mut req = http
                 .post(format!("{}/chat/completions", config.base_url))
-                .bearer_auth(&config.api_key)
+                .bearer_auth(&config.api_key);
+            for (name, value) in &config.extra_headers {
+                req = req.header(name, value);
+            }
+            let response = req
                 .json(&body)
                 .send()
                 .await

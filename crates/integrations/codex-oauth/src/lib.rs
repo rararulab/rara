@@ -430,11 +430,47 @@ impl LlmCredentialResolver for CodexCredentialResolver {
             }
         }
 
-        Ok(LlmCredential::new(
-            "https://api.openai.com/v1",
-            tokens.access_token,
-        ))
+        let mut cred = LlmCredential::new("https://api.openai.com/v1", &tokens.access_token);
+
+        // The Codex OAuth access token is a JWT containing the ChatGPT
+        // account ID in the `https://api.openai.com/auth` claim. OpenAI
+        // requires this as a `ChatGPT-Account-Id` header for API access
+        // when authenticating via OAuth (vs. a regular API key).
+        if let Some(account_id) = extract_chatgpt_account_id(&tokens.access_token) {
+            tracing::debug!(%account_id, "extracted ChatGPT account ID from JWT");
+            cred = cred.with_header("chatgpt-account-id", account_id);
+        } else {
+            tracing::warn!("could not extract ChatGPT account ID from JWT — API calls may fail");
+        }
+
+        Ok(cred)
     }
+}
+
+/// Decode the JWT access token (without signature verification) and
+/// extract the ChatGPT account ID from the `https://api.openai.com/auth`
+/// claim.
+///
+/// The claim structure is:
+/// ```json
+/// { "https://api.openai.com/auth": { "user_id": "user-...", "account_id": "acct_..." } }
+/// ```
+fn extract_chatgpt_account_id(jwt: &str) -> Option<String> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    // JWT payload is the second part, base64url-encoded.
+    use base64::Engine;
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .ok()?;
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+    payload
+        .get("https://api.openai.com/auth")
+        .and_then(|auth| auth.get("chatgpt_account_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned())
 }
 
 fn codex_client_id() -> String {

@@ -88,17 +88,28 @@ pub type LlmEmbedderRef = Arc<dyn LlmEmbedder>;
 /// making it straightforward to add auditing or redaction later.
 #[derive(Debug, Clone)]
 pub struct LlmCredential {
-    base_url: String,
-    api_key:  String,
+    base_url:      String,
+    api_key:       String,
+    /// Extra headers sent with every LLM request (e.g. `ChatGPT-Account-Id`
+    /// for Codex OAuth). Keys are lowercased header names.
+    extra_headers: Vec<(String, String)>,
 }
 
 impl LlmCredential {
     /// Create a new credential pair.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            base_url: base_url.into(),
-            api_key:  api_key.into(),
+            base_url:      base_url.into(),
+            api_key:       api_key.into(),
+            extra_headers: Vec::new(),
         }
+    }
+
+    /// Add an extra header to every request made with this credential.
+    #[must_use]
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_headers.push((name.into(), value.into()));
+        self
     }
 
     /// Provider base URL (e.g. `https://api.openai.com/v1`).
@@ -106,6 +117,9 @@ impl LlmCredential {
 
     /// Bearer token or API key.
     pub fn api_key(&self) -> &str { &self.api_key }
+
+    /// Extra headers for this credential (e.g. account ID).
+    pub fn extra_headers(&self) -> &[(String, String)] { &self.extra_headers }
 }
 
 /// Dynamic credential resolver for LLM providers that need runtime
