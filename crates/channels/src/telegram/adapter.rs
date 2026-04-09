@@ -422,7 +422,11 @@ fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
     } else if phase.activity == rara_kernel::io::stages::THINKING {
         loading_hint.to_string()
     } else {
-        format!("正在{}…{suffix}", phase.activity)
+        // Append a randomly-sampled spinner verb on each render so the
+        // message visibly changes during long tool runs — the static
+        // "正在{activity}…" looked frozen for 2+ minutes.
+        let verb = super::spinner_verbs::random_verb();
+        format!("正在{}… ({verb}){suffix}", phase.activity)
     }
 }
 
