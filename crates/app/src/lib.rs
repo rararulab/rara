@@ -378,9 +378,12 @@ pub async fn start_with_options(
     .await
     .whatever_context("Failed to initialize BackendState")?;
 
+    let stt_correction = config.stt.as_ref().and_then(|s| s.correction.clone());
+
     let web_adapter = Arc::new(
         rara_channels::web::WebAdapter::new(config.owner_token.clone())
-            .with_stt_service(stt_service.clone()),
+            .with_stt_service(stt_service.clone())
+            .with_stt_correction(stt_correction.clone()),
     );
     let web_router = web_adapter.router();
 
@@ -388,6 +391,7 @@ pub async fn start_with_options(
         &backend.settings_svc,
         rara.user_question_manager.clone(),
         stt_service,
+        stt_correction,
         tts_service,
     )
     .await
@@ -737,6 +741,7 @@ async fn try_build_telegram(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
     user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
     stt_service: Option<rara_stt::SttService>,
+    stt_correction: Option<rara_stt::SttCorrectionConfig>,
     tts_service: Option<rara_tts::TtsService>,
 ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
@@ -786,6 +791,7 @@ async fn try_build_telegram(
             .with_config(tg_config)
             .with_user_question_manager(user_question_manager)
             .with_stt_service(stt_service)
+            .with_stt_correction(stt_correction)
             .with_tts_service(tts_service),
     );
 

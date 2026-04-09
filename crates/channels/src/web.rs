@@ -370,6 +370,8 @@ pub struct WebAdapter {
     shutdown_rx:       watch::Receiver<bool>,
     /// Optional STT service for transcribing voice messages to text.
     stt_service:       Option<rara_stt::SttService>,
+    /// Optional configuration for the post-transcription LLM correction pass.
+    stt_correction:    Option<rara_stt::SttCorrectionConfig>,
 }
 
 impl WebAdapter {
@@ -385,6 +387,7 @@ impl WebAdapter {
             shutdown_tx,
             shutdown_rx,
             stt_service: None,
+            stt_correction: None,
         }
     }
 
@@ -392,6 +395,21 @@ impl WebAdapter {
     #[must_use]
     pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
         self.stt_service = stt;
+        self
+    }
+
+    /// Attach an optional STT correction config.
+    ///
+    /// When `SttCorrectionConfig::enabled` is `true`, raw transcriptions are
+    /// routed through a fast LLM that fixes obvious speech-recognition
+    /// mistakes before delivery. The driver registry is read from the bound
+    /// `KernelHandle` at message-handling time.
+    #[must_use]
+    pub fn with_stt_correction(
+        mut self,
+        correction: Option<rara_stt::SttCorrectionConfig>,
+    ) -> Self {
+        self.stt_correction = correction;
         self
     }
 
@@ -410,6 +428,7 @@ impl WebAdapter {
             owner_token:       self.owner_token.clone(),
             shutdown_rx:       self.shutdown_rx.clone(),
             stt_service:       self.stt_service.clone(),
+            stt_correction:    self.stt_correction.clone(),
         };
 
         Router::new()
@@ -440,9 +459,6 @@ impl WebAdapter {
         user_id: &str,
         content: MessageContent,
     ) -> Result<(), String> {
-        let content = transcribe_audio_blocks(content, &self.stt_service).await;
-        let raw = build_raw_platform_message(session_key, user_id, content);
-
         let handle = {
             let guard = self.sink.read().await;
             guard
@@ -450,6 +466,15 @@ impl WebAdapter {
                 .cloned()
                 .ok_or_else(|| "adapter not started".to_owned())?
         };
+
+        let content = transcribe_audio_blocks(
+            content,
+            &self.stt_service,
+            self.stt_correction.as_ref(),
+            Some(handle.driver_registry()),
+        )
+        .await;
+        let raw = build_raw_platform_message(session_key, user_id, content);
 
         let msg = handle.resolve(raw).await.map_err(|e| e.to_string())?;
         handle.submit_message(msg).map_err(|e| e.to_string())?;
@@ -505,6 +530,7 @@ struct WebAdapterState {
     owner_token:       Option<String>,
     shutdown_rx:       watch::Receiver<bool>,
     stt_service:       Option<rara_stt::SttService>,
+    stt_correction:    Option<rara_stt::SttCorrectionConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -588,9 +614,16 @@ use rara_kernel::channel::types::ContentBlock;
 
 /// Transcribe any `AudioBase64` blocks in the message content, replacing them
 /// with `Text` blocks containing the transcribed text.
+///
+/// When `correction` is enabled and a `driver_registry` is provided, every
+/// transcribed clip is routed through an LLM correction pass. The result is
+/// then prefixed with [`crate::voice::VOICE_ANNOTATION_PREFIX`] so the
+/// downstream agent treats it as speech-recognised input.
 async fn transcribe_audio_blocks(
     content: MessageContent,
     stt: &Option<rara_stt::SttService>,
+    correction: Option<&rara_stt::SttCorrectionConfig>,
+    driver_registry: Option<&rara_kernel::llm::DriverRegistryRef>,
 ) -> MessageContent {
     let blocks = match content {
         MessageContent::Text(_) => return content,
@@ -608,12 +641,9 @@ async fn transcribe_audio_blocks(
     for block in blocks {
         match block {
             ContentBlock::AudioBase64 { data, media_type } => {
-                let text = transcribe_single_audio(&data, &media_type, stt).await;
-                let text = if text.is_empty() {
-                    "[voice message]".to_owned()
-                } else {
-                    text
-                };
+                let text =
+                    transcribe_single_audio(&data, &media_type, stt, correction, driver_registry)
+                        .await;
                 result.push(ContentBlock::Text { text });
             }
             other => result.push(other),
@@ -630,10 +660,16 @@ async fn transcribe_audio_blocks(
 }
 
 /// Transcribe a single base64-encoded audio clip via the STT service.
+///
+/// On success, the raw transcription is optionally corrected via LLM
+/// (Layer B) and then annotated (Layer A) so the downstream agent
+/// interprets it as speech-recognised input.
 async fn transcribe_single_audio(
     data_b64: &str,
     media_type: &str,
     stt: &Option<rara_stt::SttService>,
+    correction: Option<&rara_stt::SttCorrectionConfig>,
+    driver_registry: Option<&rara_kernel::llm::DriverRegistryRef>,
 ) -> String {
     use base64::Engine;
 
@@ -653,7 +689,13 @@ async fn transcribe_single_audio(
     match stt.transcribe(audio_bytes, media_type).await {
         Ok(text) => {
             info!(len = text.len(), "voice message transcribed");
-            text
+            if text.is_empty() {
+                return "[voice message]".to_owned();
+            }
+            // Layer B: optional LLM correction (non-fatal on failure).
+            let corrected = crate::voice::maybe_correct(&text, correction, driver_registry).await;
+            // Layer A: annotate so downstream LLM interprets it as STT output.
+            crate::voice::annotate_voice(&corrected)
         }
         Err(e) => {
             warn!(error = %e, "STT transcription failed");
@@ -751,6 +793,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         let session_key = session_key.clone();
         let user_id = params.user_id.clone();
         let stt_service = state.stt_service.clone();
+        let stt_correction = state.stt_correction.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 let text = match msg {
@@ -767,12 +810,26 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                 }
 
                 let payload = parse_inbound_text_frame(&text);
-                // Transcribe any audio blocks before submitting to the kernel.
-                let content = transcribe_audio_blocks(payload.content, &stt_service).await;
-                let raw = build_raw_platform_message(&session_key, &user_id, content);
 
                 let guard = sink.read().await;
-                if let Some(ref s) = *guard {
+                let Some(s) = guard.as_ref().cloned() else {
+                    drop(guard);
+                    warn!(session_key, "adapter not started, dropping inbound frame");
+                    continue;
+                };
+                drop(guard);
+
+                // Transcribe any audio blocks before submitting to the kernel.
+                let content = transcribe_audio_blocks(
+                    payload.content,
+                    &stt_service,
+                    stt_correction.as_ref(),
+                    Some(s.driver_registry()),
+                )
+                .await;
+                let raw = build_raw_platform_message(&session_key, &user_id, content);
+
+                {
                     // Send typing indicator before processing.
                     WebAdapter::broadcast_event(&sessions, &session_key, &WebEvent::Typing);
                     // Resolve identity + session first (like TG adapter),
@@ -826,15 +883,6 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                             );
                         }
                     }
-                } else {
-                    warn!(session_key, "sink not set, cannot dispatch message");
-                    WebAdapter::broadcast_event(
-                        &sessions,
-                        &session_key,
-                        &WebEvent::Error {
-                            message: "adapter not started".to_owned(),
-                        },
-                    );
                 }
             }
         })
