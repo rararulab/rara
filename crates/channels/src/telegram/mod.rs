@@ -19,5 +19,6 @@ pub mod commands;
 pub mod latex;
 pub mod loading_hints;
 pub mod markdown;
+pub mod spinner_verbs;
 
 pub use adapter::{TelegramAdapter, TelegramConfig, build_bot, telegram_to_raw_platform_message};
