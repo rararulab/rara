@@ -698,6 +698,14 @@ pub fn clean_schema(schema: schemars::Schema) -> serde_json::Value {
     // Strip noise fields.
     clean_value(&mut value);
 
+    // Ensure object schemas always have a `properties` key — some providers
+    // (e.g. Codex Responses API) reject schemas without it.
+    if value.get("type").and_then(|v| v.as_str()) == Some("object")
+        && value.get("properties").is_none()
+    {
+        value["properties"] = serde_json::json!({});
+    }
+
     value
 }
 
