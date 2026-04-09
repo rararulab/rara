@@ -50,6 +50,7 @@ pub mod proactive;
 pub mod queue;
 pub mod schedule;
 pub mod security;
+pub mod sentence_buffer;
 pub mod session;
 pub(crate) mod syscall;
 pub mod task_report;
