@@ -2897,6 +2897,7 @@ async fn generate_session_title(
         tool_choice: crate::llm::ToolChoice::None,
         parallel_tool_calls: false,
         frequency_penalty: None,
+        top_p: None,
     };
 
     let response = driver.complete(request).await?;

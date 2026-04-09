@@ -30,7 +30,8 @@ use super::{
     stream::StreamDelta,
     types::{
         CompletionRequest, CompletionResponse, ContentBlock, EmbeddingRequest, EmbeddingResponse,
-        Message, MessageContent, ModelInfo, Role, StopReason, ToolCallRequest, ToolChoice, Usage,
+        LlmProviderFamily, Message, MessageContent, ModelInfo, Role, StopReason, ToolCallRequest,
+        ToolChoice, Usage, detect_provider_family,
     },
 };
 use crate::error::{KernelError, Result};
@@ -1073,6 +1074,11 @@ struct ChatRequest<'a> {
     stream_options:        Option<WireStreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     frequency_penalty:     Option<f32>,
+    /// GLM-specific: stream tool-call argument deltas instead of buffering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_stream:           Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p:                 Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -1141,6 +1147,8 @@ struct WireFunctionRef<'a> {
 
 impl<'a> ChatRequest<'a> {
     fn from_completion(request: &'a CompletionRequest, stream: bool) -> Self {
+        let provider = detect_provider_family(None, &request.model);
+
         let messages: Vec<WireMessage<'a>> = request
             .messages
             .iter()
@@ -1212,6 +1220,14 @@ impl<'a> ChatRequest<'a> {
             thinking,
             stream_options,
             frequency_penalty: request.frequency_penalty,
+            // GLM requires `tool_stream: true` for streaming tool-call argument
+            // deltas; omitted for other providers via skip_serializing_if.
+            tool_stream: if provider == LlmProviderFamily::Glm && !request.tools.is_empty() {
+                Some(true)
+            } else {
+                None
+            },
+            top_p: request.top_p,
         }
     }
 }
