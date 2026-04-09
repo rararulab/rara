@@ -248,6 +248,7 @@ pub(crate) async fn run_plan_loop(
     tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     guard_pipeline: Arc<GuardPipeline>,
+    hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
 ) -> Result<AgentTurnResult> {
@@ -395,6 +396,7 @@ pub(crate) async fn run_plan_loop(
                     tool_context.clone(),
                     milestone_tx.clone(),
                     guard_pipeline.clone(),
+                    hook_runner.clone(),
                     notification_bus.clone(),
                     rara_message_id,
                     &mut total_iterations,
@@ -1322,6 +1324,7 @@ async fn execute_inline_step(
     tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     guard_pipeline: Arc<GuardPipeline>,
+    hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
     total_iterations: &mut usize,
@@ -1384,6 +1387,7 @@ async fn execute_inline_step(
         tool_context,
         milestone_tx,
         guard_pipeline,
+        hook_runner,
         notification_bus,
         rara_message_id,
     )
