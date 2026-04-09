@@ -236,7 +236,7 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         "instructions": instructions,
         "input": input,
         "stream": true,
-        "store": true,
+        "store": false,
         "truncation": "auto",
     });
 
@@ -748,7 +748,7 @@ mod tests {
         };
 
         let body = build_codex_request(&request);
-        assert_eq!(body["store"], true);
+        assert_eq!(body["store"], false);
         assert_eq!(body["truncation"], "auto");
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert_eq!(body["reasoning"]["summary"], "auto");
