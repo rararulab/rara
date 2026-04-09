@@ -166,6 +166,7 @@ impl ToolExecute for ScheduleIntervalTool {
 
         register_job(
             Trigger::Interval {
+                anchor_at: Some(next_at),
                 every_secs: p.interval_seconds,
                 next_at,
             },

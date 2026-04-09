@@ -47,6 +47,17 @@ pub enum Trigger {
     Once { run_at: Timestamp },
     /// Fire at fixed intervals.
     Interval {
+        /// Original reference point for interval scheduling. The next fire
+        /// time is always computed as `anchor_at + k * every_secs` for the
+        /// smallest `k` placing the result strictly after `now` — this gives
+        /// drift-free, catch-up semantics across missed periods, sleep, or
+        /// scheduler stalls.
+        ///
+        /// Optional in serde to remain backward compatible with legacy
+        /// `jobs.json` files written before this field existed; missing
+        /// entries are backfilled from `next_at` at load time.
+        #[serde(default)]
+        anchor_at:  Option<Timestamp>,
         /// Interval in seconds.
         every_secs: u64,
         /// Next scheduled fire time.
@@ -169,7 +180,22 @@ impl JobWheel {
                     }
                 };
                 let mut map = BTreeMap::new();
-                for entry in entries {
+                for mut entry in entries {
+                    // Backfill `anchor_at` for legacy interval entries
+                    // serialized before the field existed. Using the prior
+                    // `next_at` as the anchor preserves the observable
+                    // cadence: subsequent fires land on
+                    // `anchor + k * every_secs`, which lines up with the
+                    // unmodified `next_at` value the old scheduler would
+                    // have produced.
+                    if let Trigger::Interval {
+                        anchor_at: anchor_at @ None,
+                        next_at,
+                        ..
+                    } = &mut entry.trigger
+                    {
+                        *anchor_at = Some(*next_at);
+                    }
                     let key = Self::key(&entry);
                     map.insert(key, entry);
                 }
@@ -247,13 +273,31 @@ impl JobWheel {
                     Trigger::Once { .. } => {
                         // One-shot — do not re-insert into the wheel.
                     }
-                    Trigger::Interval { every_secs, .. } => {
-                        let next = now
-                            .checked_add(jiff::SignedDuration::from_secs(every_secs as i64))
-                            .unwrap_or(now);
+                    Trigger::Interval {
+                        anchor_at,
+                        every_secs,
+                        next_at,
+                    } => {
+                        // Catch-up semantics: pick the smallest k such that
+                        // anchor_at + k * every_secs > now. This eliminates
+                        // cumulative drift even after missed periods.
+                        //
+                        // `anchor_at` should always be Some after `load`'s
+                        // backfill pass, but we tolerate None defensively by
+                        // falling back to the prior `next_at` as the anchor.
+                        let anchor = anchor_at.unwrap_or(next_at);
+                        let every = jiff::SignedDuration::from_secs(every_secs as i64);
+                        let mut next = anchor;
+                        while next <= now {
+                            match next.checked_add(every) {
+                                Ok(t) => next = t,
+                                Err(_) => break,
+                            }
+                        }
 
                         let mut rescheduled = entry;
                         rescheduled.trigger = Trigger::Interval {
+                            anchor_at: Some(anchor),
                             every_secs,
                             next_at: next,
                         };
@@ -483,5 +527,151 @@ impl JobResultStore {
             }
         }
         results
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use jiff::SignedDuration;
+
+    use super::*;
+    use crate::{
+        identity::{KernelUser, Permission, Principal, Role},
+        session::SessionKey,
+    };
+
+    fn test_principal() -> Principal {
+        let user = KernelUser {
+            name:        "test-user".into(),
+            role:        Role::User,
+            permissions: vec![Permission::Spawn],
+            enabled:     true,
+        };
+        Principal::from_user(&user)
+    }
+
+    fn make_interval_entry(anchor: Timestamp, every_secs: u64) -> JobEntry {
+        JobEntry {
+            id:          JobId::new(),
+            trigger:     Trigger::Interval {
+                anchor_at: Some(anchor),
+                every_secs,
+                next_at: anchor,
+            },
+            message:     "tick".into(),
+            session_key: SessionKey::new(),
+            principal:   test_principal(),
+            created_at:  anchor,
+            tags:        vec![],
+        }
+    }
+
+    fn next_interval_at(wheel: &JobWheel, id: JobId) -> Timestamp {
+        let entry = wheel
+            .jobs
+            .values()
+            .find(|e| e.id == id)
+            .expect("job should still be in wheel after interval reschedule");
+        match &entry.trigger {
+            Trigger::Interval { next_at, .. } => *next_at,
+            other => panic!("expected Interval trigger, got {other:?}"),
+        }
+    }
+
+    /// Reschedule lands on `anchor + N*period`, not on `now + period`.
+    /// Anchor at t0, period 10s, drain at t0+25s → next_at must be t0+30s.
+    #[test]
+    fn interval_reschedule_is_catch_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+
+        let t0 = Timestamp::from_second(1_700_000_000).unwrap();
+        let entry = make_interval_entry(t0, 10);
+        let id = entry.id;
+        wheel.add(entry);
+
+        let now = t0.checked_add(SignedDuration::from_secs(25)).unwrap();
+        let drained = wheel.drain_expired(now);
+        assert_eq!(drained.len(), 1);
+
+        let expected = t0.checked_add(SignedDuration::from_secs(30)).unwrap();
+        assert_eq!(next_interval_at(&wheel, id), expected);
+    }
+
+    /// Multiple missed periods skip ahead in one shot — no slow catch-up loop
+    /// of N drains, no compound drift. Anchor at t0, period 10s, drain at
+    /// t0+100s → next_at must be t0+110s.
+    #[test]
+    fn interval_multiple_missed_periods_skip_ahead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+
+        let t0 = Timestamp::from_second(1_700_000_000).unwrap();
+        let entry = make_interval_entry(t0, 10);
+        let id = entry.id;
+        wheel.add(entry);
+
+        let now = t0.checked_add(SignedDuration::from_secs(100)).unwrap();
+        let drained = wheel.drain_expired(now);
+        assert_eq!(drained.len(), 1);
+
+        let expected = t0.checked_add(SignedDuration::from_secs(110)).unwrap();
+        assert_eq!(next_interval_at(&wheel, id), expected);
+    }
+
+    /// Legacy `jobs.json` entries serialized before `anchor_at` existed must
+    /// be backfilled at load time so subsequent reschedules use catch-up
+    /// arithmetic anchored on the prior `next_at`.
+    #[test]
+    fn legacy_interval_without_anchor_backfills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("jobs.json");
+
+        // Persist a normal entry, then strip the `anchor_at` field from the
+        // on-disk JSON so the file matches what an older kernel would have
+        // written. This is more robust than hand-crafting JSON whose shape
+        // would drift if neighbouring fields change.
+        {
+            let mut wheel = JobWheel::load(path.clone());
+            let t0 = Timestamp::from_second(1_700_000_000).unwrap();
+            wheel.add(make_interval_entry(t0, 10));
+            wheel.persist();
+        }
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for entry in value.as_array_mut().unwrap() {
+            let trigger = entry.get_mut("trigger").unwrap().as_object_mut().unwrap();
+            assert!(trigger.remove("anchor_at").is_some());
+        }
+        std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let wheel = JobWheel::load(path);
+        let entry = wheel
+            .jobs
+            .values()
+            .next()
+            .expect("legacy entry should load");
+        match &entry.trigger {
+            Trigger::Interval {
+                anchor_at,
+                every_secs,
+                next_at,
+            } => {
+                assert_eq!(*every_secs, 10);
+                assert_eq!(
+                    *anchor_at,
+                    Some(*next_at),
+                    "legacy interval should backfill anchor_at = next_at",
+                );
+            }
+            other => panic!("expected Interval, got {other:?}"),
+        }
     }
 }
