@@ -398,16 +398,15 @@ async fn build_driver_registry(
         }
     }
 
-    // -- codex (OpenAI via OAuth) — dynamic credential resolution -------------
+    // -- codex (ChatGPT backend via OAuth) — uses Responses API ----------------
 
     match rara_codex_oauth::load_tokens().await {
         Ok(Some(_)) => {
             registry.register_driver(
                 "codex",
-                Arc::new(OpenAiDriver::with_credential_resolver(
-                    Arc::new(rara_codex_oauth::CodexCredentialResolver),
-                    OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-                )),
+                Arc::new(rara_kernel::llm::codex::CodexDriver::new(Arc::new(
+                    rara_codex_oauth::CodexCredentialResolver,
+                ))),
             );
         }
         Ok(None) => {} // No tokens configured — skip
