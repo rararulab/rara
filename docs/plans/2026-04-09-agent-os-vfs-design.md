@@ -6,7 +6,7 @@
 
 核心结论：
 
-- **技术方案选型**：采用类似 `rivet-dev/agent-os` 的三层模型，但先做 rara 约束下的精简版本。
+- **技术方案选型**：采用类似 `rivet-dev/agent-os` 当前 `rootFilesystem` 的三层模型，但先做 rara 约束下的精简版本。
 - **API 设计**：对 agent 暴露稳定的 guest path，例如 `/workspace`、`/data`、`/artifacts`、`/tmp`，不再把宿主机绝对路径作为主要接口。
 - **与 ralph task agent 整合**：每个 issue/session 拥有独立 mount table 和 upper layer；child worker 通过 snapshot/fork 继承 lower layers。
 - **实施优先级**：先抽象文件系统接口与挂载点，再加 overlay snapshot，最后加远端 mount plugin。
@@ -34,6 +34,15 @@ rara 现在的文件能力主要建立在真实文件系统之上：
 - `OverlayFileSystem` 维护 `lowers + upper`，通过 whiteout/opaque marker 处理删除与目录覆盖。
 - `MountTable` 按最长前缀分发 guest path，并支持只读 mount。
 - `FileSystemPluginFactory` 按 `vm_id + guest_path + config` 打开挂载文件系统实例。
+- `RootFilesystemDescriptor` 暴露 `mode`、`disable_default_base_layer`、`lowers` 和 `bootstrap_entries`，允许从默认 base、最小 synthetic root 或已有 snapshot 组装 root。
+- `snapshotRootFilesystem()` 可以把当前可见 root 导出为可复用 snapshot，再喂回后续 VM 启动或 mount overlay。
+
+从 `docs/filesystem.mdx` 可以提炼出几个 rara 也应该直接借鉴的行为语义：
+
+1. root 的路径优先级是 **mount -> writable overlay -> base layer**；
+2. `read-only` root 只是去掉 writable overlay，不会改变 lower stack；
+3. 没有 default base 且没有 lowers 时，agent-os 会退化到只包含启动必需目录的 synthetic root；
+4. mount 本身也可以是 declarative overlay，而不要求所有 backend 先实现成同一种 VFS 类型。
 
 对应参考：
 
@@ -74,6 +83,17 @@ rara 方案至少要满足下面几点：
 
 1. **root base 不做 Alpine snapshot**，先用最小 synthetic root。
 2. **mount backend 先支持 host-backed directory 和 session-owned data store**，远端 plugin 后置。
+
+### Concept Mapping
+
+| agent-os 当前概念 | rara 对应概念 | 说明 |
+|-------------------|---------------|------|
+| `RootFilesystemDescriptor.mode` | `RootMode` | rara 需要 `ephemeral` / `read_only` 两种 root 策略 |
+| `RootFilesystemDescriptor.lowers` | `fork_from` + lower snapshot chain | child worker 继承 parent lower stack |
+| `disable_default_base_layer` | `SyntheticRootOnly` | rara v1 不引入 Alpine-like base snapshot |
+| `MountTable` longest-prefix routing | guest path mount dispatcher | `/workspace`、`/data`、`/artifacts`、`/tmp` 统一分发 |
+| `FileSystemPluginRegistry` | mount backend registry | v1 先只落 host dir 和 session data，远端 backend 后置 |
+| `snapshotRootFilesystem()` | session snapshot export | 用于 worker fork、verify/review 复盘、潜在缓存 |
 
 ### Core Types
 
@@ -157,6 +177,19 @@ synthetic root (read-only)
 - 用 manifest/metadata 文件表达 whiteout 和 snapshot lineage；
 - child worker fork 时只复用 lower snapshot ID，并创建新的 upper 目录。
 
+建议把这层状态放到 issue runtime 已经管理的私有目录，而不是混进仓库内容本身。例如：
+
+```text
+<issue-runtime-root>/
+  fs/
+    <session-id>/
+      upper/
+      metadata.json
+      snapshots/
+```
+
+这样 `/workspace` 仍然直接指向 git worktree，`/data` 和 guest namespace 元数据则归属于 Ralph/Symphony runtime 生命周期。
+
 这样可以保留 agent-os 的语义优势，同时避免把大文件全塞进内存。
 
 ## API Design
@@ -207,6 +240,19 @@ pub enum RootMode {
 - issue worktree session：挂 `/workspace`、`/data`、`/artifacts`、`/tmp`。
 - child worker：`fork_from = parent.root_snapshot`，然后创建新的 writable upper。
 
+### Compatibility Bridge for Current Tools
+
+这一步必须显式兼容 rara 当前工具行为。今天的 `read-file` / `write-file` 仍然接受宿主机绝对路径，且相对路径默认解析到 `rara_paths::workspace_dir()`。
+
+因此 Phase 1 不应该一次性硬切：
+
+1. tool schema 继续保留 `file_path` 字段名；
+2. kernel 先引入 `resolve_agent_path()`，优先识别 `/workspace/...`、`/data/...` 这类 guest absolute path；
+3. 如果传入的是现有 host absolute path，并且 lexical 上仍落在当前 workspace 内，则临时映射回 `/workspace/...`；
+4. trace、audit、task report 从第一天起统一记录 guest path，避免新旧语义继续扩散。
+
+这样可以先把 **命名空间** 切换过来，再逐步收紧 host-path 兼容窗口。
+
 ## Integration with Ralph Task Agent
 
 这是本方案里最重要的 rara-specific 部分。
@@ -223,6 +269,13 @@ pub enum RootMode {
 | `/tmp` | ephemeral upper |
 
 这样，task agent 不再需要知道 worktree 在宿主机上的真实绝对路径。
+
+更具体一点，bootstrap 输出应该至少包含：
+
+- 当前 issue worktree 的 host path；
+- issue runtime 私有状态目录，供 `/data` upper 使用；
+- artifacts 根目录，供 review/verify/browser 流程统一落盘；
+- 初始 `GuestPathGuard` allowlist。
 
 ### 2. Worker Fork Semantics
 
@@ -317,7 +370,7 @@ v1 不做下面这些事情：
 
 ## Why This Fits Rara Better Than a Direct agent-os Port
 
-agent-os 运行在 WebAssembly + V8 isolates 的 VM 语境里，所以它自然需要一个完整的 in-memory root filesystem 和 mount plugin 体系。
+agent-os 运行在 WebAssembly + V8 isolates 的 VM 语境里，所以它自然需要一个完整的 root filesystem descriptor、可复用 lowers、mount plugin registry，以及默认 Alpine-like base filesystem。
 
 rara 当前的现实约束不同：
 
@@ -330,6 +383,7 @@ rara 当前的现实约束不同：
 - `VirtualFileSystem` 对应 rara 的 `AgentFileSystem`
 - `OverlayFileSystem` 对应 rara 的 session upper/lower snapshot
 - `MountTable` 对应 rara 的 guest path dispatcher
+- `RootFilesystemDescriptor` 对应 rara 的 `SessionFsDescriptor`
 - plugin factory 对应 rara 后续的 mount backend registry
 
 这能保留核心能力，同时不把 rara 拉进一个过重的 VM/runtime 项目。
@@ -352,6 +406,7 @@ rara 当前的现实约束不同：
 - [rivet-dev/agent-os: crates/kernel/src/overlay_fs.rs](https://github.com/rivet-dev/agent-os/blob/main/crates/kernel/src/overlay_fs.rs)
 - [rivet-dev/agent-os: crates/kernel/src/mount_table.rs](https://github.com/rivet-dev/agent-os/blob/main/crates/kernel/src/mount_table.rs)
 - [rivet-dev/agent-os: crates/kernel/src/mount_plugin.rs](https://github.com/rivet-dev/agent-os/blob/main/crates/kernel/src/mount_plugin.rs)
+- [rivet-dev/agent-os: crates/kernel/src/root_fs.rs](https://github.com/rivet-dev/agent-os/blob/main/crates/kernel/src/root_fs.rs)
 - [rara: docs/plans/2026-03-13-plan-execute-architecture.md](../plans/2026-03-13-plan-execute-architecture.md)
 - [rara: crates/app/src/tools/read_file.rs](../../crates/app/src/tools/read_file.rs)
 - [rara: crates/app/src/tools/write_file.rs](../../crates/app/src/tools/write_file.rs)
