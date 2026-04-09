@@ -245,9 +245,8 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         body["parallel_tool_calls"] = json!(request.parallel_tool_calls);
     }
 
-    if let Some(max_tokens) = request.max_tokens {
-        body["max_output_tokens"] = json!(max_tokens);
-    }
+    // Note: Codex /backend-api/codex/responses does NOT accept
+    // max_output_tokens. Omit it — the model uses its own default.
 
     if let Some(temp) = request.temperature {
         body["temperature"] = json!(temp);
@@ -774,7 +773,7 @@ mod tests {
         };
 
         let body = build_codex_request(&request);
-        assert_eq!(body["max_output_tokens"], 4096);
+        // max_output_tokens is not sent to Codex endpoint
         assert_eq!(body["parallel_tool_calls"], true);
         assert!(body["tools"].as_array().expect("tools array").len() == 1);
     }
