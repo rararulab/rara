@@ -612,7 +612,16 @@ pub fn chunk_message(html: &str, max_len: usize) -> Vec<String> {
         }
 
         // Find a good break point within max_len.
-        let search_region = &remaining[..max_len];
+        // Clamp to a char boundary — max_len is in bytes but the string is
+        // UTF-8, so a raw byte slice may land inside a multi-byte character.
+        let safe_max = {
+            let mut i = max_len.min(remaining.len());
+            while i > 0 && !remaining.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+        let search_region = &remaining[..safe_max];
 
         // Try to break at a newline.
         let break_at = if let Some(pos) = search_region.rfind('\n') {
@@ -622,8 +631,8 @@ pub fn chunk_message(html: &str, max_len: usize) -> Vec<String> {
             if let Some(pos) = search_region.rfind(' ') {
                 pos + 1
             } else {
-                // No space either; hard break at max_len.
-                max_len
+                // No space either; hard break at safe boundary.
+                safe_max
             }
         };
 
