@@ -43,7 +43,9 @@ pub struct MarketplaceSearchParams {
     description = "Search for plugins and skills by keyword in GitHub marketplace indexes or \
                    clawhub.ai. Use `source: \"clawhub\"` to search clawhub.ai (supports `limit`), \
                    or omit `source` to search GitHub marketplace indexes.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub struct MarketplaceSearchTool {
     service: Arc<MarketplaceService>,

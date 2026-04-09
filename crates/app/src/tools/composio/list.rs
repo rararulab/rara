@@ -23,7 +23,9 @@ pub struct ComposioListParams {
     name = "composio_list",
     description = "List available actions/tools on Composio. Filter by app name (e.g. 'gmail', \
                    'notion', 'github') and/or search query to find specific actions.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub(super) struct ComposioListTool {
     shared: ComposioShared,

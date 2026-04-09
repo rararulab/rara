@@ -50,7 +50,9 @@ pub struct HttpFetchResult {
                    (truncated to 100KB). For human-readable web pages use `browser-fetch` instead \
                    — it executes JavaScript and returns clean Markdown. Reserve this tool for raw \
                    API calls (JSON/XML endpoints) where you need the exact HTTP response.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub struct HttpFetchTool {
     client: reqwest::Client,

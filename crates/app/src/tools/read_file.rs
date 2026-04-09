@@ -168,7 +168,9 @@ const BATCH_MAX_FILES: usize = 20;
     description = "Read files with line numbers. Single file: use `file_path` with optional \
                    offset/limit. Multiple files: use `file_paths` (array, max 20) to read them \
                    all in one call — always prefer this for research tasks to avoid wasting \
-                   iterations."
+                   iterations.",
+    read_only,
+    concurrency_safe
 )]
 pub struct ReadFileTool;
 

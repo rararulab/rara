@@ -48,7 +48,9 @@ pub struct TapeSearchResult {
 #[derive(ToolDef)]
 #[tool(
     name = "tape-search",
-    description = "Search past conversations by keyword across all anchors."
+    description = "Search past conversations by keyword across all anchors.",
+    read_only,
+    concurrency_safe
 )]
 pub(crate) struct TapeSearchTool {
     tape_service: TapeService,

@@ -39,7 +39,9 @@ pub struct DebugTraceParams {
     description = "Look up all tape entries related to a specific rara_message_id in the current \
                    session. Returns the full execution trace (messages, tool calls, results) with \
                    metadata. Only use when the user asks to debug or trace a specific message.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub struct DebugTraceTool {
     tape_service: TapeService,

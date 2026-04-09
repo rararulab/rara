@@ -70,7 +70,9 @@ pub struct WalkDirectoryResult {
     description = "Recursively walk a directory tree. Returns each entry's relative path, type \
                    (file/dir/symlink), size, and depth. Supports max_depth limit and glob pattern \
                    filtering. Maximum 2000 entries. Use this to understand project structure.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub struct WalkDirectoryTool;
 

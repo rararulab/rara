@@ -49,7 +49,9 @@ pub struct TapeInfoParams {}
 #[tool(
     name = "tape-info",
     description = "Show tape state: entry count, anchor count, context token estimate.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub(crate) struct TapeInfoTool {
     tape_service: TapeService,

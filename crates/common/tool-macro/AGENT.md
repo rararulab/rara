@@ -34,6 +34,19 @@ The macro auto-bridges `ToolExecute::validate` → `AgentTool::validate`:
 | `execute_fn` without `validate_fn` | Omitted — trait default (no-op) applies |
 | `manual_impl = true` | User writes `validate` manually if needed |
 
+### Safety axis flags
+
+Boolean flags generate trait method overrides (default is omitted → fail-closed `false`):
+
+| Flag | Generated method |
+|---|---|
+| `read_only` | `fn is_read_only(&self, _args: &Value) -> bool { true }` |
+| `destructive` | `fn is_destructive(&self, _args: &Value) -> bool { true }` |
+| `concurrency_safe` | `fn is_concurrency_safe(&self, _args: &Value) -> bool { true }` |
+| `user_interaction` | `fn requires_user_interaction(&self) -> bool { true }` |
+
+Example: `#[tool(name = "read_file", description = "...", read_only, concurrency_safe)]`
+
 ## Critical Invariants
 
 - Generated `AgentTool::parameters_schema()` output must be **semantically equivalent** to the hand-written `serde_json::json!()` it replaces. Field ordering may differ.

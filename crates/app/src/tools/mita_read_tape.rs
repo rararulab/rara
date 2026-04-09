@@ -45,7 +45,9 @@ pub struct ReadTapeParams {
     description = "Read tape entries from a session or user tape. Returns message history \
                    including user messages, assistant responses, and tool calls. Use `recent_n` \
                    to limit to the most recent entries. Provide either `session_id` or `user_id`, \
-                   not both."
+                   not both.",
+    read_only,
+    concurrency_safe
 )]
 pub struct ReadTapeTool {
     tape_service: TapeService,

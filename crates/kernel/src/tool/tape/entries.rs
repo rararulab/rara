@@ -50,7 +50,9 @@ pub struct TapeEntriesResult {
 #[tool(
     name = "tape-entries",
     description = "Read tape entries from current or named anchor.",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub(crate) struct TapeEntriesTool {
     tape_service: TapeService,

@@ -110,6 +110,18 @@ pub trait ToolExecute: Send + Sync {
     /// Bridged into [`AgentTool::validate`] by the `ToolDef` derive macro.
     async fn validate(&self, _params: &Self::Params) -> anyhow::Result<()> { Ok(()) }
 
+    /// Hints to attach to every successful output of this tool. Default:
+    /// empty (no hints).
+    ///
+    /// The `ToolDef` macro calls this after [`run`](Self::run) and attaches
+    /// the returned hints to the [`ToolOutput`]. This bridges the gap where
+    /// [`ToolOutput::from_serialize`] always returns empty hints.
+    ///
+    /// Override this to declare static hints — e.g. tools that produce
+    /// large output should return `[ToolHint::SuggestFold { .. }]` so the
+    /// agent loop auto-folds context.
+    fn hints(&self) -> Vec<ToolHint> { vec![] }
+
     /// Execute the tool with typed parameters.
     async fn run(
         &self,
@@ -128,12 +140,9 @@ pub struct EmptyParams {}
 /// after execution and acts accordingly. This keeps orchestration decisions
 /// in the loop while letting tools signal intent declaratively.
 ///
-/// **Current limitation**: The `ToolDef` derive macro calls
-/// [`ToolOutput::from_serialize`] which always returns empty hints. Tools
-/// using the macro cannot set hints via `ToolExecute::run()`. The agent loop
-/// therefore uses tool-name detection as a pragmatic workaround for known
-/// hint-worthy tools (e.g. `marketplace-install` → `SuggestFold`). Once the
-/// macro supports hint propagation, tool-name checks should be replaced.
+/// Tools using `ToolExecute` declare static hints via
+/// [`ToolExecute::hints()`]; the `ToolDef` macro bridges these into the
+/// generated `AgentTool::execute` output automatically.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ToolHint {
@@ -399,6 +408,38 @@ pub trait AgentTool: Send + Sync {
         context: &ToolContext,
     ) -> anyhow::Result<ToolOutput>;
 
+    /// Whether the tool only reads state and never mutates it. Default:
+    /// `false` (fail-closed — new tools are assumed to write unless they
+    /// explicitly opt in).
+    ///
+    /// The agent loop uses this (together with [`Self::is_concurrency_safe`])
+    /// to decide whether tool calls in a wave can run in parallel.
+    fn is_read_only(&self, _args: &serde_json::Value) -> bool { false }
+
+    /// Whether the tool can mutate or destroy state irreversibly (e.g.
+    /// `rm -rf`, `DROP TABLE`). Default: `false` (fail-closed).
+    ///
+    /// Used by the approval manager to escalate risk classification and by
+    /// future hook pipelines for policy decisions.
+    fn is_destructive(&self, _args: &serde_json::Value) -> bool { false }
+
+    /// Whether the tool can safely execute concurrently with other
+    /// concurrency-safe tools in the same wave. Default: `false`
+    /// (fail-closed — new tools run sequentially unless they opt in).
+    ///
+    /// The agent loop partitions each wave into batches: concurrency-safe
+    /// calls run in parallel, unsafe calls run sequentially.  Accepts
+    /// `args` because the same tool may be safe for some inputs but not
+    /// others (e.g. `bash("ls")` vs `bash("rm -rf")`).
+    fn is_concurrency_safe(&self, _args: &serde_json::Value) -> bool { false }
+
+    /// Whether the tool requires synchronous user interaction (e.g. asking
+    /// a question, requesting approval). Default: `false`.
+    ///
+    /// Tools that return `true` are never batched into a concurrent wave
+    /// regardless of their `is_concurrency_safe` value.
+    fn requires_user_interaction(&self) -> bool { false }
+
     /// Per-tool execution timeout override.
     ///
     /// Returns `None` to use the kernel's `default_tool_timeout`.
@@ -574,6 +615,66 @@ impl ToolRegistry {
 
 impl Default for ToolRegistry {
     fn default() -> Self { Self::new() }
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency partitioning
+// ---------------------------------------------------------------------------
+
+/// A batch of tool calls to execute together. Concurrent batches run in
+/// parallel; sequential batches run one at a time.
+#[derive(Debug)]
+pub enum ToolCallBatch<T> {
+    /// All calls in this batch can run concurrently.
+    Concurrent(Vec<T>),
+    /// A single call that must run in isolation.
+    Sequential(T),
+}
+
+/// Partition a sequence of tool calls into batches based on concurrency
+/// safety, preserving the original ordering.
+///
+/// Adjacent concurrency-safe calls are grouped into [`Concurrent`] batches.
+/// Unsafe calls (or those requiring user interaction) each become a
+/// [`Sequential`] batch. This mirrors Claude Code's `partitionToolCalls()`
+/// and ensures write-after-read / write-after-write hazards cannot occur.
+///
+/// `resolve` maps each element to its `(tool_ref, args)` pair. Elements
+/// whose tool cannot be found are treated as unsafe (sequential).
+///
+/// [`Concurrent`]: ToolCallBatch::Concurrent
+/// [`Sequential`]: ToolCallBatch::Sequential
+pub fn partition_tool_calls<T>(
+    calls: Vec<T>,
+    resolve: impl Fn(&T) -> Option<(&dyn AgentTool, &serde_json::Value)>,
+) -> Vec<ToolCallBatch<T>> {
+    let mut batches: Vec<ToolCallBatch<T>> = Vec::new();
+    let mut concurrent_buf: Vec<T> = Vec::new();
+
+    for call in calls {
+        let is_safe = resolve(&call)
+            .map(|(tool, args)| tool.is_concurrency_safe(args) && !tool.requires_user_interaction())
+            .unwrap_or(false);
+
+        if is_safe {
+            concurrent_buf.push(call);
+        } else {
+            // Flush any pending concurrent batch.
+            if !concurrent_buf.is_empty() {
+                batches.push(ToolCallBatch::Concurrent(std::mem::take(
+                    &mut concurrent_buf,
+                )));
+            }
+            batches.push(ToolCallBatch::Sequential(call));
+        }
+    }
+
+    // Flush trailing concurrent batch.
+    if !concurrent_buf.is_empty() {
+        batches.push(ToolCallBatch::Concurrent(concurrent_buf));
+    }
+
+    batches
 }
 
 // Re-export the derive macro so tools can `use crate::tool::ToolDef`.

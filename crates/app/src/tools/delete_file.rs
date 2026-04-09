@@ -43,7 +43,8 @@ pub struct DeleteFileResult {
     name = "delete-file",
     description = "Delete a file from the filesystem. Refuses to delete directories — use bash \
                    for that.",
-    tier = "deferred"
+    tier = "deferred",
+    destructive
 )]
 pub struct DeleteFileTool;
 

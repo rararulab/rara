@@ -57,7 +57,9 @@ pub struct FindFilesResult {
 #[derive(ToolDef)]
 #[tool(
     name = "find-files",
-    description = "Find files by glob pattern, sorted by modification time; respects .gitignore."
+    description = "Find files by glob pattern, sorted by modification time; respects .gitignore.",
+    read_only,
+    concurrency_safe
 )]
 pub struct FindFilesTool;
 impl FindFilesTool {

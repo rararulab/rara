@@ -61,7 +61,9 @@ pub struct ListSkillsParams {}
     name = "list-skills",
     description = "List all available skills with their metadata (name, description, \
                    allowed_tools, source, eligibility).",
-    tier = "deferred"
+    tier = "deferred",
+    read_only,
+    concurrency_safe
 )]
 pub struct ListSkillsTool {
     registry: InMemoryRegistry,
