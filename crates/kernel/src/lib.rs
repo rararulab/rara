@@ -36,6 +36,7 @@ pub mod error;
 pub mod event;
 pub mod guard;
 pub mod handle;
+pub mod hooks;
 pub mod identity;
 pub mod io;
 pub mod kernel;

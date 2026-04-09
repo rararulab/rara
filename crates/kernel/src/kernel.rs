@@ -55,6 +55,7 @@ use crate::{
     },
     channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
+    hooks::{HookRunner, HookRunnerRef, HooksConfig},
     identity::Principal,
     io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
     kv::SharedKv,
@@ -140,6 +141,9 @@ pub struct KernelConfig {
     /// sharded queue when channel adapters publish messages. See
     /// [`crate::queue::push_with_retry`].
     pub ingress:                 crate::queue::IngressConfig,
+    /// Tool execution hook commands (PreToolUse / PostToolUse /
+    /// PostToolUseFailure).
+    pub hooks:                   HooksConfig,
 }
 
 /// Shared reference to a
@@ -199,6 +203,9 @@ pub struct Kernel {
     knowledge:             crate::memory::knowledge::KnowledgeServiceRef,
     /// Security guard pipeline (taint tracking + pattern scanning).
     guard_pipeline:        Arc<crate::guard::pipeline::GuardPipeline>,
+    /// Tool execution hook runner (PreToolUse / PostToolUse /
+    /// PostToolUseFailure).
+    hook_runner:           HookRunnerRef,
     /// Execution trace service for persisting turn-level traces.
     trace_service:         crate::trace::TraceService,
     /// Provider for generating the skills prompt block.
@@ -282,6 +289,8 @@ impl Kernel {
             dynamic_tool_provider,
         );
 
+        let hook_runner: HookRunnerRef = Arc::new(HookRunner::new(config.hooks.clone()));
+
         Self {
             config,
             process_table: Arc::new(SessionTable::new()),
@@ -298,6 +307,7 @@ impl Kernel {
             started_at: Timestamp::now(),
             knowledge,
             guard_pipeline,
+            hook_runner,
             trace_service,
             skill_prompt_provider,
         }
@@ -2206,6 +2216,7 @@ impl Kernel {
         let typing_session_key = egress_session_key;
         let stream_hub_ref = Arc::clone(self.io.stream_hub());
         let guard_pipeline = self.guard_pipeline.clone();
+        let hook_runner = self.hook_runner.clone();
         let notification_bus = self.syscall.event_bus().clone();
 
         let milestone_tx = self
@@ -2371,6 +2382,7 @@ impl Kernel {
                         tool_context,
                         milestone_tx,
                         guard_pipeline,
+                        hook_runner,
                         notification_bus,
                         rara_message_id,
                     )
@@ -2387,6 +2399,7 @@ impl Kernel {
                         tool_context,
                         milestone_tx,
                         guard_pipeline,
+                        hook_runner,
                         notification_bus,
                         rara_message_id,
                     )

@@ -901,6 +901,7 @@ pub(crate) async fn run_agent_loop(
     mut tool_context: crate::tool::ToolContext,
     milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     guard_pipeline: Arc<GuardPipeline>,
+    hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
 ) -> crate::error::Result<AgentTurnResult> {
@@ -2059,6 +2060,7 @@ pub(crate) async fn run_agent_loop(
                 let user_ref = runtime_user.clone();
                 let tool_cancel = turn_cancel.clone();
                 let guard_pipeline = guard_pipeline.clone();
+                let hook_runner = hook_runner.clone();
                 let notification_bus = notification_bus.clone();
                 let approval_manager = Arc::clone(handle.security().approval());
                 let session_key_for_guard = session_key;
@@ -2162,6 +2164,35 @@ pub(crate) async fn run_agent_loop(
                         }
                     }
 
+                    // -- PreToolUse hook --
+                    // Runs after guard approval, before validation/execution.
+                    // Denial blocks the tool call (same as guard denial).
+                    // Failure is logged but does not block execution.
+                    let pre_hook = hook_runner
+                        .run_pre_tool_use(name.as_str(), &args.to_string())
+                        .await;
+                    if pre_hook.is_denied() {
+                        tool_span.record("success", false);
+                        let reason = pre_hook.messages().join("; ");
+                        warn!(tool = %name, %reason, "tool call denied by PreToolUse hook");
+                        let dur = tool_start.elapsed().as_millis() as u64;
+                        return (
+                            false,
+                            crate::tool::ToolOutput::from(
+                                serde_json::json!({ "error": format!("Hook denied: {reason}") }),
+                            ),
+                            Some(format!("Hook denied: {reason}")),
+                            dur,
+                        );
+                    }
+                    if pre_hook.is_failed() {
+                        warn!(
+                            tool = %name,
+                            messages = ?pre_hook.messages(),
+                            "PreToolUse hook failed (continuing execution)"
+                        );
+                    }
+
                     if let Some(tool) = tool {
                         let args_snapshot = args.to_string();
                         let per_tool_timeout = tool.execution_timeout().unwrap_or(default_tool_timeout);
@@ -2217,12 +2248,47 @@ pub(crate) async fn run_agent_loop(
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 info!(tool = %name, duration_ms = dur, "tool call succeeded");
                                 guard_pipeline.post_execute(&session_key_for_guard, &name);
+
+                                // PostToolUse hook — fire-and-forget; failures are logged.
+                                let post_hook = hook_runner
+                                    .run_post_tool_use(
+                                        name.as_str(),
+                                        &args_snapshot,
+                                        &result.json.to_string(),
+                                        false,
+                                    )
+                                    .await;
+                                if post_hook.is_failed() {
+                                    warn!(
+                                        tool = %name,
+                                        messages = ?post_hook.messages(),
+                                        "PostToolUse hook failed"
+                                    );
+                                }
+
                                 (true, result, None::<String>, dur)
                             }
                             Err(e) => {
                                 tool_span.record("success", false);
                                 warn!(tool = %name, args = %args_snapshot, error = %e, "tool execution failed");
                                 let dur = tool_start.elapsed().as_millis() as u64;
+
+                                // PostToolUseFailure hook — fire-and-forget.
+                                let fail_hook = hook_runner
+                                    .run_post_tool_use_failure(
+                                        name.as_str(),
+                                        &args_snapshot,
+                                        &e.to_string(),
+                                    )
+                                    .await;
+                                if fail_hook.is_failed() {
+                                    warn!(
+                                        tool = %name,
+                                        messages = ?fail_hook.messages(),
+                                        "PostToolUseFailure hook failed"
+                                    );
+                                }
+
                                 (
                                     false,
                                     crate::tool::ToolOutput::from(
