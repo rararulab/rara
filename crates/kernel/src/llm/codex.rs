@@ -225,6 +225,7 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         "instructions": instructions,
         "input": input,
         "stream": true,
+        "store": false,
     });
 
     if !tools.is_empty() {
@@ -743,7 +744,7 @@ mod tests {
 
         let body = build_codex_request(&request);
         // store and truncation are NOT sent to Codex endpoint
-        assert!(body.get("store").is_none());
+        assert_eq!(body["store"], false);
         assert!(body.get("truncation").is_none());
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert_eq!(body["reasoning"]["summary"], "auto");
