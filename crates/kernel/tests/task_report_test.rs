@@ -513,6 +513,7 @@ fn test_in_flight_recovery() {
     let interval_job = JobEntry {
         id:          JobId::new(),
         trigger:     Trigger::Interval {
+            anchor_at:  Some(past),
             every_secs: 60,
             next_at:    past,
         },
@@ -529,7 +530,8 @@ fn test_in_flight_recovery() {
 
     // 2. Drain expired — both should be returned and tracked in-flight.
     let expired = wheel.drain_expired(now);
-    assert_eq!(expired.len(), 2);
+    assert_eq!(expired.fired.len(), 2);
+    assert!(expired.cron_expired.is_empty());
     wheel.persist();
 
     // in_flight.json should exist and contain 2 entries.
@@ -744,4 +746,97 @@ async fn test_subscription_persistence_roundtrip() {
     let registry3 = SubscriptionRegistry::load(path);
     let matched = registry3.match_tags(&["pr_review".into()], &user).await;
     assert!(matched.is_empty());
+}
+
+/// Cron jobs whose expression yields no future fire time at drain time
+/// (e.g., a recurring task that has outlived its last valid date) must
+/// surface in `DrainResult::cron_expired`, not silently disappear into
+/// `fired`. The kernel uses this signal to publish a user-visible
+/// notification instead of the previous warn-and-forget behaviour.
+#[test]
+fn drain_reports_cron_expired_separately() {
+    use rara_kernel::schedule::{JobEntry, JobId, JobWheel, Trigger};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let jobs_path = tmp.path().join("jobs.json");
+
+    let test_user = rara_kernel::identity::KernelUser {
+        name:        "test-user".into(),
+        role:        rara_kernel::identity::Role::User,
+        permissions: vec![rara_kernel::identity::Permission::Spawn],
+        enabled:     true,
+    };
+    let principal = rara_kernel::identity::Principal::from_user(&test_user);
+    let session = SessionKey::new();
+    let past = jiff::Timestamp::now()
+        .checked_sub(jiff::SignedDuration::from_secs(60))
+        .unwrap();
+
+    let mut wheel = JobWheel::load(jobs_path);
+
+    // Insert a cron job with `next_at` already in the past AND an
+    // expression ("Feb 31") that has no upcoming fire time. This is the
+    // shape we'd see for a recurring job whose stored `next_at` was
+    // computed before something invalidated the schedule.
+    let dead_cron = JobEntry {
+        id:          JobId::new(),
+        trigger:     Trigger::Cron {
+            expr:    "0 0 0 31 2 *".into(),
+            next_at: past,
+        },
+        message:     "this cron is dead".into(),
+        session_key: session,
+        principal:   principal.clone(),
+        created_at:  past,
+        tags:        vec!["dead".into()],
+    };
+    let dead_id = dead_cron.id;
+
+    // And a healthy interval job alongside it, to prove drain still
+    // partitions correctly.
+    let live_interval = JobEntry {
+        id: JobId::new(),
+        trigger: Trigger::Interval {
+            anchor_at:  Some(past),
+            every_secs: 60,
+            next_at:    past,
+        },
+        message: "still alive".into(),
+        session_key: session,
+        principal,
+        created_at: past,
+        tags: vec![],
+    };
+    let live_id = live_interval.id;
+
+    wheel.add(dead_cron);
+    wheel.add(live_interval);
+
+    let result = wheel.drain_expired(jiff::Timestamp::now());
+
+    assert_eq!(
+        result.fired.len(),
+        1,
+        "only the live interval job should be fired"
+    );
+    assert_eq!(result.fired[0].id, live_id);
+
+    assert_eq!(
+        result.cron_expired.len(),
+        1,
+        "the dead cron job should appear in cron_expired, not fired"
+    );
+    assert_eq!(result.cron_expired[0].id, dead_id);
+
+    // The dead cron must not be reinserted into the wheel and must not
+    // sit in the in-flight ledger (we will never re-execute it).
+    let still_listed = wheel.list(None);
+    assert!(
+        still_listed.iter().all(|j| j.id != dead_id),
+        "dead cron should not be reinserted"
+    );
+    assert!(
+        !wheel.complete_in_flight(&dead_id),
+        "dead cron should not be in the in-flight ledger"
+    );
 }

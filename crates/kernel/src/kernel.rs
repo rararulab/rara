@@ -50,8 +50,7 @@ use tracing::{Instrument, error, info, info_span, warn};
 use crate::{
     KernelError,
     agent::{
-        AgentEnv, AgentManifest, AgentRegistryRef, AgentRole, AgentTurnResult, ExecutionMode,
-        Priority, run_agent_loop,
+        AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, ExecutionMode, run_agent_loop,
     },
     channel::types::MessageContent,
     event::{KernelEvent, KernelEventEnvelope},
@@ -584,25 +583,28 @@ impl Kernel {
     /// blocking thread-pool to avoid starving the tokio runtime.
     async fn drain_scheduled_jobs(&self) {
         let wheel_ref = self.syscall.job_wheel().clone();
-        let expired = tokio::task::spawn_blocking(move || {
+        let drained = tokio::task::spawn_blocking(move || {
             let now = jiff::Timestamp::now();
             let mut wheel = wheel_ref.lock();
 
             // Re-fire any in-flight jobs from a previous run (only returns
             // entries on the first call; subsequent calls return empty).
-            let mut all = wheel.take_in_flight();
+            let mut fired = wheel.take_in_flight();
 
-            let expired = wheel.drain_expired(now);
-            if !expired.is_empty() {
+            let result = wheel.drain_expired(now);
+            let dirty = !result.fired.is_empty() || !result.cron_expired.is_empty();
+            if dirty {
                 wheel.persist();
             }
-            all.extend(expired);
-            all
+            fired.extend(result.fired);
+            (fired, result.cron_expired)
         })
         .await
         .unwrap_or_default();
 
-        for job in expired {
+        let (fired, cron_expired) = drained;
+
+        for job in fired {
             info!(
                 job_id = %job.id,
                 session = %job.session_key,
@@ -611,6 +613,31 @@ impl Kernel {
             let _ = self
                 .event_queue
                 .push(KernelEventEnvelope::scheduled_task(job));
+        }
+
+        // Surface cron jobs that died because their expression no longer
+        // yields a future time. Previously this was a silent delete + warn;
+        // the user is the only one who can fix the broken expression, so
+        // they need a visible notification.
+        for job in cron_expired {
+            let expr = match &job.trigger {
+                crate::schedule::Trigger::Cron { expr, .. } => expr.clone(),
+                _ => String::new(),
+            };
+            tracing::warn!(
+                job_id = %job.id,
+                session = %job.session_key,
+                expr = %expr,
+                "cron job removed: expression yields no future fire time"
+            );
+            let message = format!(
+                "Scheduled cron job {} was removed because its expression `{}` no longer yields a \
+                 future fire time. Original prompt: {:?}",
+                job.id, expr, job.message
+            );
+            let _ = self
+                .event_queue
+                .push(KernelEventEnvelope::send_notification(message));
         }
     }
 
@@ -1415,51 +1442,14 @@ impl Kernel {
             "scheduled task fired"
         );
 
-        // Build a dedicated ScheduledJobAgent manifest with job context
-        // baked into the system prompt.
-        let manifest = AgentManifest {
-            name:                   "scheduled_job".to_string(),
-            role:                   AgentRole::Worker,
-            description:            "Executes a scheduled task and summarizes the result"
-                .to_string(),
-            model:                  None,
-            system_prompt:          {
-                let tags_str = if job.tags.is_empty() {
-                    String::new()
-                } else {
-                    format!("\nRouting tags: {}\n", job.tags.join(", "))
-                };
-                format!(
-                    "You are a scheduled task executor.\n\n## Task\nJob ID: {job_id}\nSchedule: \
-                     {trigger_summary}\nTask: {message}\n{tags_str}\n## Instructions\n1. Execute \
-                     the task described above using available tools.\n2. After completion, \
-                     provide a brief summary of what you did and the outcome.\n\n## After \
-                     Completion\nWhen you finish the task, call the `kernel` tool with:\n- \
-                     action: \"publish_report\"\n- report: {{ \"task_id\": \"<uuid>\", \
-                     \"task_type\": \"<type>\", \"tags\": [<routing tags>], \"status\": \
-                     \"completed\", \"summary\": \"<one-line summary>\", \"result\": \
-                     {{<structured result>}} }}\n\nAlternatively, use action: \"publish\" with \
-                     event_type: \"scheduled_task_done\" and payload: {{ \"message\": \
-                     \"<summary>\" }}\n",
-                    message = job.message,
-                )
-            },
-            soul_prompt:            None,
-            provider_hint:          None,
-            max_iterations:         Some(15),
-            tools:                  vec![],
-            excluded_tools:         vec![],
-            max_children:           Some(0),
-            max_context_tokens:     None,
-            priority:               Priority::default(),
-            metadata:               serde_json::json!({
-                "scheduled_job_id": job_id.to_string(),
-            }),
-            sandbox:                None,
-            default_execution_mode: None,
-            tool_call_limit:        None,
-            worker_timeout_secs:    None,
-        };
+        // Build a dedicated scheduled_job manifest with job context baked
+        // into the system prompt.
+        let manifest = crate::agent::scheduled::scheduled_job_manifest(
+            &job_id.to_string(),
+            &trigger_summary,
+            &job.message,
+            &job.tags,
+        );
 
         // 3. Spawn the agent.
         let principal = crate::identity::Principal::lookup(job.principal.user_id.0.clone());

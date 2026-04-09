@@ -31,7 +31,7 @@ use tracing::debug;
 
 use crate::{
     event::{KernelEventEnvelope, Syscall},
-    schedule::{JobId, Trigger},
+    schedule::{JobId, JobWheel, Trigger},
     tool::{EmptyParams, ToolContext, ToolExecute},
 };
 
@@ -166,6 +166,7 @@ impl ToolExecute for ScheduleIntervalTool {
 
         register_job(
             Trigger::Interval {
+                anchor_at: Some(next_at),
                 every_secs: p.interval_seconds,
                 next_at,
             },
@@ -218,24 +219,18 @@ impl ToolExecute for ScheduleCronTool {
             return Err(anyhow::anyhow!("cron expression must not be empty"));
         }
 
-        use std::str::FromStr;
-        let schedule = cron::Schedule::from_str(&p.cron)
-            .map_err(|e| anyhow::anyhow!("invalid cron expression '{}': {e}", p.cron))?;
-
+        // Validate the expression up front: parse error AND
+        // "syntactically valid but yields no future fire time" both turn
+        // into a single user-actionable error here, rather than the silent
+        // delete that drain_expired used to perform.
         let now = jiff::Timestamp::now();
-        let now_chrono = chrono::DateTime::<chrono::Utc>::from_timestamp(
-            now.as_second(),
-            now.subsec_nanosecond() as u32,
-        )
-        .ok_or_else(|| anyhow::anyhow!("failed to convert timestamp"))?;
-
-        let next_chrono = schedule
-            .upcoming(chrono::Utc)
-            .find(|t| *t > now_chrono)
-            .ok_or_else(|| anyhow::anyhow!("cron expression '{}' yields no future time", p.cron))?;
-
-        let next_at = jiff::Timestamp::from_second(next_chrono.timestamp())
-            .map_err(|e| anyhow::anyhow!("timestamp conversion error: {e}"))?;
+        let next_at = JobWheel::next_cron_time(&p.cron, now).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cron expression '{}' is invalid or yields no future fire time. Check for \
+                 impossible dates like 'Feb 31' or expressions whose last valid time has passed.",
+                p.cron
+            )
+        })?;
 
         register_job(
             Trigger::Cron {
@@ -347,5 +342,81 @@ impl ToolExecute for ScheduleListTool {
             "jobs": list,
             "count": list.len(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        io::MessageId,
+        queue::{ShardedEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
+        session::SessionKey,
+    };
+
+    fn build_queue() -> ShardedQueueRef {
+        Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+            num_shards:      0,
+            shard_capacity:  1,
+            global_capacity: 16,
+        }))
+    }
+
+    fn build_context() -> ToolContext {
+        ToolContext {
+            user_id:               "test-user".into(),
+            session_key:           SessionKey::new(),
+            origin_endpoint:       None,
+            event_queue:           build_queue(),
+            rara_message_id:       MessageId::new(),
+            context_window_tokens: 0,
+            tool_registry:         None,
+            stream_handle:         None,
+            tool_call_id:          None,
+        }
+    }
+
+    /// A cron expression that parses but yields no future fire time
+    /// (e.g., Feb 31 — sec min hour day month weekday) must be rejected at
+    /// registration, not silently swallowed by the wheel.
+    #[tokio::test]
+    async fn cron_with_no_future_time_rejected_at_registration() {
+        let tool = ScheduleCronTool;
+        let ctx = build_context();
+        let params = ScheduleCronParams {
+            cron:    "0 0 0 31 2 *".into(),
+            message: "should never fire".into(),
+            tags:    vec![],
+        };
+
+        let err = tool
+            .run(params, &ctx)
+            .await
+            .expect_err("impossible cron must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no future fire time") || msg.contains("invalid"),
+            "error should explain why the cron was rejected, got: {msg}"
+        );
+    }
+
+    /// A clearly valid 6-field cron expression must pass validation.
+    ///
+    /// We can't drive the success path all the way through `register_job`
+    /// in a unit test (no kernel is draining the queue), so we exercise the
+    /// validator directly via [`crate::schedule::JobWheel::next_cron_time`]
+    /// — which is exactly what the tool calls before pushing the syscall.
+    #[test]
+    fn valid_cron_accepted() {
+        let now = jiff::Timestamp::now();
+        let next = JobWheel::next_cron_time("*/5 * * * * *", now);
+        assert!(
+            next.is_some(),
+            "*/5 * * * * * must yield a future fire time"
+        );
+        let next = next.unwrap();
+        assert!(next > now, "next fire time must be strictly after now");
     }
 }
