@@ -104,8 +104,10 @@ pub struct JobEntry {
     pub message:     String,
     /// Session this job is bound to.
     pub session_key: SessionKey,
-    /// The principal who created the job.
-    pub principal:   Principal,
+    /// The principal who created the job. Always fully resolved — jobs are
+    /// registered through `Syscall::RegisterJob`, which copies the resolved
+    /// principal off the originating session in the process table.
+    pub principal:   Principal<crate::identity::Resolved>,
     /// When this job was created.
     pub created_at:  Timestamp,
     /// Routing tags propagated to TaskNotification on completion.
@@ -483,5 +485,44 @@ impl JobResultStore {
             }
         }
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::{KernelUser, Permission, Resolved, Role};
+
+    /// Verify that `JobEntry` round-trips through JSON with a typed
+    /// `Principal<Resolved>`. The `Resolved` marker is `PhantomData` and
+    /// must not affect the serialized representation.
+    #[test]
+    fn job_entry_principal_roundtrip() {
+        let user = KernelUser {
+            name:        "alice".into(),
+            role:        Role::User,
+            permissions: vec![Permission::Spawn],
+            enabled:     true,
+        };
+        let principal: Principal<Resolved> = Principal::from_user(&user);
+
+        let job = JobEntry {
+            id:          JobId::new(),
+            trigger:     Trigger::Once {
+                run_at: Timestamp::from_second(1_700_000_000).unwrap(),
+            },
+            message:     "hello".into(),
+            session_key: SessionKey::new(),
+            principal:   principal.clone(),
+            created_at:  Timestamp::from_second(1_699_000_000).unwrap(),
+            tags:        vec!["tag1".into()],
+        };
+
+        let json = serde_json::to_string(&job).expect("serialize JobEntry");
+        let back: JobEntry = serde_json::from_str(&json).expect("deserialize JobEntry");
+        assert_eq!(job.principal, back.principal);
+        assert_eq!(job.id, back.id);
+        assert_eq!(job.message, back.message);
+        assert_eq!(job.tags, back.tags);
     }
 }
