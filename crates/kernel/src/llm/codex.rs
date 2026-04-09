@@ -133,28 +133,25 @@ impl CodexDriver {
 /// tags (`input_text`, `output_text`) rather than plain strings.
 fn build_codex_request(request: &CompletionRequest) -> Value {
     let mut input = Vec::new();
+    // The Responses API requires system/developer messages as a top-level
+    // `instructions` string — sending them in input[] returns HTTP 400
+    // "Instructions are required".
+    let mut instructions_parts: Vec<String> = Vec::new();
 
     for msg in &request.messages {
         match msg.role {
-            super::types::Role::System
-            | super::types::Role::Developer
-            | super::types::Role::User => {
-                let role_str = match msg.role {
-                    super::types::Role::System | super::types::Role::Developer => "developer",
-                    super::types::Role::User => "user",
-                    _ => unreachable!(),
-                };
-                let content_type = if role_str == "user" {
-                    "input_text"
-                } else {
-                    // developer messages use plain string content
-                    "input_text"
-                };
+            super::types::Role::System | super::types::Role::Developer => {
+                let text = msg.content.as_text();
+                if !text.is_empty() {
+                    instructions_parts.push(text.to_string());
+                }
+            }
+            super::types::Role::User => {
                 input.push(json!({
                     "type": "message",
-                    "role": role_str,
+                    "role": "user",
                     "content": [{
-                        "type": content_type,
+                        "type": "input_text",
                         "text": msg.content.as_text(),
                     }],
                 }));
@@ -233,8 +230,10 @@ fn build_codex_request(request: &CompletionRequest) -> Value {
         })
         .unwrap_or("medium");
 
+    let instructions = instructions_parts.join("\n\n");
     let mut body = json!({
         "model": request.model,
+        "instructions": instructions,
         "input": input,
         "stream": true,
         "store": true,
