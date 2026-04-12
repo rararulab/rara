@@ -71,11 +71,6 @@ const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
 /// User-turn count since last anchor at which a session-length reminder is
 /// injected.  Unlike the pressure-based thresholds this is a pure turn count
 /// and does not depend on token estimates.
-const TURN_REMINDER_THRESHOLD: usize = 8;
-const _: () = {
-    assert!(TURN_REMINDER_THRESHOLD >= 4, "threshold too low");
-    assert!(TURN_REMINDER_THRESHOLD <= 20, "threshold too high");
-};
 /// Large tool outputs that should trigger an explicit anchor reminder.
 const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
 /// Multiple medium tool outputs in one phase should also trigger a reminder.
@@ -843,16 +838,9 @@ fn build_runtime_contract_prompt(
 <context_contract>
 ## Context Management
 
-**Tape tools** (always available — no `discover-tools` needed):
-- `tape-anchor` — checkpoint + trim context
-- `tape-search` — recall earlier context and past conversations
-
-Excessively long context may cause model call failures. When context is long or \
-[Context Usage Warning] appears, use `tape-anchor` to checkpoint and trim. \
-When you need to recall something from before an anchor, or the user references \
-a project/task/concept from a previous session, use `tape-search` before asking \
-the user — they likely already told you. \
-Always include `summary` and `next_steps` in anchors.
+Excessively long context may cause model call failures. In this case, you MAY use \
+`tape-info` to check token usage and you SHOULD use `tape-anchor` to shorten the \
+retrieved history.
 
 **On-demand tool activation**: Call `discover-tools` BEFORE using any tool from \
 the discoverable list below. These are search keywords, NOT callable tools. \
@@ -1035,7 +1023,6 @@ pub(crate) async fn run_agent_loop(
     let mut last_progress_at = Instant::now();
 
     let mut needs_anchor_reminder = false;
-    let mut context_pressure_warning: Option<String> = None;
     let mut llm_error_recovery_message: Option<String> = None;
     // True while the current iteration is a recovery attempt (tools disabled).
     // Reset after the recovery iteration produces a successful response.
@@ -1044,28 +1031,8 @@ pub(crate) async fn run_agent_loop(
         loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
     let mut loop_breaker_warning: Option<String> = None;
 
-    // ── Session length reminder state ─────────────────────────────────
-    // Count user turns since the last anchor to detect long sessions that
-    // may benefit from a handoff.  Queried once from the tape at turn
-    // start; incremented by 1 for the current user message; reset when
-    // the agent creates an anchor (detected via tool names).
-    let user_turns_since_anchor: usize = {
-        tape.from_last_anchor(tape_name, None)
-            .await
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter(|e| {
-                        e.kind == crate::memory::TapEntryKind::Message
-                            && e.payload.get("role").and_then(|v| v.as_str()) == Some("user")
-                    })
-                    .count()
-            })
-            .unwrap_or(0)
-    };
-    // +1 for the current user message that triggered this turn.
-    let mut user_turns_since_anchor = user_turns_since_anchor + 1;
-    let mut session_length_warned = false;
+    // Session length reminder state removed — context pressure warnings
+    // caused excessive anchoring.  The LLM decides when to anchor.
     // ── Tool call limit circuit breaker ──────────────────────────────────
     // Prevents runaway tool loops by pausing execution every N tool calls
     // and asking the user whether to continue. 0 = disabled (default).
@@ -1231,11 +1198,6 @@ pub(crate) async fn run_agent_loop(
                  summary and next_steps. Use tape-search later for older details.",
             ));
             needs_anchor_reminder = false;
-        }
-
-        // Inject context pressure warning from previous iteration
-        if let Some(warning) = context_pressure_warning.take() {
-            messages.push(llm::Message::user(warning));
         }
 
         // Inject loop breaker warning from previous iteration
@@ -2481,13 +2443,7 @@ pub(crate) async fn run_agent_loop(
                 }
             }
 
-            // Reset session-length counter when the agent creates an anchor.
-            // Detected via result payload rather than hardcoded tool names so
-            // that new anchor-creating tools are automatically covered.
-            if did_create_anchor(&results_json) {
-                user_turns_since_anchor = 0;
-                session_length_warned = false;
-            }
+            // (Session-length counter removed — see context_contract simplification.)
 
             // Record tool calls for loop detection.
             for (_id, name, args) in &valid_tool_calls {
@@ -2668,53 +2624,11 @@ pub(crate) async fn run_agent_loop(
         }
 
         // ── Runtime context guard ──────────────────────────────────────
-        // Evaluate context pressure from the tape's estimated token count
-        // (which reflects actual usage metadata) rather than from the
-        // post-trim rebuilt messages, to avoid underestimating pressure.
-        if let Ok(tape_info) = tape.info(tape_name).await {
-            let pressure = classify_context_pressure(
-                tape_info.estimated_context_tokens as usize,
-                capabilities.context_window_tokens,
-            );
-            match pressure {
-                ContextPressure::Critical { usage_ratio, .. } => {
-                    context_pressure_warning = Some(format!(
-                        "[Context Usage Critical] Current context ~{} tokens ({:.0}%), context \
-                         window capacity {} tokens. You MUST immediately call tape-anchor with \
-                         summary and next_steps.",
-                        tape_info.estimated_context_tokens,
-                        usage_ratio * 100.0,
-                        capabilities.context_window_tokens,
-                    ));
-                }
-                ContextPressure::Warning { usage_ratio, .. } => {
-                    context_pressure_warning = Some(format!(
-                        "[Context Usage Warning] Current context ~{} tokens ({:.0}%), context \
-                         window capacity {} tokens. You SHOULD consider calling tape-anchor.",
-                        tape_info.estimated_context_tokens,
-                        usage_ratio * 100.0,
-                        capabilities.context_window_tokens,
-                    ));
-                }
-                ContextPressure::Normal => {}
-            }
-        }
-
-        // ── Session length reminder ──────────────────────────────────
-        // Inject a warning when the session has many user turns without an
-        // anchor, independent of token-based context pressure.  Uses an
-        // in-memory counter instead of querying tape each iteration.
-        if !session_length_warned
-            && context_pressure_warning.is_none()
-            && user_turns_since_anchor >= TURN_REMINDER_THRESHOLD
-        {
-            context_pressure_warning = Some(format!(
-                "[Session Length Warning] This session has had {user_turns_since_anchor} user \
-                 turns since the last anchor. If the topic has shifted, you MUST call tape-anchor \
-                 now with summary and next_steps.",
-            ));
-            session_length_warned = true;
-        }
+        // Context pressure warnings are disabled — they caused excessive
+        // anchoring that destroyed context and KV cache.  The LLM decides
+        // when to anchor based on the context_contract guidance.
+        // Auto-fold (when enabled) handles emergency compression at the
+        // code level without LLM involvement.
 
         // Emit a progress event on silent (tool-only, no text) iterations so
         // the user sees the agent is still working. Throttled to at most once
