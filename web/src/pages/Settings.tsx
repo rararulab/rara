@@ -979,25 +979,7 @@ export default function Settings() {
               }}
             />
 
-            {/* Model Assignments (unchanged) */}
-            <KvGroup
-              title="Model Assignments"
-              description="Map model keys to specific model IDs. Unset keys fall back to default."
-              icon={<Bot className="h-4 w-4" />}
-              fields={[
-                { key: KEYS.LLM_MODELS_DEFAULT, label: "Default Model", placeholder: "openai/gpt-4o" },
-                { key: KEYS.LLM_MODELS_CHAT, label: "Chat Model", placeholder: "(falls back to default)", description: "Model used for interactive chat" },
-                { key: KEYS.LLM_MODELS_JOB, label: "Job Model", placeholder: "(falls back to default)", description: "Model used for job analysis tasks" },
-                { key: KEYS.LLM_FALLBACK_MODELS, label: "Fallback Models", placeholder: "model1,model2,model3", description: "Comma-separated ordered fallback list" },
-                { key: KEYS.LLM_FAVORITE_MODELS, label: "Favorite Models", placeholder: "model1,model2", description: "Comma-separated favorites shown in model picker" },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() => handleGroupSave([KEYS.LLM_MODELS_DEFAULT, KEYS.LLM_MODELS_CHAT, KEYS.LLM_MODELS_JOB, KEYS.LLM_FALLBACK_MODELS, KEYS.LLM_FAVORITE_MODELS], "llm-models")}
-              saving={saveMutation.isPending}
-              toast={groupToasts["llm-models"] ?? null}
-            />
+
           </>
         )}
 
