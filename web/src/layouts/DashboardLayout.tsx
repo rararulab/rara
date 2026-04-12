@@ -23,6 +23,7 @@ import { settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
 import ThemeToggle from '@/components/ThemeToggle';
+import { useServerStatus } from '@/hooks/use-server-status';
 
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock', '/settings']);
@@ -69,6 +70,23 @@ function hasConfiguredLlmProvider(settings: Record<string, string> | undefined):
   }
 }
 
+/** Small dot + label showing live backend connectivity. */
+function ConnectionStatus() {
+  const { isOnline, isChecking } = useServerStatus();
+  if (isChecking) return null;
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <div
+        className={cn(
+          "h-2 w-2 rounded-full",
+          isOnline ? "bg-green-500" : "bg-red-500",
+        )}
+      />
+      <span>{isOnline ? "Connected" : "Disconnected"}</span>
+    </div>
+  );
+}
+
 export default function DashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -99,6 +117,8 @@ export default function DashboardLayout() {
       <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
         {/* Top bar */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
+          <ConnectionStatus />
+          <div className="mx-1 h-4 w-px bg-border/60" />
           <Button
             variant="ghost"
             size="sm"

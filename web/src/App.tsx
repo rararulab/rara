@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
+import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import PiChat from '@/pages/PiChat';
 import Docs from '@/pages/Docs';
@@ -25,12 +27,23 @@ import KernelTop from '@/pages/KernelTop';
 import Symphony from '@/pages/Symphony';
 import Dock from '@/pages/Dock';
 
+const STORAGE_KEY = "rara_backend_url";
 const queryClient = new QueryClient();
 
 export default function App() {
+  const [needsSetup, setNeedsSetup] = useState(
+    () => !localStorage.getItem(STORAGE_KEY),
+  );
+
   return (
     <QueryClientProvider client={queryClient}>
       <ServerStatusProvider>
+        {needsSetup && (
+          <ConnectionSetupDialog
+            open={needsSetup}
+            onConnect={() => setNeedsSetup(false)}
+          />
+        )}
         <BrowserRouter>
           <Routes>
             {/* Fullscreen pi-web-ui chat */}
