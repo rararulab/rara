@@ -12,94 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Lightweight static file server for the web frontend.
+//! Web frontend dev server — spawns `bun run dev` in the `web/` directory.
 //!
-//! When `web/dist/` exists (pre-built frontend), spawns a child process to
-//! serve it on a separate port. Tries `npx serve` first (SPA-friendly with
-//! `--single`), falls back to `python3 -m http.server`.
+//! Vite (via bun) handles HMR, SPA fallback, and proxying `/api` requests
+//! to the backend server. The child process is killed on app shutdown via
+//! `kill_on_drop` + [`CancellationToken`].
 
-use std::{path::PathBuf, process::Stdio};
+use std::path::PathBuf;
 
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-/// Spawn a static file server for the web frontend.
+/// Spawn the Vite dev server via `bun run dev` in `web_dir`.
 ///
-/// Serves `dist_dir` on the given port. Uses `npx serve` if available,
-/// falls back to Python's `http.server`. The child process is killed when
-/// `cancel` fires (`kill_on_drop`).
-///
-/// Returns immediately (no-op) when `dist_dir/index.html` does not exist.
-pub async fn start_web_server(dist_dir: PathBuf, port: u16, cancel: CancellationToken) {
-    if !dist_dir.join("index.html").exists() {
+/// Returns immediately (no-op) when `web_dir/package.json` does not exist.
+/// The `_port` parameter is ignored — Vite uses its own port from
+/// `vite.config.ts` (default 5173).
+pub async fn start_web_server(web_dir: PathBuf, _port: u16, cancel: CancellationToken) {
+    if !web_dir.join("package.json").exists() {
         info!(
-            path = %dist_dir.display(),
-            "web/dist not found, skipping frontend server"
+            path = %web_dir.display(),
+            "web/package.json not found, skipping frontend server"
         );
         return;
     }
 
-    info!(port, path = %dist_dir.display(), "starting web frontend server");
+    info!(path = %web_dir.display(), "starting web frontend server (bun run dev)");
 
-    let dist_str = dist_dir.to_str().unwrap_or(".");
-
-    // Try `npx serve` first — better SPA support with --single flag.
-    let mut child = match Command::new("npx")
-        .args([
-            "serve",
-            "--single",
-            "--listen",
-            &format!("tcp://0.0.0.0:{port}"),
-            dist_str,
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+    let mut child = match Command::new("bun")
+        .args(["run", "dev"])
+        .current_dir(&web_dir)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .kill_on_drop(true)
         .spawn()
     {
         Ok(child) => {
-            info!(
-                port,
-                "Web UI available at http://0.0.0.0:{port} (npx serve)"
-            );
+            info!("web frontend server started (bun run dev)");
             child
         }
-        Err(_) => {
-            // Fallback: python3 -m http.server (no SPA routing).
-            match Command::new("python3")
-                .args([
-                    "-m",
-                    "http.server",
-                    &port.to_string(),
-                    "--directory",
-                    dist_str,
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-            {
-                Ok(child) => {
-                    warn!(
-                        port,
-                        "Web UI available at http://0.0.0.0:{port} (python3 http.server, no SPA \
-                         fallback)"
-                    );
-                    child
-                }
-                Err(e) => {
-                    error!(
-                        %e,
-                        "failed to start web frontend server — neither 'npx serve' nor 'python3' available"
-                    );
-                    return;
-                }
-            }
+        Err(e) => {
+            error!(%e, "failed to start web frontend server — is bun installed?");
+            return;
         }
     };
 
-    // Wait for cancellation or unexpected child exit.
     tokio::select! {
         () = cancel.cancelled() => {
             info!("shutting down web frontend server");

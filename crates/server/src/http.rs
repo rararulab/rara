@@ -97,10 +97,10 @@ pub struct RestServerConfig {
     /// Request timeout in seconds
     #[default(DEFAULT_REQUEST_TIMEOUT_SECS)]
     pub request_timeout: u64,
-    /// Port for the static web frontend server (optional).
+    /// Port for the web frontend dev server (optional).
     ///
-    /// When set, the app spawns a child process (`npx serve` or `python3
-    /// http.server`) to serve `web/dist/` on this port.
+    /// When set, the app spawns `bun run dev` in `web/`. Vite uses its
+    /// own port (default 5173); this field gates whether to start it.
     pub web_port:        Option<u16>,
 }
 
