@@ -125,6 +125,7 @@ just consul-keys   # list current keys
 | `max_body_size` | `RARA__HTTP__MAX_BODY_SIZE` | `100MB` | Max request body |
 | `enable_cors` | `RARA__HTTP__ENABLE_CORS` | `true` | CORS headers |
 | `request_timeout` | `RARA__HTTP__REQUEST_TIMEOUT` | `60` | Timeout in seconds |
+| `web_port` | `RARA__HTTP__WEB_PORT` | *(none)* | Static frontend server port (spawns `npx serve` or `python3 http.server` for `web/dist/`) |
 
 #### gRPC Server (`grpc.*`)
 
