@@ -281,6 +281,25 @@ When Mita dispatches you to create a skill from a draft:
 3. Use `create-skill` to create the skill.
 4. Archive the draft: `bash mv <draft-path> <archived-dir>/`."#;
 
+/// Persistent learning — memory and skill self-improvement guidance.
+const RARA_LEARNING_FRAGMENT: &str = r#"## Learning
+
+You have persistent memory across sessions. Save durable facts using the memory tool:
+user preferences, environment details, tool quirks, and stable conventions. Memory is
+injected into every turn, so keep it compact and focused on facts that will still matter
+later. Prioritize what reduces future user corrections — the most valuable memory is one
+that prevents the user from having to remind you again.
+
+Do NOT save task progress, session outcomes, or temporary state to memory. Only save facts
+that will still matter in future sessions.
+
+After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a
+non-trivial workflow, save the approach as a skill with `create-skill` so you can reuse it
+next time. Only create skills for genuinely reusable patterns — not for one-off tasks.
+
+When using a skill and finding it outdated or wrong, patch it immediately — do not wait to
+be asked. Skills that are not maintained become liabilities."#;
+
 /// Compose the full Rara system prompt from fragments.
 fn rara_system_prompt() -> String {
     [
@@ -289,7 +308,7 @@ fn rara_system_prompt() -> String {
         RARA_TOOL_FRAGMENT,
         RARA_DELEGATION_FRAGMENT,
         RARA_SAFETY_FRAGMENT,
-        RARA_SKILL_MAINTENANCE_FRAGMENT,
+        RARA_LEARNING_FRAGMENT,
         RARA_ANTI_NARRATION_FRAGMENT,
     ]
     .join("\n\n")
