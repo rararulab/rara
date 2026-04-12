@@ -695,12 +695,12 @@ pub async fn start_with_options(
         }
     }
 
-    // Start web frontend server if web/dist/ exists and web_port is configured.
+    // Start web frontend dev server (bun run dev) if web/ exists.
     if let Some(web_port) = config.http.web_port {
-        let web_dist = PathBuf::from("web/dist");
+        let web_dir = PathBuf::from("web");
         let web_cancel = cancellation_token.clone();
         tokio::spawn(async move {
-            web_server::start_web_server(web_dist, web_port, web_cancel).await;
+            web_server::start_web_server(web_dir, web_port, web_cancel).await;
         });
     }
 
