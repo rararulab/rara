@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rara_backend_admin::settings::SettingsSvc;
 use rara_domain_shared::settings::SettingsProvider;
 use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
@@ -40,15 +41,18 @@ pub struct SettingsParams {
 #[derive(ToolDef)]
 #[tool(
     name = "settings",
-    description = "Read and modify runtime settings. Use 'list' to see all settings, 'get' to \
-                   read a specific key, 'set' to update a value.",
+    description = "Read and modify runtime settings. Actions: 'list' to see all, 'get' to read a \
+                   key, 'set' to update a value, 'version' for current version, 'history' for \
+                   recent changes, 'snapshot' for point-in-time view, 'rollback' to revert to a \
+                   version.",
     tier = "deferred"
 )]
 pub struct SettingsTool {
-    settings: Arc<dyn SettingsProvider>,
+    settings: Arc<SettingsSvc>,
 }
 impl SettingsTool {
-    pub fn new(settings: Arc<dyn SettingsProvider>) -> Self { Self { settings } }
+    /// Create a new settings tool backed by the MVCC settings service.
+    pub fn new(settings: Arc<SettingsSvc>) -> Self { Self { settings } }
 }
 
 #[async_trait]
@@ -90,6 +94,50 @@ impl ToolExecute for SettingsTool {
                     .ok_or_else(|| anyhow::anyhow!("missing required parameter: value"))?;
                 self.settings.set(key, value).await?;
                 Ok(json!({"key": key, "updated": true}))
+            }
+            "version" => {
+                let ver = self
+                    .settings
+                    .current_version()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(json!({"version": ver}))
+            }
+            "history" => {
+                let entries = self
+                    .settings
+                    .list_versions(20)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(json!({"versions": entries}))
+            }
+            "snapshot" => {
+                let ver_str = params.key.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("missing required parameter: key (version number)")
+                })?;
+                let ver: i64 = ver_str.parse().map_err(|_| {
+                    anyhow::anyhow!("key must be a version number for snapshot action")
+                })?;
+                let snap = self
+                    .settings
+                    .snapshot(ver)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(json!({"version": ver, "settings": snap}))
+            }
+            "rollback" => {
+                let ver_str = params.key.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("missing required parameter: key (version number)")
+                })?;
+                let ver: i64 = ver_str.parse().map_err(|_| {
+                    anyhow::anyhow!("key must be a version number for rollback action")
+                })?;
+                let new_ver = self
+                    .settings
+                    .rollback_to(ver)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(json!({"rolled_back_to": ver, "new_version": new_ver}))
             }
             other => Ok(json!({"error": format!("unknown action: {other}")})),
         }

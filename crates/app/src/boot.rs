@@ -94,6 +94,7 @@ pub struct PlatformBindingConfig {
 pub(crate) async fn boot(
     pool: sqlx::SqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    settings_svc: Arc<rara_backend_admin::settings::SettingsSvc>,
     users: &[UserConfig],
     browser_manager: Option<rara_browser::BrowserManagerRef>,
 ) -> Result<BootResult, Whatever> {
@@ -214,6 +215,7 @@ pub(crate) async fn boot(
         &mut tool_registry,
         crate::tools::ToolDeps {
             settings: settings_provider.clone(),
+            settings_svc: settings_svc.clone(),
             composio_auth_provider,
             skill_registry: skill_registry.clone(),
             mcp_manager: mcp_manager.clone(),
