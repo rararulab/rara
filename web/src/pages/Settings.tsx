@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -35,24 +36,39 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Bot,
   BookOpen,
-  ChevronRight,
-  Circle,
   ExternalLink,
   Eye,
   EyeOff,
   Mail,
   MessageSquare,
+  Plus,
   Save,
   Settings2,
   Shield,
   Sparkles,
+  Trash2,
   Users,
   Sun,
   Palette,
   Wifi,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/hooks/use-theme";
@@ -80,12 +96,6 @@ const KEYS = {
   LLM_PROVIDERS_OLLAMA_BASE_URL: "llm.providers.ollama.base_url",
   // Provider: Codex
   LLM_PROVIDERS_CODEX_ENABLED: "llm.providers.codex.enabled",
-  LLM_PROVIDERS_CODEX_API_KEY: "llm.providers.codex.api_key",
-  LLM_PROVIDERS_CODEX_BASE_URL: "llm.providers.codex.base_url",
-  // Provider: GLM (Zhipu)
-  LLM_PROVIDERS_GLM_ENABLED: "llm.providers.glm.enabled",
-  LLM_PROVIDERS_GLM_API_KEY: "llm.providers.glm.api_key",
-  LLM_PROVIDERS_GLM_BASE_URL: "llm.providers.glm.base_url",
   // Model assignments
   LLM_MODELS_DEFAULT: "llm.models.default",
   LLM_MODELS_CHAT: "llm.models.chat",
@@ -119,21 +129,28 @@ const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; descrip
 const SENSITIVE_KEYS: Set<string> = new Set([
   KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY,
   KEYS.LLM_PROVIDERS_OLLAMA_API_KEY,
-  KEYS.LLM_PROVIDERS_CODEX_API_KEY,
-  KEYS.LLM_PROVIDERS_GLM_API_KEY,
   KEYS.TELEGRAM_BOT_TOKEN,
   KEYS.GMAIL_APP_PASSWORD,
   KEYS.COMPOSIO_API_KEY,
   KEYS.MEMORY_MEMOS_TOKEN,
 ]);
 
-// Provider definitions for the multi-provider architecture
-const PROVIDER_DEFS = [
+// Built-in provider definitions
+interface ProviderDef {
+  id: string;
+  name: string;
+  description: string;
+  enabledKey: string;
+  fields: Array<{ key: string; label: string; placeholder?: string; sensitive?: boolean }>;
+  isCustom?: boolean;
+}
+
+const BUILTIN_PROVIDERS: ProviderDef[] = [
   {
     id: "openrouter",
     name: "OpenRouter",
     description: "Unified API gateway for 100+ models",
-    apiKeyKey: KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY,
+    enabledKey: KEYS.LLM_PROVIDERS_OPENROUTER_ENABLED,
     fields: [
       { key: KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY, label: "API Key", placeholder: "sk-or-v1-...", sensitive: true },
       { key: KEYS.LLM_PROVIDERS_OPENROUTER_BASE_URL, label: "Base URL", placeholder: "https://openrouter.ai/api/v1" },
@@ -143,7 +160,7 @@ const PROVIDER_DEFS = [
     id: "ollama",
     name: "Ollama",
     description: "Local model inference server",
-    apiKeyKey: KEYS.LLM_PROVIDERS_OLLAMA_API_KEY,
+    enabledKey: KEYS.LLM_PROVIDERS_OLLAMA_ENABLED,
     fields: [
       { key: KEYS.LLM_PROVIDERS_OLLAMA_API_KEY, label: "API Key", placeholder: "ollama", sensitive: true },
       { key: KEYS.LLM_PROVIDERS_OLLAMA_BASE_URL, label: "Base URL", placeholder: "http://localhost:11434/v1" },
@@ -152,24 +169,40 @@ const PROVIDER_DEFS = [
   {
     id: "codex",
     name: "Codex",
-    description: "ChatGPT backend API",
-    apiKeyKey: KEYS.LLM_PROVIDERS_CODEX_API_KEY,
-    fields: [
-      { key: KEYS.LLM_PROVIDERS_CODEX_API_KEY, label: "API Key", placeholder: "sk-...", sensitive: true },
-      { key: KEYS.LLM_PROVIDERS_CODEX_BASE_URL, label: "Base URL", placeholder: "https://api.openai.com/v1" },
-    ],
+    description: "Uses OAuth authentication. Configure via CLI.",
+    enabledKey: KEYS.LLM_PROVIDERS_CODEX_ENABLED,
+    fields: [],
   },
-  {
-    id: "glm",
-    name: "GLM (Zhipu)",
-    description: "Zhipu AI large language models",
-    apiKeyKey: KEYS.LLM_PROVIDERS_GLM_API_KEY,
+];
+
+const BUILTIN_PROVIDER_IDS = new Set(BUILTIN_PROVIDERS.map((p) => p.id));
+
+/** Discover custom providers from settings keys and merge with built-ins. */
+function getProviderList(settings: SettingsMap | undefined): ProviderDef[] {
+  const customKeys = new Set<string>();
+  if (settings) {
+    for (const key of Object.keys(settings)) {
+      const match = key.match(/^llm\.providers\.([^.]+)\./);
+      if (match && !BUILTIN_PROVIDER_IDS.has(match[1])) {
+        customKeys.add(match[1]);
+      }
+    }
+  }
+
+  const custom: ProviderDef[] = [...customKeys].map((key) => ({
+    id: key,
+    name: key.charAt(0).toUpperCase() + key.slice(1),
+    description: "Custom provider",
+    enabledKey: `llm.providers.${key}.enabled`,
     fields: [
-      { key: KEYS.LLM_PROVIDERS_GLM_API_KEY, label: "API Key", placeholder: "zhipu-...", sensitive: true },
-      { key: KEYS.LLM_PROVIDERS_GLM_BASE_URL, label: "Base URL", placeholder: "https://open.bigmodel.cn/api/paas/v4" },
+      { key: `llm.providers.${key}.api_key`, label: "API Key", placeholder: "sk-...", sensitive: true },
+      { key: `llm.providers.${key}.base_url`, label: "Base URL", placeholder: "https://..." },
     ],
-  },
-] as const;
+    isCustom: true,
+  }));
+
+  return [...BUILTIN_PROVIDERS, ...custom];
+}
 
 // A single KV field with optional show/hide toggle for sensitive values
 function KvField({
@@ -193,9 +226,12 @@ function KvField({
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={settingKey} className="text-sm font-medium">
-        {label}
-      </Label>
+      <div className="flex items-center justify-between">
+        <Label htmlFor={settingKey} className="text-sm font-medium">
+          {label}
+        </Label>
+        <span className="font-mono text-[10px] text-muted-foreground">{settingKey}</span>
+      </div>
       <div className="flex items-center gap-2">
         <Input
           id={settingKey}
@@ -375,216 +411,86 @@ function ConnectionCard() {
   );
 }
 
-/** Status badge for provider cards — green dot for connected, gray for not configured. */
-function ProviderStatusBadge({ configured }: { configured: boolean }) {
-  return configured ? (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600">
-      <Circle className="h-2 w-2 fill-green-500 text-green-500" />
-      Connected
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-      <Circle className="h-2 w-2 fill-muted-foreground/40 text-muted-foreground/40" />
-      Not configured
-    </span>
-  );
-}
+/** Dialog + button for adding a custom provider. */
+function AddProviderButton({ onAdd }: { onAdd: (name: string, baseUrl: string, apiKey: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
 
-/** Collapsible provider card — collapsed shows name + status, expanded shows fields + save. */
-function ProviderCard({
-  provider,
-  draft,
-  original,
-  onFieldChange,
-  onGroupSave,
-  saving,
-  toast,
-}: {
-  provider: (typeof PROVIDER_DEFS)[number];
-  draft: Record<string, string>;
-  original: Record<string, string>;
-  onFieldChange: (key: string, value: string) => void;
-  onGroupSave: (keys: string[], group: string) => void;
-  saving: boolean;
-  toast: ToastState;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const hasApiKey = !!(draft[provider.apiKeyKey] ?? "").trim();
-  const allKeys = provider.fields.map((f) => f.key);
-  const groupId = `provider-${provider.id}`;
-  const hasChanges = allKeys.some((k) => (draft[k] ?? "") !== (original[k] ?? ""));
+  const isValid = /^[a-z][a-z0-9_-]*$/.test(name) && baseUrl.trim().length > 0 && apiKey.trim().length > 0;
 
-  return (
-    <div className="border rounded-lg bg-card">
-      {/* Header — always visible */}
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center justify-between p-4 text-left hover:bg-accent/30 transition-colors rounded-lg"
-      >
-        <div className="flex items-center gap-3">
-          <ChevronRight
-            className={cn(
-              "h-4 w-4 text-muted-foreground transition-transform duration-200",
-              expanded && "rotate-90"
-            )}
-          />
-          <div>
-            <h3 className="text-sm font-medium">{provider.name}</h3>
-            <p className="text-xs text-muted-foreground">{provider.description}</p>
-          </div>
-        </div>
-        <ProviderStatusBadge configured={hasApiKey} />
-      </button>
-
-      {/* Body — collapsible */}
-      {expanded && (
-        <div className="px-4 pb-4 space-y-3 border-t">
-          <div className="pt-3 space-y-3">
-            {provider.fields.map((field) => (
-              <KvField
-                key={field.key}
-                settingKey={field.key}
-                label={field.label}
-                value={draft[field.key] ?? ""}
-                placeholder={field.placeholder}
-                onChange={(v) => onFieldChange(field.key, v)}
-                sensitive={SENSITIVE_KEYS.has(field.key)}
-              />
-            ))}
-          </div>
-          <div className="flex items-center justify-between pt-1">
-            <div>
-              {toast && (
-                <p className={cn("text-sm", toast.kind === "success" ? "text-green-600" : "text-destructive")}>
-                  {toast.message}
-                </p>
-              )}
-            </div>
-            <Button
-              onClick={(e) => { e.stopPropagation(); onGroupSave(allKeys, groupId); }}
-              disabled={!hasChanges || saving}
-              size="sm"
-            >
-              <Save className="mr-1.5 h-3.5 w-3.5" />
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Providers settings tab — default model + collapsible provider cards + model assignments. */
-function ProvidersSection({
-  draft,
-  original,
-  onFieldChange,
-  onGroupSave,
-  saving,
-  groupToasts,
-}: {
-  draft: Record<string, string>;
-  original: Record<string, string>;
-  onFieldChange: (key: string, value: string) => void;
-  onGroupSave: (keys: string[], group: string) => void;
-  saving: boolean;
-  groupToasts: Record<string, ToastState>;
-}) {
-  const defaultModelChanged = (draft[KEYS.LLM_DEFAULT_MODEL] ?? "") !== (original[KEYS.LLM_DEFAULT_MODEL] ?? "");
+  async function handleAdd() {
+    if (!isValid) return;
+    setSaving(true);
+    try {
+      await onAdd(name, baseUrl.trim(), apiKey.trim());
+      setOpen(false);
+      setName("");
+      setBaseUrl("");
+      setApiKey("");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <>
-      {/* Default Model */}
-      <Card className="app-surface border-border/60">
-        <CardHeader className="pb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-              <Sparkles className="h-4 w-4" />
+      <Button variant="outline" className="w-full" onClick={() => setOpen(true)}>
+        <Plus className="h-4 w-4 mr-2" />
+        Add Provider
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Custom Provider</DialogTitle>
+            <DialogDescription>
+              Add an OpenAI-compatible provider with its base URL and API key.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="add-provider-name">Provider Name</Label>
+              <Input
+                id="add-provider-name"
+                value={name}
+                onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s/g, "-"))}
+                placeholder="my-provider"
+                className="h-9 font-mono text-sm"
+              />
+              <p className="text-xs text-muted-foreground">Lowercase, no spaces. Used as the identifier.</p>
             </div>
-            <div>
-              <CardTitle className="text-base">Default Model</CardTitle>
-              <CardDescription>Used when no specific model is configured</CardDescription>
+            <div className="space-y-1.5">
+              <Label htmlFor="add-provider-url">Base URL</Label>
+              <Input
+                id="add-provider-url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://api.example.com/v1"
+                className="h-9 font-mono text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="add-provider-key">API Key</Label>
+              <Input
+                id="add-provider-key"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
+                className="h-9 font-mono text-sm"
+              />
             </div>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <KvField
-            settingKey={KEYS.LLM_DEFAULT_MODEL}
-            label="Model"
-            value={draft[KEYS.LLM_DEFAULT_MODEL] ?? ""}
-            placeholder="openai/gpt-4o-mini"
-            onChange={(v) => onFieldChange(KEYS.LLM_DEFAULT_MODEL, v)}
-          />
-          <div className="flex items-center justify-between pt-2">
-            <div>
-              {groupToasts["global-defaults"] && (
-                <p className={cn("text-sm", groupToasts["global-defaults"]!.kind === "success" ? "text-green-600" : "text-destructive")}>
-                  {groupToasts["global-defaults"]!.message}
-                </p>
-              )}
-            </div>
-            <Button
-              onClick={() => onGroupSave([KEYS.LLM_DEFAULT_MODEL], "global-defaults")}
-              disabled={!defaultModelChanged || saving}
-              size="sm"
-            >
-              <Save className="mr-1.5 h-3.5 w-3.5" />
-              {saving ? "Saving..." : "Save"}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button onClick={handleAdd} disabled={!isValid || saving}>
+              {saving ? "Adding..." : "Add Provider"}
             </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Provider Cards */}
-      <Card className="app-surface border-border/60">
-        <CardHeader className="pb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-              <Sparkles className="h-4 w-4" />
-            </div>
-            <div>
-              <CardTitle className="text-base">Providers</CardTitle>
-              <CardDescription>Configure API keys for LLM providers</CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {PROVIDER_DEFS.map((provider) => (
-            <ProviderCard
-              key={provider.id}
-              provider={provider}
-              draft={draft}
-              original={original}
-              onFieldChange={onFieldChange}
-              onGroupSave={onGroupSave}
-              saving={saving}
-              toast={groupToasts[`provider-${provider.id}`] ?? null}
-            />
-          ))}
-        </CardContent>
-      </Card>
-
-      {/* Model Assignments */}
-      <KvGroup
-        title="Model Assignments"
-        description="Map model keys to specific model IDs. Unset keys fall back to default."
-        icon={<Bot className="h-4 w-4" />}
-        fields={[
-          { key: KEYS.LLM_MODELS_DEFAULT, label: "Default Model", placeholder: "openai/gpt-4o" },
-          { key: KEYS.LLM_MODELS_CHAT, label: "Chat Model", placeholder: "(falls back to default)", description: "Model used for interactive chat" },
-          { key: KEYS.LLM_MODELS_JOB, label: "Job Model", placeholder: "(falls back to default)", description: "Model used for job analysis tasks" },
-          { key: KEYS.LLM_FALLBACK_MODELS, label: "Fallback Models", placeholder: "model1,model2,model3", description: "Comma-separated ordered fallback list" },
-          { key: KEYS.LLM_FAVORITE_MODELS, label: "Favorite Models", placeholder: "model1,model2", description: "Comma-separated favorites shown in model picker" },
-        ]}
-        values={draft}
-        original={original}
-        onFieldChange={onFieldChange}
-        onSave={() => onGroupSave([KEYS.LLM_MODELS_DEFAULT, KEYS.LLM_MODELS_CHAT, KEYS.LLM_MODELS_JOB, KEYS.LLM_FALLBACK_MODELS, KEYS.LLM_FAVORITE_MODELS], "llm-models")}
-        saving={saving}
-        toast={groupToasts["llm-models"] ?? null}
-      />
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -877,14 +783,218 @@ export default function Settings() {
 
         {/* ── Providers ── */}
         {activeCategory === "providers" && (
-          <ProvidersSection
-            draft={draft}
-            original={original}
-            onFieldChange={handleFieldChange}
-            onGroupSave={handleGroupSave}
-            saving={saveMutation.isPending}
-            groupToasts={groupToasts}
-          />
+          <>
+            {/* Global Defaults */}
+            <Card className="app-surface border-border/60">
+              <CardHeader className="pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <Sparkles className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Global Defaults</CardTitle>
+                    <CardDescription>Default provider and model used across the platform</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="default-provider" className="text-sm font-medium">Default Provider</Label>
+                    <span className="font-mono text-[10px] text-muted-foreground">{KEYS.LLM_DEFAULT_PROVIDER}</span>
+                  </div>
+                  <Select
+                    value={draft[KEYS.LLM_DEFAULT_PROVIDER] ?? ""}
+                    onValueChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_PROVIDER, v)}
+                  >
+                    <SelectTrigger id="default-provider" className="h-9 font-mono text-sm">
+                      <SelectValue placeholder="Select a provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getProviderList(settingsQuery.data).map((p) => {
+                        const isEnabled = draft[p.enabledKey] === "true";
+                        return (
+                          <SelectItem key={p.id} value={p.id} disabled={!isEnabled}>
+                            {p.name}{!isEnabled ? " (disabled)" : ""}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <KvField
+                  settingKey={KEYS.LLM_DEFAULT_MODEL}
+                  label="Default Model"
+                  value={draft[KEYS.LLM_DEFAULT_MODEL] ?? ""}
+                  placeholder="openai/gpt-4o-mini"
+                  onChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_MODEL, v)}
+                  description="Model identifier used when no specific model is configured"
+                />
+                <div className="flex items-center justify-between pt-2">
+                  <div>
+                    {groupToasts["global-defaults"] && (
+                      <p className={cn("text-sm", groupToasts["global-defaults"]!.kind === "success" ? "text-green-600" : "text-destructive")}>
+                        {groupToasts["global-defaults"]!.message}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    onClick={() => handleGroupSave([KEYS.LLM_DEFAULT_PROVIDER, KEYS.LLM_DEFAULT_MODEL], "global-defaults")}
+                    disabled={
+                      ((draft[KEYS.LLM_DEFAULT_PROVIDER] ?? "") === (original[KEYS.LLM_DEFAULT_PROVIDER] ?? "") &&
+                       (draft[KEYS.LLM_DEFAULT_MODEL] ?? "") === (original[KEYS.LLM_DEFAULT_MODEL] ?? "")) ||
+                      saveMutation.isPending
+                    }
+                    size="sm"
+                  >
+                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                    {saveMutation.isPending ? "Saving..." : "Save"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Provider Cards */}
+            {getProviderList(settingsQuery.data).map((provider) => {
+              const enabled = draft[provider.enabledKey] === "true";
+              const allKeys = [provider.enabledKey, ...provider.fields.map((f) => f.key)];
+              const groupId = `provider-${provider.id}`;
+              const hasChanges = allKeys.some((k) => (draft[k] ?? "") !== (original[k] ?? ""));
+              const isDefault = (draft[KEYS.LLM_DEFAULT_PROVIDER] ?? "") === provider.id;
+              const hasApiKey = provider.fields.some((f) => f.sensitive && (draft[f.key] ?? "").length > 0);
+
+              return (
+                <Card key={provider.id} className="app-surface border-border/60">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                          <Sparkles className="h-4 w-4" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div>
+                            <CardTitle className="text-base">{provider.name}</CardTitle>
+                            <CardDescription>{provider.description}</CardDescription>
+                          </div>
+                          {isDefault && <Badge variant="secondary">Default</Badge>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {!isDefault && enabled && hasApiKey && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={async () => {
+                              await settingsApi.batchUpdate({ [KEYS.LLM_DEFAULT_PROVIDER]: provider.id });
+                              queryClient.invalidateQueries({ queryKey: ["settings"] });
+                            }}
+                          >
+                            Set as default
+                          </Button>
+                        )}
+                        {provider.isCustom && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={async () => {
+                              const keysToDelete: Record<string, string | null> = {};
+                              for (const key of Object.keys(settingsQuery.data ?? {})) {
+                                if (key.startsWith(`llm.providers.${provider.id}.`)) {
+                                  keysToDelete[key] = null;
+                                }
+                              }
+                              if (isDefault) {
+                                keysToDelete[KEYS.LLM_DEFAULT_PROVIDER] = null;
+                              }
+                              await settingsApi.batchUpdate(keysToDelete);
+                              queryClient.invalidateQueries({ queryKey: ["settings"] });
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <Label htmlFor={`${provider.id}-enabled`} className="text-sm text-muted-foreground">
+                          {enabled ? "Enabled" : "Disabled"}
+                        </Label>
+                        <Switch
+                          id={`${provider.id}-enabled`}
+                          checked={enabled}
+                          onCheckedChange={(checked) => handleFieldChange(provider.enabledKey, checked ? "true" : "false")}
+                        />
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {provider.fields.length > 0 && (
+                      <div className={cn("space-y-4", !enabled && "pointer-events-none opacity-50")}>
+                        {provider.fields.map((field) => (
+                          <KvField
+                            key={field.key}
+                            settingKey={field.key}
+                            label={field.label}
+                            value={draft[field.key] ?? ""}
+                            placeholder={field.placeholder}
+                            onChange={(v) => handleFieldChange(field.key, v)}
+                            sensitive={SENSITIVE_KEYS.has(field.key)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-2">
+                      <div>
+                        {groupToasts[groupId] && (
+                          <p className={cn("text-sm", groupToasts[groupId]!.kind === "success" ? "text-green-600" : "text-destructive")}>
+                            {groupToasts[groupId]!.message}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        onClick={() => handleGroupSave(allKeys, groupId)}
+                        disabled={!hasChanges || saveMutation.isPending}
+                        size="sm"
+                      >
+                        <Save className="mr-1.5 h-3.5 w-3.5" />
+                        {saveMutation.isPending ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+
+            {/* Add Provider */}
+            <AddProviderButton
+              onAdd={async (name, baseUrl, apiKey) => {
+                await settingsApi.batchUpdate({
+                  [`llm.providers.${name}.api_key`]: apiKey,
+                  [`llm.providers.${name}.base_url`]: baseUrl,
+                  [`llm.providers.${name}.enabled`]: "true",
+                });
+                queryClient.invalidateQueries({ queryKey: ["settings"] });
+              }}
+            />
+
+            {/* Model Assignments (unchanged) */}
+            <KvGroup
+              title="Model Assignments"
+              description="Map model keys to specific model IDs. Unset keys fall back to default."
+              icon={<Bot className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.LLM_MODELS_DEFAULT, label: "Default Model", placeholder: "openai/gpt-4o" },
+                { key: KEYS.LLM_MODELS_CHAT, label: "Chat Model", placeholder: "(falls back to default)", description: "Model used for interactive chat" },
+                { key: KEYS.LLM_MODELS_JOB, label: "Job Model", placeholder: "(falls back to default)", description: "Model used for job analysis tasks" },
+                { key: KEYS.LLM_FALLBACK_MODELS, label: "Fallback Models", placeholder: "model1,model2,model3", description: "Comma-separated ordered fallback list" },
+                { key: KEYS.LLM_FAVORITE_MODELS, label: "Favorite Models", placeholder: "model1,model2", description: "Comma-separated favorites shown in model picker" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.LLM_MODELS_DEFAULT, KEYS.LLM_MODELS_CHAT, KEYS.LLM_MODELS_JOB, KEYS.LLM_FALLBACK_MODELS, KEYS.LLM_FAVORITE_MODELS], "llm-models")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["llm-models"] ?? null}
+            />
+          </>
         )}
 
         {/* ── Agents ── */}
