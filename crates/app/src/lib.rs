@@ -20,6 +20,7 @@ pub mod gateway;
 // `crate::tool::AgentTool` in derived impls.
 pub(crate) use rara_kernel::tool;
 mod tools;
+mod web_server;
 
 use std::{
     path::{Path, PathBuf},
@@ -692,6 +693,15 @@ pub async fn start_with_options(
             });
             info!("Symphony service started");
         }
+    }
+
+    // Start web frontend server if web/dist/ exists and web_port is configured.
+    if let Some(web_port) = config.http.web_port {
+        let web_dist = PathBuf::from("web/dist");
+        let web_cancel = cancellation_token.clone();
+        tokio::spawn(async move {
+            web_server::start_web_server(web_dist, web_port, web_cancel).await;
+        });
     }
 
     info!("Application started successfully");

@@ -97,6 +97,11 @@ pub struct RestServerConfig {
     /// Request timeout in seconds
     #[default(DEFAULT_REQUEST_TIMEOUT_SECS)]
     pub request_timeout: u64,
+    /// Port for the static web frontend server (optional).
+    ///
+    /// When set, the app spawns a child process (`npx serve` or `python3
+    /// http.server`) to serve `web/dist/` on this port.
+    pub web_port:        Option<u16>,
 }
 
 /// Starts the REST server and returns a handle for managing its lifecycle.
