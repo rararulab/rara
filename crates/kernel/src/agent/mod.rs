@@ -843,25 +843,23 @@ fn build_runtime_contract_prompt(
 <context_contract>
 ## Context Management
 
-**Tape tools**: `tape-anchor` (checkpoint + trim), `tape-search` (recall old context).
+**Tape tools** (always available — no `discover-tools` needed):
+- `tape-anchor` — checkpoint + trim context
+- `tape-search` — recall earlier context and past conversations
 
-**MANDATORY: On-demand tool activation**: You MUST call `discover-tools` BEFORE using any tool \
-from the list below. These names are search keywords, NOT callable tools. \
-Example: `discover-tools({{"query":"marketplace"}})` — this loads the real tools so you can call them. \
+Excessively long context may cause model call failures. When context is long or \
+[Context Usage Warning] appears, use `tape-anchor` to checkpoint and trim. \
+When you need to recall something from before an anchor, or the user references \
+a project/task/concept from a previous session, use `tape-search` before asking \
+the user — they likely already told you. \
+Always include `summary` and `next_steps` in anchors.
+
+**On-demand tool activation**: Call `discover-tools` BEFORE using any tool from \
+the discoverable list below. These are search keywords, NOT callable tools. \
+Example: `discover-tools({{"query":"marketplace"}})`. \
 NEVER call a listed name directly. NEVER tell the user a tool is unavailable — \
 call `discover-tools` to load it first.{tool_list}
 {system_paths}
-
-**MUST anchor when:**
-- Context is long or [Context Usage Warning] appears
-- Tool result exceeds ~2000 chars (anchor the key findings, not the raw output)
-- User switches topic or starts a new task
-
-**MUST search when:**
-- Question refers to content before an anchor
-- You need exact details from earlier in the conversation
-
-Always include `summary` and `next_steps` in anchors — they are your future self's entry point.
 </context_contract>"#
     )
 }
