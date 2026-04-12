@@ -27,7 +27,6 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -55,6 +54,7 @@ import {
   Settings2,
   Shield,
   Sparkles,
+  ChevronDown,
   Trash2,
   Users,
   Sun,
@@ -226,12 +226,9 @@ function KvField({
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <Label htmlFor={settingKey} className="text-sm font-medium">
-          {label}
-        </Label>
-        <span className="font-mono text-[10px] text-muted-foreground">{settingKey}</span>
-      </div>
+      <Label htmlFor={settingKey} className="text-sm font-medium">
+        {label}
+      </Label>
       <div className="flex items-center gap-2">
         <Input
           id={settingKey}
@@ -505,6 +502,9 @@ export default function Settings() {
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
+
+  // Track which provider cards are expanded (collapsed by default)
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
 
   // Local draft of all KV values
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -799,10 +799,7 @@ export default function Settings() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="default-provider" className="text-sm font-medium">Default Provider</Label>
-                    <span className="font-mono text-[10px] text-muted-foreground">{KEYS.LLM_DEFAULT_PROVIDER}</span>
-                  </div>
+                  <Label htmlFor="default-provider" className="text-sm font-medium">Default Provider</Label>
                   <Select
                     value={draft[KEYS.LLM_DEFAULT_PROVIDER] ?? ""}
                     onValueChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_PROVIDER, v)}
@@ -811,14 +808,11 @@ export default function Settings() {
                       <SelectValue placeholder="Select a provider" />
                     </SelectTrigger>
                     <SelectContent>
-                      {getProviderList(settingsQuery.data).map((p) => {
-                        const isEnabled = draft[p.enabledKey] === "true";
-                        return (
-                          <SelectItem key={p.id} value={p.id} disabled={!isEnabled}>
-                            {p.name}{!isEnabled ? " (disabled)" : ""}
-                          </SelectItem>
-                        );
-                      })}
+                      {getProviderList(settingsQuery.data).map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -854,33 +848,44 @@ export default function Settings() {
               </CardContent>
             </Card>
 
-            {/* Provider Cards */}
+            {/* Provider Cards — collapsible, no enable/disable toggle */}
             {getProviderList(settingsQuery.data).map((provider) => {
-              const enabled = draft[provider.enabledKey] === "true";
               const allKeys = [provider.enabledKey, ...provider.fields.map((f) => f.key)];
               const groupId = `provider-${provider.id}`;
               const hasChanges = allKeys.some((k) => (draft[k] ?? "") !== (original[k] ?? ""));
               const isDefault = (draft[KEYS.LLM_DEFAULT_PROVIDER] ?? "") === provider.id;
               const hasApiKey = provider.fields.some((f) => f.sensitive && (draft[f.key] ?? "").length > 0);
+              const isConnected = hasApiKey || provider.fields.length === 0;
+              const isExpanded = expandedProviders.has(provider.id);
+
+              const toggleExpanded = () => {
+                setExpandedProviders((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(provider.id)) next.delete(provider.id);
+                  else next.add(provider.id);
+                  return next;
+                });
+              };
 
               return (
                 <Card key={provider.id} className="app-surface border-border/60">
-                  <CardHeader className="pb-4">
+                  <CardHeader
+                    className="cursor-pointer select-none pb-4"
+                    onClick={toggleExpanded}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
                           <Sparkles className="h-4 w-4" />
                         </div>
-                        <div className="flex items-center gap-2">
-                          <div>
-                            <CardTitle className="text-base">{provider.name}</CardTitle>
-                            <CardDescription>{provider.description}</CardDescription>
-                          </div>
-                          {isDefault && <Badge variant="secondary">Default</Badge>}
+                        <div>
+                          <CardTitle className="text-base">{provider.name}</CardTitle>
+                          <CardDescription>{provider.description}</CardDescription>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {!isDefault && enabled && hasApiKey && (
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        {isDefault && <Badge variant="secondary">Default</Badge>}
+                        {!isDefault && isConnected && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -914,51 +919,57 @@ export default function Settings() {
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         )}
-                        <Label htmlFor={`${provider.id}-enabled`} className="text-sm text-muted-foreground">
-                          {enabled ? "Enabled" : "Disabled"}
-                        </Label>
-                        <Switch
-                          id={`${provider.id}-enabled`}
-                          checked={enabled}
-                          onCheckedChange={(checked) => handleFieldChange(provider.enabledKey, checked ? "true" : "false")}
-                        />
+                        <Badge
+                          variant="outline"
+                          className={isConnected
+                            ? "border-green-300 bg-green-50 text-green-700"
+                            : "border-border text-muted-foreground"}
+                        >
+                          {isConnected ? "Connected" : "Not configured"}
+                        </Badge>
+                        <ChevronDown className={cn(
+                          "h-4 w-4 text-muted-foreground transition-transform",
+                          isExpanded && "rotate-180"
+                        )} />
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    {provider.fields.length > 0 && (
-                      <div className={cn("space-y-4", !enabled && "pointer-events-none opacity-50")}>
-                        {provider.fields.map((field) => (
-                          <KvField
-                            key={field.key}
-                            settingKey={field.key}
-                            label={field.label}
-                            value={draft[field.key] ?? ""}
-                            placeholder={field.placeholder}
-                            onChange={(v) => handleFieldChange(field.key, v)}
-                            sensitive={SENSITIVE_KEYS.has(field.key)}
-                          />
-                        ))}
+                  {isExpanded && (
+                    <CardContent className="space-y-4">
+                      {provider.fields.length > 0 && (
+                        <div className="space-y-4">
+                          {provider.fields.map((field) => (
+                            <KvField
+                              key={field.key}
+                              settingKey={field.key}
+                              label={field.label}
+                              value={draft[field.key] ?? ""}
+                              placeholder={field.placeholder}
+                              onChange={(v) => handleFieldChange(field.key, v)}
+                              sensitive={SENSITIVE_KEYS.has(field.key)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-2">
+                        <div>
+                          {groupToasts[groupId] && (
+                            <p className={cn("text-sm", groupToasts[groupId]!.kind === "success" ? "text-green-600" : "text-destructive")}>
+                              {groupToasts[groupId]!.message}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          onClick={() => handleGroupSave(allKeys, groupId)}
+                          disabled={!hasChanges || saveMutation.isPending}
+                          size="sm"
+                        >
+                          <Save className="mr-1.5 h-3.5 w-3.5" />
+                          {saveMutation.isPending ? "Saving..." : "Save"}
+                        </Button>
                       </div>
-                    )}
-                    <div className="flex items-center justify-between pt-2">
-                      <div>
-                        {groupToasts[groupId] && (
-                          <p className={cn("text-sm", groupToasts[groupId]!.kind === "success" ? "text-green-600" : "text-destructive")}>
-                            {groupToasts[groupId]!.message}
-                          </p>
-                        )}
-                      </div>
-                      <Button
-                        onClick={() => handleGroupSave(allKeys, groupId)}
-                        disabled={!hasChanges || saveMutation.isPending}
-                        size="sm"
-                      >
-                        <Save className="mr-1.5 h-3.5 w-3.5" />
-                        {saveMutation.isPending ? "Saving..." : "Save"}
-                      </Button>
-                    </div>
-                  </CardContent>
+                    </CardContent>
+                  )}
                 </Card>
               );
             })}
