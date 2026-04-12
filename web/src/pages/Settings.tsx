@@ -57,10 +57,13 @@ import {
   Users,
   Sun,
   Palette,
+  Wifi,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/hooks/use-theme";
+import { useServerStatus } from "@/hooks/use-server-status";
+import { getBackendUrl, setBackendUrl } from "@/api/client";
 import Skills from "@/pages/Skills";
 import Agents from "@/pages/Agents";
 import McpServers from "@/pages/McpServers";
@@ -288,6 +291,78 @@ function KvGroup({
   );
 }
 
+/** Backend URL configuration card for the General settings tab. */
+function ConnectionCard() {
+  const { isOnline } = useServerStatus();
+  const [url, setUrl] = useState(() => getBackendUrl());
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+
+  async function saveAndReconnect() {
+    setSaving(true);
+    setResult(null);
+    try {
+      const res = await fetch(`${url}/api/v1/settings`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        setBackendUrl(url); // persists + reloads
+      } else {
+        setResult({ kind: "error", message: `Server returned ${res.status}` });
+      }
+    } catch (e) {
+      setResult({ kind: "error", message: `Cannot connect: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="app-surface border-border/60">
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+            <Wifi className="h-4 w-4" />
+          </div>
+          <div className="flex-1">
+            <CardTitle className="text-base">Connection</CardTitle>
+            <CardDescription>Backend server URL</CardDescription>
+          </div>
+          <Badge variant={isOnline ? "secondary" : "destructive"} className="capitalize">
+            {isOnline ? "Connected" : "Disconnected"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Input
+            value={url}
+            onChange={(e) => { setUrl(e.target.value); setResult(null); }}
+            placeholder="http://localhost:25555"
+            className="h-9 font-mono text-sm"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !saving) saveAndReconnect();
+            }}
+          />
+          <Button
+            onClick={saveAndReconnect}
+            disabled={saving || !url.trim()}
+            size="sm"
+          >
+            <Save className="mr-1.5 h-3.5 w-3.5" />
+            {saving ? "Testing..." : "Save & Reconnect"}
+          </Button>
+        </div>
+        {result && (
+          <p className={cn("text-sm", result.kind === "success" ? "text-green-600" : "text-destructive")}>
+            {result.message}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
@@ -477,6 +552,9 @@ export default function Settings() {
         {/* ── General ── */}
         {activeCategory === "general" && (
           <>
+            {/* Connection */}
+            <ConnectionCard />
+
             {/* Appearance */}
             <Card className="app-surface border-border/60">
               <CardHeader>

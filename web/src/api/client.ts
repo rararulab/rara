@@ -14,6 +14,43 @@
  * limitations under the License.
  */
 
+const STORAGE_KEY = "rara_backend_url";
+const DEFAULT_BACKEND_URL = "http://localhost:25555";
+
+/** Read the backend URL from localStorage, env, or fallback to default. */
+export function getBackendUrl(): string {
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) return stored;
+  }
+  return import.meta.env.VITE_API_URL || DEFAULT_BACKEND_URL;
+}
+
+/** Persist backend URL and reload the page so all clients pick it up. */
+export function setBackendUrl(url: string) {
+  localStorage.setItem(STORAGE_KEY, url);
+  window.location.reload();
+}
+
+/** True when the user has explicitly set a custom backend URL. */
+function hasCustomBackendUrl(): boolean {
+  return typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY) !== null;
+}
+
+/**
+ * Resolve the fetch URL for a given API path.
+ *
+ * When no custom URL is stored we use relative paths so the Vite dev proxy
+ * can forward `/api/...` requests.  When a custom URL is set we bypass the
+ * proxy and hit the backend directly.
+ */
+export function resolveUrl(path: string): string {
+  if (hasCustomBackendUrl()) {
+    return `${getBackendUrl()}${path}`;
+  }
+  return path;
+}
+
 export const BASE_URL = '';
 
 /** Build common request headers. */
@@ -47,7 +84,7 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
   };
 
   try {
-    const res = await fetch(`${BASE_URL}${path}`, {
+    const res = await fetch(resolveUrl(path), {
       ...fetchOptions,
       headers,
       signal: controller.signal,
@@ -75,7 +112,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(`${BASE_URL}${path}`, {
+    const res = await fetch(resolveUrl(path), {
       ...fetchOptions,
       signal: controller.signal,
     });
