@@ -209,6 +209,8 @@ pub struct Kernel {
     trace_service:         crate::trace::TraceService,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: crate::handle::SkillPromptProvider,
+    /// Lifecycle hook registry for turn/fold/delegation events.
+    lifecycle_hooks:       crate::lifecycle::LifecycleHookRegistry,
 }
 
 impl Kernel {
@@ -309,7 +311,16 @@ impl Kernel {
             hook_runner,
             trace_service,
             skill_prompt_provider,
+            lifecycle_hooks: crate::lifecycle::LifecycleHookRegistry::new(),
         }
+    }
+
+    /// Set the lifecycle hook registry.
+    ///
+    /// Must be called before `start()`. The registry is shared with all
+    /// agent sessions via the kernel handle.
+    pub fn set_lifecycle_hooks(&mut self, hooks: crate::lifecycle::LifecycleHookRegistry) {
+        self.lifecycle_hooks = hooks;
     }
 
     /// List detailed runtime statistics for all processes.
@@ -998,6 +1009,17 @@ impl Kernel {
             output_len = result.output.len(),
             "child result received"
         );
+
+        // Fire delegation_done lifecycle hooks.
+        self.lifecycle_hooks
+            .fire_delegation_done(&crate::lifecycle::DelegationResult {
+                parent_session: parent_id,
+                child_session:  child_id,
+                task:           String::new(), // task text not available here
+                success:        result.success,
+                output:         result.output.clone(),
+            })
+            .await;
 
         use crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES;
         let output = &result.output;
@@ -2208,6 +2230,13 @@ impl Kernel {
         let guard_pipeline = self.guard_pipeline.clone();
         let hook_runner = self.hook_runner.clone();
         let notification_bus = self.syscall.event_bus().clone();
+        let lifecycle_hooks = self.lifecycle_hooks.clone();
+        let model_name = self
+            .process_table
+            .with(&session_key, |p| {
+                p.manifest.model.clone().unwrap_or_default()
+            })
+            .unwrap_or_default();
 
         let milestone_tx = self
             .process_table
@@ -2359,6 +2388,15 @@ impl Kernel {
                 // Use the inbound message ID as the turn's rara_message_id
                 // for end-to-end correlation.
                 let rara_message_id = msg_id.clone();
+
+                // Fire pre_turn lifecycle hooks.
+                lifecycle_hooks
+                    .fire_pre_turn(&crate::lifecycle::TurnContext {
+                        session_key: rt_session_key,
+                        user_text:   effective_user_text.clone(),
+                        model:       model_name.clone(),
+                    })
+                    .await;
 
                 let turn_result = if use_plan_executor {
                     run_plan_loop(
@@ -2554,6 +2592,42 @@ impl Kernel {
             .process_table
             .with(&session_key, |p| p.manifest.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
+
+        // Fire post_turn lifecycle hooks.
+        {
+            let model = self
+                .process_table
+                .with(&session_key, |p| {
+                    p.manifest.model.clone().unwrap_or_default()
+                })
+                .unwrap_or_default();
+            let turn_ctx = crate::lifecycle::TurnContext {
+                session_key,
+                user_text: String::new(), // not available here
+                model,
+            };
+            let turn_result = match &result {
+                Ok(turn) => crate::lifecycle::TurnResult {
+                    success:     turn.trace.success,
+                    iterations:  turn.iterations,
+                    tool_calls:  turn.tool_calls,
+                    output:      turn.text.clone(),
+                    error:       turn.trace.error.clone(),
+                    duration_ms: turn.trace.duration_ms,
+                },
+                Err(err) => crate::lifecycle::TurnResult {
+                    success:     false,
+                    iterations:  0,
+                    tool_calls:  0,
+                    output:      String::new(),
+                    error:       Some(err.clone()),
+                    duration_ms: 0,
+                },
+            };
+            self.lifecycle_hooks
+                .fire_post_turn(&turn_ctx, &turn_result)
+                .await;
+        }
 
         match result {
             Ok(turn) if !turn.text.is_empty() => {
