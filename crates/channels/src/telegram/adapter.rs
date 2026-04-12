@@ -422,11 +422,7 @@ fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
     } else if phase.activity == rara_kernel::io::stages::THINKING {
         loading_hint.to_string()
     } else {
-        // Append a randomly-sampled spinner verb on each render so the
-        // message visibly changes during long tool runs — the static
-        // "正在{activity}…" looked frozen for 2+ minutes.
-        let verb = super::spinner_verbs::random_verb();
-        format!("正在{}… ({verb}){suffix}", phase.activity)
+        format!("正在{}…{suffix}", phase.activity)
     }
 }
 
@@ -464,8 +460,12 @@ fn render_progress(
         if !progress.thinking {
             return String::new();
         }
+        let verb = super::spinner_verbs::random_verb().to_lowercase();
         let mut lines = vec![thinking_hint(progress)];
-        lines.push(format!("✳️ {}", format_duration_compact(turn_elapsed)));
+        lines.push(format!(
+            "✳️ {verb}... {}",
+            format_duration_compact(turn_elapsed)
+        ));
         return lines.join("\n");
     }
 
@@ -522,8 +522,11 @@ fn render_progress(
         lines.push(thinking_hint(progress));
     }
 
-    // Footer: elapsed + tokens + thinking
+    // Footer: spinner verb + elapsed + tokens + thinking.
+    // The verb was previously on the phase line as "(Verb)" — moved here
+    // so the phase line stays clean for the command summary.
     {
+        let verb = super::spinner_verbs::random_verb().to_lowercase();
         let mut parts = vec![format_duration_compact(turn_elapsed)];
 
         if progress.input_tokens > 0 || progress.output_tokens > 0 {
@@ -539,7 +542,7 @@ fn render_progress(
             }
         }
 
-        lines.push(format!("✳️ {}", parts.join(" · ")));
+        lines.push(format!("✳️ {verb}... {}", parts.join(" · ")));
     }
 
     lines.join("\n")
