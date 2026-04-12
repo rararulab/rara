@@ -80,7 +80,7 @@ use crate::{
 #[derive(Debug, Clone, smart_default::SmartDefault, serde::Serialize, serde::Deserialize)]
 pub struct ContextFoldingConfig {
     /// Whether automatic context folding is enabled.
-    #[default = true]
+    #[default = false]
     pub enabled:                   bool,
     /// Context pressure ratio at which auto-fold triggers (below the 0.70
     /// warning threshold).
