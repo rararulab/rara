@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
@@ -51,21 +52,39 @@ struct ModelMeta {
 ///
 /// Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 /// like `reasoning_content` that `async-openai` doesn't expose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiFormat {
+    ChatCompletions,
+    Responses,
+}
+
+impl ApiFormat {
+    fn request_path(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "/chat/completions",
+            Self::Responses => "/v1/responses",
+        }
+    }
+}
+
 pub struct OpenAiDriver {
     /// Client for non-streaming requests (with total timeout).
-    client:           reqwest::Client,
+    client:                reqwest::Client,
     /// Client for streaming requests (no total timeout — SSE idle timeout
     /// handles stall detection instead).
-    stream_client:    reqwest::Client,
-    config_source:    OpenAiDriverConfigSource,
+    stream_client:         reqwest::Client,
+    config_source:         OpenAiDriverConfigSource,
     /// Per-event idle timeout for SSE streaming. Defaults to
     /// [`Self::DEFAULT_SSE_IDLE_TIMEOUT`].
-    sse_idle_timeout: Duration,
+    sse_idle_timeout:      Duration,
     /// Lazily populated cache of model metadata from the provider's
     /// `/models` endpoint.  Initialised at most once via
     /// [`tokio::sync::OnceCell`] to avoid duplicate fetches under
     /// concurrent access.
-    models_cache:     tokio::sync::OnceCell<HashMap<String, ModelMeta>>,
+    models_cache:          tokio::sync::OnceCell<HashMap<String, ModelMeta>>,
+    api_format:            ApiFormat,
+    request_path_override: Option<String>,
+    base_url_override:     Option<String>,
 }
 
 enum OpenAiDriverConfigSource {
@@ -201,6 +220,9 @@ impl OpenAiDriver {
             },
             sse_idle_timeout,
             models_cache: tokio::sync::OnceCell::new(),
+            api_format: ApiFormat::ChatCompletions,
+            request_path_override: None,
+            base_url_override: None,
         }
     }
 
@@ -227,6 +249,9 @@ impl OpenAiDriver {
             },
             sse_idle_timeout,
             models_cache: tokio::sync::OnceCell::new(),
+            api_format: ApiFormat::ChatCompletions,
+            request_path_override: None,
+            base_url_override: None,
         }
     }
 
@@ -251,7 +276,33 @@ impl OpenAiDriver {
             config_source: OpenAiDriverConfigSource::Dynamic { resolver },
             sse_idle_timeout,
             models_cache: tokio::sync::OnceCell::new(),
+            api_format: ApiFormat::ChatCompletions,
+            request_path_override: None,
+            base_url_override: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_api_format(mut self, api_format: ApiFormat) -> Self {
+        self.api_format = api_format;
+        self
+    }
+
+    #[must_use]
+    pub fn with_request_path_override(mut self, request_path: impl Into<String>) -> Self {
+        self.request_path_override = Some(request_path.into());
+        self
+    }
+
+    /// Override the base URL resolved from credentials.
+    ///
+    /// Useful when the credential resolver returns a generic URL (e.g.
+    /// `api.openai.com`) but the driver must target a different endpoint
+    /// (e.g. `chatgpt.com/backend-api`).
+    #[must_use]
+    pub fn with_base_url_override(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url_override = Some(base_url.into());
+        self
     }
 
     async fn resolve_config(&self) -> Result<ResolvedConfig> {
@@ -361,13 +412,23 @@ impl OpenAiDriver {
         stream: bool,
     ) -> Result<reqwest::Response> {
         let config = self.resolve_config().await?;
-        let body = ChatRequest::from_completion(request, stream);
+        let base_url = self
+            .base_url_override
+            .as_deref()
+            .unwrap_or(&config.base_url);
+        let body = build_request_body(request, stream, self.api_format)?;
+        let path = self
+            .request_path_override
+            .as_deref()
+            .unwrap_or_else(|| self.api_format.request_path());
 
         tracing::debug!(
             model = request.model.as_str(),
             messages = request.messages.len(),
             tools = request.tools.len(),
             stream,
+            api_format = ?self.api_format,
+            path,
             "sending LLM request"
         );
 
@@ -382,7 +443,7 @@ impl OpenAiDriver {
 
         loop {
             let mut req = http
-                .post(format!("{}/chat/completions", config.base_url))
+                .post(format!("{}{}", base_url, path))
                 .bearer_auth(&config.api_key);
             for (name, value) in &config.extra_headers {
                 req = req.header(name, value);
@@ -532,6 +593,701 @@ impl OpenAiDriver {
 }
 
 // ---------------------------------------------------------------------------
+// Request body construction — dispatches by ApiFormat
+// ---------------------------------------------------------------------------
+
+/// Build the JSON request body for the given API format.
+fn build_request_body(
+    request: &CompletionRequest,
+    stream: bool,
+    format: ApiFormat,
+) -> Result<Value> {
+    match format {
+        ApiFormat::ChatCompletions => {
+            let chat = ChatRequest::from_completion(request, stream);
+            serde_json::to_value(chat).map_err(|e| KernelError::Provider {
+                message: format!("failed to serialize chat request: {e}").into(),
+            })
+        }
+        ApiFormat::Responses => {
+            let mut body = build_responses_request(request, format);
+            body["stream"] = json!(stream);
+            Ok(body)
+        }
+    }
+}
+
+/// Build a Responses API request body from our internal `CompletionRequest`.
+///
+/// The Responses API uses `input[]` items with explicit type tags instead of
+/// the Chat Completions `messages[]` format.
+pub(crate) fn build_responses_request(request: &CompletionRequest, _format: ApiFormat) -> Value {
+    let mut input = Vec::new();
+    let mut instructions_parts: Vec<String> = Vec::new();
+
+    for msg in &request.messages {
+        match msg.role {
+            Role::System | Role::Developer => {
+                let text = msg.content.as_text();
+                if !text.is_empty() {
+                    instructions_parts.push(text.to_string());
+                }
+            }
+            Role::User => {
+                input.push(json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": msg.content.as_text(),
+                    }],
+                }));
+            }
+            Role::Assistant => {
+                if msg.tool_calls.is_empty() {
+                    input.push(json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": msg.content.as_text(),
+                        }],
+                    }));
+                } else {
+                    let text = msg.content.as_text();
+                    if !text.is_empty() {
+                        input.push(json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{
+                                "type": "output_text",
+                                "text": text,
+                            }],
+                        }));
+                    }
+                    for tc in &msg.tool_calls {
+                        input.push(json!({
+                            "type": "function_call",
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            "call_id": tc.id,
+                        }));
+                    }
+                }
+            }
+            Role::Tool => {
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": msg.tool_call_id.as_deref().unwrap_or(""),
+                    "output": msg.content.as_text(),
+                }));
+            }
+        }
+    }
+
+    let tools: Vec<Value> = request
+        .tools
+        .iter()
+        .map(|t| {
+            json!({
+                "type": "function",
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            })
+        })
+        .collect();
+
+    let instructions = instructions_parts.join("\n\n");
+
+    let mut body = json!({
+        "model": request.model,
+        "instructions": instructions,
+        "input": input,
+        "store": false,
+    });
+
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+
+    // Reasoning config — map thinking budget to effort level.
+    let reasoning_effort = request
+        .thinking
+        .as_ref()
+        .and_then(|t| {
+            t.budget_tokens.map(|b| {
+                if b >= 10_000 {
+                    "high"
+                } else if b >= 3_000 {
+                    "medium"
+                } else {
+                    "low"
+                }
+            })
+        })
+        .unwrap_or("medium");
+
+    body["reasoning"] = json!({
+        "effort": reasoning_effort,
+        "summary": "auto",
+    });
+
+    body
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming response parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a Chat Completions API response into our internal type.
+fn parse_chat_completion_response(
+    raw: RawCompletionResponse,
+    request: &CompletionRequest,
+) -> CompletionResponse {
+    let choice = raw.choices.into_iter().next();
+    let (stop_reason, tool_calls, content, reasoning_content) = match choice {
+        Some(choice) => {
+            let stop_reason = parse_stop_reason(choice.finish_reason.as_deref());
+            let tool_calls = choice
+                .message
+                .tool_calls
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tc| ToolCallRequest {
+                    id:        tc.id,
+                    name:      tc.function.name,
+                    arguments: tc.function.arguments,
+                })
+                .collect();
+
+            let (embedded_thinking, cleaned_content) = choice
+                .message
+                .content
+                .as_deref()
+                .map(super::think_tag::strip_think_tags)
+                .map(|(thinking, content)| (thinking, non_empty(content)))
+                .unwrap_or((None, None));
+
+            let reasoning = choice.message.reasoning_content.or(embedded_thinking);
+            (stop_reason, tool_calls, cleaned_content, reasoning)
+        }
+        None => (StopReason::Stop, vec![], None, None),
+    };
+
+    let usage = raw.usage.map(|u| Usage {
+        prompt_tokens:     u.input.unwrap_or(0),
+        completion_tokens: u.output.unwrap_or(0),
+        total_tokens:      u.total.unwrap_or(0),
+    });
+
+    CompletionResponse {
+        content,
+        reasoning_content,
+        tool_calls,
+        stop_reason,
+        usage,
+        model: raw.model.unwrap_or_else(|| request.model.clone()),
+    }
+}
+
+/// Parse a Responses API non-streaming response.
+fn parse_responses_completion(
+    raw: Value,
+    request: &CompletionRequest,
+) -> Result<CompletionResponse> {
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    let mut tool_calls = Vec::new();
+    let mut has_function_call = false;
+
+    if let Some(output) = raw.get("output").and_then(|o| o.as_array()) {
+        for item in output {
+            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match item_type {
+                "message" => {
+                    if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                        for part in content {
+                            let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if part_type == "output_text" || part_type == "text" {
+                                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                    text.push_str(t);
+                                }
+                            }
+                        }
+                    }
+                }
+                "reasoning" => {
+                    if let Some(summary) = item.get("summary").and_then(|s| s.as_array()) {
+                        for part in summary {
+                            if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                reasoning.push_str(t);
+                            }
+                        }
+                    }
+                }
+                "function_call" => {
+                    has_function_call = true;
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let arguments = item
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    tool_calls.push(ToolCallRequest {
+                        id: call_id,
+                        name,
+                        arguments,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let usage = raw.get("usage").map(|u| {
+        let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        Usage {
+            prompt_tokens:     input,
+            completion_tokens: output,
+            total_tokens:      input + output,
+        }
+    });
+
+    let stop_reason = if has_function_call {
+        StopReason::ToolCalls
+    } else {
+        let status = raw
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
+        match status {
+            "incomplete" => {
+                let reason = raw
+                    .get("incomplete_details")
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|r| r.as_str());
+                match reason {
+                    Some("max_output_tokens") => StopReason::Length,
+                    Some("content_filter") => StopReason::ContentFilter,
+                    _ => StopReason::Stop,
+                }
+            }
+            _ => StopReason::Stop,
+        }
+    };
+
+    Ok(CompletionResponse {
+        content: non_empty(text),
+        reasoning_content: non_empty(reasoning),
+        tool_calls,
+        stop_reason,
+        usage,
+        model: raw
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| request.model.clone()),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Streaming — Chat Completions format
+// ---------------------------------------------------------------------------
+
+/// Stream a Chat Completions API response using `StreamAccumulator`.
+async fn stream_chat_completions(
+    response: reqwest::Response,
+    tx: mpsc::Sender<StreamDelta>,
+    model: String,
+    sse_idle_timeout: Duration,
+) -> Result<CompletionResponse> {
+    let mut event_stream = response.bytes_stream().eventsource();
+    let mut acc = StreamAccumulator::new();
+
+    loop {
+        if tx.is_closed() {
+            tracing::debug!("stream consumer disconnected, returning partial response");
+            break;
+        }
+
+        let maybe_event = tokio::time::timeout(sse_idle_timeout, event_stream.next()).await;
+
+        match maybe_event {
+            Ok(Some(event_result)) => {
+                let event = event_result.map_err(|e| KernelError::Provider {
+                    message: format!("SSE stream error: {}", crate::error::format_error_chain(&e))
+                        .into(),
+                })?;
+                if event.data == "[DONE]" {
+                    break;
+                }
+                let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
+                    let truncated = truncate_utf8(&event.data, 200);
+                    tracing::debug!(data = truncated, "skipping unparseable SSE chunk");
+                    continue;
+                };
+                acc.process_chunk(&chunk, &tx).await;
+            }
+            Ok(None) => break,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    timeout_secs = sse_idle_timeout.as_secs(),
+                    "SSE stream idle timeout — no event received, aborting stream"
+                );
+                return Err(KernelError::RetryableServer {
+                    message: "SSE stream idle timeout".into(),
+                });
+            }
+        }
+    }
+
+    Ok(acc.finalize(&tx, model).await)
+}
+
+// ---------------------------------------------------------------------------
+// Streaming — Responses API format
+// ---------------------------------------------------------------------------
+
+/// Tracks tool calls by `output_index` for the Responses API stream.
+struct ResponsesToolIndexTracker {
+    map:  HashMap<u64, u32>,
+    next: u32,
+}
+
+impl ResponsesToolIndexTracker {
+    fn new() -> Self {
+        Self {
+            map:  HashMap::new(),
+            next: 0,
+        }
+    }
+
+    fn index_for(&mut self, output_index: u64) -> u32 {
+        *self.map.entry(output_index).or_insert_with(|| {
+            let idx = self.next;
+            self.next += 1;
+            idx
+        })
+    }
+}
+
+/// Accumulated state while processing a Responses API SSE stream.
+pub(crate) struct ResponsesStreamState {
+    tool_tracker:                     ResponsesToolIndexTracker,
+    pub(crate) accumulated_text:      String,
+    pub(crate) accumulated_reasoning: String,
+    pub(crate) has_function_call:     bool,
+    pub(crate) final_stop:            StopReason,
+    pub(crate) final_usage:           Option<Usage>,
+}
+
+impl ResponsesStreamState {
+    pub(crate) fn new() -> Self {
+        Self {
+            tool_tracker:          ResponsesToolIndexTracker::new(),
+            accumulated_text:      String::new(),
+            accumulated_reasoning: String::new(),
+            has_function_call:     false,
+            final_stop:            StopReason::Stop,
+            final_usage:           None,
+        }
+    }
+}
+
+/// Parse a single Responses API SSE event and emit `StreamDelta`s.
+///
+/// Returns `Some(true)` when the stream should terminate,
+/// `Some(false)` on parse failure, `None` to continue.
+pub(crate) fn parse_responses_event(
+    event_type: &str,
+    data: &str,
+    tx: &mpsc::Sender<StreamDelta>,
+    state: &mut ResponsesStreamState,
+) -> Option<bool> {
+    let parsed: Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(_) => return Some(false),
+    };
+
+    match event_type {
+        "response.output_text.delta" => {
+            if let Some(delta) = parsed.get("delta").and_then(|d| d.as_str()) {
+                state.accumulated_text.push_str(delta);
+                let _ = tx.try_send(StreamDelta::TextDelta {
+                    text: delta.to_owned(),
+                });
+            }
+        }
+
+        "response.refusal.delta" => {
+            if let Some(delta) = parsed.get("delta").and_then(|d| d.as_str()) {
+                let _ = tx.try_send(StreamDelta::TextDelta {
+                    text: delta.to_owned(),
+                });
+            }
+        }
+
+        "response.reasoning_summary_text.delta" => {
+            if let Some(delta) = parsed.get("delta").and_then(|d| d.as_str()) {
+                state.accumulated_reasoning.push_str(delta);
+                let _ = tx.try_send(StreamDelta::ReasoningDelta {
+                    text: delta.to_owned(),
+                });
+            }
+        }
+
+        "response.reasoning_summary_part.added" => {
+            tracing::trace!("reasoning summary part added");
+        }
+
+        "response.output_item.added" => {
+            if let Some(item) = parsed.get("item") {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let output_index = parsed
+                    .get("output_index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                match item_type {
+                    "function_call" => {
+                        let name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        let index = state.tool_tracker.index_for(output_index);
+                        let _ = tx.try_send(StreamDelta::ToolCallStart {
+                            index,
+                            id: call_id,
+                            name,
+                        });
+                    }
+                    "reasoning" => {
+                        tracing::trace!(output_index, "reasoning item started");
+                    }
+                    "message" => {
+                        tracing::trace!(output_index, "message item started");
+                    }
+                    other => {
+                        tracing::debug!(item_type = other, "unhandled output_item.added type");
+                    }
+                }
+            }
+        }
+
+        "response.output_item.done" => {
+            if let Some(item) = parsed.get("item") {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if item_type == "function_call" {
+                    state.has_function_call = true;
+                }
+            }
+        }
+
+        "response.function_call_arguments.delta" => {
+            if let Some(delta) = parsed.get("delta").and_then(|d| d.as_str()) {
+                let output_index = parsed
+                    .get("output_index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let index = state.tool_tracker.index_for(output_index);
+                let _ = tx.try_send(StreamDelta::ToolCallArgumentsDelta {
+                    index,
+                    arguments: delta.to_owned(),
+                });
+            }
+        }
+
+        "response.output_text.annotation.added" => {
+            if let Some(annotation) = parsed.get("annotation") {
+                let ann_type = annotation
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if ann_type == "url_citation" {
+                    let url = annotation.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    let title = annotation
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(url);
+                    if !url.is_empty() {
+                        let citation = format!(" [{title}]({url})");
+                        let _ = tx.try_send(StreamDelta::TextDelta { text: citation });
+                    }
+                }
+            }
+        }
+
+        "response.created" => {
+            if let Some(response) = parsed.get("response") {
+                let id = response.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                let model = response
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                tracing::debug!(response_id = id, model, "Responses API response created");
+            }
+        }
+
+        "response.completed" | "response.incomplete" => {
+            let is_incomplete = event_type == "response.incomplete";
+
+            state.final_usage = parsed.get("response").and_then(|r| {
+                let u = r.get("usage")?;
+                let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                Some(Usage {
+                    prompt_tokens:     input,
+                    completion_tokens: output,
+                    total_tokens:      input + output,
+                })
+            });
+
+            if is_incomplete {
+                let reason = parsed
+                    .get("response")
+                    .and_then(|r| r.get("incomplete_details"))
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|r| r.as_str());
+
+                state.final_stop = match reason {
+                    Some("max_output_tokens") => StopReason::Length,
+                    Some("content_filter") => StopReason::ContentFilter,
+                    Some(other) => {
+                        tracing::warn!(
+                            reason = other,
+                            "Responses API response incomplete with unexpected reason"
+                        );
+                        if state.has_function_call {
+                            StopReason::ToolCalls
+                        } else {
+                            StopReason::Stop
+                        }
+                    }
+                    None => {
+                        if state.has_function_call {
+                            StopReason::ToolCalls
+                        } else {
+                            StopReason::Stop
+                        }
+                    }
+                };
+            } else {
+                state.final_stop = if state.has_function_call {
+                    StopReason::ToolCalls
+                } else {
+                    StopReason::Stop
+                };
+            }
+
+            return Some(true);
+        }
+
+        "error" => {
+            let code = parsed
+                .get("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let message = parsed
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            tracing::error!(code, message, "Responses API error event");
+        }
+
+        _ => {
+            tracing::debug!(event_type, "unhandled Responses API SSE event");
+        }
+    }
+
+    None
+}
+
+/// Stream a Responses API response.
+async fn stream_responses_api(
+    response: reqwest::Response,
+    tx: mpsc::Sender<StreamDelta>,
+    model: String,
+    sse_idle_timeout: Duration,
+) -> Result<CompletionResponse> {
+    let mut event_stream = response.bytes_stream().eventsource();
+    let mut state = ResponsesStreamState::new();
+
+    loop {
+        if tx.is_closed() {
+            tracing::debug!("stream consumer disconnected, returning partial response");
+            break;
+        }
+
+        let maybe_event = tokio::time::timeout(sse_idle_timeout, event_stream.next()).await;
+
+        match maybe_event {
+            Ok(Some(Ok(event))) => {
+                if event.data == "[DONE]" {
+                    break;
+                }
+                if let Some(terminal) =
+                    parse_responses_event(&event.event, &event.data, &tx, &mut state)
+                {
+                    if terminal {
+                        break;
+                    }
+                }
+            }
+            Ok(Some(Err(e))) => {
+                return Err(KernelError::Provider {
+                    message: format!("Responses API SSE error: {e}").into(),
+                });
+            }
+            Ok(None) => break,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    timeout_secs = sse_idle_timeout.as_secs(),
+                    "Responses API SSE idle timeout — aborting stream"
+                );
+                return Err(KernelError::RetryableServer {
+                    message: "SSE stream idle timeout".into(),
+                });
+            }
+        }
+    }
+
+    let _ = tx
+        .send(StreamDelta::Done {
+            stop_reason: state.final_stop,
+            usage:       state.final_usage,
+        })
+        .await;
+
+    let reasoning_content = non_empty(state.accumulated_reasoning);
+
+    Ok(CompletionResponse {
+        content: non_empty(state.accumulated_text),
+        reasoning_content,
+        tool_calls: vec![], // Populated by agent loop from StreamDelta events.
+        stop_reason: state.final_stop,
+        usage: state.final_usage,
+        model,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // LlmDriver implementation
 // ---------------------------------------------------------------------------
 
@@ -539,62 +1295,21 @@ impl OpenAiDriver {
 impl LlmDriver for OpenAiDriver {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let response = self.send_request(&request, false).await?;
-
-        let raw: RawCompletionResponse =
-            response.json().await.map_err(|e| KernelError::Provider {
-                message: format!("failed to parse LLM response: {e}").into(),
-            })?;
-
-        let choice = raw
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| KernelError::Provider {
-                message: "no choices in response".into(),
-            })?;
-
-        let stop_reason = parse_stop_reason(choice.finish_reason.as_deref());
-
-        let tool_calls = choice
-            .message
-            .tool_calls
-            .unwrap_or_default()
-            .into_iter()
-            .map(|tc| ToolCallRequest {
-                id:        tc.id,
-                name:      tc.function.name,
-                arguments: tc.function.arguments,
-            })
-            .collect();
-
-        let usage = raw.usage.map(|u| Usage {
-            prompt_tokens:     u.input.unwrap_or(0),
-            completion_tokens: u.output.unwrap_or(0),
-            total_tokens:      u.total.unwrap_or(0),
-        });
-
-        // Strip embedded <think> tags from content for providers that place
-        // reasoning there instead of `reasoning_content`.
-        let (embedded_thinking, cleaned_content) = choice
-            .message
-            .content
-            .as_deref()
-            .map(super::think_tag::strip_think_tags)
-            .map(|(thinking, content)| (thinking, non_empty(content)))
-            .unwrap_or((None, None));
-
-        // Prefer explicit reasoning_content when present, otherwise use
-        // extracted `<think>` content.
-        let reasoning_content = choice.message.reasoning_content.or(embedded_thinking);
-
-        Ok(CompletionResponse {
-            content: cleaned_content,
-            reasoning_content,
-            tool_calls,
-            stop_reason,
-            usage,
-            model: raw.model.unwrap_or_else(|| request.model.clone()),
-        })
+        match self.api_format {
+            ApiFormat::ChatCompletions => {
+                let raw: RawCompletionResponse =
+                    response.json().await.map_err(|e| KernelError::Provider {
+                        message: format!("failed to parse LLM response: {e}").into(),
+                    })?;
+                Ok(parse_chat_completion_response(raw, &request))
+            }
+            ApiFormat::Responses => {
+                let raw: Value = response.json().await.map_err(|e| KernelError::Provider {
+                    message: format!("failed to parse Responses API response: {e}").into(),
+                })?;
+                parse_responses_completion(raw, &request)
+            }
+        }
     }
 
     async fn stream(
@@ -603,53 +1318,16 @@ impl LlmDriver for OpenAiDriver {
         tx: mpsc::Sender<StreamDelta>,
     ) -> Result<CompletionResponse> {
         let response = self.send_request(&request, true).await?;
-
-        let mut event_stream = response.bytes_stream().eventsource();
-        let mut acc = StreamAccumulator::new();
-
-        loop {
-            // Break early if the receiver has been dropped (e.g. user cancelled)
-            if tx.is_closed() {
-                tracing::debug!("stream consumer disconnected, returning partial response");
-                break;
+        match self.api_format {
+            ApiFormat::ChatCompletions => {
+                stream_chat_completions(response, tx, request.model.clone(), self.sse_idle_timeout)
+                    .await
             }
-
-            let maybe_event =
-                tokio::time::timeout(self.sse_idle_timeout, event_stream.next()).await;
-
-            match maybe_event {
-                Ok(Some(event_result)) => {
-                    let event = event_result.map_err(|e| KernelError::Provider {
-                        message: format!(
-                            "SSE stream error: {}",
-                            crate::error::format_error_chain(&e)
-                        )
-                        .into(),
-                    })?;
-                    if event.data == "[DONE]" {
-                        break;
-                    }
-                    let Ok(chunk) = serde_json::from_str::<RawStreamChunk>(&event.data) else {
-                        let truncated = truncate_utf8(&event.data, 200);
-                        tracing::debug!(data = truncated, "skipping unparseable SSE chunk");
-                        continue;
-                    };
-                    acc.process_chunk(&chunk, &tx).await;
-                }
-                Ok(None) => break,
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        timeout_secs = self.sse_idle_timeout.as_secs(),
-                        "SSE stream idle timeout — no event received, aborting stream"
-                    );
-                    return Err(KernelError::RetryableServer {
-                        message: "SSE stream idle timeout".into(),
-                    });
-                }
+            ApiFormat::Responses => {
+                stream_responses_api(response, tx, request.model.clone(), self.sse_idle_timeout)
+                    .await
             }
         }
-
-        Ok(acc.finalize(&tx, request.model.clone()).await)
     }
 
     async fn model_context_length(&self, model: &str) -> Option<usize> {
@@ -1484,6 +2162,7 @@ struct RawEmbeddingData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::types::{Message, ThinkingConfig, ToolDefinition};
 
     #[test]
     fn raw_model_entry_parses_input_modalities() {
@@ -1510,5 +2189,304 @@ mod tests {
         });
         let entry: RawModelEntry = serde_json::from_value(json).unwrap();
         assert!(entry.architecture.is_none());
+    }
+
+    #[test]
+    fn build_responses_request_user_message_uses_input_text_format() {
+        let request = CompletionRequest {
+            model:               "codex-mini".into(),
+            messages:            vec![Message::user("hello world")],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+        };
+
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        let input = body["input"].as_array().expect("input should be array");
+        assert_eq!(input.len(), 1);
+
+        let msg = &input[0];
+        assert_eq!(msg["type"], "message");
+        assert_eq!(msg["role"], "user");
+
+        let content = msg["content"].as_array().expect("content should be array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "hello world");
+    }
+
+    #[test]
+    fn build_responses_request_assistant_message_uses_output_text_format() {
+        let request = CompletionRequest {
+            model:               "codex-mini".into(),
+            messages:            vec![Message::assistant("I can help")],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+        };
+
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        let input = body["input"].as_array().expect("input should be array");
+        let content = input[0]["content"]
+            .as_array()
+            .expect("content should be array");
+        assert_eq!(content[0]["type"], "output_text");
+        assert_eq!(content[0]["text"], "I can help");
+    }
+
+    #[test]
+    fn build_responses_request_includes_codex_reasoning_defaults() {
+        let request = CompletionRequest {
+            model:               "codex-mini".into(),
+            messages:            vec![],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+        };
+
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        assert_eq!(body["store"], false);
+        assert!(body.get("truncation").is_none());
+        assert_eq!(body["reasoning"]["effort"], "medium");
+        assert_eq!(body["reasoning"]["summary"], "auto");
+    }
+
+    #[test]
+    fn build_responses_request_omits_chat_only_fields_and_keeps_tools() {
+        let request = CompletionRequest {
+            model:               "codex-mini".into(),
+            messages:            vec![],
+            tools:               vec![ToolDefinition {
+                name:        "read_file".into(),
+                description: "Read a file".into(),
+                parameters:  serde_json::json!({"type": "object"}),
+            }],
+            temperature:         None,
+            max_tokens:          Some(4096),
+            thinking:            None,
+            tool_choice:         Default::default(),
+            parallel_tool_calls: true,
+            frequency_penalty:   None,
+            top_p:               None,
+        };
+
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        assert!(body.get("max_output_tokens").is_none());
+        assert!(body.get("parallel_tool_calls").is_none());
+        assert_eq!(body["tools"].as_array().expect("tools array").len(), 1);
+    }
+
+    #[test]
+    fn build_responses_request_high_thinking_budget_maps_to_high_effort() {
+        let request = CompletionRequest {
+            model:               "codex-mini".into(),
+            messages:            vec![],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            Some(ThinkingConfig {
+                enabled:       true,
+                budget_tokens: Some(20_000),
+            }),
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+        };
+
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn build_responses_request_formats_tool_call_and_tool_result() {
+        let request = CompletionRequest {
+            model:               "codex-mini".into(),
+            messages:            vec![
+                Message::assistant_with_tool_calls(
+                    "",
+                    vec![super::super::types::ToolCallRequest {
+                        id:        "call_123".into(),
+                        name:      "read_file".into(),
+                        arguments: r#"{"path":"foo.rs"}"#.into(),
+                    }],
+                ),
+                Message::tool_result("call_123", "file contents here"),
+            ],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+        };
+
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        let input = body["input"].as_array().expect("input should be array");
+
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["name"], "read_file");
+        assert_eq!(input[0]["call_id"], "call_123");
+
+        assert_eq!(input[1]["type"], "function_call_output");
+        assert_eq!(input[1]["call_id"], "call_123");
+        assert_eq!(input[1]["output"], "file contents here");
+    }
+
+    #[test]
+    fn parse_responses_text_delta_event() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let data = r#"{"delta":"hello ","item_id":"item_1","output_index":0}"#;
+        let result = parse_responses_event("response.output_text.delta", data, &tx, &mut state);
+        assert!(result.is_none());
+
+        let delta = rx.try_recv().expect("should receive delta");
+        match delta {
+            StreamDelta::TextDelta { text } => assert_eq!(text, "hello "),
+            other => panic!("unexpected delta: {other:?}"),
+        }
+        assert_eq!(state.accumulated_text, "hello ");
+    }
+
+    #[test]
+    fn parse_responses_reasoning_delta_event() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let data = r#"{"delta":"thinking...","summary_index":0}"#;
+        let result = parse_responses_event(
+            "response.reasoning_summary_text.delta",
+            data,
+            &tx,
+            &mut state,
+        );
+        assert!(result.is_none());
+
+        let delta = rx.try_recv().expect("should receive reasoning delta");
+        match delta {
+            StreamDelta::ReasoningDelta { text } => assert_eq!(text, "thinking..."),
+            other => panic!("unexpected delta: {other:?}"),
+        }
+        assert_eq!(state.accumulated_reasoning, "thinking...");
+    }
+
+    #[test]
+    fn parse_responses_tool_call_flow() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let added = r#"{"item":{"type":"function_call","id":"item_1","call_id":"call_abc","name":"read_file","arguments":""},"output_index":2}"#;
+        parse_responses_event("response.output_item.added", added, &tx, &mut state);
+
+        let start = rx.try_recv().expect("should receive ToolCallStart");
+        match start {
+            StreamDelta::ToolCallStart { index, id, name } => {
+                assert_eq!(index, 0);
+                assert_eq!(id, "call_abc");
+                assert_eq!(name, "read_file");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let args_delta = r#"{"delta":"{\"path\"","output_index":2}"#;
+        parse_responses_event(
+            "response.function_call_arguments.delta",
+            args_delta,
+            &tx,
+            &mut state,
+        );
+
+        let arg = rx.try_recv().expect("should receive args delta");
+        match arg {
+            StreamDelta::ToolCallArgumentsDelta { index, arguments } => {
+                assert_eq!(index, 0);
+                assert_eq!(arguments, r#"{"path""#);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let done = r#"{"item":{"type":"function_call","id":"item_1","call_id":"call_abc","name":"read_file","arguments":"{\"path\":\"foo.rs\"}"},"output_index":2}"#;
+        parse_responses_event("response.output_item.done", done, &tx, &mut state);
+        assert!(state.has_function_call);
+    }
+
+    #[test]
+    fn parse_responses_completed_event_with_usage() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let data = r#"{"response":{"status":"completed","usage":{"input_tokens":100,"output_tokens":50}}}"#;
+        let result = parse_responses_event("response.completed", data, &tx, &mut state);
+        assert_eq!(result, Some(true));
+        assert_eq!(state.final_stop, StopReason::Stop);
+
+        let usage = state.final_usage.expect("should have usage");
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(usage.total_tokens, 150);
+    }
+
+    #[test]
+    fn parse_responses_completed_with_function_call_yields_tool_calls_stop() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+        state.has_function_call = true;
+
+        let data =
+            r#"{"response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":5}}}"#;
+        let result = parse_responses_event("response.completed", data, &tx, &mut state);
+        assert_eq!(result, Some(true));
+        assert_eq!(state.final_stop, StopReason::ToolCalls);
+    }
+
+    #[test]
+    fn parse_responses_incomplete_max_output_tokens() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let data = r#"{"response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":50,"output_tokens":200}}}"#;
+        let result = parse_responses_event("response.incomplete", data, &tx, &mut state);
+        assert_eq!(result, Some(true));
+        assert_eq!(state.final_stop, StopReason::Length);
+    }
+
+    #[test]
+    fn parse_responses_incomplete_content_filter() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let data = r#"{"response":{"incomplete_details":{"reason":"content_filter"},"usage":{"input_tokens":50,"output_tokens":10}}}"#;
+        let result = parse_responses_event("response.incomplete", data, &tx, &mut state);
+        assert_eq!(result, Some(true));
+        assert_eq!(state.final_stop, StopReason::ContentFilter);
+    }
+
+    #[test]
+    fn parse_responses_unknown_event_type_does_not_crash() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut state = ResponsesStreamState::new();
+
+        let data = r#"{"some":"data"}"#;
+        let result = parse_responses_event("response.something.new", data, &tx, &mut state);
+        assert!(result.is_none());
     }
 }
