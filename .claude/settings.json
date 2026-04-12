@@ -1,4 +1,17 @@
 {
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/guard-main-branch.sh"
+          }
+        ]
+      }
+    ]
+  },
   "enabledPlugins": {
     "dev-skills@rara-skills": true
   },
