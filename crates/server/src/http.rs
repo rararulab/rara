@@ -35,6 +35,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::{Any, CorsLayer},
+    services::{ServeDir, ServeFile},
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
@@ -97,6 +98,10 @@ pub struct RestServerConfig {
     /// Request timeout in seconds
     #[default(DEFAULT_REQUEST_TIMEOUT_SECS)]
     pub request_timeout: u64,
+    /// Path to the web frontend dist directory. When set, the server
+    /// serves static files and falls back to `index.html` for SPA routing.
+    #[default(None)]
+    pub web_root:        Option<String>,
 }
 
 /// Starts the REST server and returns a handle for managing its lifecycle.
@@ -186,13 +191,42 @@ where
         api_router = api_router.layer(cors);
     }
 
-    // Build the final router: merge API routes, add /health and fallback,
-    // then apply TraceLayer as the outermost layer so it observes every
-    // request — including merged domain routes and timeout responses.
-    let router = Router::new()
+    // Build the final router: merge API routes, add /health, then apply
+    // static-file serving (if configured) or the JSON 404 fallback.
+    // TraceLayer is the outermost layer so it observes every request —
+    // including merged domain routes, static files, and timeout responses.
+    let base_router = Router::new()
         .route("/health", get(health_check))
-        .merge(api_router)
-        .fallback(route_not_found)
+        .merge(api_router);
+
+    let router = if let Some(ref web_root) = config.web_root {
+        let path = std::path::Path::new(web_root);
+        if path.exists() && path.join("index.html").exists() {
+            info!(path = %path.display(), "serving web frontend (configured)");
+            let serve_dir =
+                ServeDir::new(path).not_found_service(ServeFile::new(path.join("index.html")));
+            base_router.fallback_service(serve_dir)
+        } else {
+            tracing::warn!(
+                path = %path.display(),
+                "web_root configured but path or index.html missing, skipping static files"
+            );
+            base_router.fallback(route_not_found)
+        }
+    } else {
+        // Auto-detect default path when web_root is not explicitly configured.
+        let default_path = std::path::Path::new("web/dist");
+        if default_path.exists() && default_path.join("index.html").exists() {
+            info!(path = %default_path.display(), "serving web frontend (auto-detected)");
+            let serve_dir = ServeDir::new(default_path)
+                .not_found_service(ServeFile::new(default_path.join("index.html")));
+            base_router.fallback_service(serve_dir)
+        } else {
+            base_router.fallback(route_not_found)
+        }
+    };
+
+    let router = router
         .layer(middleware::from_fn(observe_http_metrics))
         .layer(
             TraceLayer::new_for_http()
