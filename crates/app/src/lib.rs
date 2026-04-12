@@ -467,7 +467,7 @@ pub async fn start_with_options(
         })
     };
 
-    let kernel = rara_kernel::kernel::Kernel::new(
+    let mut kernel = rara_kernel::kernel::Kernel::new(
         kernel_config,
         rara.driver_registry.clone(),
         rara.tool_registry.clone(),
@@ -501,6 +501,14 @@ pub async fn start_with_options(
             config_file_sync.start(cancel).await;
         });
     }
+
+    // Register lifecycle hooks for the closed learning loop.
+    kernel.set_lifecycle_hooks(rara_kernel::lifecycle::LifecycleHookRegistry::with_hooks(
+        vec![
+            std::sync::Arc::new(rara_kernel::lifecycle::SkillNudgeHook),
+            std::sync::Arc::new(rara_kernel::lifecycle::MemoryNudgeHook::new(10)),
+        ],
+    ));
 
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
