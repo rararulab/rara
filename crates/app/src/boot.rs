@@ -182,6 +182,33 @@ pub(crate) async fn boot(
     let user_question_manager: rara_kernel::user_question::UserQuestionManagerRef =
         std::sync::Arc::new(rara_kernel::user_question::UserQuestionManager::new());
 
+    // -- fff file picker (background scan + frecency) -----------------------
+
+    let fff_picker = fff_search::SharedPicker::default();
+    let fff_frecency = fff_search::SharedFrecency::default();
+    let fff_query_tracker = fff_search::SharedQueryTracker::default();
+
+    let fff_db_path = rara_paths::data_dir().join("fff");
+    if let Ok(frecency) = fff_search::FrecencyTracker::new(fff_db_path.join("frecency"), false) {
+        let _ = fff_frecency.init(frecency);
+    }
+    if let Ok(qt) = fff_search::QueryTracker::new(fff_db_path.join("queries"), false) {
+        let _ = fff_query_tracker.init(qt);
+    }
+
+    // Spawn the background filesystem scanner and watcher.
+    let _ = fff_search::file_picker::FilePicker::new_with_shared_state(
+        fff_picker.clone(),
+        fff_frecency,
+        fff_search::FilePickerOptions {
+            base_path: rara_paths::workspace_dir().to_string_lossy().into_owned(),
+            mode: fff_search::FFFMode::Ai,
+            ..Default::default()
+        },
+    );
+
+    // -- tools -------------------------------------------------------------
+
     let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
     let tool_result = crate::tools::register_all(
         &mut tool_registry,
@@ -197,6 +224,8 @@ pub(crate) async fn boot(
             dock_mutation_sink: dock_mutation_sink.clone(),
             acp_registry,
             user_question_manager: user_question_manager.clone(),
+            fff_picker,
+            fff_query_tracker,
         },
     );
 

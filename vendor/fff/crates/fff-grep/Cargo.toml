@@ -1,0 +1,20 @@
+[package]
+name = "fff-grep"
+description = "File grepping logic for fff"
+license = "MIT"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlok.com>"]
+version = "0.5.2"
+edition = "2024"
+
+[dependencies]
+bstr = { version = "1.6.2", default-features = false, features = ["std"] }
+memchr = "2.6.3"
+
+# Relax lints for vendored code — upstream style is not under our control.
+[lints.clippy]
+all = "allow"
+pedantic = "allow"
+nursery = "allow"
+
+[lints.rust]
+dead_code = "allow"
