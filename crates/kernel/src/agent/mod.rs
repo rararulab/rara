@@ -1046,6 +1046,13 @@ pub(crate) async fn run_agent_loop(
         loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
     let mut loop_breaker_warning: Option<String> = None;
 
+    // ── Self-continuation signal state ──────────────────────────────
+    // Tracks whether the most recent tool wave included a continue-work
+    // call, and how many continuations have been consumed this turn.
+    let max_continuations: usize = 10;
+    let mut continuation_count: usize = 0;
+    let mut continuation_pending = false;
+
     // ── Session length reminder state ─────────────────────────────────
     // Count user turns since the last anchor to detect long sessions that
     // may benefit from a handoff.  Queried once from the tape at turn
@@ -1743,6 +1750,69 @@ pub(crate) async fn run_agent_loop(
         // but subsequent iterations (after tool restoration) can resume
         // normal tool-calling flow.
         if !has_tool_calls {
+            // ── Text-token fallback: detect CONTINUE_WORK at response tail ──
+            if !continuation_pending && continuation_count < max_continuations {
+                let trimmed = accumulated_text.trim();
+                if trimmed.ends_with("CONTINUE_WORK") {
+                    // Strip the token from displayed text
+                    let end = accumulated_text
+                        .rfind("CONTINUE_WORK")
+                        .expect("CONTINUE_WORK confirmed present by ends_with check");
+                    accumulated_text.truncate(end);
+                    accumulated_text = accumulated_text.trim_end().to_string();
+                    continuation_pending = true;
+                    info!(
+                        iteration,
+                        "CONTINUE_WORK text token detected at response tail"
+                    );
+                }
+            }
+
+            // ── Self-continuation: intercept premature stop ─────────────
+            if continuation_pending && continuation_count < max_continuations {
+                continuation_pending = false;
+                continuation_count += 1;
+                info!(
+                    iteration,
+                    continuation_count,
+                    max_continuations,
+                    "continuation signal: injecting wake message instead of stopping"
+                );
+
+                // Persist intermediate text to tape (not as final).
+                let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
+                    rara_message_id: rara_message_id.to_string(),
+                    usage: last_usage,
+                    model: model.clone(),
+                    iteration,
+                    stream_ms,
+                    first_token_ms,
+                    reasoning_content: if accumulated_reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(accumulated_reasoning.clone())
+                    },
+                })
+                .ok();
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": &accumulated_text,
+                        }),
+                        meta,
+                    )
+                    .await;
+
+                // Inject wake message
+                messages.push(llm::Message::user(format!(
+                    "[continuation:wake] Turn {}/{}. You elected to continue working. Resume your \
+                     task.",
+                    continuation_count, max_continuations
+                )));
+                continue;
+            }
             // Persist final assistant message to tape.
             let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
                 rara_message_id: rara_message_id.to_string(),
@@ -2481,6 +2551,17 @@ pub(crate) async fn run_agent_loop(
                     force_fold_next_iteration = true;
                     info!(tool = %name, "setting force_fold_next_iteration via ToolHint");
                 }
+            }
+
+            // Check for ContinueWork hint from continue-work tool.
+            if results.iter().any(|(_success, output, _err, _dur)| {
+                output
+                    .hints
+                    .iter()
+                    .any(|h| matches!(h, crate::tool::ToolHint::ContinueWork { .. }))
+            }) {
+                continuation_pending = true;
+                info!(iteration, "continue-work signal detected in tool wave");
             }
 
             // Reset session-length counter when the agent creates an anchor.
