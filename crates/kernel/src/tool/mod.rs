@@ -82,6 +82,7 @@ pub(crate) fn recursive_tool_denylist() -> Vec<ToolName> {
         crate::tool_names::SPAWN_BACKGROUND.clone(),
         crate::tool_names::CREATE_PLAN.clone(),
         crate::tool_names::ASK_USER.clone(),
+        crate::tool_names::CONTINUE_WORK.clone(),
     ]
 }
 

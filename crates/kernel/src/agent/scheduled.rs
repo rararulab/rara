@@ -76,5 +76,6 @@ pub fn scheduled_job_manifest(
         default_execution_mode: None,
         tool_call_limit: None,
         worker_timeout_secs: None,
+        max_continuations: Some(0),
     }
 }

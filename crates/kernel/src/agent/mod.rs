@@ -279,6 +279,12 @@ pub struct AgentManifest {
     /// **Default: `None` (uses 300s fallback).**
     #[serde(default)]
     pub worker_timeout_secs:    Option<u64>,
+    /// Maximum self-elected continuations per turn.
+    ///
+    /// When set to `Some(0)`, continuation is disabled entirely.
+    /// **Default: `None` (uses [`machine::DEFAULT_MAX_CONTINUATIONS`]).**
+    #[serde(default)]
+    pub max_continuations:      Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.
@@ -1049,7 +1055,9 @@ pub(crate) async fn run_agent_loop(
     // ── Self-continuation signal state ──────────────────────────────
     // Tracks whether the most recent tool wave included a continue-work
     // call, and how many continuations have been consumed this turn.
-    let max_continuations: usize = 10;
+    let max_continuations = manifest
+        .max_continuations
+        .unwrap_or(crate::agent::machine::DEFAULT_MAX_CONTINUATIONS);
     let mut continuation_count: usize = 0;
     let mut continuation_pending = false;
 
