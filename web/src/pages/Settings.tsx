@@ -416,9 +416,9 @@ export default function Settings() {
   ];
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[16rem_minmax(0,1fr)]">
+    <div className="flex h-full gap-4 overflow-hidden">
       {/* Sidebar */}
-      <aside className="data-panel h-fit xl:sticky xl:top-4">
+      <aside className="data-panel w-64 shrink-0 overflow-y-auto">
         <div className="border-b border-border/70 px-4 py-4">
           <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -463,7 +463,7 @@ export default function Settings() {
       </aside>
 
       {/* Content */}
-      <div className="space-y-6">
+      <div className="flex-1 space-y-6 overflow-y-auto pr-1">
         {/* Toast */}
         {toast && (
           <div className={cn(
