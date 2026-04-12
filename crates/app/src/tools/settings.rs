@@ -27,14 +27,42 @@ use serde_json::{Value, json};
 
 const SENSITIVE_FRAGMENTS: &[&str] = &["api_key", "token", "password", "secret"];
 
+/// Number of version entries returned by the history action.
+const TOOL_HISTORY_LIMIT: i64 = 20;
+
+/// Number of leading characters shown before masking a sensitive value.
+const MASK_VISIBLE_LEN: usize = 6;
+
+/// Available actions for the settings tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SettingsAction {
+    /// List all settings.
+    List,
+    /// Get a single setting by key.
+    Get,
+    /// Set a single setting by key.
+    Set,
+    /// Show the current settings version number.
+    Version,
+    /// Show recent version history.
+    History,
+    /// Show a point-in-time snapshot at a given version.
+    Snapshot,
+    /// Rollback settings to a given version.
+    Rollback,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SettingsParams {
-    /// The action to perform: list, get, or set.
-    action: String,
-    /// The setting key (required for get and set).
-    key:    Option<String>,
+    /// The action to perform.
+    action:  SettingsAction,
+    /// The setting key (required for get/set).
+    key:     Option<String>,
     /// The value to set (required for set).
-    value:  Option<String>,
+    value:   Option<String>,
+    /// The version number (required for snapshot/rollback).
+    version: Option<i64>,
 }
 
 /// Agent tool that reads and modifies runtime settings.
@@ -61,8 +89,8 @@ impl ToolExecute for SettingsTool {
     type Params = SettingsParams;
 
     async fn run(&self, params: SettingsParams, _context: &ToolContext) -> anyhow::Result<Value> {
-        match params.action.as_str() {
-            "list" => {
+        match params.action {
+            SettingsAction::List => {
                 let all = self.settings.list().await;
                 let masked: serde_json::Map<String, Value> = all
                     .into_iter()
@@ -73,7 +101,7 @@ impl ToolExecute for SettingsTool {
                     .collect();
                 Ok(json!({"settings": masked}))
             }
-            "get" => {
+            SettingsAction::Get => {
                 let key = params
                     .key
                     .as_deref()
@@ -83,7 +111,7 @@ impl ToolExecute for SettingsTool {
                     None => Ok(json!({"key": key, "value": null})),
                 }
             }
-            "set" => {
+            SettingsAction::Set => {
                 let key = params
                     .key
                     .as_deref()
@@ -95,51 +123,28 @@ impl ToolExecute for SettingsTool {
                 self.settings.set(key, value).await?;
                 Ok(json!({"key": key, "updated": true}))
             }
-            "version" => {
-                let ver = self
-                    .settings
-                    .current_version()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            SettingsAction::Version => {
+                let ver = self.settings.current_version().await?;
                 Ok(json!({"version": ver}))
             }
-            "history" => {
-                let entries = self
-                    .settings
-                    .list_versions(20)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            SettingsAction::History => {
+                let entries = self.settings.list_versions(TOOL_HISTORY_LIMIT).await?;
                 Ok(json!({"versions": entries}))
             }
-            "snapshot" => {
-                let ver_str = params.key.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("missing required parameter: key (version number)")
-                })?;
-                let ver: i64 = ver_str.parse().map_err(|_| {
-                    anyhow::anyhow!("key must be a version number for snapshot action")
-                })?;
-                let snap = self
-                    .settings
-                    .snapshot(ver)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            SettingsAction::Snapshot => {
+                let ver = params
+                    .version
+                    .ok_or_else(|| anyhow::anyhow!("missing required parameter: version"))?;
+                let snap = self.settings.snapshot(ver).await?;
                 Ok(json!({"version": ver, "settings": snap}))
             }
-            "rollback" => {
-                let ver_str = params.key.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("missing required parameter: key (version number)")
-                })?;
-                let ver: i64 = ver_str.parse().map_err(|_| {
-                    anyhow::anyhow!("key must be a version number for rollback action")
-                })?;
-                let new_ver = self
-                    .settings
-                    .rollback_to(ver)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            SettingsAction::Rollback => {
+                let ver = params
+                    .version
+                    .ok_or_else(|| anyhow::anyhow!("missing required parameter: version"))?;
+                let new_ver = self.settings.rollback_to(ver).await?;
                 Ok(json!({"rolled_back_to": ver, "new_version": new_ver}))
             }
-            other => Ok(json!({"error": format!("unknown action: {other}")})),
         }
     }
 }
@@ -150,10 +155,10 @@ fn maybe_mask(key: &str, value: &str) -> String {
         .iter()
         .any(|frag| key_lower.contains(frag));
     if is_sensitive {
-        if value.len() < 6 {
+        if value.len() < MASK_VISIBLE_LEN {
             "****".to_owned()
         } else {
-            format!("{}****", &value[..6])
+            format!("{}****", &value[..MASK_VISIBLE_LEN])
         }
     } else {
         value.to_owned()

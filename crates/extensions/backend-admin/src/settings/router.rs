@@ -39,6 +39,31 @@ use utoipa_axum::router::OpenApiRouter;
 
 use crate::settings::{SettingsSvc, service::VersionEntry};
 
+/// Default number of version entries returned by the list endpoint.
+const DEFAULT_VERSION_LIMIT: i64 = 100;
+
+// -- typed response structs for version endpoints --
+
+/// Response for the current version endpoint.
+#[derive(serde::Serialize)]
+struct VersionResponse {
+    version: i64,
+}
+
+/// Response for the snapshot endpoint.
+#[derive(serde::Serialize)]
+struct SnapshotResponse {
+    version:  i64,
+    settings: HashMap<String, String>,
+}
+
+/// Response for the rollback endpoint.
+#[derive(serde::Serialize)]
+struct RollbackResponse {
+    rolled_back_to: i64,
+    new_version:    i64,
+}
+
 // -- state wrapper --
 
 type SharedProvider = Arc<dyn SettingsProvider>;
@@ -145,7 +170,7 @@ async fn batch_update_settings(
 async fn list_versions(
     State(svc): State<Arc<SettingsSvc>>,
 ) -> Result<Json<Vec<VersionEntry>>, StatusCode> {
-    svc.list_versions(100)
+    svc.list_versions(DEFAULT_VERSION_LIMIT)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -154,10 +179,10 @@ async fn list_versions(
 /// Return the current global version number.
 async fn get_current_version(
     State(svc): State<Arc<SettingsSvc>>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<VersionResponse>, StatusCode> {
     svc.current_version()
         .await
-        .map(|v| Json(serde_json::json!({"version": v})))
+        .map(|v| Json(VersionResponse { version: v }))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -165,10 +190,10 @@ async fn get_current_version(
 async fn snapshot_at_version(
     State(svc): State<Arc<SettingsSvc>>,
     Path(version): Path<i64>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<SnapshotResponse>, StatusCode> {
     svc.snapshot(version)
         .await
-        .map(|snap| Json(serde_json::json!({"version": version, "settings": snap})))
+        .map(|settings| Json(SnapshotResponse { version, settings }))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -176,9 +201,14 @@ async fn snapshot_at_version(
 async fn rollback_to_version(
     State(svc): State<Arc<SettingsSvc>>,
     Path(version): Path<i64>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<RollbackResponse>, StatusCode> {
     svc.rollback_to(version)
         .await
-        .map(|new_ver| Json(serde_json::json!({"rolled_back_to": version, "new_version": new_ver})))
+        .map(|new_version| {
+            Json(RollbackResponse {
+                rolled_back_to: version,
+                new_version,
+            })
+        })
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
