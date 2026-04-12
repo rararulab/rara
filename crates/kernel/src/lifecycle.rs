@@ -110,9 +110,11 @@ pub trait LifecycleHook: Send + Sync + 'static {
 
     /// Called after the agent loop completes a turn.
     ///
-    /// Use this for post-processing: persist memories, check whether to
-    /// suggest skill creation, update analytics.
-    async fn post_turn(&self, _ctx: &TurnContext, _result: &TurnResult) {}
+    /// Return an optional nudge message. The kernel persists it to the
+    /// session tape as a system message so the LLM sees it on the next
+    /// turn. Hooks never write to tape directly — all writes go through
+    /// the kernel event pipeline.
+    async fn post_turn(&self, _ctx: &TurnContext, _result: &TurnResult) -> Option<String> { None }
 
     /// Called before tape auto-fold compresses context.
     ///
@@ -163,18 +165,27 @@ impl LifecycleHookRegistry {
         }
     }
 
-    /// Fire `post_turn` on all registered hooks.
-    pub async fn fire_post_turn(&self, ctx: &TurnContext, result: &TurnResult) {
+    /// Fire `post_turn` on all registered hooks and collect nudge messages.
+    ///
+    /// The kernel writes returned nudges to the session tape so the LLM
+    /// sees them on the next turn.
+    pub async fn fire_post_turn(&self, ctx: &TurnContext, result: &TurnResult) -> Vec<String> {
+        let mut nudges = Vec::new();
         for hook in self.hooks.iter() {
-            if let Err(e) = tokio::time::timeout(
+            match tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 hook.post_turn(ctx, result),
             )
             .await
             {
-                tracing::warn!(hook = hook.name(), "post_turn hook timed out: {e}");
+                Ok(Some(msg)) => nudges.push(msg),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(hook = hook.name(), "post_turn hook timed out: {e}");
+                }
             }
         }
+        nudges
     }
 
     /// Fire `pre_fold` on all registered hooks.
@@ -225,6 +236,76 @@ impl std::fmt::Debug for LifecycleHookRegistry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Built-in hooks
+// ---------------------------------------------------------------------------
+
+/// Nudges the agent to create a skill after complex turns (5+ tool calls).
+pub struct SkillNudgeHook;
+
+#[async_trait]
+impl LifecycleHook for SkillNudgeHook {
+    fn name(&self) -> &str { "skill-nudge" }
+
+    async fn post_turn(&self, _ctx: &TurnContext, result: &TurnResult) -> Option<String> {
+        if !result.success || result.tool_calls < 5 {
+            return None;
+        }
+        Some(
+            "[System nudge] You just completed a complex task with multiple tool calls. If you \
+             discovered a non-trivial workflow, solved a tricky problem, or built something \
+             reusable, save the approach as a skill with `create-skill` so you can reuse it next \
+             time. Only create skills for genuinely reusable patterns — not for one-off tasks."
+                .to_owned(),
+        )
+    }
+}
+
+/// Periodically nudges the agent to persist durable facts to memory.
+///
+/// Uses a simple turn counter — fires every `interval` successful turns.
+pub struct MemoryNudgeHook {
+    interval: std::sync::atomic::AtomicUsize,
+    counter:  std::sync::atomic::AtomicUsize,
+}
+
+impl MemoryNudgeHook {
+    /// Create a nudge hook that fires every `every_n_turns` successful turns.
+    pub fn new(every_n_turns: usize) -> Self {
+        Self {
+            interval: std::sync::atomic::AtomicUsize::new(every_n_turns),
+            counter:  std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl LifecycleHook for MemoryNudgeHook {
+    fn name(&self) -> &str { "memory-nudge" }
+
+    async fn post_turn(&self, _ctx: &TurnContext, result: &TurnResult) -> Option<String> {
+        if !result.success {
+            return None;
+        }
+        let count = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let interval = self.interval.load(std::sync::atomic::Ordering::Relaxed);
+        if interval == 0 || count % interval != 0 {
+            return None;
+        }
+        Some(
+            "[System nudge] Periodic memory check: review what you learned in recent turns. Save \
+             durable facts using the memory tool — user preferences, environment details, tool \
+             quirks, stable conventions. Prioritize what reduces future user corrections. Do NOT \
+             save task progress or session outcomes — only facts that will still matter in future \
+             sessions."
+                .to_owned(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -253,8 +334,9 @@ mod tests {
             self.pre_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        async fn post_turn(&self, _ctx: &TurnContext, _result: &TurnResult) {
+        async fn post_turn(&self, _ctx: &TurnContext, _result: &TurnResult) -> Option<String> {
             self.post_count.fetch_add(1, Ordering::Relaxed);
+            None
         }
     }
 
