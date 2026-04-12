@@ -41,6 +41,7 @@ pub mod identity;
 pub mod io;
 pub mod kernel;
 pub mod kv;
+pub mod lifecycle;
 pub mod llm;
 pub mod memory;
 pub mod metrics;
