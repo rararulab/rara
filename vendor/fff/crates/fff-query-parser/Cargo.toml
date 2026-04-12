@@ -1,0 +1,34 @@
+[package]
+name = "fff-query-parser"
+version = "0.5.2"
+edition = "2024"
+description = "Query parser for fff file finder - includes specific syntax for various constraints like globs, extensions, regex etc"
+license = "MIT"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlok.com>"]
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+zlob = ["dep:zlob"]
+
+[dependencies]
+zlob = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Relax lints for vendored code — upstream style is not under our control.
+[lints.clippy]
+all = "allow"
+pedantic = "allow"
+nursery = "allow"
+
+[lints.rust]
+dead_code = "allow"
+
+# Bench disabled in vendored build.
+# [[bench]]
+# name = "parse_bench"
+# harness = false

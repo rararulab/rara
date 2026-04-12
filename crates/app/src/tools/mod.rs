@@ -28,6 +28,8 @@ mod debug_trace;
 mod delete_file;
 mod discover;
 mod edit_file;
+mod fff_find;
+mod fff_grep;
 mod file_stats;
 mod find_files;
 mod grep;
@@ -68,6 +70,8 @@ use debug_trace::DebugTraceTool;
 use delete_file::DeleteFileTool;
 pub use discover::DiscoverToolsTool;
 use edit_file::EditFileTool;
+use fff_find::FffFindTool;
+use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -139,6 +143,10 @@ pub struct ToolDeps {
     pub dock_mutation_sink:     rara_dock::DockMutationSink,
     pub acp_registry:           rara_acp::AcpRegistryRef,
     pub user_question_manager:  rara_kernel::user_question::UserQuestionManagerRef,
+    /// Shared fff file picker state (initialized at boot).
+    pub fff_picker:             fff_search::SharedPicker,
+    /// Shared fff query tracker state (initialized at boot).
+    pub fff_query_tracker:      fff_search::SharedQueryTracker,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -223,6 +231,12 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(SessionInfoTool::new(deps.session_index.clone())),
         // System paths (directory layout discovery)
         Arc::new(SystemPathsTool::new()),
+        // fff frecency-aware search tools (deferred tier)
+        Arc::new(FffFindTool::new(
+            deps.fff_picker.clone(),
+            deps.fff_query_tracker.clone(),
+        )),
+        Arc::new(FffGrepTool::new(deps.fff_picker.clone())),
         // Mita-exclusive tools
         list_sessions,
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
@@ -295,6 +309,8 @@ mod tests {
             "memory",
             "http-fetch",
             "ask-user",
+            "fff-find",
+            "fff-grep",
         ] {
             assert!(
                 !names.iter().any(|n| n == deferred),
