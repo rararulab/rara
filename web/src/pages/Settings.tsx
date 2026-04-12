@@ -816,14 +816,7 @@ export default function Settings() {
                     </SelectContent>
                   </Select>
                 </div>
-                <KvField
-                  settingKey={KEYS.LLM_DEFAULT_MODEL}
-                  label="Default Model"
-                  value={draft[KEYS.LLM_DEFAULT_MODEL] ?? ""}
-                  placeholder="openai/gpt-4o-mini"
-                  onChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_MODEL, v)}
-                  description="Model identifier used when no specific model is configured"
-                />
+
                 <div className="flex items-center justify-between pt-2">
                   <div>
                     {groupToasts["global-defaults"] && (
