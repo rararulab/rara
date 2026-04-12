@@ -126,6 +126,14 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     follow_up = Some(subsys.run_tools(calls).await);
                 }
                 Effect::AppendTape { kind } => subsys.append_tape(kind).await,
+                Effect::InjectContinuationWake { turn, max } => {
+                    subsys
+                        .emit_stream(format!(
+                            "[continuation:wake] Turn {turn}/{max}. The agent elected to continue \
+                             working."
+                        ))
+                        .await;
+                }
                 Effect::EmitStream { kind } => subsys.emit_stream(kind).await,
                 Effect::Finish {
                     text,
@@ -272,6 +280,62 @@ mod tests {
                 TapeAppendKind::ToolResults,
                 TapeAppendKind::AssistantFinal,
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_handles_continuation_wake() {
+        let tc = Tc {
+            id:        ToolCallId::new("c1"),
+            name:      ToolName::new("continue-work"),
+            arguments: r#"{"reason":"checking services"}"#.into(),
+        };
+        let mut subsys = ScriptedSubsys {
+            llm_script:     vec![
+                // Iteration 0: call continue-work
+                Event::LlmCompleted {
+                    text:           "checking...".into(),
+                    tool_calls:     vec![tc.clone()],
+                    has_tool_calls: true,
+                },
+                // Iteration 1: text-only (continuation fires, wake injected, another LLM call)
+                Event::LlmCompleted {
+                    text:           "still working".into(),
+                    tool_calls:     vec![],
+                    has_tool_calls: false,
+                },
+                // After wake: finishes for real
+                Event::LlmCompleted {
+                    text:           "all done".into(),
+                    tool_calls:     vec![],
+                    has_tool_calls: false,
+                },
+            ],
+            next_llm:       0,
+            tool_responses: vec![vec![Tr {
+                id:          ToolCallId::new("c1"),
+                name:        ToolName::new("continue-work"),
+                success:     true,
+                duration_ms: 1,
+                error:       None,
+            }]],
+            next_tool:      0,
+            tape_log:       vec![],
+            stream_log:     vec![],
+        };
+        let mut machine = AgentMachine::with_max_continuations(8, 3);
+        let outcome = drive(&mut machine, &mut subsys).await;
+        assert!(outcome.success);
+        assert_eq!(outcome.text, "all done");
+        assert_eq!(machine.continuation_count(), 1);
+        // Verify wake message was emitted
+        assert!(
+            subsys
+                .stream_log
+                .iter()
+                .any(|s| s.contains("[continuation:wake]")),
+            "expected continuation wake in stream log: {:?}",
+            subsys.stream_log
         );
     }
 
