@@ -344,6 +344,8 @@ struct Phase {
     all_success:    bool,
     total_duration: Option<std::time::Duration>,
     first_error:    Option<String>,
+    /// Display name of the first tool (e.g. "shell", "ctx_execute").
+    first_name:     String,
     /// Summary of the first tool in this phase (e.g. file path, command).
     first_summary:  String,
 }
@@ -378,6 +380,7 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
                 all_success:    tool.success,
                 total_duration: tool.duration,
                 first_error:    tool.error.clone(),
+                first_name:     tool.name.clone(),
                 first_summary:  tool.summary.clone(),
             });
         }
@@ -394,10 +397,12 @@ fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
 fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
     use crate::tool_display::truncate_summary;
 
-    // Truncate at 60 chars for Telegram's narrow viewport; the full text
-    // is preserved in the trace detail accessible via the "📊 详情" button.
+    // Show what the tool is doing: prefer summary (command, path, query),
+    // fall back to display name so the user always sees *something*.
     let suffix = if phase.count == 1 && !phase.first_summary.is_empty() {
         format!(" — {}", truncate_summary(&phase.first_summary, 60))
+    } else if phase.count == 1 && !phase.first_name.is_empty() {
+        format!(" — {}", phase.first_name)
     } else {
         String::new()
     };
