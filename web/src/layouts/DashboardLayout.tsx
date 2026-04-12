@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bot, LayoutDashboard } from 'lucide-react';
+import { Activity, Bot, LayoutDashboard, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
@@ -25,7 +25,7 @@ import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingM
 import ThemeToggle from '@/components/ThemeToggle';
 
 /** Routes that need zero padding in the main content area. */
-const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);
+const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock', '/settings']);
 
 /** Routes that need full bleed when they match as a prefix. */
 const FULL_BLEED_PREFIXES: string[] = [];
@@ -125,6 +125,15 @@ export default function DashboardLayout() {
           >
             <LayoutDashboard className="h-3.5 w-3.5" />
             Dock
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => navigate('/settings')}
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Settings
           </Button>
           <ThemeToggle />
         </div>
