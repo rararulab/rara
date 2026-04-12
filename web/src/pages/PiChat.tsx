@@ -33,6 +33,7 @@ import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
 import type { ChatSession, ChatMessageData } from "@/api/types";
+import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 
 /** Strip `<think>...</think>` blocks from assistant text. */
@@ -123,12 +124,14 @@ function SessionListPanel({
   onClose,
   onDelete,
   onNew,
+  onNavigate,
 }: {
   activeKey: string | undefined;
   onSelect: (s: ChatSession) => void;
   onClose: () => void;
   onDelete: (key: string) => void;
   onNew: () => void;
+  onNavigate: (path: string) => void;
 }) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -228,6 +231,19 @@ function SessionListPanel({
             ))
           )}
         </div>
+        {/* Settings link at the bottom */}
+        <div className="border-t border-border px-4 py-3">
+          <button
+            onClick={() => { onNavigate("/settings"); onClose(); }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            Settings
+          </button>
+        </div>
       </div>
     </>
   );
@@ -243,6 +259,7 @@ export default function PiChat() {
   const agentRef = useRef<Agent | null>(null);
   const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
+  const navigate = useNavigate();
 
   /** Switch the agent to a different session, loading its history. */
   const switchSession = useCallback(async (session: ChatSession) => {
@@ -405,6 +422,7 @@ export default function PiChat() {
           onClose={() => setShowSessionList(false)}
           onDelete={handleSessionDeleted}
           onNew={newSession}
+          onNavigate={navigate}
         />
       )}
     </div>

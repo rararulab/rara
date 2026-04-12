@@ -15,7 +15,12 @@
  */
 
 const STORAGE_KEY = "rara_backend_url";
-const DEFAULT_BACKEND_URL = "http://localhost:25555";
+
+/** Derive a sensible default backend URL from the current page hostname. */
+function defaultBackendUrl(): string {
+  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  return `http://${host}:25555`;
+}
 
 /** Read the backend URL from localStorage, env, or fallback to default. */
 export function getBackendUrl(): string {
@@ -23,7 +28,7 @@ export function getBackendUrl(): string {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) return stored;
   }
-  return import.meta.env.VITE_API_URL || DEFAULT_BACKEND_URL;
+  return import.meta.env.VITE_API_URL || defaultBackendUrl();
 }
 
 /** Persist backend URL and reload the page so all clients pick it up. */
