@@ -97,7 +97,9 @@ export default function DashboardLayout() {
     queryFn: () => settingsApi.list(),
   });
 
-  const shouldShowOnboarding = !isOnboardingDismissed();
+  // Skip onboarding entirely when dismissed or when providers are already configured.
+  const providerConfigured = hasConfiguredLlmProvider(settingsQuery.data);
+  const shouldShowOnboarding = !isOnboardingDismissed() && !providerConfigured;
   const [onboardingOpen, setOnboardingOpen] = useState(true);
 
   const handleOnboardingDismiss = () => {

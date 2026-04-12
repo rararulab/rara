@@ -15,7 +15,7 @@
  */
 
 import { useState } from "react";
-import { setBackendUrl } from "@/api/client";
+import { setBackendUrl, getBackendUrl } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -33,7 +33,7 @@ interface ConnectionSetupDialogProps {
 
 /** First-launch dialog that prompts the user to enter their backend URL. */
 export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialogProps) {
-  const [url, setUrl] = useState("http://localhost:25555");
+  const [url, setUrl] = useState(() => getBackendUrl());
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,7 +73,7 @@ export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialog
           <Input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://localhost:25555"
+            placeholder="http://hostname:25555"
             className="font-mono text-sm"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !testing) testConnection();
