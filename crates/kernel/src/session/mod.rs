@@ -195,6 +195,18 @@ pub trait SessionIndex: Send + Sync + 'static {
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError>;
 
+    /// Resolve the first channel binding that points to the given session.
+    ///
+    /// Returns `Ok(None)` when no binding exists or the implementation does
+    /// not support reverse lookups. Channels use this to route responses
+    /// (e.g. approval prompts) back to the originating chat.
+    async fn get_channel_binding_by_session(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Option<ChannelBinding>, SessionError> {
+        Ok(None)
+    }
+
     /// Remove all channel bindings that point to the given session.
     async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError>;
 }
