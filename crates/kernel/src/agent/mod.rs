@@ -38,7 +38,10 @@ pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -871,7 +874,8 @@ call `discover-tools` to load it first.{tool_list}
         tape,
         tape_name,
         guard_pipeline,
-        notification_bus
+        notification_bus,
+        interrupted
     ),
     fields(
         session_key = %session_key,
@@ -891,6 +895,7 @@ pub(crate) async fn run_agent_loop(
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
+    interrupted: &AtomicBool,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1077,6 +1082,16 @@ pub(crate) async fn run_agent_loop(
     };
 
     for iteration in 0..max_iterations {
+        // Check interrupt flag — a new user message arrived while this turn
+        // was running. Break early so the kernel can drain the pause buffer
+        // and start a new turn with the latest message.
+        if interrupted.load(Ordering::Relaxed) {
+            info!("agent turn interrupted by new user message at iteration start");
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "interrupted".to_string(),
+            });
+            break;
+        }
         // ── Auto-fold: pressure-driven context compression ───────────
         // Runs BEFORE rebuild so the new anchor (if created) takes effect
         // in this iteration's context.  Disabled for the remainder of this
@@ -2621,6 +2636,15 @@ pub(crate) async fn run_agent_loop(
                     break;
                 }
             }
+        }
+
+        // Check interrupt flag after tool wave completes.
+        if interrupted.load(Ordering::Relaxed) {
+            info!("agent turn interrupted after tool wave");
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "interrupted".to_string(),
+            });
+            break;
         }
 
         // ── Runtime context guard ──────────────────────────────────────

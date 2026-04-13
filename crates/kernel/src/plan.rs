@@ -23,7 +23,10 @@
 //! The entry point is `run_plan_loop`, which has the same signature as
 //! `run_agent_loop` so the kernel can route to either.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{Arc, atomic::AtomicBool},
+    time::Instant,
+};
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -251,6 +254,7 @@ pub(crate) async fn run_plan_loop(
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
+    interrupted: &AtomicBool,
 ) -> Result<AgentTurnResult> {
     info!(session_key = %session_key, "plan executor: starting v2 plan-execute loop");
     let start = Instant::now();
@@ -399,6 +403,7 @@ pub(crate) async fn run_plan_loop(
                     hook_runner.clone(),
                     notification_bus.clone(),
                     rara_message_id,
+                    interrupted,
                     &mut total_iterations,
                     &mut total_tool_calls,
                     &mut last_model,
@@ -1327,6 +1332,7 @@ async fn execute_inline_step(
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
+    interrupted: &AtomicBool,
     total_iterations: &mut usize,
     total_tool_calls: &mut usize,
     last_model: &mut String,
@@ -1390,6 +1396,7 @@ async fn execute_inline_step(
         hook_runner,
         notification_bus,
         rara_message_id,
+        interrupted,
     )
     .await;
 
