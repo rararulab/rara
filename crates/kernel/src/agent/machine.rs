@@ -60,16 +60,25 @@ pub enum Phase {
 /// `MAX_LLM_ERROR_RECOVERIES` constant in `agent::mod`).
 pub const MAX_LLM_RECOVERIES: u32 = 3;
 
+/// Default maximum self-elected continuations per turn.
+pub const DEFAULT_MAX_CONTINUATIONS: usize = 10;
+
 /// Mutable state carried across machine transitions for one turn.
 #[derive(Debug, Clone)]
 pub struct AgentMachine {
-    phase:               Phase,
-    iteration:           usize,
-    max_iterations:      usize,
-    tool_calls_made:     usize,
-    last_assistant_text: String,
-    tools_enabled:       bool,
-    llm_recoveries:      u32,
+    phase:                Phase,
+    iteration:            usize,
+    max_iterations:       usize,
+    tool_calls_made:      usize,
+    last_assistant_text:  String,
+    tools_enabled:        bool,
+    llm_recoveries:       u32,
+    /// Whether the most recent tool wave included a continue-work signal.
+    continuation_pending: bool,
+    /// How many self-elected continuations have been consumed this turn.
+    continuation_count:   usize,
+    /// Maximum allowed continuations per turn.
+    max_continuations:    usize,
 }
 
 impl AgentMachine {
@@ -83,6 +92,17 @@ impl AgentMachine {
             last_assistant_text: String::new(),
             tools_enabled: true,
             llm_recoveries: 0,
+            continuation_pending: false,
+            continuation_count: 0,
+            max_continuations: DEFAULT_MAX_CONTINUATIONS,
+        }
+    }
+
+    /// Construct a machine with custom iteration and continuation limits.
+    pub fn with_max_continuations(max_iterations: usize, max_continuations: usize) -> Self {
+        Self {
+            max_continuations,
+            ..Self::new(max_iterations)
         }
     }
 
@@ -94,6 +114,9 @@ impl AgentMachine {
 
     /// Cumulative tool calls executed in the turn so far.
     pub fn tool_calls_made(&self) -> usize { self.tool_calls_made }
+
+    /// How many self-elected continuations have been consumed this turn.
+    pub fn continuation_count(&self) -> usize { self.continuation_count }
 
     /// Whether the machine has reached a terminal state.
     pub fn is_terminal(&self) -> bool { matches!(self.phase, Phase::Done | Phase::Failed) }
@@ -125,6 +148,29 @@ impl AgentMachine {
             ) if !has_tool_calls => {
                 self.last_assistant_text = text.clone();
                 debug_assert!(tool_calls.is_empty());
+
+                // If a previous tool wave signaled continue-work AND budget remains,
+                // loop back instead of stopping.
+                if self.continuation_pending && self.continuation_count < self.max_continuations {
+                    self.continuation_pending = false;
+                    self.continuation_count += 1;
+                    self.phase = Phase::AwaitingLlm;
+                    return vec![
+                        Effect::AppendTape {
+                            kind: TapeAppendKind::AssistantIntermediate,
+                        },
+                        Effect::InjectContinuationWake {
+                            turn: self.continuation_count,
+                            max:  self.max_continuations,
+                        },
+                        Effect::CallLlm {
+                            iteration:     self.iteration,
+                            tools_enabled: self.tools_enabled,
+                        },
+                    ];
+                }
+
+                self.continuation_pending = false;
                 self.phase = Phase::Done;
                 vec![
                     Effect::AppendTape {
@@ -179,7 +225,11 @@ impl AgentMachine {
             }
 
             // ── Tool wave finished ───────────────────────────────────────
-            (Phase::ExecutingTools, Event::ToolsCompleted { results: _ }) => {
+            (Phase::ExecutingTools, Event::ToolsCompleted { results }) => {
+                // Check if any tool in this wave signaled continuation.
+                self.continuation_pending = results
+                    .iter()
+                    .any(|r| r.name == "continue-work" && r.success);
                 self.iteration += 1;
                 if self.iteration >= self.max_iterations {
                     self.phase = Phase::Done;
@@ -516,6 +566,124 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn continuation_signal_loops_back_to_llm() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+
+        // LLM calls continue-work tool
+        let _ = m.step(Event::LlmCompleted {
+            text:           "working on it".into(),
+            tool_calls:     vec![tool_call("c1", "continue-work")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "continue-work", true)],
+        });
+
+        // LLM responds with text only — BUT continuation was signaled
+        let effects = m.step(Event::LlmCompleted {
+            text:           "still working...".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        });
+
+        // Should NOT terminate — should inject wake and loop back
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::InjectContinuationWake { .. }))
+        );
+        assert!(effects.iter().any(|e| matches!(e, Effect::CallLlm { .. })));
+        assert_eq!(m.continuation_count(), 1);
+    }
+
+    #[test]
+    fn continuation_respects_max_limit() {
+        let mut m = AgentMachine::with_max_continuations(20, 2);
+        let _ = m.step(Event::TurnStarted);
+
+        // Use up 2 continuations
+        for i in 0..2 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           String::new(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "continue-work")],
+                has_tool_calls: true,
+            });
+            let _ = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(&format!("c{i}"), "continue-work", true)],
+            });
+            // Text-only response — continuation kicks in
+            let _ = m.step(Event::LlmCompleted {
+                text:           format!("working {i}"),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            });
+            assert_eq!(
+                m.phase(),
+                Phase::AwaitingLlm,
+                "should continue at round {i}"
+            );
+        }
+
+        // 3rd continue-work call
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c3", "continue-work")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c3", "continue-work", true)],
+        });
+        // Text-only — but limit reached, should stop
+        let effects = m.step(Event::LlmCompleted {
+            text:           "done".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        });
+        assert_eq!(m.phase(), Phase::Done);
+        assert!(matches!(
+            effects.last(),
+            Some(Effect::Finish {
+                reason: FinishReason::Stopped,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn continuation_not_triggered_without_signal() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+
+        // Regular tool call (not continue-work)
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", true)],
+        });
+
+        // Text-only — should stop normally
+        let effects = m.step(Event::LlmCompleted {
+            text:           "here are the results".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        });
+        assert_eq!(m.phase(), Phase::Done);
+        assert!(matches!(
+            effects.last(),
+            Some(Effect::Finish {
+                reason: FinishReason::Stopped,
+                ..
+            })
+        ));
+        assert_eq!(m.continuation_count(), 0);
     }
 
     #[test]

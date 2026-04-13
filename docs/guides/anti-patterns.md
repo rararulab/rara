@@ -13,6 +13,7 @@ Every entry has a **why** — the reasoning generalizes better than the rule alo
 - Do NOT hardcode database URLs or config defaults in Rust — **why:** config must be explicit and auditable in YAML; hidden defaults cause "works on my machine" failures
 - Do NOT modify already-applied migration files — **why:** SQLx tracks checksums; any change breaks startup on every deployed instance
 - Do NOT write code comments in any language other than English — **why:** non-English comments fragment search and break tooling for international contributors
+- Do NOT enable continuation for worker/child agents — **why:** child agents run in bounded context; self-continuation would break the parent's timeout and resource accounting
 
 ## Workflow
 

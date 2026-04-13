@@ -921,6 +921,7 @@ impl Session {
                 default_execution_mode: None,
                 tool_call_limit:        None,
                 worker_timeout_secs:    None,
+                max_continuations:      None,
             },
             principal,
             env: AgentEnv::default(),
@@ -981,6 +982,7 @@ mod state_transition_tests {
             default_execution_mode: None,
             tool_call_limit:        None,
             worker_timeout_secs:    None,
+            max_continuations:      None,
         }
     }
 

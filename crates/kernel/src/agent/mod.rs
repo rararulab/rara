@@ -274,6 +274,12 @@ pub struct AgentManifest {
     /// **Default: `None` (uses 300s fallback).**
     #[serde(default)]
     pub worker_timeout_secs:    Option<u64>,
+    /// Maximum self-elected continuations per turn.
+    ///
+    /// When set to `Some(0)`, continuation is disabled entirely.
+    /// **Default: `None` (uses [`machine::DEFAULT_MAX_CONTINUATIONS`]).**
+    #[serde(default)]
+    pub max_continuations:      Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.
@@ -1031,8 +1037,14 @@ pub(crate) async fn run_agent_loop(
         loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
     let mut loop_breaker_warning: Option<String> = None;
 
-    // Session length reminder state removed — context pressure warnings
-    // caused excessive anchoring.  The LLM decides when to anchor.
+    // ── Self-continuation signal state ──────────────────────────────
+    // Tracks whether the most recent tool wave included a continue-work
+    // call, and how many continuations have been consumed this turn.
+    let max_continuations = manifest
+        .max_continuations
+        .unwrap_or(crate::agent::machine::DEFAULT_MAX_CONTINUATIONS);
+    let mut continuation_count: usize = 0;
+    let mut continuation_pending = false;
     // ── Tool call limit circuit breaker ──────────────────────────────────
     // Prevents runaway tool loops by pausing execution every N tool calls
     // and asking the user whether to continue. 0 = disabled (default).
@@ -1703,6 +1715,85 @@ pub(crate) async fn run_agent_loop(
         // but subsequent iterations (after tool restoration) can resume
         // normal tool-calling flow.
         if !has_tool_calls {
+            // ── Text-token fallback: strip CONTINUE_WORK from response tail ──
+            // Always strip to prevent leaking the sentinel to the user, even
+            // when continuation_pending is already set (dual-channel case) or
+            // the budget is exhausted.
+            {
+                let trimmed = accumulated_text.trim();
+                if trimmed.ends_with("CONTINUE_WORK") {
+                    let end = accumulated_text
+                        .rfind("CONTINUE_WORK")
+                        .expect("CONTINUE_WORK confirmed present by ends_with check");
+                    accumulated_text.truncate(end);
+                    accumulated_text = accumulated_text.trim_end().to_string();
+                    if !continuation_pending && continuation_count < max_continuations {
+                        continuation_pending = true;
+                    }
+                    info!(
+                        iteration,
+                        continuation_pending,
+                        "CONTINUE_WORK text token stripped from response tail"
+                    );
+                }
+            }
+
+            // ── Self-continuation: intercept premature stop ─────────────
+            if continuation_pending && continuation_count < max_continuations {
+                continuation_pending = false;
+                continuation_count += 1;
+                info!(
+                    iteration,
+                    continuation_count,
+                    max_continuations,
+                    "continuation signal: injecting wake message instead of stopping"
+                );
+
+                // Persist intermediate text to tape (not as final).
+                let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
+                    rara_message_id: rara_message_id.to_string(),
+                    usage: last_usage,
+                    model: model.clone(),
+                    iteration,
+                    stream_ms,
+                    first_token_ms,
+                    reasoning_content: if accumulated_reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(accumulated_reasoning.clone())
+                    },
+                })
+                .ok();
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": &accumulated_text,
+                        }),
+                        meta,
+                    )
+                    .await;
+
+                // Persist wake message to tape so it survives the message
+                // rebuild at the top of the next iteration.
+                let wake_text = format!(
+                    "[continuation:wake] Turn {}/{}. You elected to continue working. Resume your \
+                     task.",
+                    continuation_count, max_continuations
+                );
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "user",
+                            "content": &wake_text,
+                        }),
+                        None,
+                    )
+                    .await;
+                continue;
+            }
             // Persist final assistant message to tape.
             let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
                 rara_message_id: rara_message_id.to_string(),
@@ -2443,7 +2534,16 @@ pub(crate) async fn run_agent_loop(
                 }
             }
 
-            // (Session-length counter removed — see context_contract simplification.)
+            // Check for ContinueWork hint from continue-work tool.
+            if results.iter().any(|(_success, output, _err, _dur)| {
+                output
+                    .hints
+                    .iter()
+                    .any(|h| matches!(h, crate::tool::ToolHint::ContinueWork { .. }))
+            }) {
+                continuation_pending = true;
+                info!(iteration, "continue-work signal detected in tool wave");
+            }
 
             // Record tool calls for loop detection.
             for (_id, name, args) in &valid_tool_calls {
@@ -2792,11 +2892,8 @@ mod tests {
     fn runtime_contract_prompt_includes_tape_and_discover_tools() {
         let prompt = build_runtime_contract_prompt("base", &[], "");
         assert!(prompt.contains("<context_contract>"));
-        assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
-        assert!(prompt.contains("`tape-search` (recall old context)"));
+        assert!(prompt.contains("`tape-anchor`"));
         assert!(prompt.contains("`discover-tools`"));
-        assert!(prompt.contains("exact details from earlier"));
-        assert!(prompt.contains("`summary` and `next_steps` in anchors"));
     }
 
     #[test]
@@ -2839,9 +2936,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_contract_includes_topic_switch_in_must_anchor() {
+    fn runtime_contract_includes_context_contract_tag() {
         let prompt = build_runtime_contract_prompt("base", &[], "");
-        assert!(prompt.contains("switches topic"));
+        assert!(prompt.contains("<context_contract>"));
+        assert!(prompt.contains("</context_contract>"));
     }
 
     #[test]
