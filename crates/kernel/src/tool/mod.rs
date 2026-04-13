@@ -14,6 +14,7 @@
 
 pub mod browser;
 pub(crate) mod cancel_background;
+pub(crate) mod continue_work;
 pub(crate) mod create_plan;
 pub(crate) mod fold_branch;
 pub(crate) mod schedule;
@@ -81,6 +82,7 @@ pub(crate) fn recursive_tool_denylist() -> Vec<ToolName> {
         crate::tool_names::SPAWN_BACKGROUND.clone(),
         crate::tool_names::CREATE_PLAN.clone(),
         crate::tool_names::ASK_USER.clone(),
+        crate::tool_names::CONTINUE_WORK.clone(),
     ]
 }
 
@@ -153,6 +155,14 @@ pub enum ToolHint {
     SuggestFold {
         /// Optional human-readable reason for logging/diagnostics.
         reason: Option<String>,
+    },
+
+    /// Signal that the agent wants another turn to continue working.
+    /// The agent loop should inject a continuation wake message and
+    /// re-enter the LLM call instead of terminating.
+    ContinueWork {
+        /// Why the agent wants to continue (for logging and the wake message).
+        reason: String,
     },
 }
 

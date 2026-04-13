@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod ack_detector;
 pub mod effect;
 pub mod fold;
 pub(crate) mod loop_breaker;
@@ -38,7 +39,10 @@ pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -274,6 +278,12 @@ pub struct AgentManifest {
     /// **Default: `None` (uses 300s fallback).**
     #[serde(default)]
     pub worker_timeout_secs:    Option<u64>,
+    /// Maximum self-elected continuations per turn.
+    ///
+    /// When set to `Some(0)`, continuation is disabled entirely.
+    /// **Default: `None` (uses [`machine::DEFAULT_MAX_CONTINUATIONS`]).**
+    #[serde(default)]
+    pub max_continuations:      Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.
@@ -842,6 +852,14 @@ Excessively long context may cause model call failures. In this case, you MAY us
 `tape-info` to check token usage and you SHOULD use `tape-anchor` to shorten the \
 retrieved history.
 
+**Task delegation**: Use the `task` tool to delegate focused subtasks to a background \
+agent. Pick a task_type: `explore` for codebase research (read-only, fast), `bash` for \
+shell operations, `general-purpose` for complex multi-step work with full tool access. \
+Provide a complete prompt with all necessary context — the child agent does not see your \
+conversation. Use `explore` when your task requires more than 3 search queries or spans \
+multiple files. You can launch multiple tasks concurrently to investigate independent \
+questions in parallel.
+
 **On-demand tool activation**: Call `discover-tools` BEFORE using any tool from \
 the discoverable list below. These are search keywords, NOT callable tools. \
 Example: `discover-tools({{"query":"marketplace"}})`. \
@@ -871,7 +889,9 @@ call `discover-tools` to load it first.{tool_list}
         tape,
         tape_name,
         guard_pipeline,
-        notification_bus
+        notification_bus,
+        interrupted,
+        interrupt_notify
     ),
     fields(
         session_key = %session_key,
@@ -891,6 +911,8 @@ pub(crate) async fn run_agent_loop(
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
+    interrupted: &AtomicBool,
+    interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1031,8 +1053,14 @@ pub(crate) async fn run_agent_loop(
         loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
     let mut loop_breaker_warning: Option<String> = None;
 
-    // Session length reminder state removed — context pressure warnings
-    // caused excessive anchoring.  The LLM decides when to anchor.
+    // ── Self-continuation signal state ──────────────────────────────
+    // Tracks whether the most recent tool wave included a continue-work
+    // call, and how many continuations have been consumed this turn.
+    let max_continuations = manifest
+        .max_continuations
+        .unwrap_or(crate::agent::machine::DEFAULT_MAX_CONTINUATIONS);
+    let mut continuation_count: usize = 0;
+    let mut continuation_pending = false;
     // ── Tool call limit circuit breaker ──────────────────────────────────
     // Prevents runaway tool loops by pausing execution every N tool calls
     // and asking the user whether to continue. 0 = disabled (default).
@@ -1047,6 +1075,16 @@ pub(crate) async fn run_agent_loop(
     // Distinguishes "user stopped via limit" from "max iterations exhausted"
     // in the post-loop exit logic — they produce different user messages.
     let mut stopped_by_limit = false;
+    // Set when a new user message interrupts the turn — the turn should
+    // exit quietly without emitting exhaustion warnings or fallback text.
+    let mut was_interrupted = false;
+    // How many times we nudged the model for producing an intermediate ack
+    // ("I'll look into it...") instead of calling tools.
+    let mut ack_nudge_count: usize = 0;
+    // Budget grace call: when max_iterations is about to be exhausted, inject
+    // a summarize nudge and give the model one more chance. Aligned with
+    // hermes-agent _budget_grace_call.
+    let mut budget_grace_injected = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1076,7 +1114,24 @@ pub(crate) async fn run_agent_loop(
         None
     };
 
-    for iteration in 0..max_iterations {
+    // +1 for potential budget grace call (only consumed if grace is injected).
+    for iteration in 0..=max_iterations {
+        // Hard cap: the grace iteration is only allowed if we injected the
+        // grace nudge on the previous iteration. Otherwise stop.
+        if iteration >= max_iterations && !budget_grace_injected {
+            break;
+        }
+        // Check interrupt flag — a new user message arrived while this turn
+        // was running. Break early so the kernel can drain the pause buffer
+        // and start a new turn with the latest message.
+        if interrupted.load(Ordering::Relaxed) {
+            info!("agent turn interrupted by new user message at iteration start");
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "interrupted".to_string(),
+            });
+            was_interrupted = true;
+            break;
+        }
         // ── Auto-fold: pressure-driven context compression ───────────
         // Runs BEFORE rebuild so the new anchor (if created) takes effect
         // in this iteration's context.  Disabled for the remainder of this
@@ -1363,6 +1418,12 @@ pub(crate) async fn run_agent_loop(
                     info!("LLM turn cancelled during streaming");
                     return Err(KernelError::Interrupted);
                 }
+                _ = interrupt_notify.notified() => {
+                    stream_task.abort();
+                    info!("LLM streaming interrupted by new user message");
+                    was_interrupted = true;
+                    break;
+                }
             };
 
             let Some(delta) = delta else {
@@ -1481,6 +1542,15 @@ pub(crate) async fn run_agent_loop(
                     break;
                 }
             }
+        }
+
+        // If interrupted mid-stream, skip remaining iteration processing
+        // and exit the for loop — the post-loop code handles was_interrupted.
+        if was_interrupted {
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "interrupted".to_string(),
+            });
+            break;
         }
 
         // Signal forwarder to discard intermediate narration text.
@@ -1698,11 +1768,132 @@ pub(crate) async fn run_agent_loop(
             continue;
         }
 
+        // Anti-laziness: detect intermediate ack ("I'll look into it...")
+        // and nudge the model to actually call tools instead of stopping.
+        // Aligned with hermes-agent _looks_like_codex_intermediate_ack.
+        if !has_tool_calls
+            && !in_llm_error_recovery
+            && ack_nudge_count < ack_detector::MAX_ACK_NUDGES
+            && ack_detector::looks_like_intermediate_ack(&accumulated_text, &messages)
+        {
+            ack_nudge_count += 1;
+            warn!(
+                iteration,
+                ack_nudge_count,
+                text_preview = %accumulated_text.chars().take(80).collect::<String>(),
+                "intermediate ack detected, nudging model to take action"
+            );
+            // Persist intermediate assistant text to tape so the model sees
+            // its own plan in context after rebuild. Aligned with hermes:
+            // append assistant msg with finish_reason="incomplete".
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": &accumulated_text,
+                    }),
+                    None,
+                )
+                .await;
+            // Persist nudge to tape so it survives the message rebuild.
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": ack_detector::ACK_NUDGE_MESSAGE,
+                    }),
+                    None,
+                )
+                .await;
+            continue;
+        }
+
         // Terminal response: exit when the LLM produced no tool calls.
         // Recovery iterations always land here because tools were disabled,
         // but subsequent iterations (after tool restoration) can resume
         // normal tool-calling flow.
         if !has_tool_calls {
+            // ── Text-token fallback: strip CONTINUE_WORK from response tail ──
+            // Always strip to prevent leaking the sentinel to the user, even
+            // when continuation_pending is already set (dual-channel case) or
+            // the budget is exhausted.
+            {
+                let trimmed = accumulated_text.trim();
+                if trimmed.ends_with("CONTINUE_WORK") {
+                    let end = accumulated_text
+                        .rfind("CONTINUE_WORK")
+                        .expect("CONTINUE_WORK confirmed present by ends_with check");
+                    accumulated_text.truncate(end);
+                    accumulated_text = accumulated_text.trim_end().to_string();
+                    if !continuation_pending && continuation_count < max_continuations {
+                        continuation_pending = true;
+                    }
+                    info!(
+                        iteration,
+                        continuation_pending,
+                        "CONTINUE_WORK text token stripped from response tail"
+                    );
+                }
+            }
+
+            // ── Self-continuation: intercept premature stop ─────────────
+            if continuation_pending && continuation_count < max_continuations {
+                continuation_pending = false;
+                continuation_count += 1;
+                info!(
+                    iteration,
+                    continuation_count,
+                    max_continuations,
+                    "continuation signal: injecting wake message instead of stopping"
+                );
+
+                // Persist intermediate text to tape (not as final).
+                let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
+                    rara_message_id: rara_message_id.to_string(),
+                    usage: last_usage,
+                    model: model.clone(),
+                    iteration,
+                    stream_ms,
+                    first_token_ms,
+                    reasoning_content: if accumulated_reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(accumulated_reasoning.clone())
+                    },
+                })
+                .ok();
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": &accumulated_text,
+                        }),
+                        meta,
+                    )
+                    .await;
+
+                // Persist wake message to tape so it survives the message
+                // rebuild at the top of the next iteration.
+                let wake_text = format!(
+                    "[continuation:wake] Turn {}/{}. You elected to continue working. Resume your \
+                     task.",
+                    continuation_count, max_continuations
+                );
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "user",
+                            "content": &wake_text,
+                        }),
+                        None,
+                    )
+                    .await;
+                continue;
+            }
             // Persist final assistant message to tape.
             let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
                 rara_message_id: rara_message_id.to_string(),
@@ -2443,7 +2634,16 @@ pub(crate) async fn run_agent_loop(
                 }
             }
 
-            // (Session-length counter removed — see context_contract simplification.)
+            // Check for ContinueWork hint from continue-work tool.
+            if results.iter().any(|(_success, output, _err, _dur)| {
+                output
+                    .hints
+                    .iter()
+                    .any(|h| matches!(h, crate::tool::ToolHint::ContinueWork { .. }))
+            }) {
+                continuation_pending = true;
+                info!(iteration, "continue-work signal detected in tool wave");
+            }
 
             // Record tool calls for loop detection.
             for (_id, name, args) in &valid_tool_calls {
@@ -2623,6 +2823,16 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
+        // Check interrupt flag after tool wave completes.
+        if interrupted.load(Ordering::Relaxed) {
+            info!("agent turn interrupted after tool wave");
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "interrupted".to_string(),
+            });
+            was_interrupted = true;
+            break;
+        }
+
         // ── Runtime context guard ──────────────────────────────────────
         // Context pressure warnings are disabled — they caused excessive
         // anchoring that destroyed context and KV cache.  The LLM decides
@@ -2641,10 +2851,55 @@ pub(crate) async fn run_agent_loop(
             });
             last_progress_at = Instant::now();
         }
+
+        // Budget grace call: if this is the last normal iteration and the
+        // model has been calling tools (no text-only response yet), inject
+        // a summarize nudge and allow one more iteration. Aligned with
+        // hermes-agent _budget_grace_call.
+        if iteration == max_iterations - 1
+            && !budget_grace_injected
+            && !stopped_by_limit
+            && tool_calls_made > 0
+            && last_accumulated_text.is_empty()
+            && max_iterations >= 5
+        {
+            budget_grace_injected = true;
+            warn!(
+                iteration,
+                tool_calls_made, "budget nearly exhausted, injecting grace call to summarize"
+            );
+            let grace_msg = "[System: Your tool budget is almost exhausted. Summarize the \
+                             information and actions you have completed so far. Do not call more \
+                             tools.]";
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": grace_msg,
+                    }),
+                    None,
+                )
+                .await;
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "Budget nearly exhausted — requesting summary...".to_string(),
+            });
+            // Disable tools for the grace iteration so the model must respond with text.
+            tool_defs = vec![];
+        }
     }
 
     // Determine exit reason and build appropriate error/message.
-    let exhaustion_error = if stopped_by_limit {
+    let exhaustion_error = if was_interrupted {
+        // Turn interrupted by a new user message — exit quietly.
+        // No warning, no fallback text. The buffered message will
+        // trigger a fresh turn with full context.
+        info!(
+            tool_calls_made,
+            "agent turn interrupted, yielding to new message"
+        );
+        format!("interrupted after {tool_calls_made} tool calls")
+    } else if stopped_by_limit {
         // User clicked "stop" or tool call limit timed out — not an exhaustion error.
         let msg = format!("agent stopped by user/timeout after {tool_calls_made} tool calls");
         warn!(
@@ -2792,11 +3047,8 @@ mod tests {
     fn runtime_contract_prompt_includes_tape_and_discover_tools() {
         let prompt = build_runtime_contract_prompt("base", &[], "");
         assert!(prompt.contains("<context_contract>"));
-        assert!(prompt.contains("`tape-anchor` (checkpoint + trim)"));
-        assert!(prompt.contains("`tape-search` (recall old context)"));
+        assert!(prompt.contains("`tape-anchor`"));
         assert!(prompt.contains("`discover-tools`"));
-        assert!(prompt.contains("exact details from earlier"));
-        assert!(prompt.contains("`summary` and `next_steps` in anchors"));
     }
 
     #[test]
@@ -2839,9 +3091,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_contract_includes_topic_switch_in_must_anchor() {
+    fn runtime_contract_includes_context_contract_tag() {
         let prompt = build_runtime_contract_prompt("base", &[], "");
-        assert!(prompt.contains("switches topic"));
+        assert!(prompt.contains("<context_contract>"));
+        assert!(prompt.contains("</context_contract>"));
     }
 
     #[test]

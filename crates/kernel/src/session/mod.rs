@@ -23,7 +23,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     },
 };
 
@@ -195,6 +195,18 @@ pub trait SessionIndex: Send + Sync + 'static {
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError>;
 
+    /// Resolve the first channel binding that points to the given session.
+    ///
+    /// Returns `Ok(None)` when no binding exists or the implementation does
+    /// not support reverse lookups. Channels use this to route responses
+    /// (e.g. approval prompts) back to the originating chat.
+    async fn get_channel_binding_by_session(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Option<ChannelBinding>, SessionError> {
+        Ok(None)
+    }
+
     /// Remove all channel bindings that point to the given session.
     async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError>;
 }
@@ -344,6 +356,12 @@ pub struct Session {
     pub paused: bool,
     /// Buffered events received while the session was paused or busy.
     pub pause_buffer: Vec<KernelEventEnvelope>,
+    /// Flag set when a new user message arrives during an active turn.
+    /// The agent loop checks this between iterations and breaks if set.
+    pub interrupted: Arc<AtomicBool>,
+    /// Wakes the agent loop immediately when the `interrupted` flag is set,
+    /// so it does not have to wait for the next iteration boundary.
+    pub interrupt_notify: Arc<tokio::sync::Notify>,
     /// Active background tasks spawned by this session.
     pub background_tasks: Vec<BackgroundTaskEntry>,
     /// Pending tool call limit oneshot sender keyed by limit_id. When the
@@ -921,6 +939,7 @@ impl Session {
                 default_execution_mode: None,
                 tool_call_limit:        None,
                 worker_timeout_secs:    None,
+                max_continuations:      None,
             },
             principal,
             env: AgentEnv::default(),
@@ -937,6 +956,8 @@ impl Session {
             execution_mode: None,
             paused: false,
             pause_buffer: Vec::new(),
+            interrupted: Arc::new(AtomicBool::new(false)),
+            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
             background_tasks: Vec::new(),
             pending_tool_call_limit: None,
             origin_endpoint: None,
@@ -981,6 +1002,7 @@ mod state_transition_tests {
             default_execution_mode: None,
             tool_call_limit:        None,
             worker_timeout_secs:    None,
+            max_continuations:      None,
         }
     }
 
@@ -1013,6 +1035,8 @@ mod state_transition_tests {
             execution_mode: None,
             paused: false,
             pause_buffer: vec![],
+            interrupted: Arc::new(AtomicBool::new(false)),
+            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
             background_tasks: vec![],
             pending_tool_call_limit: None,
             origin_endpoint: None,

@@ -44,7 +44,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     system_prompt:          rara_system_prompt(),
     soul_prompt:            None,
     provider_hint:          None,
-    max_iterations:         Some(25),
+    max_iterations:         None,
     tools:                  vec![],
     excluded_tools:         vec![],
     max_children:           None,
@@ -55,6 +55,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     default_execution_mode: None,
     tool_call_limit:        None,
     worker_timeout_secs:    None,
+    max_continuations:      Some(10),
 });
 
 /// Build the **rara** agent manifest — the default user-facing chat agent.
@@ -83,6 +84,7 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     default_execution_mode: None,
     tool_call_limit:        None,
     worker_timeout_secs:    None,
+    max_continuations:      Some(0),
 });
 
 /// Build the **nana** agent manifest — a chat-only companion for regular users.
@@ -112,6 +114,7 @@ static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest
     default_execution_mode: None,
     tool_call_limit:        None,
     worker_timeout_secs:    None,
+    max_continuations:      Some(0),
 });
 
 /// Build the **worker** agent manifest — a lightweight sub-agent for task
@@ -153,6 +156,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     default_execution_mode: None,
     tool_call_limit:        None,
     worker_timeout_secs:    None,
+    max_continuations:      Some(0),
 });
 
 /// Build the **mita** agent manifest — a background proactive agent that
@@ -195,6 +199,7 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
         default_execution_mode: None,
         tool_call_limit:        None,
         worker_timeout_secs:    None,
+        max_continuations:      Some(0),
     }
 }
 
@@ -247,14 +252,35 @@ When facing multiple independent questions, dispatch parallel tasks — one per 
 /// Action safety — consider reversibility and blast radius.
 const RARA_SAFETY_FRAGMENT: &str = r#"## Actions
 
-Freely take local, reversible actions (reading, writing notes, searching).
-For actions that affect external systems or are hard to reverse, confirm with the user first:
+Act by default. Confirm only when the action is hard to reverse AND affects people outside this system:
 - Sending messages or notifications to other people
-- Dispatching tasks that trigger real-world side effects
+- Modifying external services, deployments, or infrastructure
 - Deleting or overwriting user data
 
-When blocked, do not brute-force past the obstacle. Investigate root causes, consider
-alternatives, or ask the user."#;
+Everything else — dispatching agents, updating statuses, moving pipeline stages forward — just do it.
+
+When blocked, investigate root causes or ask the user."#;
+
+/// Self-continuation — signal when you have more work to do.
+const RARA_CONTINUATION_FRAGMENT: &str = r#"## Continuation
+
+When a task has obvious next steps, keep going — do not stop to ask "should I continue?"
+
+If you are about to produce a text-only response mid-task (no tool calls), call the
+`continue-work` tool first to signal you have more work. The system will automatically
+give you another turn.
+
+Use continue-work when:
+- You completed one phase of a multi-step task and the next step is obvious
+- You started a setup process and need to verify it worked
+- The user gave you a destination; you should drive there, not stop at each intersection
+
+Do NOT use continue-work when:
+- You genuinely finished the task
+- You hit a real ambiguity requiring user input
+- You need the user to perform an action (login, approve, etc.)
+
+Fallback: end your response with CONTINUE_WORK (exact text) if tool calling fails."#;
 
 /// Anti-narration — prevent common LLM chattiness patterns.
 const RARA_ANTI_NARRATION_FRAGMENT: &str = r#"## Anti-patterns
@@ -265,7 +291,8 @@ Do NOT:
 - Repeat the user's question back to them
 - Add disclaimers or hedging ("I think...", "It seems like...")
 - Over-explain simple actions
-- Ask for confirmation on routine operations"#;
+- Ask for confirmation on routine operations
+- Stop mid-task to ask "should I continue?" when the next step is obvious"#;
 
 /// Rara prompt fragment: skill maintenance and draft handling.
 const RARA_SKILL_MAINTENANCE_FRAGMENT: &str = r#"## Skill Maintenance
@@ -289,6 +316,7 @@ fn rara_system_prompt() -> String {
         RARA_TOOL_FRAGMENT,
         RARA_DELEGATION_FRAGMENT,
         RARA_SAFETY_FRAGMENT,
+        RARA_CONTINUATION_FRAGMENT,
         RARA_SKILL_MAINTENANCE_FRAGMENT,
         RARA_ANTI_NARRATION_FRAGMENT,
     ]

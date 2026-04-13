@@ -39,7 +39,13 @@
 //! Each spawned agent receives a `ProcessHandle` — a thin event pusher that
 //! sends `Syscall` variants through the unified event queue.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use futures::FutureExt;
 use jiff::Timestamp;
@@ -846,6 +852,8 @@ impl Kernel {
             paused: false,
             origin_endpoint,
             pause_buffer: Vec::new(),
+            interrupted: Arc::new(AtomicBool::new(false)),
+            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
             background_tasks: Vec::new(),
             pending_tool_call_limit: None,
             activated_deferred: std::collections::HashSet::new(),
@@ -1750,6 +1758,9 @@ impl Kernel {
             if is_active {
                 rt.pause_buffer
                     .push(KernelEventEnvelope::user_message(msg.clone()));
+                // Signal the agent loop to break at next checkpoint.
+                rt.interrupted.store(true, Ordering::Relaxed);
+                rt.interrupt_notify.notify_one();
                 return true;
             }
             false
@@ -2240,6 +2251,14 @@ impl Kernel {
             .flatten();
         let parent_span = tracing::Span::current();
 
+        // Clone the interrupt flag + notify so the spawned agent task can check it.
+        let (interrupted, interrupt_notify) = self
+            .process_table
+            .with(&session_key, |p| {
+                (Arc::clone(&p.interrupted), Arc::clone(&p.interrupt_notify))
+            })
+            .expect("session must exist when starting turn");
+
         // -- Phase 6b: Resolve execution mode ------------------------------------
         //
         // Determine whether this turn uses reactive (v1) or plan-execute (v2).
@@ -2409,6 +2428,8 @@ impl Kernel {
                         hook_runner,
                         notification_bus,
                         rara_message_id,
+                        &interrupted,
+                        &interrupt_notify,
                     )
                     .await
                 } else {
@@ -2426,6 +2447,8 @@ impl Kernel {
                         hook_runner,
                         notification_bus,
                         rara_message_id,
+                        &interrupted,
+                        &interrupt_notify,
                     )
                     .await
                 };
@@ -2895,6 +2918,11 @@ impl Kernel {
                 });
             }
         }
+
+        // Reset interrupt flag before draining so the next turn starts clean.
+        self.process_table.with_mut(&session_key, |rt| {
+            rt.interrupted.store(false, Ordering::Relaxed);
+        });
 
         // Drain pause buffer — if the user sent messages while the turn was
         // running, re-inject them so they start a new turn on this session.
