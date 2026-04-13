@@ -182,21 +182,32 @@ async fn get_current_version(
 }
 
 /// Return a point-in-time snapshot of all settings at version `n`.
+///
+/// Returns 404 if the requested version does not exist.
 async fn snapshot_at_version(
     State(svc): State<Arc<SettingsSvc>>,
     Path(version): Path<i64>,
-) -> Result<Json<SnapshotResponse>, StatusCode> {
+) -> Result<Json<SnapshotResponse>, (StatusCode, String)> {
     svc.snapshot(version)
         .await
         .map(|settings| Json(SnapshotResponse { version, settings }))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("does not exist") {
+                (StatusCode::NOT_FOUND, msg)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+        })
 }
 
 /// Rollback settings to the state at version `n` (creates a new version).
+///
+/// Returns 404 if the target version does not exist.
 async fn rollback_to_version(
     State(svc): State<Arc<SettingsSvc>>,
     Path(version): Path<i64>,
-) -> Result<Json<RollbackResponse>, StatusCode> {
+) -> Result<Json<RollbackResponse>, (StatusCode, String)> {
     svc.rollback_to(version)
         .await
         .map(|new_version| {
@@ -205,5 +216,12 @@ async fn rollback_to_version(
                 new_version,
             })
         })
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("does not exist") {
+                (StatusCode::NOT_FOUND, msg)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+        })
 }

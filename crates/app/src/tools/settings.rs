@@ -129,14 +129,33 @@ impl ToolExecute for SettingsTool {
             }
             SettingsAction::History => {
                 let entries = self.settings.list_versions(TOOL_HISTORY_LIMIT).await?;
-                Ok(json!({"versions": entries}))
+                let masked: Vec<Value> = entries
+                    .into_iter()
+                    .map(|e| {
+                        let masked_val = e.value.as_deref().map(|v| maybe_mask(&e.key, v));
+                        json!({
+                            "version": e.version,
+                            "key": e.key,
+                            "value": masked_val,
+                            "changed_at": e.changed_at,
+                        })
+                    })
+                    .collect();
+                Ok(json!({"versions": masked}))
             }
             SettingsAction::Snapshot => {
                 let ver = params
                     .version
                     .ok_or_else(|| anyhow::anyhow!("missing required parameter: version"))?;
                 let snap = self.settings.snapshot(ver).await?;
-                Ok(json!({"version": ver, "settings": snap}))
+                let masked: serde_json::Map<String, Value> = snap
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let display = maybe_mask(&k, &v);
+                        (k, Value::String(display))
+                    })
+                    .collect();
+                Ok(json!({"version": ver, "settings": masked}))
             }
             SettingsAction::Rollback => {
                 let ver = params

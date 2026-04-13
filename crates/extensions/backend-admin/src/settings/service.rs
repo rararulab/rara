@@ -88,7 +88,14 @@ impl SettingsSvc {
     }
 
     /// Snapshot all settings at a given version (MVCC point-in-time read).
+    ///
+    /// Fails if `version` is outside the valid range `[0, current]`.
     pub async fn snapshot(&self, version: i64) -> anyhow::Result<HashMap<String, String>> {
+        let current_ver = self.current_version().await?;
+        anyhow::ensure!(
+            version >= 0 && version <= current_ver,
+            "version {version} does not exist (current: {current_ver})"
+        );
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
             "SELECT sv.key, sv.value
              FROM settings_version sv
@@ -130,12 +137,18 @@ impl SettingsSvc {
         .fetch_all(&self.pool)
         .await?;
 
-        // Strip the internal `settings.` prefix so consumers see clean keys.
+        // Strip the internal `settings.` prefix and decode JSON-encoded values
+        // so consumers see clean keys and plain strings.
         Ok(rows
             .into_iter()
             .map(|mut e| {
                 if let Some(stripped) = e.key.strip_prefix(PREFIX) {
                     e.key = stripped.to_owned();
+                }
+                if let Some(ref raw) = e.value {
+                    if let Ok(decoded) = serde_json::from_str::<String>(raw) {
+                        e.value = Some(decoded);
+                    }
                 }
                 e
             })
@@ -379,6 +392,32 @@ mod tests {
         let new_ver = svc.rollback_to(1).await.unwrap();
         assert_eq!(new_ver, 3); // rollback creates v3
         assert_eq!(svc.get("a").await.unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn snapshot_rejects_future_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "val").await.unwrap(); // v1
+
+        let err = svc.snapshot(999).await.unwrap_err();
+        assert!(
+            err.to_string().contains("does not exist"),
+            "expected 'does not exist' error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_versions_decodes_json_values() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("llm.provider", "openrouter").await.unwrap();
+        let entries = svc.list_versions(10).await.unwrap();
+        let entry = entries.first().expect("should have one entry");
+        // Value should be the plain string, not JSON-encoded.
+        assert_eq!(entry.value.as_deref(), Some("openrouter"));
     }
 
     #[tokio::test]
