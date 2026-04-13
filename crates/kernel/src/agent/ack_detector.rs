@@ -21,24 +21,30 @@
 //!
 //! Aligned with hermes-agent `_looks_like_codex_intermediate_ack`.
 
+use std::sync::OnceLock;
+
+use regex::Regex;
+
 use crate::llm;
 
-/// Maximum assistant response length (bytes) to consider.
+/// Maximum assistant response length (chars) to consider.
 /// Longer responses are likely substantive, not lazy acks.
-/// hermes uses 1200 chars; we use 2000 bytes to cover CJK
-/// (3 bytes/char × ~650 chars ≈ 2000 bytes).
-const MAX_ACK_LENGTH_BYTES: usize = 2000;
+/// Aligned with hermes (1200 chars).
+const MAX_ACK_LENGTH_CHARS: usize = 1200;
 
-/// Future-tense phrases signaling the model is *planning* but hasn't acted.
-const FUTURE_ACK_PATTERNS: &[&str] = &[
-    // English — aligned with hermes regex
-    "i'll",
-    "i\u{2019}ll", // curly apostrophe
-    "i will",
-    "let me",
-    "i can do that",
-    "i can help with that",
-    // Chinese — rara extension
+/// Compiled regex for English future-ack phrases with word boundaries.
+/// Aligned with hermes: `re.search(r"\b(i['']ll|i will|let me|i can do that|i
+/// can help with that)\b", text)`
+fn future_ack_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(i[''\u{2019}]ll|i will|let me|i can do that|i can help with that)\b")
+            .expect("ack regex must compile")
+    })
+}
+
+/// Chinese future-ack phrases (no word boundaries needed — CJK has no spaces).
+const CHINESE_ACK_PATTERNS: &[&str] = &[
     "让我",
     "我来",
     "我去",
@@ -82,36 +88,53 @@ const ACTION_MARKERS: &[&str] = &[
     "测试",
 ];
 
+/// Strip `<think>...</think>` blocks from assistant text before detection.
+/// Aligned with hermes `_strip_think_blocks` — reasoning content should
+/// not trigger ack detection.
+fn strip_think_blocks(text: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?s)<think>.*?</think>").expect("think-strip regex must compile")
+    });
+    re.replace_all(text, "").to_string()
+}
+
 /// Check whether an assistant response is an intermediate ack that should
 /// be nudged instead of ending the turn.
 ///
-/// Mirrors hermes-agent logic:
-/// 1. If the conversation already contains tool results, the model has started
+/// Mirrors hermes-agent `_looks_like_codex_intermediate_ack`:
+/// 1. Strip `<think>` blocks (reasoning shouldn't trigger detection).
+/// 2. If the conversation already contains tool results, the model has started
 ///    working — a text-only follow-up is a genuine answer.
-/// 2. Short text with a future-tense phrase + action verb = lazy ack.
+/// 3. Short text (≤1200 chars) with a future-tense phrase (word-boundary
+///    matched for English, substring for Chinese) + action verb = lazy ack.
 ///
 /// Workspace markers from hermes are omitted because rara always operates
 /// in a workspace context (personal agent, not general chat).
 pub fn looks_like_intermediate_ack(assistant_text: &str, messages: &[llm::Message]) -> bool {
-    // If any tool results exist in the conversation, the model already
-    // took action — don't nudge a genuine summary. Aligned with hermes:
-    // `if any(msg.get("role") == "tool" for msg in messages): return False`
+    // hermes: `if any(msg.get("role") == "tool" for msg in messages): return False`
     if messages.iter().any(|m| matches!(m.role, llm::Role::Tool)) {
         return false;
     }
 
-    let text = assistant_text.trim();
-    if text.is_empty() || text.len() > MAX_ACK_LENGTH_BYTES {
+    // hermes: `self._strip_think_blocks(assistant_content or "").strip().lower()`
+    let stripped = strip_think_blocks(assistant_text);
+    let text = stripped.trim();
+    if text.is_empty() || text.chars().count() > MAX_ACK_LENGTH_CHARS {
         return false;
     }
 
     let lower = text.to_lowercase();
 
-    let has_future_ack = FUTURE_ACK_PATTERNS.iter().any(|pat| lower.contains(pat));
+    // hermes: `re.search(r"\b(i['']ll|i will|let me|...)\b", assistant_text)`
+    // Word-boundary regex for English, substring match for Chinese.
+    let has_future_ack = future_ack_regex().is_match(&lower)
+        || CHINESE_ACK_PATTERNS.iter().any(|p| lower.contains(p));
     if !has_future_ack {
         return false;
     }
 
+    // hermes: `any(marker in assistant_text for marker in action_markers)`
     ACTION_MARKERS.iter().any(|marker| lower.contains(marker))
 }
 
@@ -149,7 +172,7 @@ mod tests {
     fn detects_chinese_planning_ack() {
         assert!(looks_like_intermediate_ack(
             "让我检查一下构建日志",
-            &empty_messages(),
+            &empty_messages()
         ));
     }
 
@@ -192,6 +215,32 @@ mod tests {
     fn detects_hermes_style_ack() {
         assert!(looks_like_intermediate_ack(
             "I can help with that. Let me search the codebase and report back.",
+            &empty_messages(),
+        ));
+    }
+
+    // Word boundary: "filled" should NOT match "i'll"
+    #[test]
+    fn word_boundary_no_false_positive() {
+        assert!(!looks_like_intermediate_ack(
+            "I filled the test report and checked the results.",
+            &empty_messages(),
+        ));
+    }
+
+    // Think blocks stripped before detection
+    #[test]
+    fn ignores_ack_inside_think_block() {
+        assert!(!looks_like_intermediate_ack(
+            "<think>I'll look into this and check the logs.</think>The answer is 42.",
+            &empty_messages(),
+        ));
+    }
+
+    #[test]
+    fn strip_think_preserves_visible_ack() {
+        assert!(looks_like_intermediate_ack(
+            "<think>reasoning here</think>Let me check the build logs.",
             &empty_messages(),
         ));
     }
