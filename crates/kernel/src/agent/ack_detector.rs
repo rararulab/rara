@@ -30,8 +30,8 @@ use regex::Regex;
 use crate::llm;
 
 /// Maximum assistant response length (chars) to consider.
-/// Longer responses are likely substantive, not lazy acks.
-const MAX_ACK_LENGTH_CHARS: usize = 1200;
+/// GPT models produce verbose planning responses that exceed 1200 chars.
+const MAX_ACK_LENGTH_CHARS: usize = 2000;
 
 // ---------------------------------------------------------------------------
 // Category 1: Future-tense planning ("I'll...", "Let me...")
