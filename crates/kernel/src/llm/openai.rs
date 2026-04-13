@@ -597,6 +597,56 @@ impl OpenAiDriver {
 // ---------------------------------------------------------------------------
 
 /// Build the JSON request body for the given API format.
+/// Sanitize a tool name to comply with OpenAI's `^[a-zA-Z0-9-]+$` restriction.
+///
+/// Returns `Some(sanitized)` only when the name needed modification.
+fn sanitize_tool_name(name: &str) -> Option<String> {
+    if name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return None;
+    }
+    Some(
+        name.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Rewrite non-compliant tool names inside a [`CompletionRequest`] and return
+/// a reverse map (sanitized → original) so responses can be mapped back.
+fn sanitize_request_tool_names(request: &mut CompletionRequest) -> HashMap<String, String> {
+    let mut reverse_map = HashMap::new();
+
+    for tool in &mut request.tools {
+        if let Some(sanitized) = sanitize_tool_name(&tool.name) {
+            let original = std::mem::replace(&mut tool.name, sanitized.clone());
+            reverse_map.insert(sanitized, original);
+        }
+    }
+
+    // Rewrite tool-call names in conversation history so the provider sees
+    // consistent names across the entire request.
+    for msg in &mut request.messages {
+        for tc in &mut msg.tool_calls {
+            if let Some(sanitized) = sanitize_tool_name(&tc.name) {
+                tc.name = sanitized;
+            }
+        }
+    }
+
+    reverse_map
+}
+
+/// Look up the original tool name from a potentially-sanitized name.
+fn unsanitize_tool_name(name: String, reverse_map: &HashMap<String, String>) -> String {
+    reverse_map.get(&name).cloned().unwrap_or(name)
+}
+
 fn build_request_body(
     request: &CompletionRequest,
     stream: bool,
@@ -744,6 +794,7 @@ pub(crate) fn build_responses_request(request: &CompletionRequest, _format: ApiF
 fn parse_chat_completion_response(
     raw: RawCompletionResponse,
     request: &CompletionRequest,
+    reverse_map: &HashMap<String, String>,
 ) -> CompletionResponse {
     let choice = raw.choices.into_iter().next();
     let (stop_reason, tool_calls, content, reasoning_content) = match choice {
@@ -756,7 +807,7 @@ fn parse_chat_completion_response(
                 .into_iter()
                 .map(|tc| ToolCallRequest {
                     id:        tc.id,
-                    name:      tc.function.name,
+                    name:      unsanitize_tool_name(tc.function.name, reverse_map),
                     arguments: tc.function.arguments,
                 })
                 .collect();
@@ -795,6 +846,7 @@ fn parse_chat_completion_response(
 fn parse_responses_completion(
     raw: Value,
     request: &CompletionRequest,
+    reverse_map: &HashMap<String, String>,
 ) -> Result<CompletionResponse> {
     let mut text = String::new();
     let mut reasoning = String::new();
@@ -845,7 +897,7 @@ fn parse_responses_completion(
                         .to_owned();
                     tool_calls.push(ToolCallRequest {
                         id: call_id,
-                        name,
+                        name: unsanitize_tool_name(name, reverse_map),
                         arguments,
                     });
                 }
@@ -911,9 +963,11 @@ async fn stream_chat_completions(
     tx: mpsc::Sender<StreamDelta>,
     model: String,
     sse_idle_timeout: Duration,
+    reverse_map: HashMap<String, String>,
 ) -> Result<CompletionResponse> {
     let mut event_stream = response.bytes_stream().eventsource();
     let mut acc = StreamAccumulator::new();
+    acc.tool_name_reverse_map = reverse_map;
 
     loop {
         if tx.is_closed() {
@@ -990,6 +1044,7 @@ pub(crate) struct ResponsesStreamState {
     pub(crate) has_function_call:     bool,
     pub(crate) final_stop:            StopReason,
     pub(crate) final_usage:           Option<Usage>,
+    pub(crate) tool_name_reverse_map: HashMap<String, String>,
 }
 
 impl ResponsesStreamState {
@@ -1001,6 +1056,7 @@ impl ResponsesStreamState {
             has_function_call:     false,
             final_stop:            StopReason::Stop,
             final_usage:           None,
+            tool_name_reverse_map: HashMap::new(),
         }
     }
 }
@@ -1061,11 +1117,13 @@ pub(crate) fn parse_responses_event(
 
                 match item_type {
                     "function_call" => {
-                        let name = item
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_owned();
+                        let name = unsanitize_tool_name(
+                            item.get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_owned(),
+                            &state.tool_name_reverse_map,
+                        );
                         let call_id = item
                             .get("call_id")
                             .and_then(|v| v.as_str())
@@ -1225,9 +1283,11 @@ async fn stream_responses_api(
     tx: mpsc::Sender<StreamDelta>,
     model: String,
     sse_idle_timeout: Duration,
+    reverse_map: HashMap<String, String>,
 ) -> Result<CompletionResponse> {
     let mut event_stream = response.bytes_stream().eventsource();
     let mut state = ResponsesStreamState::new();
+    state.tool_name_reverse_map = reverse_map;
 
     loop {
         if tx.is_closed() {
@@ -1293,7 +1353,8 @@ async fn stream_responses_api(
 
 #[async_trait]
 impl LlmDriver for OpenAiDriver {
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+    async fn complete(&self, mut request: CompletionRequest) -> Result<CompletionResponse> {
+        let reverse_map = sanitize_request_tool_names(&mut request);
         let response = self.send_request(&request, false).await?;
         match self.api_format {
             ApiFormat::ChatCompletions => {
@@ -1301,31 +1362,44 @@ impl LlmDriver for OpenAiDriver {
                     response.json().await.map_err(|e| KernelError::Provider {
                         message: format!("failed to parse LLM response: {e}").into(),
                     })?;
-                Ok(parse_chat_completion_response(raw, &request))
+                Ok(parse_chat_completion_response(raw, &request, &reverse_map))
             }
             ApiFormat::Responses => {
                 let raw: Value = response.json().await.map_err(|e| KernelError::Provider {
                     message: format!("failed to parse Responses API response: {e}").into(),
                 })?;
-                parse_responses_completion(raw, &request)
+                parse_responses_completion(raw, &request, &reverse_map)
             }
         }
     }
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
         tx: mpsc::Sender<StreamDelta>,
     ) -> Result<CompletionResponse> {
+        let reverse_map = sanitize_request_tool_names(&mut request);
         let response = self.send_request(&request, true).await?;
         match self.api_format {
             ApiFormat::ChatCompletions => {
-                stream_chat_completions(response, tx, request.model.clone(), self.sse_idle_timeout)
-                    .await
+                stream_chat_completions(
+                    response,
+                    tx,
+                    request.model.clone(),
+                    self.sse_idle_timeout,
+                    reverse_map,
+                )
+                .await
             }
             ApiFormat::Responses => {
-                stream_responses_api(response, tx, request.model.clone(), self.sse_idle_timeout)
-                    .await
+                stream_responses_api(
+                    response,
+                    tx,
+                    request.model.clone(),
+                    self.sse_idle_timeout,
+                    reverse_map,
+                )
+                .await
             }
         }
     }
@@ -1426,16 +1500,17 @@ impl LlmEmbedder for OpenAiDriver {
 // ---------------------------------------------------------------------------
 
 struct StreamAccumulator {
-    text:            String,
-    reasoning:       String,
-    think_parser:    super::think_tag::ThinkTagParser,
-    tool_xml_parser: super::tool_xml::ToolXmlParser,
+    text:                  String,
+    reasoning:             String,
+    think_parser:          super::think_tag::ThinkTagParser,
+    tool_xml_parser:       super::tool_xml::ToolXmlParser,
     /// Auto-incrementing index for XML-extracted tool calls so they get
     /// unique slots in the agent loop's `pending_tool_calls` HashMap.
-    xml_tool_index:  u32,
-    tools:           HashMap<u32, PendingToolCall>,
-    stop_reason:     StopReason,
-    usage:           Option<Usage>,
+    xml_tool_index:        u32,
+    tools:                 HashMap<u32, PendingToolCall>,
+    stop_reason:           StopReason,
+    usage:                 Option<Usage>,
+    tool_name_reverse_map: HashMap<String, String>,
 }
 
 struct PendingToolCall {
@@ -1448,14 +1523,15 @@ struct PendingToolCall {
 impl StreamAccumulator {
     fn new() -> Self {
         Self {
-            text:            String::new(),
-            reasoning:       String::new(),
-            think_parser:    super::think_tag::ThinkTagParser::new(),
-            tool_xml_parser: super::tool_xml::ToolXmlParser::new(),
-            xml_tool_index:  1000, // offset from JSON tool_calls (0-based)
-            tools:           HashMap::new(),
-            stop_reason:     StopReason::Stop,
-            usage:           None,
+            text:                  String::new(),
+            reasoning:             String::new(),
+            think_parser:          super::think_tag::ThinkTagParser::new(),
+            tool_xml_parser:       super::tool_xml::ToolXmlParser::new(),
+            xml_tool_index:        1000, // offset from JSON tool_calls (0-based)
+            tools:                 HashMap::new(),
+            tool_name_reverse_map: HashMap::new(),
+            stop_reason:           StopReason::Stop,
+            usage:                 None,
         }
     }
 
@@ -1533,7 +1609,8 @@ impl StreamAccumulator {
                     if let Some(ref func) = tc.function {
                         if let Some(ref name) = func.name {
                             if !name.is_empty() {
-                                entry.name = name.clone();
+                                entry.name =
+                                    unsanitize_tool_name(name.clone(), &self.tool_name_reverse_map);
                             }
                         }
                         if let Some(ref args) = func.arguments {
@@ -1613,9 +1690,10 @@ impl StreamAccumulator {
         self.xml_tool_index += 1;
         let id = format!("xml-tool-{idx}");
         let args_str = serde_json::to_string(&arguments).unwrap_or_default();
+        let name = unsanitize_tool_name(name.to_owned(), &self.tool_name_reverse_map);
 
         tracing::debug!(
-            tool_name = name,
+            tool_name = %name,
             index = idx,
             "intercepted XML tool call from content stream"
         );
@@ -1624,7 +1702,7 @@ impl StreamAccumulator {
             idx,
             PendingToolCall {
                 id:        id.clone(),
-                name:      name.to_owned(),
+                name:      name.clone(),
                 arguments: args_str.clone(),
                 started:   true,
             },
@@ -1634,7 +1712,7 @@ impl StreamAccumulator {
             .send(StreamDelta::ToolCallStart {
                 index: idx,
                 id,
-                name: name.to_owned(),
+                name,
             })
             .await;
         let _ = tx
