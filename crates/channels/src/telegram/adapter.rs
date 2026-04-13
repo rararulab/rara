@@ -1184,12 +1184,34 @@ impl ChannelAdapter for TelegramAdapter {
                 reply_context,
                 attachments,
             } => {
+                let original_len = content.len();
+                let original_chars = content.chars().count();
                 let mut content = if let Some(state) = self.active_streams.get(&chat_id) {
+                    info!(
+                        chat_id,
+                        original_len,
+                        original_chars,
+                        streamed_prefix_chars = state.streamed_prefix_chars,
+                        accumulated_len = state.accumulated.len(),
+                        message_ids = ?state.message_ids,
+                        dirty = state.dirty,
+                        "tg egress: Reply arrived with active stream state"
+                    );
                     slice_after_char_prefix(&content, state.streamed_prefix_chars)
                 } else {
+                    info!(
+                        chat_id,
+                        original_len, "tg egress: Reply arrived, no active stream state"
+                    );
                     content
                 };
                 if content.is_empty() && attachments.is_empty() {
+                    warn!(
+                        chat_id,
+                        original_len,
+                        original_chars,
+                        "tg egress: Reply content empty after prefix slice, skipping send"
+                    );
                     self.active_streams.remove(&chat_id);
                     return Ok(());
                 }
@@ -1229,6 +1251,15 @@ impl ChannelAdapter for TelegramAdapter {
                             .message_ids
                             .last()
                             .map_or(false, |id| *id != MessageId(0));
+                        info!(
+                            chat_id,
+                            msg_was_sent,
+                            message_ids = ?stream_state.message_ids,
+                            accumulated_len = stream_state.accumulated.len(),
+                            streamed_prefix_chars = stream_state.streamed_prefix_chars,
+                            content_len = content.len(),
+                            "tg egress: removed stream state for final Reply"
+                        );
                         if msg_was_sent {
                             streamed_visible_prefix =
                                 Some(strip_tool_call_xml(&stream_state.accumulated));
@@ -3032,9 +3063,11 @@ fn spawn_stream_forwarder(
         };
 
         if subs.is_empty() {
-            tracing::debug!(session_id = %session_id, "telegram stream forwarder: no streams found");
+            tracing::info!(session_id = %session_id, attempts, "tg stream forwarder: no streams found after polling");
             return;
         }
+
+        tracing::info!(session_id = %session_id, attempts, stream_count = subs.len(), "tg stream forwarder: subscribed");
 
         // Initialize streaming state.
         active_streams.insert(chat_id, StreamingMessage::new());
@@ -3493,6 +3526,17 @@ fn spawn_stream_forwarder(
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             // Stream closed — do final flush.
+                            let stream_state_snapshot = active_streams.get(&chat_id).map(|s| {
+                                format!(
+                                    "message_ids={:?} accumulated_len={} prefix_chars={} dirty={}",
+                                    s.message_ids, s.accumulated.len(), s.streamed_prefix_chars, s.dirty,
+                                )
+                            });
+                            tracing::info!(
+                                chat_id,
+                                state = ?stream_state_snapshot,
+                                "tg stream forwarder: stream closed, doing final flush"
+                            );
                             let flush_req = {
                                 if let Some(state) = active_streams.get(&chat_id) {
                                     if state.dirty {
