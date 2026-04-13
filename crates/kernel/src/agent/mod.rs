@@ -20,6 +20,7 @@ pub mod machine;
 pub(crate) mod repetition;
 pub mod runner;
 pub mod scheduled;
+mod talk_normal;
 
 /// Maximum **byte** length for child/worker agent results passed back to
 /// the parent context.  Child agents are instructed to self-summarize
@@ -799,7 +800,9 @@ pub(crate) fn build_agent_system_prompt(
     } else {
         effective_prompt
     };
-    // 3. Append runtime contract (tape actions, discoverable tool catalog, system
+    // 3. Append talk-normal anti-slop output style rules.
+    let effective_prompt = format!("{effective_prompt}\n\n{}", talk_normal::TALK_NORMAL_PROMPT);
+    // 4. Append runtime contract (tape actions, discoverable tool catalog, system
     //    paths).
     let empty = std::collections::HashSet::new();
     let deferred_catalog = tool_registry.deferred_catalog(&empty);
