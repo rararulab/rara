@@ -987,6 +987,24 @@ pub(crate) async fn run_agent_loop(
 
     tracing::Span::current().record("model", model.as_str());
 
+    // GPT models narrate plans instead of acting. Inject a stronger
+    // constraint when the resolved model is GPT-family.
+    let effective_prompt = if model.contains("gpt") || model.contains("o3") || model.contains("o4")
+    {
+        format!(
+            "{effective_prompt}\n\n## GPT Anti-Narration\n\nCRITICAL: You tend to describe what \
+             you plan to do instead of doing it.\n\nWRONG: \"I'll look into the build failure and \
+             check the logs.\"\nRIGHT: [call read-file on the log file]\n\nWRONG: \"Let me \
+             analyze the configuration...\"\nRIGHT: [call read-file on config.yaml]\n\nWRONG: \
+             \"Here's my plan: 1. Check X  2. Fix Y  3. Test Z\"\nRIGHT: [call the first tool \
+             immediately]\n\nEvery response MUST contain at least one tool call unless you are \
+             directly answering a question. If you catch yourself writing a plan, stop and call a \
+             tool."
+        )
+    } else {
+        effective_prompt
+    };
+
     let mut capabilities = ModelCapabilities::detect(provider_hint, &model);
 
     // Context window priority: manifest override > provider API > default.
