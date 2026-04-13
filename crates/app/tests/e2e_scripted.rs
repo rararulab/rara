@@ -31,7 +31,7 @@ use rara_kernel::{
     identity::{Principal, UserId},
     io::{ChannelSource, InboundMessage, MessageId},
     llm::{CompletionResponse, StopReason, ToolCallRequest},
-    session::SessionKey,
+    session::{SessionKey, SessionState},
     testing::{FakeTool, TestKernelBuilder, scripted_response, scripted_tool_call_response},
 };
 use serde_json::json;
@@ -105,6 +105,34 @@ async fn wait_for_turn_count(
             traces.last()
         );
         sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait for a session to complete its current turn and return to Ready.
+///
+/// `handle_spawn_agent` pushes a UserMessage to the event queue and
+/// returns — the session is still Ready when `spawn_named` completes.
+/// We poll until `messages_received >= 1` (the turn started, incrementing
+/// the counter in `start_llm_turn`) AND state is Ready (the turn finished).
+/// This distinguishes pre-turn Ready from post-turn Ready without needing
+/// to observe the brief Active window.
+async fn wait_for_session_ready(
+    handle: &rara_kernel::handle::KernelHandle,
+    session_key: SessionKey,
+) {
+    let deadline = Instant::now() + TURN_WAIT_TIMEOUT;
+    loop {
+        if let Some(stats) = handle.session_stats(session_key) {
+            if stats.messages_received >= 1 && matches!(stats.state, SessionState::Ready) {
+                return;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for session {session_key} to return to Ready after processing \
+             initial message"
+        );
+        sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -432,12 +460,10 @@ async fn llm_error_does_not_crash_session() {
         .expect("spawn session");
 
     // The agent loop returns Err for non-retryable errors, so no TurnTrace
-    // is pushed. The session starts in Ready state and the error turn
-    // completes almost instantly (scripted driver). Sleep to let the kernel
-    // process the initial UserMessage and complete the error turn before
-    // sending the follow-up. This avoids a race where the follow-up lands
-    // while the first turn is Active, triggering the interrupt flag.
-    sleep(Duration::from_millis(500)).await;
+    // is pushed. Wait for the error turn to complete (session returns to
+    // Ready) before sending the follow-up, otherwise the follow-up lands
+    // while the first turn is Active and triggers the interrupt flag.
+    wait_for_session_ready(&tk.handle, session_key).await;
 
     // Session is alive and Ready — send a second message to prove it
     // did not crash.
