@@ -2858,8 +2858,10 @@ pub(crate) async fn run_agent_loop(
         // hermes-agent _budget_grace_call.
         if iteration == max_iterations - 1
             && !budget_grace_injected
+            && !stopped_by_limit
             && tool_calls_made > 0
             && last_accumulated_text.is_empty()
+            && max_iterations >= 5
         {
             budget_grace_injected = true;
             warn!(
