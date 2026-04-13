@@ -40,7 +40,15 @@ use crate::{
     description = "Launch a background task using a predefined agent type. Pick a task_type: \
                    'explore' for codebase analysis and research, 'bash' for shell/CLI operations, \
                    'general-purpose' for complex multi-step tasks with full tool access. The \
-                   agent runs independently and results are delivered when complete."
+                   agent runs independently and results are delivered when complete. Only the \
+                   final result enters your context — intermediate tool calls stay in the \
+                   child.\n\nWHEN TO USE:\n- Research spanning 3+ queries or multiple files\n- \
+                   Tasks whose intermediate output would flood your context\n- Independent \
+                   workstreams that can run in parallel\n- Reasoning-heavy subtasks (debugging, \
+                   code review, analysis)\n\nWHEN NOT TO USE:\n- Single tool call — just call the \
+                   tool directly\n- Tasks needing user interaction — child agents cannot ask the \
+                   user\n\nIMPORTANT: The child agent has NO memory of your conversation. Pass \
+                   ALL relevant context (file paths, error messages, constraints) in the prompt."
 )]
 pub struct TaskTool {
     handle:      KernelHandle,
