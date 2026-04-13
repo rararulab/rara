@@ -53,6 +53,10 @@ const CHINESE_ACK_PATTERNS: &[&str] = &[
     "我先",
     "我看看",
     "我查一下",
+    "我下一步",
+    "我接下来",
+    "下一步我",
+    "接下来我",
 ];
 
 /// Action verbs confirming described future work. Aligned with hermes.
@@ -80,7 +84,9 @@ const ACTION_MARKERS: &[&str] = &[
     "examine",
     // Chinese — rara extension
     "查看",
+    "查实",
     "检查",
+    "确认",
     "分析",
     "调试",
     "搜索",
@@ -102,19 +108,29 @@ fn strip_think_blocks(text: &str) -> String {
 /// Check whether an assistant response is an intermediate ack that should
 /// be nudged instead of ending the turn.
 ///
-/// Mirrors hermes-agent `_looks_like_codex_intermediate_ack`:
+/// Based on hermes-agent `_looks_like_codex_intermediate_ack`, adapted for
+/// rara's tape-driven architecture:
 /// 1. Strip `<think>` blocks (reasoning shouldn't trigger detection).
-/// 2. If the conversation already contains tool results, the model has started
-///    working — a text-only follow-up is a genuine answer.
+/// 2. If the last message is a tool result, the model is summarizing tool
+///    output — that's a genuine answer, not laziness.
 /// 3. Short text (≤1200 chars) with a future-tense phrase (word-boundary
 ///    matched for English, substring for Chinese) + action verb = lazy ack.
+///
+/// **Divergence from hermes**: hermes checks `any(role == "tool")` which
+/// disables detection after the first tool call ever. This misses the common
+/// scenario where the agent calls tools for several iterations then produces
+/// a planning response instead of continuing. We check the *last* message
+/// instead: tool result at tail = genuine summary; anything else = may be lazy.
 ///
 /// Workspace markers from hermes are omitted because rara always operates
 /// in a workspace context (personal agent, not general chat).
 pub fn looks_like_intermediate_ack(assistant_text: &str, messages: &[llm::Message]) -> bool {
-    // hermes: `if any(msg.get("role") == "tool" for msg in messages): return False`
-    if messages.iter().any(|m| matches!(m.role, llm::Role::Tool)) {
-        return false;
+    // If the last message is a tool result, the model is responding to tool
+    // output — that's a genuine summary, not laziness. Skip detection.
+    if let Some(last) = messages.last() {
+        if matches!(last.role, llm::Role::Tool) {
+            return false;
+        }
     }
 
     // hermes: `self._strip_think_blocks(assistant_content or "").strip().lower()`
@@ -153,10 +169,21 @@ mod tests {
 
     fn empty_messages() -> Vec<llm::Message> { vec![] }
 
-    fn messages_with_tool_result() -> Vec<llm::Message> {
+    /// Last message is a tool result — model is summarizing.
+    fn messages_ending_with_tool_result() -> Vec<llm::Message> {
         vec![
             llm::Message::user("hello".to_string()),
             llm::Message::tool_result("call_1", "result"),
+        ]
+    }
+
+    /// Tool results exist but last message is user text — model may be lazy.
+    fn messages_with_tools_then_user() -> Vec<llm::Message> {
+        vec![
+            llm::Message::user("hello".to_string()),
+            llm::Message::tool_result("call_1", "result"),
+            llm::Message::assistant("I found the file.".to_string()),
+            llm::Message::user("ok now fix it".to_string()),
         ]
     }
 
@@ -177,10 +204,20 @@ mod tests {
     }
 
     #[test]
-    fn ignores_when_tools_already_called() {
+    fn ignores_when_last_msg_is_tool_result() {
         assert!(!looks_like_intermediate_ack(
             "I'll look into the build failure.",
-            &messages_with_tool_result(),
+            &messages_ending_with_tool_result(),
+        ));
+    }
+
+    #[test]
+    fn detects_ack_after_tools_when_last_msg_is_user() {
+        // Tools were called earlier, but last message is user text.
+        // Model should act, not plan.
+        assert!(looks_like_intermediate_ack(
+            "I'll look into the build failure and check the logs.",
+            &messages_with_tools_then_user(),
         ));
     }
 
@@ -233,6 +270,14 @@ mod tests {
     fn ignores_ack_inside_think_block() {
         assert!(!looks_like_intermediate_ack(
             "<think>I'll look into this and check the logs.</think>The answer is 42.",
+            &empty_messages(),
+        ));
+    }
+
+    #[test]
+    fn detects_next_step_chinese_ack() {
+        assert!(looks_like_intermediate_ack(
+            "我下一步会直接从这些官方文档里把触发机制查实",
             &empty_messages(),
         ));
     }
