@@ -1716,19 +1716,23 @@ pub(crate) async fn run_agent_loop(
         // normal tool-calling flow.
         if !has_tool_calls {
             // ── Text-token fallback: detect CONTINUE_WORK at response tail ──
-            if !continuation_pending && continuation_count < max_continuations {
+            // Always strip the sentinel to prevent it from leaking to the user,
+            // regardless of whether continuation budget remains.
+            if !continuation_pending {
                 let trimmed = accumulated_text.trim();
                 if trimmed.ends_with("CONTINUE_WORK") {
-                    // Strip the token from displayed text
                     let end = accumulated_text
                         .rfind("CONTINUE_WORK")
                         .expect("CONTINUE_WORK confirmed present by ends_with check");
                     accumulated_text.truncate(end);
                     accumulated_text = accumulated_text.trim_end().to_string();
-                    continuation_pending = true;
+                    if continuation_count < max_continuations {
+                        continuation_pending = true;
+                    }
                     info!(
                         iteration,
-                        "CONTINUE_WORK text token detected at response tail"
+                        continuation_pending,
+                        "CONTINUE_WORK text token stripped from response tail"
                     );
                 }
             }
@@ -1770,12 +1774,23 @@ pub(crate) async fn run_agent_loop(
                     )
                     .await;
 
-                // Inject wake message
-                messages.push(llm::Message::user(format!(
+                // Persist wake message to tape so it survives the message
+                // rebuild at the top of the next iteration.
+                let wake_text = format!(
                     "[continuation:wake] Turn {}/{}. You elected to continue working. Resume your \
                      task.",
                     continuation_count, max_continuations
-                )));
+                );
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "user",
+                            "content": &wake_text,
+                        }),
+                        None,
+                    )
+                    .await;
                 continue;
             }
             // Persist final assistant message to tape.
