@@ -75,10 +75,6 @@ const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
 /// User-turn count since last anchor at which a session-length reminder is
 /// injected.  Unlike the pressure-based thresholds this is a pure turn count
 /// and does not depend on token estimates.
-/// Large tool outputs that should trigger an explicit anchor reminder.
-const LARGE_TOOL_RESULT_CHARS: usize = 8_000;
-/// Multiple medium tool outputs in one phase should also trigger a reminder.
-const MEDIUM_TOOL_RESULT_CHARS: usize = 3_000;
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ContextPressure {
     Normal,
@@ -658,47 +654,6 @@ fn should_remind_tape_search(input_text: &str) -> bool {
         && history_cues.iter().any(|cue| normalized.contains(cue))
 }
 
-fn should_remind_tape_anchor(tool_names: &[String], tool_results: &[serde_json::Value]) -> bool {
-    let mut medium_results = 0usize;
-
-    for (name, result) in tool_names.iter().zip(tool_results.iter()) {
-        let serialized_len = result.to_string().len();
-        let is_large_result = serialized_len >= LARGE_TOOL_RESULT_CHARS;
-        let is_medium_result = serialized_len >= MEDIUM_TOOL_RESULT_CHARS;
-        let is_high_context_tool = matches!(
-            name.as_str(),
-            "read-file" | "grep" | "bash" | "http-fetch" | "list-directory" | "find-files"
-        );
-
-        if is_large_result && is_high_context_tool {
-            return true;
-        }
-
-        if is_medium_result && is_high_context_tool {
-            medium_results += 1;
-        }
-    }
-
-    medium_results >= 2
-}
-
-/// Returns `true` if any tool result JSON indicates a tape anchor was created.
-///
-/// Checks result payloads for known anchor-creation signatures rather than
-/// hardcoding tool names, so new anchor-creating tools are automatically
-/// covered.
-fn did_create_anchor(results_json: &[serde_json::Value]) -> bool {
-    results_json.iter().any(|json| {
-        // `tape-anchor` tool returns {"anchor_name": ...}
-        json.get("anchor_name").is_some()
-            // Legacy tape-handoff returns {"output": "handoff created: ..."}
-            || json
-                .get("output")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| s.starts_with("handoff created"))
-    })
-}
-
 /// Resolve the soul prompt for an agent at runtime.
 ///
 /// Loads the soul file and runtime state via `rara_soul::load_and_render`,
@@ -848,9 +803,9 @@ fn build_runtime_contract_prompt(
 <context_contract>
 ## Context Management
 
-Excessively long context may cause model call failures. In this case, you MAY use \
-`tape-info` to check token usage and you SHOULD use `tape-anchor` to shorten the \
-retrieved history.
+Use `tape-anchor` ONLY when the conversation switches to a distinctly different \
+topic — it marks a topic boundary, NOT a compression tool. Do NOT anchor just \
+because context is long or a tool returned a large result.
 
 **On-demand tool activation**: Call `discover-tools` BEFORE using any tool from \
 the discoverable list below. These are search keywords, NOT callable tools. \
@@ -1075,7 +1030,6 @@ pub(crate) async fn run_agent_loop(
     let mut empty_response_nudged = false;
     let mut last_progress_at = Instant::now();
 
-    let mut needs_anchor_reminder = false;
     let mut llm_error_recovery_message: Option<String> = None;
     // True while the current iteration is a recovery attempt (tools disabled).
     // Reset after the recovery iteration produces a successful response.
@@ -1274,16 +1228,6 @@ pub(crate) async fn run_agent_loop(
                  earlier context. If you don't have clear evidence in your current context, you \
                  MUST use tape-search to verify before answering.",
             ));
-        }
-
-        // Inject anchor reminder from previous iteration's large tool output
-        if needs_anchor_reminder {
-            messages.push(llm::Message::user(
-                "[Large Tool Output] You just processed a large tool result that significantly \
-                 bloats context. Before continuing, use tape-anchor to create a handoff with \
-                 summary and next_steps. Use tape-search later for older details.",
-            ));
-            needs_anchor_reminder = false;
         }
 
         // Inject loop breaker warning from previous iteration
@@ -2621,9 +2565,6 @@ pub(crate) async fn run_agent_loop(
                 let results_refs: Vec<&str> = results_strs.iter().map(|s| s.as_str()).collect();
                 cascade_asm.push_tool_results(&results_refs, jiff::Timestamp::now(), None);
             }
-            if should_remind_tape_anchor(&tool_names, &results_json) {
-                needs_anchor_reminder = true;
-            }
             // If discover-tools was called, extract activated tool names and
             // regenerate tool_defs so newly activated tools are available in
             // the next iteration.
@@ -2866,8 +2807,8 @@ pub(crate) async fn run_agent_loop(
 
         // ── Runtime context guard ──────────────────────────────────────
         // Context pressure warnings are disabled — they caused excessive
-        // anchoring that destroyed context and KV cache.  The LLM decides
-        // when to anchor based on the context_contract guidance.
+        // anchoring that destroyed context and KV cache.  Anchors are
+        // reserved for topic switches only (not compression).
         // Auto-fold (when enabled) handles emergency compression at the
         // code level without LLM involvement.
 
@@ -3019,12 +2960,9 @@ pub(crate) async fn run_agent_loop(
 mod tests {
     use std::collections::HashMap;
 
-    use serde_json::json;
-
     use super::{
         ContextPressure, PendingToolCall, build_runtime_contract_prompt, classify_context_pressure,
-        did_create_anchor, infer_has_tool_calls, resolve_soul_prompt, should_remind_tape_anchor,
-        should_remind_tape_search,
+        infer_has_tool_calls, resolve_soul_prompt, should_remind_tape_search,
     };
     #[test]
     fn classify_context_pressure_returns_normal_below_threshold() {
@@ -3063,22 +3001,11 @@ mod tests {
     }
 
     #[test]
-    fn large_file_results_trigger_anchor_reminder() {
-        assert!(should_remind_tape_anchor(
-            &[String::from("read-file")],
-            &[json!({ "content": "x".repeat(8_000) })]
-        ));
-        assert!(!should_remind_tape_anchor(
-            &[String::from("read-file")],
-            &[json!({ "content": "short" })]
-        ));
-    }
-
-    #[test]
     fn runtime_contract_prompt_includes_tape_and_discover_tools() {
         let prompt = build_runtime_contract_prompt("base", &[], "");
         assert!(prompt.contains("<context_contract>"));
-        assert!(prompt.contains("`tape-anchor`"));
+        assert!(prompt.contains("tape-anchor"));
+        assert!(prompt.contains("topic boundary"));
         assert!(prompt.contains("`discover-tools`"));
     }
 
@@ -3138,24 +3065,6 @@ mod tests {
         assert!(prompt.contains("Config: /test/config"));
         assert!(prompt.contains("Data: /test/data"));
         assert!(prompt.contains("Workspace: /test/workspace"));
-    }
-
-    #[test]
-    fn did_create_anchor_detects_tape_anchor() {
-        let results = vec![json!({"anchor_name": "topic/foo", "entries_after_anchor": 5})];
-        assert!(did_create_anchor(&results));
-    }
-
-    #[test]
-    fn did_create_anchor_detects_tape_handoff() {
-        let results = vec![json!({"output": "handoff created: my-handoff"})];
-        assert!(did_create_anchor(&results));
-    }
-
-    #[test]
-    fn did_create_anchor_ignores_unrelated_tools() {
-        let results = vec![json!({"output": "search results: 3 found"})];
-        assert!(!did_create_anchor(&results));
     }
 
     #[test]
