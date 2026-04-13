@@ -1773,13 +1773,30 @@ pub(crate) async fn run_agent_loop(
                 text_preview = %accumulated_text.chars().take(80).collect::<String>(),
                 "intermediate ack detected, nudging model to take action"
             );
-            // Keep the ack as an intermediate assistant message so the model
-            // sees its own plan in context. Aligned with hermes: append
-            // assistant msg with finish_reason="incomplete", then user nudge.
-            messages.push(llm::Message::assistant(accumulated_text.clone()));
-            messages.push(llm::Message::user(
-                ack_detector::ACK_NUDGE_MESSAGE.to_string(),
-            ));
+            // Persist intermediate assistant text to tape so the model sees
+            // its own plan in context after rebuild. Aligned with hermes:
+            // append assistant msg with finish_reason="incomplete".
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": &accumulated_text,
+                    }),
+                    None,
+                )
+                .await;
+            // Persist nudge to tape so it survives the message rebuild.
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": ack_detector::ACK_NUDGE_MESSAGE,
+                    }),
+                    None,
+                )
+                .await;
             continue;
         }
 

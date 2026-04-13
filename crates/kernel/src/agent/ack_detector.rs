@@ -23,10 +23,11 @@
 
 use crate::llm;
 
-/// Maximum assistant response length (chars) to consider.
+/// Maximum assistant response length (bytes) to consider.
 /// Longer responses are likely substantive, not lazy acks.
-/// Aligned with hermes (1200).
-const MAX_ACK_LENGTH: usize = 1200;
+/// hermes uses 1200 chars; we use 2000 bytes to cover CJK
+/// (3 bytes/char × ~650 chars ≈ 2000 bytes).
+const MAX_ACK_LENGTH_BYTES: usize = 2000;
 
 /// Future-tense phrases signaling the model is *planning* but hasn't acted.
 const FUTURE_ACK_PATTERNS: &[&str] = &[
@@ -42,11 +43,10 @@ const FUTURE_ACK_PATTERNS: &[&str] = &[
     "我来",
     "我去",
     "我帮你",
-    "好的，",
+    "好的，我",
     "我先",
     "我看看",
     "我查一下",
-    "我检查",
 ];
 
 /// Action verbs confirming described future work. Aligned with hermes.
@@ -101,7 +101,7 @@ pub fn looks_like_intermediate_ack(assistant_text: &str, messages: &[llm::Messag
     }
 
     let text = assistant_text.trim();
-    if text.is_empty() || text.len() > MAX_ACK_LENGTH {
+    if text.is_empty() || text.len() > MAX_ACK_LENGTH_BYTES {
         return false;
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn detects_polite_ack() {
         assert!(looks_like_intermediate_ack(
-            "好的，我来帮你检查一下这个问题",
+            "好的，我来帮你查看一下这个问题",
             &empty_messages(),
         ));
     }
