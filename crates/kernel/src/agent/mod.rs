@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod ack_detector;
 pub mod effect;
 pub mod fold;
 pub(crate) mod loop_breaker;
@@ -1077,6 +1078,13 @@ pub(crate) async fn run_agent_loop(
     // Set when a new user message interrupts the turn — the turn should
     // exit quietly without emitting exhaustion warnings or fallback text.
     let mut was_interrupted = false;
+    // How many times we nudged the model for producing an intermediate ack
+    // ("I'll look into it...") instead of calling tools.
+    let mut ack_nudge_count: usize = 0;
+    // Budget grace call: when max_iterations is about to be exhausted, inject
+    // a summarize nudge and give the model one more chance. Aligned with
+    // hermes-agent _budget_grace_call.
+    let mut budget_grace_injected = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1106,7 +1114,13 @@ pub(crate) async fn run_agent_loop(
         None
     };
 
-    for iteration in 0..max_iterations {
+    // +1 for potential budget grace call (only consumed if grace is injected).
+    for iteration in 0..=max_iterations {
+        // Hard cap: the grace iteration is only allowed if we injected the
+        // grace nudge on the previous iteration. Otherwise stop.
+        if iteration >= max_iterations && !budget_grace_injected {
+            break;
+        }
         // Check interrupt flag — a new user message arrived while this turn
         // was running. Break early so the kernel can drain the pause buffer
         // and start a new turn with the latest message.
@@ -1751,6 +1765,48 @@ pub(crate) async fn run_agent_loop(
             );
             tool_defs = vec![];
             in_llm_error_recovery = true;
+            continue;
+        }
+
+        // Anti-laziness: detect intermediate ack ("I'll look into it...")
+        // and nudge the model to actually call tools instead of stopping.
+        // Aligned with hermes-agent _looks_like_codex_intermediate_ack.
+        if !has_tool_calls
+            && !in_llm_error_recovery
+            && ack_nudge_count < ack_detector::MAX_ACK_NUDGES
+            && ack_detector::looks_like_intermediate_ack(&accumulated_text, &messages)
+        {
+            ack_nudge_count += 1;
+            warn!(
+                iteration,
+                ack_nudge_count,
+                text_preview = %accumulated_text.chars().take(80).collect::<String>(),
+                "intermediate ack detected, nudging model to take action"
+            );
+            // Persist intermediate assistant text to tape so the model sees
+            // its own plan in context after rebuild. Aligned with hermes:
+            // append assistant msg with finish_reason="incomplete".
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": &accumulated_text,
+                    }),
+                    None,
+                )
+                .await;
+            // Persist nudge to tape so it survives the message rebuild.
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": ack_detector::ACK_NUDGE_MESSAGE,
+                    }),
+                    None,
+                )
+                .await;
             continue;
         }
 
@@ -2794,6 +2850,42 @@ pub(crate) async fn run_agent_loop(
                 stage: format!("Processing... ({tool_calls_made} steps completed)"),
             });
             last_progress_at = Instant::now();
+        }
+
+        // Budget grace call: if this is the last normal iteration and the
+        // model has been calling tools (no text-only response yet), inject
+        // a summarize nudge and allow one more iteration. Aligned with
+        // hermes-agent _budget_grace_call.
+        if iteration == max_iterations - 1
+            && !budget_grace_injected
+            && !stopped_by_limit
+            && tool_calls_made > 0
+            && last_accumulated_text.is_empty()
+            && max_iterations >= 5
+        {
+            budget_grace_injected = true;
+            warn!(
+                iteration,
+                tool_calls_made, "budget nearly exhausted, injecting grace call to summarize"
+            );
+            let grace_msg = "[System: Your tool budget is almost exhausted. Summarize the \
+                             information and actions you have completed so far. Do not call more \
+                             tools.]";
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": grace_msg,
+                    }),
+                    None,
+                )
+                .await;
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "Budget nearly exhausted — requesting summary...".to_string(),
+            });
+            // Disable tools for the grace iteration so the model must respond with text.
+            tool_defs = vec![];
         }
     }
 
