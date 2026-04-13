@@ -117,7 +117,6 @@ use rara_kernel::{
         RawPlatformMessage, ReplyContext, StreamHubRef,
     },
     security::{ApprovalDecision, ApprovalRequest, ResolveError},
-    session::SessionIndexRef,
     user_question::{UserQuestion, UserQuestionManagerRef},
 };
 use teloxide::{
@@ -261,18 +260,6 @@ struct ProgressMessage {
     /// Whether the LLM is currently in extended thinking (reasoning) phase.
     /// Set on first `ReasoningDelta`, cleared on first `ToolCallStart`.
     thinking:          bool,
-    /// Active background tasks (subagents) spawned during this turn.
-    background_tasks:  Vec<BackgroundTaskState>,
-}
-
-/// Tracks a spawned background task for progress display.
-struct BackgroundTaskState {
-    task_id:     String,
-    agent_name:  String,
-    description: String,
-    started_at:  Instant,
-    finished:    bool,
-    status:      Option<rara_kernel::io::BackgroundTaskStatus>,
 }
 
 impl ProgressMessage {
@@ -298,7 +285,6 @@ impl ProgressMessage {
             plan_current_step: None,
             turn_rationale: None,
             thinking: false,
-            background_tasks: Vec::new(),
         }
     }
 
@@ -465,9 +451,6 @@ fn render_progress(
         lines.push(thinking_hint(progress));
     }
 
-    // Background tasks (subagents).
-    render_background_tasks(&progress.background_tasks, &mut lines);
-
     // Footer: spinner verb + elapsed + tokens + thinking.
     {
         let verb = super::spinner_verbs::random_verb().to_lowercase();
@@ -539,9 +522,6 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         }
     }
 
-    // Background tasks (subagents).
-    render_background_tasks(&progress.background_tasks, &mut lines);
-
     // Footer: elapsed + tokens
     let mut parts = vec![format_duration_compact(turn_elapsed)];
     if progress.input_tokens > 0 || progress.output_tokens > 0 {
@@ -559,36 +539,6 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
     lines.push(format!("\u{2733} {}", parts.join(" \u{00b7} ")));
 
     lines.join("\n")
-}
-
-/// Render background task (subagent) status lines.
-///
-/// Each task gets one line: status emoji + agent name + description + elapsed.
-fn render_background_tasks(tasks: &[BackgroundTaskState], lines: &mut Vec<String>) {
-    if tasks.is_empty() {
-        return;
-    }
-    lines.push(String::new());
-    for task in tasks {
-        let elapsed = format_duration_compact(task.started_at.elapsed());
-        if task.finished {
-            let icon = match task.status {
-                Some(rara_kernel::io::BackgroundTaskStatus::Completed) => "\u{2705}",
-                Some(rara_kernel::io::BackgroundTaskStatus::Failed) => "\u{274c}",
-                Some(rara_kernel::io::BackgroundTaskStatus::Cancelled) => "\u{23f9}\u{fe0f}",
-                None => "\u{2705}",
-            };
-            lines.push(format!(
-                "{icon} \u{1f916} {} \u{2014} {} {elapsed}",
-                task.agent_name, task.description,
-            ));
-        } else {
-            lines.push(format!(
-                "\u{23f3} \u{1f916} {} \u{2014} {} {elapsed}",
-                task.agent_name, task.description,
-            ));
-        }
-    }
 }
 
 fn format_token_count(tokens: u32) -> String {
@@ -1414,20 +1364,17 @@ impl ChannelAdapter for TelegramAdapter {
             }
         }
 
-        // Spawn approval request listener — sends inline keyboard to the
-        // originating chat (resolved via session binding).
+        // Spawn approval request listener — sends inline keyboard to primary chat.
         {
             let approval_rx = handle.security().approval().subscribe_requests();
             let approval_bot = self.bot.clone();
             let approval_config = Arc::clone(&self.config);
-            let approval_session_index = Arc::clone(handle.session_index());
             let mut approval_shutdown = self.shutdown_rx.clone();
             tokio::spawn(async move {
                 approval_listener(
                     approval_bot,
                     approval_rx,
                     approval_config,
-                    approval_session_index,
                     &mut approval_shutdown,
                 )
                 .await;
@@ -2150,15 +2097,11 @@ async fn handle_cascade_callback(
 }
 
 /// Listens for new approval requests and sends inline keyboard messages
-/// to the originating Telegram chat so the user can approve or deny.
-///
-/// The chat is resolved from the session's channel binding; falls back to
-/// `primary_chat_id` when no binding exists.
+/// to the primary Telegram chat so the user can approve or deny.
 async fn approval_listener(
     bot: teloxide::Bot,
     mut rx: tokio::sync::broadcast::Receiver<ApprovalRequest>,
     config: Arc<StdRwLock<TelegramConfig>>,
-    session_index: SessionIndexRef,
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
     loop {
@@ -2177,24 +2120,12 @@ async fn approval_listener(
                     }
                 };
 
-                // Resolve the originating chat from the session's channel
-                // binding; fall back to primary_chat_id when unavailable.
-                let binding_chat_id = session_index
-                    .get_channel_binding_by_session(&req.session_key)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|b| b.chat_id.parse::<i64>().ok());
-
-                let chat_id = binding_chat_id.or_else(|| {
+                let chat_id = {
                     let cfg = config.read().unwrap_or_else(|e| e.into_inner());
                     cfg.primary_chat_id
-                });
+                };
                 let Some(chat_id) = chat_id else {
-                    warn!(
-                        session_key = %req.session_key,
-                        "telegram approval listener: no channel binding and no primary_chat_id configured"
-                    );
+                    warn!("telegram approval listener: no primary_chat_id configured, cannot send approval prompt");
                     continue;
                 };
 
@@ -3467,25 +3398,7 @@ fn spawn_stream_forwarder(
                         // ToolOutput is a live preview (e.g. bash stdout) — Telegram
                         // messages cannot be updated fast enough for streaming.
                         Ok(StreamEvent::ToolOutput { .. }) => {}
-                        Ok(StreamEvent::BackgroundTaskStarted { task_id, agent_name, description }) => {
-                            progress.background_tasks.push(BackgroundTaskState {
-                                task_id,
-                                agent_name,
-                                description,
-                                started_at: Instant::now(),
-                                finished: false,
-                                status: None,
-                            });
-                            progress_dirty = true;
-                        }
-                        Ok(StreamEvent::BackgroundTaskDone { task_id, status }) => {
-                            if let Some(task) = progress.background_tasks.iter_mut().find(|t| t.task_id == task_id) {
-                                task.finished = true;
-                                task.status = Some(status);
-                                progress_dirty = true;
-                            }
-                        }
-                        // Progress, DockTurnComplete, LoopBreakerTriggered
+                        // Progress, DockTurnComplete, BackgroundTask*, LoopBreakerTriggered
                         // — no Telegram UX for these.
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

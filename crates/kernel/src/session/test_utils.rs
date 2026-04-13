@@ -98,18 +98,6 @@ impl SessionIndex for InMemorySessionIndex {
             .map(|entry| entry.clone()))
     }
 
-    async fn get_channel_binding_by_session(
-        &self,
-        key: &SessionKey,
-    ) -> Result<Option<ChannelBinding>, SessionError> {
-        let key_str = key.to_string();
-        Ok(self
-            .bindings
-            .iter()
-            .find(|entry| entry.value().session_key.to_string() == key_str)
-            .map(|entry| entry.value().clone()))
-    }
-
     async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
         let key_str = key.to_string();
         let to_remove: Vec<_> = self
