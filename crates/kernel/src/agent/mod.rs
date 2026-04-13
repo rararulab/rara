@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod ack_detector;
 pub mod effect;
 pub mod fold;
 pub(crate) mod loop_breaker;
@@ -1077,6 +1078,9 @@ pub(crate) async fn run_agent_loop(
     // Set when a new user message interrupts the turn — the turn should
     // exit quietly without emitting exhaustion warnings or fallback text.
     let mut was_interrupted = false;
+    // How many times we nudged the model for producing an intermediate ack
+    // ("I'll look into it...") instead of calling tools.
+    let mut ack_nudge_count: usize = 0;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1751,6 +1755,31 @@ pub(crate) async fn run_agent_loop(
             );
             tool_defs = vec![];
             in_llm_error_recovery = true;
+            continue;
+        }
+
+        // Anti-laziness: detect intermediate ack ("I'll look into it...")
+        // and nudge the model to actually call tools instead of stopping.
+        // Aligned with hermes-agent _looks_like_codex_intermediate_ack.
+        if !has_tool_calls
+            && !in_llm_error_recovery
+            && ack_nudge_count < ack_detector::MAX_ACK_NUDGES
+            && ack_detector::looks_like_intermediate_ack(&accumulated_text, &messages)
+        {
+            ack_nudge_count += 1;
+            warn!(
+                iteration,
+                ack_nudge_count,
+                text_preview = %accumulated_text.chars().take(80).collect::<String>(),
+                "intermediate ack detected, nudging model to take action"
+            );
+            // Keep the ack as an intermediate assistant message so the model
+            // sees its own plan in context. Aligned with hermes: append
+            // assistant msg with finish_reason="incomplete", then user nudge.
+            messages.push(llm::Message::assistant(accumulated_text.clone()));
+            messages.push(llm::Message::user(
+                ack_detector::ACK_NUDGE_MESSAGE.to_string(),
+            ));
             continue;
         }
 
