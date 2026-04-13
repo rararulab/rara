@@ -179,10 +179,10 @@ fn draw_progress_section(frame: &mut Frame, area: Rect, state: &ChatState) {
             .map(|d| format!(" ({})", format_tool_duration(d)))
             .unwrap_or_default();
 
-        let summary_part = if !entry.finished && !entry.summary.is_empty() {
-            format!(" \u{2014} {}", entry.summary)
-        } else {
+        let summary_part = if entry.summary.is_empty() {
             String::new()
+        } else {
+            format!(" \u{2014} {}", entry.summary)
         };
 
         lines.push(Line::from(vec![
