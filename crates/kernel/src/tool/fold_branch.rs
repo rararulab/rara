@@ -170,7 +170,6 @@ impl ToolExecute for FoldBranchTool {
             sandbox: None,
             default_execution_mode: None,
             tool_call_limit: None,
-            max_continuations: Some(0),
             worker_timeout_secs: None,
         };
 

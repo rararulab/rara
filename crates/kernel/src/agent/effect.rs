@@ -102,14 +102,6 @@ pub enum Effect {
         /// Reason the machine reached a terminal state.
         reason:     FinishReason,
     },
-    /// Inject a continuation wake system message into the conversation
-    /// before the next LLM call. The runner constructs the message.
-    InjectContinuationWake {
-        /// Current continuation turn number (1-based).
-        turn: usize,
-        /// Maximum continuations allowed.
-        max:  usize,
-    },
     /// Terminate the loop with a failure.
     Fail {
         /// Free-form failure description.

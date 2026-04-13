@@ -123,9 +123,6 @@ pub mod tool_names {
     // ACP delegation
     tool!(ACP_DELEGATE, "acp-delegate");
 
-    // Continuation signal
-    tool!(CONTINUE_WORK, "continue-work");
-
     // User interaction
     tool!(ASK_USER, "ask-user");
 }

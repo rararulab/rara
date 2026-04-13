@@ -853,7 +853,6 @@ impl Kernel {
             origin_endpoint,
             pause_buffer: Vec::new(),
             interrupted: Arc::new(AtomicBool::new(false)),
-            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
             background_tasks: Vec::new(),
             pending_tool_call_limit: None,
             activated_deferred: std::collections::HashSet::new(),
@@ -1760,7 +1759,6 @@ impl Kernel {
                     .push(KernelEventEnvelope::user_message(msg.clone()));
                 // Signal the agent loop to break at next checkpoint.
                 rt.interrupted.store(true, Ordering::Relaxed);
-                rt.interrupt_notify.notify_one();
                 return true;
             }
             false
@@ -2251,12 +2249,10 @@ impl Kernel {
             .flatten();
         let parent_span = tracing::Span::current();
 
-        // Clone the interrupt flag + notify so the spawned agent task can check it.
-        let (interrupted, interrupt_notify) = self
+        // Clone the interrupt flag so the spawned agent task can check it.
+        let interrupted = self
             .process_table
-            .with(&session_key, |p| {
-                (Arc::clone(&p.interrupted), Arc::clone(&p.interrupt_notify))
-            })
+            .with(&session_key, |p| Arc::clone(&p.interrupted))
             .expect("session must exist when starting turn");
 
         // -- Phase 6b: Resolve execution mode ------------------------------------
@@ -2429,7 +2425,6 @@ impl Kernel {
                         notification_bus,
                         rara_message_id,
                         &interrupted,
-                        &interrupt_notify,
                     )
                     .await
                 } else {
@@ -2448,7 +2443,6 @@ impl Kernel {
                         notification_bus,
                         rara_message_id,
                         &interrupted,
-                        &interrupt_notify,
                     )
                     .await
                 };

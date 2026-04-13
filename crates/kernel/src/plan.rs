@@ -258,7 +258,6 @@ pub(crate) async fn run_plan_loop(
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
     interrupted: &AtomicBool,
-    interrupt_notify: &tokio::sync::Notify,
 ) -> Result<AgentTurnResult> {
     info!(session_key = %session_key, "plan executor: starting v2 plan-execute loop");
     let start = Instant::now();
@@ -408,7 +407,6 @@ pub(crate) async fn run_plan_loop(
                     notification_bus.clone(),
                     rara_message_id,
                     interrupted,
-                    interrupt_notify,
                     &mut total_iterations,
                     &mut total_tool_calls,
                     &mut last_model,
@@ -1045,7 +1043,6 @@ async fn execute_worker_step(
         default_execution_mode: None,
         tool_call_limit:        None,
         worker_timeout_secs:    None,
-        max_continuations:      Some(0),
     };
 
     info!(
@@ -1339,7 +1336,6 @@ async fn execute_inline_step(
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
     interrupted: &AtomicBool,
-    interrupt_notify: &tokio::sync::Notify,
     total_iterations: &mut usize,
     total_tool_calls: &mut usize,
     last_model: &mut String,
@@ -1404,7 +1400,6 @@ async fn execute_inline_step(
         notification_bus,
         rara_message_id,
         interrupted,
-        interrupt_notify,
     )
     .await;
 

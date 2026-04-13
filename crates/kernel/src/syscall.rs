@@ -377,8 +377,6 @@ impl SyscallDispatcher {
                     }
                     // Plan tools
                     registry.register(Arc::new(crate::tool::create_plan::CreatePlanTool));
-                    // Self-continuation signal
-                    registry.register(Arc::new(crate::tool::continue_work::ContinueWorkTool));
                 }
                 // Inject dynamic tools (e.g. MCP server tools).
                 if let Some(ref provider) = self.dynamic_tool_provider {
