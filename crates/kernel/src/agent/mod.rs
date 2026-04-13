@@ -1786,46 +1786,46 @@ pub(crate) async fn run_agent_loop(
             continue;
         }
 
-        // Anti-laziness: detect intermediate ack ("I'll look into it...")
-        // and nudge the model to actually call tools instead of stopping.
-        // Aligned with hermes-agent _looks_like_codex_intermediate_ack.
+        // Anti-laziness: three-tier detection of intermediate ack, verbose
+        // narration, and dense planning essays. Nudge message varies by tier.
         if !has_tool_calls
             && !in_llm_error_recovery
             && ack_nudge_count < ack_detector::MAX_ACK_NUDGES
-            && ack_detector::looks_like_intermediate_ack(&accumulated_text, &messages)
         {
-            ack_nudge_count += 1;
-            warn!(
-                iteration,
-                ack_nudge_count,
-                text_preview = %accumulated_text.chars().take(80).collect::<String>(),
-                "intermediate ack detected, nudging model to take action"
-            );
-            // Persist intermediate assistant text to tape so the model sees
-            // its own plan in context after rebuild. Aligned with hermes:
-            // append assistant msg with finish_reason="incomplete".
-            let _ = tape
-                .append_message(
-                    tape_name,
-                    serde_json::json!({
-                        "role": "assistant",
-                        "content": &accumulated_text,
-                    }),
-                    None,
-                )
-                .await;
-            // Persist nudge to tape so it survives the message rebuild.
-            let _ = tape
-                .append_message(
-                    tape_name,
-                    serde_json::json!({
-                        "role": "user",
-                        "content": ack_detector::ACK_NUDGE_MESSAGE,
-                    }),
-                    None,
-                )
-                .await;
-            continue;
+            if let Some(kind) = ack_detector::detect(&accumulated_text, &messages) {
+                ack_nudge_count += 1;
+                warn!(
+                    iteration,
+                    ack_nudge_count,
+                    ?kind,
+                    text_preview = %accumulated_text.chars().take(80).collect::<String>(),
+                    "laziness detected, nudging model to take action"
+                );
+                // Persist intermediate assistant text to tape so the model
+                // sees its own plan in context after rebuild.
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": &accumulated_text,
+                        }),
+                        None,
+                    )
+                    .await;
+                // Persist tier-specific nudge to tape.
+                let _ = tape
+                    .append_message(
+                        tape_name,
+                        serde_json::json!({
+                            "role": "user",
+                            "content": kind.nudge_message(),
+                        }),
+                        None,
+                    )
+                    .await;
+                continue;
+            }
         }
 
         // Terminal response: exit when the LLM produced no tool calls.
