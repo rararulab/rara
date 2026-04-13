@@ -44,7 +44,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     system_prompt:          rara_system_prompt(),
     soul_prompt:            None,
     provider_hint:          None,
-    max_iterations:         None,
+    max_iterations:         Some(25),
     tools:                  vec![],
     excluded_tools:         vec![],
     max_children:           None,

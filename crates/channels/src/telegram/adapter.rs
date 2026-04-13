@@ -1171,18 +1171,8 @@ impl ChannelAdapter for TelegramAdapter {
                     }
 
                     if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
-                        // Only treat accumulated text as "already displayed" when a
-                        // Telegram message was actually sent. Fast text-only turns
-                        // may close before the throttle tick fires, leaving
-                        // accumulated content that was never shown to the user.
-                        let msg_was_sent = stream_state
-                            .message_ids
-                            .last()
-                            .map_or(false, |id| *id != MessageId(0));
-                        if msg_was_sent {
-                            streamed_visible_prefix =
-                                Some(strip_tool_call_xml(&stream_state.accumulated));
-                        }
+                        streamed_visible_prefix =
+                            Some(strip_tool_call_xml(&stream_state.accumulated));
                         if let Some(&last_msg_id) = stream_state.message_ids.last() {
                             if last_msg_id != MessageId(0) {
                                 let html =

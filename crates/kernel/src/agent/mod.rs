@@ -38,10 +38,7 @@ pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::Instant,
 };
 
@@ -874,8 +871,7 @@ call `discover-tools` to load it first.{tool_list}
         tape,
         tape_name,
         guard_pipeline,
-        notification_bus,
-        interrupted
+        notification_bus
     ),
     fields(
         session_key = %session_key,
@@ -895,7 +891,6 @@ pub(crate) async fn run_agent_loop(
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
-    interrupted: &AtomicBool,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1052,9 +1047,6 @@ pub(crate) async fn run_agent_loop(
     // Distinguishes "user stopped via limit" from "max iterations exhausted"
     // in the post-loop exit logic — they produce different user messages.
     let mut stopped_by_limit = false;
-    // Set when a new user message interrupts the turn — the turn should
-    // exit quietly without emitting exhaustion warnings or fallback text.
-    let mut was_interrupted = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1085,17 +1077,6 @@ pub(crate) async fn run_agent_loop(
     };
 
     for iteration in 0..max_iterations {
-        // Check interrupt flag — a new user message arrived while this turn
-        // was running. Break early so the kernel can drain the pause buffer
-        // and start a new turn with the latest message.
-        if interrupted.load(Ordering::Relaxed) {
-            info!("agent turn interrupted by new user message at iteration start");
-            stream_handle.emit(StreamEvent::Progress {
-                stage: "interrupted".to_string(),
-            });
-            was_interrupted = true;
-            break;
-        }
         // ── Auto-fold: pressure-driven context compression ───────────
         // Runs BEFORE rebuild so the new anchor (if created) takes effect
         // in this iteration's context.  Disabled for the remainder of this
@@ -2642,16 +2623,6 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
-        // Check interrupt flag after tool wave completes.
-        if interrupted.load(Ordering::Relaxed) {
-            info!("agent turn interrupted after tool wave");
-            stream_handle.emit(StreamEvent::Progress {
-                stage: "interrupted".to_string(),
-            });
-            was_interrupted = true;
-            break;
-        }
-
         // ── Runtime context guard ──────────────────────────────────────
         // Context pressure warnings are disabled — they caused excessive
         // anchoring that destroyed context and KV cache.  The LLM decides
@@ -2673,16 +2644,7 @@ pub(crate) async fn run_agent_loop(
     }
 
     // Determine exit reason and build appropriate error/message.
-    let exhaustion_error = if was_interrupted {
-        // Turn interrupted by a new user message — exit quietly.
-        // No warning, no fallback text. The buffered message will
-        // trigger a fresh turn with full context.
-        info!(
-            tool_calls_made,
-            "agent turn interrupted, yielding to new message"
-        );
-        format!("interrupted after {tool_calls_made} tool calls")
-    } else if stopped_by_limit {
+    let exhaustion_error = if stopped_by_limit {
         // User clicked "stop" or tool call limit timed out — not an exhaustion error.
         let msg = format!("agent stopped by user/timeout after {tool_calls_made} tool calls");
         warn!(
