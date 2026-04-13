@@ -95,6 +95,11 @@ pub trait Subsystems: Send + Sync {
 
     /// Forward a stream event to the user-facing transport.
     async fn emit_stream(&mut self, kind: String);
+
+    /// Inject a system/user message into the conversation context so the
+    /// LLM sees it on the next `call_llm`.  Used by continuation wake.
+    /// Default: no-op (test stubs that don't model message history).
+    async fn inject_user_message(&mut self, _text: String) {}
 }
 
 /// Drive the [`AgentMachine`] to completion against `subsys`.
@@ -127,12 +132,14 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                 }
                 Effect::AppendTape { kind } => subsys.append_tape(kind).await,
                 Effect::InjectContinuationWake { turn, max } => {
-                    subsys
-                        .emit_stream(format!(
-                            "[continuation:wake] Turn {turn}/{max}. The agent elected to continue \
-                             working."
-                        ))
-                        .await;
+                    let wake_msg = format!(
+                        "[continuation:wake] Turn {turn}/{max}. The agent elected to continue \
+                         working."
+                    );
+                    // Inject into conversation context so the LLM sees it.
+                    subsys.inject_user_message(wake_msg.clone()).await;
+                    // Also emit to stream for observability.
+                    subsys.emit_stream(wake_msg).await;
                 }
                 Effect::EmitStream { kind } => subsys.emit_stream(kind).await,
                 Effect::Finish {

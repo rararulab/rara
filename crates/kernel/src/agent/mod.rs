@@ -1715,10 +1715,11 @@ pub(crate) async fn run_agent_loop(
         // but subsequent iterations (after tool restoration) can resume
         // normal tool-calling flow.
         if !has_tool_calls {
-            // ── Text-token fallback: detect CONTINUE_WORK at response tail ──
-            // Always strip the sentinel to prevent it from leaking to the user,
-            // regardless of whether continuation budget remains.
-            if !continuation_pending {
+            // ── Text-token fallback: strip CONTINUE_WORK from response tail ──
+            // Always strip to prevent leaking the sentinel to the user, even
+            // when continuation_pending is already set (dual-channel case) or
+            // the budget is exhausted.
+            {
                 let trimmed = accumulated_text.trim();
                 if trimmed.ends_with("CONTINUE_WORK") {
                     let end = accumulated_text
@@ -1726,7 +1727,7 @@ pub(crate) async fn run_agent_loop(
                         .expect("CONTINUE_WORK confirmed present by ends_with check");
                     accumulated_text.truncate(end);
                     accumulated_text = accumulated_text.trim_end().to_string();
-                    if continuation_count < max_continuations {
+                    if !continuation_pending && continuation_count < max_continuations {
                         continuation_pending = true;
                     }
                     info!(
