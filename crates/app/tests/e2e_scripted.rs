@@ -432,9 +432,22 @@ async fn llm_error_does_not_crash_session() {
         .expect("spawn session");
 
     // The agent loop returns Err for non-retryable errors, so no TurnTrace
-    // is pushed. Instead, poll until the session transitions back to Ready
-    // (meaning the error was handled and the session is alive).
+    // is pushed. Poll for Active first (turn started), then Ready (turn
+    // completed) — the session starts in Ready state, so polling for Ready
+    // directly would race with the initial message delivery.
     let deadline = Instant::now() + TURN_WAIT_TIMEOUT;
+    loop {
+        if let Some(stats) = tk.handle.session_stats(session_key) {
+            if matches!(stats.state, SessionState::Active) {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for session to become Active"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
     loop {
         if let Some(stats) = tk.handle.session_stats(session_key) {
             if matches!(stats.state, SessionState::Ready) {
