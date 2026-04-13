@@ -10,6 +10,7 @@ use crate::{
 };
 
 /// HTTP client for an OpenAI-compatible `/v1/audio/speech` endpoint.
+#[derive(Clone)]
 pub struct TtsService {
     client: reqwest::Client,
     config: TtsConfig,
