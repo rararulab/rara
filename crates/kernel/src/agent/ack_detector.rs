@@ -14,14 +14,22 @@
 
 //! Runtime detection of lazy LLM responses.
 //!
-//! Catches 4 categories of laziness:
-//! 1. **Planning ack** — "I'll look into it..." (hermes/Logos/Mullet)
-//! 2. **Permission seeking** — "Would you like me to..." "Should I..."
-//! 3. **Self-narration** — "Here's my plan..." "The approach is..."
-//! 4. **Deferral** — "In the next step..." "After that..."
+//! Three detection tiers (inspired by Triggerfish's quality classifier):
 //!
-//! Pattern sources: hermes-agent, Logos, Mullet, Omegon, aider, Cursor,
-//! SLOP_Detector, stop-slop, and real-world rara logs.
+//! 1. **Short ack** (≤ 2000 chars) — full-text pattern match against 5 laziness
+//!    categories: future-planning, permission-seeking, self-narration,
+//!    deferral, and conditional offering.
+//! 2. **Trailing intent** (2000–8000 chars) — tail-only check (last 600 chars)
+//!    for lazy patterns. Catches GPT's verbose analyses that end with "if you
+//!    want, I can..." offers.
+//! 3. **Dense narration** (2000–8000 chars) — 5+ intent phrases in a single
+//!    response = planning essay regardless of where they appear.
+//!
+//! All tiers share guards: tool-result skip, think-block stripping, and
+//! result-phrase exclusion.
+//!
+//! Pattern sources: hermes-agent, Logos, Mullet, Triggerfish, Omegon,
+//! aider, Cursor, SLOP_Detector, stop-slop, and real-world rara logs.
 
 use std::sync::OnceLock;
 
@@ -29,9 +37,22 @@ use regex::Regex;
 
 use crate::llm;
 
-/// Maximum assistant response length (chars) to consider.
+/// Maximum assistant response length (chars) for short-ack detection.
 /// GPT models produce verbose planning responses that exceed 1200 chars.
 const MAX_ACK_LENGTH_CHARS: usize = 2000;
+
+/// Tail window (chars) for verbose narration detection.
+/// GPT writes long analyses ending with "if you want, I can..." offers;
+/// checking only the tail avoids false positives from incidental matches.
+const TAIL_CHECK_CHARS: usize = 600;
+
+/// Upper bound for verbose narration tier. Responses beyond this are
+/// assumed to be genuine long-form output (documentation, reports).
+const MAX_VERBOSE_NARRATION_CHARS: usize = 8000;
+
+/// Minimum intent-phrase count to trigger dense-narration detection.
+/// Aligned with Triggerfish's `DENSE_NARRATION_THRESHOLD`.
+const DENSE_NARRATION_THRESHOLD: usize = 5;
 
 // ---------------------------------------------------------------------------
 // Category 1: Future-tense planning ("I'll...", "Let me...")
@@ -162,6 +183,12 @@ const CHINESE_LAZY_PATTERNS: &[&str] = &[
     "接着我",
     "等一下我",
     "后续我",
+    // Category 5: Conditional offering — GPT's verbose "if you want, I can..."
+    "如果你要",
+    "如果你愿意",
+    "如果你需要",
+    "你看怎么样",
+    "你觉得呢",
 ];
 
 // ---------------------------------------------------------------------------
@@ -310,58 +337,152 @@ fn strip_think_blocks(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Shared matchers — used by both short-ack and verbose-narration tiers
+// ---------------------------------------------------------------------------
+
+/// Whether lowercased text contains any lazy response pattern.
+fn matches_lazy_pattern(lower: &str) -> bool {
+    future_ack_regex().is_match(lower)
+        || permission_regex().is_match(lower)
+        || narration_regex().is_match(lower)
+        || ENGLISH_ACK_SUBSTRINGS.iter().any(|p| lower.contains(p))
+        || CHINESE_LAZY_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+/// Whether lowercased text mentions a concrete action verb.
+fn matches_action_marker(lower: &str) -> bool {
+    ACTION_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// Whether lowercased text contains phrases indicating genuine results.
+fn matches_result_phrase(lower: &str) -> bool { RESULT_PHRASES.iter().any(|rp| lower.contains(rp)) }
+
+/// Extract the last `n` characters of a string.
+fn tail_chars(text: &str, n: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= n {
+        return text.to_string();
+    }
+    chars[chars.len() - n..].iter().collect()
+}
+
+/// Count total intent-phrase occurrences across all laziness categories.
+/// Used by the dense-narration tier — 5+ hits = planning essay.
+fn count_intent_phrases(lower: &str) -> usize {
+    let mut count = 0;
+    count += future_ack_regex().find_iter(lower).count();
+    count += permission_regex().find_iter(lower).count();
+    count += narration_regex().find_iter(lower).count();
+    for p in ENGLISH_ACK_SUBSTRINGS {
+        count += lower.matches(p).count();
+    }
+    for p in CHINESE_LAZY_PATTERNS {
+        count += lower.matches(p).count();
+    }
+    count
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Check whether an assistant response is a lazy ack/hedge/narration that
-/// should be nudged instead of ending the turn.
+/// Classification of detected laziness for differentiated nudging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckKind {
+    /// Short planning ack (≤ 2000 chars), full-text match.
+    ShortAck,
+    /// Long response with lazy tail (2000–8000 chars).
+    TrailingIntent,
+    /// Response saturated with 5+ intent phrases.
+    DenseNarration,
+}
+
+impl AckKind {
+    /// Nudge message appropriate for this laziness category.
+    pub fn nudge_message(self) -> &'static str {
+        match self {
+            Self::ShortAck => SHORT_ACK_NUDGE,
+            Self::TrailingIntent => TRAILING_INTENT_NUDGE,
+            Self::DenseNarration => DENSE_NARRATION_NUDGE,
+        }
+    }
+}
+
+const SHORT_ACK_NUDGE: &str = "[System: You described what you intend to do but did not call any \
+                               tools. Use your tools now to complete the task. Do not narrate — \
+                               act.]";
+
+const TRAILING_INTENT_NUDGE: &str = "[System: You wrote a lengthy analysis but ended with an \
+                                     unfulfilled intention instead of executing. Stop discussing \
+                                     — call a tool now to make concrete progress.]";
+
+const DENSE_NARRATION_NUDGE: &str = "[System: Your response is a planning essay with multiple \
+                                     stated intentions but zero tool calls. Stop narrating your \
+                                     plan and execute it. Call a tool in your very next response.]";
+
+/// Three-tier detection of lazy ack/hedge/narration that should be nudged
+/// instead of ending the turn.
 ///
-/// Detection flow:
-/// 1. Skip if last message is a tool result (model is summarizing — genuine).
-/// 2. Strip `<think>` blocks. Check length ≤ 1200 chars.
-/// 3. Skip if response contains result phrases (genuine answer).
-/// 4. Match against 4 laziness categories (future-ack, permission, narration,
-///    CJK).
-/// 5. Require an action marker to confirm the model is describing work.
-pub fn looks_like_intermediate_ack(assistant_text: &str, messages: &[llm::Message]) -> bool {
-    // Genuine summary: last message is a tool result.
+/// Returns the detected [`AckKind`] or `None` if the response is genuine.
+/// See module docs for tier descriptions.
+pub fn detect(assistant_text: &str, messages: &[llm::Message]) -> Option<AckKind> {
+    // Guard: skip if last message is a tool result (genuine summary).
     if let Some(last) = messages.last() {
         if matches!(last.role, llm::Role::Tool) {
-            return false;
+            return None;
         }
     }
 
     let stripped = strip_think_blocks(assistant_text);
     let text = stripped.trim();
-    if text.is_empty() || text.chars().count() > MAX_ACK_LENGTH_CHARS {
-        return false;
+    if text.is_empty() {
+        return None;
     }
 
+    let char_count = text.chars().count();
     let lower = text.to_lowercase();
 
-    // Result phrase exclusion: genuine answers pass through.
-    if RESULT_PHRASES.iter().any(|rp| lower.contains(rp)) {
-        return false;
+    // Result phrases anywhere → genuine answer, skip all tiers.
+    if matches_result_phrase(&lower) {
+        return None;
     }
 
-    // Match any laziness category.
-    let is_lazy = future_ack_regex().is_match(&lower)
-        || permission_regex().is_match(&lower)
-        || narration_regex().is_match(&lower)
-        || ENGLISH_ACK_SUBSTRINGS.iter().any(|p| lower.contains(p))
-        || CHINESE_LAZY_PATTERNS.iter().any(|p| lower.contains(p));
-    if !is_lazy {
-        return false;
+    // Upper bound: responses beyond MAX_VERBOSE_NARRATION_CHARS are assumed
+    // to be genuine long-form output (documentation, reports).
+    if char_count > MAX_VERBOSE_NARRATION_CHARS {
+        return None;
     }
 
-    // Require action marker to confirm it's about work, not small talk.
-    ACTION_MARKERS.iter().any(|marker| lower.contains(marker))
+    // Tier 1: Short ack — full-text lazy pattern + action marker.
+    if char_count <= MAX_ACK_LENGTH_CHARS {
+        if matches_lazy_pattern(&lower) && matches_action_marker(&lower) {
+            return Some(AckKind::ShortAck);
+        }
+        return None;
+    }
+
+    // For longer responses (2000–8000 chars), two detection strategies:
+
+    // Tier 3: Dense narration — many intent phrases across the full text.
+    // Checked first because it is higher confidence than tail-only check.
+    if count_intent_phrases(&lower) >= DENSE_NARRATION_THRESHOLD {
+        return Some(AckKind::DenseNarration);
+    }
+
+    // Tier 2: Trailing intent — lazy pattern in the tail only.
+    // GPT writes long analyses ending with "if you want, I can..." offers.
+    let tail = tail_chars(&lower, TAIL_CHECK_CHARS);
+    if matches_lazy_pattern(&tail) && matches_action_marker(&tail) {
+        return Some(AckKind::TrailingIntent);
+    }
+
+    None
 }
 
-/// Nudge message injected after laziness is detected.
-pub const ACK_NUDGE_MESSAGE: &str = "[System: You described what you intend to do but did not \
-                                     call any tools. Use your tools now to complete the task. Do \
-                                     not narrate — act.]";
+/// Convenience wrapper — returns `true` if any laziness tier matches.
+pub fn looks_like_intermediate_ack(assistant_text: &str, messages: &[llm::Message]) -> bool {
+    detect(assistant_text, messages).is_some()
+}
 
 /// Maximum nudges per turn.
 pub const MAX_ACK_NUDGES: usize = 2;
@@ -563,8 +684,9 @@ mod tests {
     }
 
     #[test]
-    fn ignores_long_response() {
-        let long = "I'll analyze this. ".repeat(200);
+    fn ignores_long_response_no_patterns() {
+        // Long response with no lazy patterns at all → pass through.
+        let long = "The configuration looks standard. ".repeat(100);
         assert!(!looks_like_intermediate_ack(&long, &empty()));
     }
 
@@ -637,5 +759,140 @@ mod tests {
             "已经完成了配置文件的修复，搞定了",
             &empty(),
         ));
+    }
+
+    // ── Tier 2: Trailing intent (verbose narration with lazy tail) ──
+
+    #[test]
+    fn catches_verbose_chinese_trailing_intent() {
+        // GPT's classic: 3000+ chars of architecture discussion ending with
+        // "如果你要，我下一步可以...检查..."
+        // Body uses neutral text (no lazy patterns) so only the tail triggers.
+        let body = "这个模块的职责划分是合理的，结构清晰，边界明确。".repeat(200);
+        let tail = "如果你要，我下一步可以直接替你做最后一轮检查";
+        let text = format!("{body}{tail}");
+        assert!(text.chars().count() > MAX_ACK_LENGTH_CHARS);
+        assert_eq!(detect(&text, &empty()), Some(AckKind::TrailingIntent));
+    }
+
+    #[test]
+    fn catches_verbose_english_trailing_intent() {
+        let body = "The module architecture looks correct. ".repeat(80);
+        let tail = " Would you like me to check the configuration and fix the issue?";
+        let text = format!("{body}{tail}");
+        assert!(text.chars().count() > MAX_ACK_LENGTH_CHARS);
+        assert_eq!(detect(&text, &empty()), Some(AckKind::TrailingIntent));
+    }
+
+    #[test]
+    fn verbose_ignores_genuine_answer() {
+        let body = "The module architecture looks correct. ".repeat(80);
+        let tail = " I've completed the analysis and the root cause is in the config.";
+        let text = format!("{body}{tail}");
+        assert!(!looks_like_intermediate_ack(&text, &empty()));
+    }
+
+    #[test]
+    fn verbose_ignores_result_in_body() {
+        let body = format!(
+            "{}. Here is what I found: the config is broken. ",
+            "x".repeat(2000),
+        );
+        let tail = "如果你要，我下一步可以检查一下";
+        let text = format!("{body}{tail}");
+        assert!(!looks_like_intermediate_ack(&text, &empty()));
+    }
+
+    #[test]
+    fn verbose_ignores_very_long_response() {
+        let text = format!("{}如果你要，我来检查一下", "x".repeat(9000));
+        assert!(!looks_like_intermediate_ack(&text, &empty()));
+    }
+
+    #[test]
+    fn verbose_ignores_clean_tail() {
+        // Long response with neutral body and no lazy pattern in the tail.
+        let body = "The configuration is standard. ".repeat(100);
+        let tail = " Everything follows best practices and no changes are needed.";
+        let text = format!("{body}{tail}");
+        assert!(text.chars().count() > MAX_ACK_LENGTH_CHARS);
+        assert!(!looks_like_intermediate_ack(&text, &empty()));
+    }
+
+    // ── Tier 3: Dense narration (5+ intent phrases) ──
+
+    #[test]
+    fn catches_dense_english_narration() {
+        // Planning essay with 6 intent phrases, padded to exceed 2000 chars.
+        let text = format!(
+            "{}First, I'll check the logs. Then I need to review the config. Let me also inspect \
+             the database. I should verify the migrations. I'm going to investigate the API \
+             layer. Allow me to examine the tests.",
+            "x".repeat(2200),
+        );
+        assert!(text.chars().count() > MAX_ACK_LENGTH_CHARS);
+        assert_eq!(detect(&text, &empty()), Some(AckKind::DenseNarration));
+    }
+
+    #[test]
+    fn catches_dense_chinese_narration() {
+        // Planning essay with 6+ Chinese intent phrases
+        let text = format!(
+            "{}我先检查一下日志。然后我来看看配置文件。接下来我去确认数据库迁移。我打算分析API层。\
+             首先我要验证测试用例。后续我处理一下部署问题。",
+            "x".repeat(2200),
+        );
+        assert!(text.chars().count() > MAX_ACK_LENGTH_CHARS);
+        assert_eq!(detect(&text, &empty()), Some(AckKind::DenseNarration));
+    }
+
+    #[test]
+    fn dense_ignores_below_threshold() {
+        // Only 2 intent phrases — not dense enough
+        let text = format!(
+            "{}I'll check the logs. Let me review the config. Everything else looks fine and the \
+             tests pass.",
+            "x".repeat(2000),
+        );
+        assert!(text.chars().count() > MAX_ACK_LENGTH_CHARS);
+        // Should NOT be DenseNarration (only 2 phrases)
+        // Might be TrailingIntent if tail matches
+        assert_ne!(detect(&text, &empty()), Some(AckKind::DenseNarration));
+    }
+
+    #[test]
+    fn dense_ignores_with_result_phrase() {
+        let text = format!(
+            "{}I'll check X. Let me do Y. I need to fix Z. I should handle W. First, I'll verify \
+             V. Here is the result of my analysis.",
+            "x".repeat(1800),
+        );
+        // Result phrase → None
+        assert!(!looks_like_intermediate_ack(&text, &empty()));
+    }
+
+    // ── AckKind nudge messages ──
+
+    #[test]
+    fn short_ack_returns_correct_kind() {
+        assert_eq!(
+            detect(
+                "I'll look into the build failure and check the logs.",
+                &empty()
+            ),
+            Some(AckKind::ShortAck),
+        );
+    }
+
+    #[test]
+    fn nudge_messages_differ_by_kind() {
+        assert_ne!(
+            AckKind::ShortAck.nudge_message(),
+            AckKind::TrailingIntent.nudge_message()
+        );
+        assert_ne!(
+            AckKind::TrailingIntent.nudge_message(),
+            AckKind::DenseNarration.nudge_message()
+        );
     }
 }
