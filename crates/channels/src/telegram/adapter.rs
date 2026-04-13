@@ -117,6 +117,7 @@ use rara_kernel::{
         RawPlatformMessage, ReplyContext, StreamHubRef,
     },
     security::{ApprovalDecision, ApprovalRequest, ResolveError},
+    session::SessionIndexRef,
     user_question::{UserQuestion, UserQuestionManagerRef},
 };
 use teloxide::{
@@ -1354,17 +1355,20 @@ impl ChannelAdapter for TelegramAdapter {
             }
         }
 
-        // Spawn approval request listener — sends inline keyboard to primary chat.
+        // Spawn approval request listener — sends inline keyboard to the
+        // originating chat (resolved via session binding).
         {
             let approval_rx = handle.security().approval().subscribe_requests();
             let approval_bot = self.bot.clone();
             let approval_config = Arc::clone(&self.config);
+            let approval_session_index = Arc::clone(handle.session_index());
             let mut approval_shutdown = self.shutdown_rx.clone();
             tokio::spawn(async move {
                 approval_listener(
                     approval_bot,
                     approval_rx,
                     approval_config,
+                    approval_session_index,
                     &mut approval_shutdown,
                 )
                 .await;
@@ -2087,11 +2091,15 @@ async fn handle_cascade_callback(
 }
 
 /// Listens for new approval requests and sends inline keyboard messages
-/// to the primary Telegram chat so the user can approve or deny.
+/// to the originating Telegram chat so the user can approve or deny.
+///
+/// The chat is resolved from the session's channel binding; falls back to
+/// `primary_chat_id` when no binding exists.
 async fn approval_listener(
     bot: teloxide::Bot,
     mut rx: tokio::sync::broadcast::Receiver<ApprovalRequest>,
     config: Arc<StdRwLock<TelegramConfig>>,
+    session_index: SessionIndexRef,
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
     loop {
@@ -2110,12 +2118,24 @@ async fn approval_listener(
                     }
                 };
 
-                let chat_id = {
+                // Resolve the originating chat from the session's channel
+                // binding; fall back to primary_chat_id when unavailable.
+                let binding_chat_id = session_index
+                    .get_channel_binding_by_session(&req.session_key)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|b| b.chat_id.parse::<i64>().ok());
+
+                let chat_id = binding_chat_id.or_else(|| {
                     let cfg = config.read().unwrap_or_else(|e| e.into_inner());
                     cfg.primary_chat_id
-                };
+                });
                 let Some(chat_id) = chat_id else {
-                    warn!("telegram approval listener: no primary_chat_id configured, cannot send approval prompt");
+                    warn!(
+                        session_key = %req.session_key,
+                        "telegram approval listener: no channel binding and no primary_chat_id configured"
+                    );
                     continue;
                 };
 
