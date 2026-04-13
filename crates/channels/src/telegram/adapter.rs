@@ -3472,8 +3472,8 @@ fn spawn_stream_forwarder(
                             if let Some(task) = progress.background_tasks.iter_mut().find(|t| t.task_id == task_id) {
                                 task.finished = true;
                                 task.status = Some(status);
+                                progress_dirty = true;
                             }
-                            progress_dirty = true;
                         }
                         // Progress, DockTurnComplete, LoopBreakerTriggered
                         // — no Telegram UX for these.
