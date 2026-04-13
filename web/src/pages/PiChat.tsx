@@ -406,9 +406,18 @@ export default function PiChat() {
           <path d="M3 12h18M3 6h18M3 18h18" />
         </svg>
       </button>
-      {/* Voice button — fixed top-right */}
-      {!liveMode && (
-        <div className="absolute right-2 top-2 z-50">
+      {/* Voice toggle — fixed top-right */}
+      <div className="absolute right-2 top-2 z-50">
+        {liveMode ? (
+          <button
+            onClick={() => setLiveMode(false)}
+            className="flex cursor-pointer items-center gap-1.5 rounded-full bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 transition-all hover:bg-red-500/20"
+            title="End live voice chat"
+          >
+            <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+            LIVE
+          </button>
+        ) : (
           <button
             onClick={() => setLiveMode(true)}
             className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-md backdrop-blur transition-all hover:bg-secondary hover:text-foreground"
@@ -420,8 +429,8 @@ export default function PiChat() {
               <line x1="12" y1="19" x2="12" y2="22" />
             </svg>
           </button>
-        </div>
-      )}
+        )}
+      </div>
       {/* Chat panel container */}
       <div ref={containerRef} className="h-full w-full" />
       {/* Live voice panel — bottom overlay */}
