@@ -261,6 +261,18 @@ struct ProgressMessage {
     /// Whether the LLM is currently in extended thinking (reasoning) phase.
     /// Set on first `ReasoningDelta`, cleared on first `ToolCallStart`.
     thinking:          bool,
+    /// Active background tasks (subagents) spawned during this turn.
+    background_tasks:  Vec<BackgroundTaskState>,
+}
+
+/// Tracks a spawned background task for progress display.
+struct BackgroundTaskState {
+    task_id:     String,
+    agent_name:  String,
+    description: String,
+    started_at:  Instant,
+    finished:    bool,
+    status:      Option<rara_kernel::io::BackgroundTaskStatus>,
 }
 
 impl ProgressMessage {
@@ -286,6 +298,7 @@ impl ProgressMessage {
             plan_current_step: None,
             turn_rationale: None,
             thinking: false,
+            background_tasks: Vec::new(),
         }
     }
 
@@ -452,6 +465,9 @@ fn render_progress(
         lines.push(thinking_hint(progress));
     }
 
+    // Background tasks (subagents).
+    render_background_tasks(&progress.background_tasks, &mut lines);
+
     // Footer: spinner verb + elapsed + tokens + thinking.
     {
         let verb = super::spinner_verbs::random_verb().to_lowercase();
@@ -523,6 +539,9 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
         }
     }
 
+    // Background tasks (subagents).
+    render_background_tasks(&progress.background_tasks, &mut lines);
+
     // Footer: elapsed + tokens
     let mut parts = vec![format_duration_compact(turn_elapsed)];
     if progress.input_tokens > 0 || progress.output_tokens > 0 {
@@ -540,6 +559,36 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
     lines.push(format!("\u{2733} {}", parts.join(" \u{00b7} ")));
 
     lines.join("\n")
+}
+
+/// Render background task (subagent) status lines.
+///
+/// Each task gets one line: status emoji + agent name + description + elapsed.
+fn render_background_tasks(tasks: &[BackgroundTaskState], lines: &mut Vec<String>) {
+    if tasks.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    for task in tasks {
+        let elapsed = format_duration_compact(task.started_at.elapsed());
+        if task.finished {
+            let icon = match task.status {
+                Some(rara_kernel::io::BackgroundTaskStatus::Completed) => "\u{2705}",
+                Some(rara_kernel::io::BackgroundTaskStatus::Failed) => "\u{274c}",
+                Some(rara_kernel::io::BackgroundTaskStatus::Cancelled) => "\u{23f9}\u{fe0f}",
+                None => "\u{2705}",
+            };
+            lines.push(format!(
+                "{icon} \u{1f916} {} \u{2014} {} {elapsed}",
+                task.agent_name, task.description,
+            ));
+        } else {
+            lines.push(format!(
+                "\u{23f3} \u{1f916} {} \u{2014} {} {elapsed}",
+                task.agent_name, task.description,
+            ));
+        }
+    }
 }
 
 fn format_token_count(tokens: u32) -> String {
@@ -3408,7 +3457,25 @@ fn spawn_stream_forwarder(
                         // ToolOutput is a live preview (e.g. bash stdout) — Telegram
                         // messages cannot be updated fast enough for streaming.
                         Ok(StreamEvent::ToolOutput { .. }) => {}
-                        // Progress, DockTurnComplete, BackgroundTask*, LoopBreakerTriggered
+                        Ok(StreamEvent::BackgroundTaskStarted { task_id, agent_name, description }) => {
+                            progress.background_tasks.push(BackgroundTaskState {
+                                task_id,
+                                agent_name,
+                                description,
+                                started_at: Instant::now(),
+                                finished: false,
+                                status: None,
+                            });
+                            progress_dirty = true;
+                        }
+                        Ok(StreamEvent::BackgroundTaskDone { task_id, status }) => {
+                            if let Some(task) = progress.background_tasks.iter_mut().find(|t| t.task_id == task_id) {
+                                task.finished = true;
+                                task.status = Some(status);
+                                progress_dirty = true;
+                            }
+                        }
+                        // Progress, DockTurnComplete, LoopBreakerTriggered
                         // — no Telegram UX for these.
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
