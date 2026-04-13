@@ -889,7 +889,8 @@ call `discover-tools` to load it first.{tool_list}
         tape_name,
         guard_pipeline,
         notification_bus,
-        interrupted
+        interrupted,
+        interrupt_notify
     ),
     fields(
         session_key = %session_key,
@@ -910,6 +911,7 @@ pub(crate) async fn run_agent_loop(
     notification_bus: NotificationBusRef,
     rara_message_id: crate::io::MessageId,
     interrupted: &AtomicBool,
+    interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
     let manifest =
@@ -1402,6 +1404,12 @@ pub(crate) async fn run_agent_loop(
                     info!("LLM turn cancelled during streaming");
                     return Err(KernelError::Interrupted);
                 }
+                _ = interrupt_notify.notified() => {
+                    stream_task.abort();
+                    info!("LLM streaming interrupted by new user message");
+                    was_interrupted = true;
+                    break;
+                }
             };
 
             let Some(delta) = delta else {
@@ -1520,6 +1528,15 @@ pub(crate) async fn run_agent_loop(
                     break;
                 }
             }
+        }
+
+        // If interrupted mid-stream, skip remaining iteration processing
+        // and exit the for loop — the post-loop code handles was_interrupted.
+        if was_interrupted {
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "interrupted".to_string(),
+            });
+            break;
         }
 
         // Signal forwarder to discard intermediate narration text.

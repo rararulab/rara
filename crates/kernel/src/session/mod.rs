@@ -359,6 +359,9 @@ pub struct Session {
     /// Flag set when a new user message arrives during an active turn.
     /// The agent loop checks this between iterations and breaks if set.
     pub interrupted: Arc<AtomicBool>,
+    /// Wakes the agent loop immediately when the `interrupted` flag is set,
+    /// so it does not have to wait for the next iteration boundary.
+    pub interrupt_notify: Arc<tokio::sync::Notify>,
     /// Active background tasks spawned by this session.
     pub background_tasks: Vec<BackgroundTaskEntry>,
     /// Pending tool call limit oneshot sender keyed by limit_id. When the
@@ -954,6 +957,7 @@ impl Session {
             paused: false,
             pause_buffer: Vec::new(),
             interrupted: Arc::new(AtomicBool::new(false)),
+            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
             background_tasks: Vec::new(),
             pending_tool_call_limit: None,
             origin_endpoint: None,
@@ -1032,6 +1036,7 @@ mod state_transition_tests {
             paused: false,
             pause_buffer: vec![],
             interrupted: Arc::new(AtomicBool::new(false)),
+            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
             background_tasks: vec![],
             pending_tool_call_limit: None,
             origin_endpoint: None,
