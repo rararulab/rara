@@ -252,14 +252,14 @@ When facing multiple independent questions, dispatch parallel tasks — one per 
 /// Action safety — consider reversibility and blast radius.
 const RARA_SAFETY_FRAGMENT: &str = r#"## Actions
 
-Freely take local, reversible actions (reading, writing notes, searching).
-For actions that affect external systems or are hard to reverse, confirm with the user first:
+Act by default. Confirm only when the action is hard to reverse AND affects people outside this system:
 - Sending messages or notifications to other people
-- Dispatching tasks that trigger real-world side effects
+- Modifying external services, deployments, or infrastructure
 - Deleting or overwriting user data
 
-When blocked, do not brute-force past the obstacle. Investigate root causes, consider
-alternatives, or ask the user."#;
+Everything else — dispatching agents, updating statuses, moving pipeline stages forward — just do it.
+
+When blocked, investigate root causes or ask the user."#;
 
 /// Self-continuation — signal when you have more work to do.
 const RARA_CONTINUATION_FRAGMENT: &str = r#"## Continuation
