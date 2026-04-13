@@ -207,7 +207,40 @@ pub enum ToolKind {
 impl ToolKind {
     /// Parse a raw tool name, returning `None` for unknown tools.
     pub fn parse(raw: &str) -> Option<Self> { Self::from_str(raw).ok() }
+
+    /// Emoji icon for per-tool progress lines.
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            Self::ShellExecute | Self::Bash => "💻",
+            Self::WebSearch | Self::CtxSearch => "🔍",
+            Self::WebFetch | Self::BrowserFetch | Self::CtxFetchAndIndex => "📄",
+            Self::ReadFile | Self::ReadTape => "📖",
+            Self::WriteFile => "✍️",
+            Self::EditFile | Self::MultiEdit => "🔧",
+            Self::FindFiles | Self::ListDirectory | Self::WalkDirectory => "📂",
+            Self::Grep => "🔎",
+            Self::Screenshot => "📸",
+            Self::SendFile => "📎",
+            Self::SendEmail => "📨",
+            Self::MemorySearch | Self::TapeSearch => "🧠",
+            Self::MemoryWrite | Self::UserNote | Self::DistillUserNotes => "🧠",
+            Self::TapeHandoff | Self::TapeInfo | Self::TapeAnchor => "📋",
+            Self::Settings => "⚙️",
+            Self::Composio => "🔌",
+            Self::ListSkills | Self::CreateSkill | Self::DeleteSkill => "📚",
+            Self::InstallMcp | Self::ListMcp | Self::RemoveMcp => "🔌",
+            Self::Dispatch => "🔀",
+            Self::ListSessions => "📋",
+            Self::UpdateSoulState | Self::EvolveSoul => "✨",
+            Self::DiscoverTools => "🔍",
+            Self::DebugTrace => "🐛",
+            Self::AskUser => "💬",
+        }
+    }
 }
+
+/// Return the emoji for a tool, falling back to ⚡ for unknown tools.
+pub fn tool_emoji(raw: &str) -> &'static str { ToolKind::parse(raw).map_or("⚡", |k| k.emoji()) }
 
 /// Map raw tool names to shorter, human-friendly display names.
 pub fn tool_display_name(raw: &str) -> &str {

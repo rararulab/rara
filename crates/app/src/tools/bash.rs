@@ -84,11 +84,14 @@ where
 
     struct DurationVisitor;
 
-    impl Visitor<'_> for DurationVisitor {
+    impl<'de> Visitor<'de> for DurationVisitor {
         type Value = Duration;
 
         fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("an integer (seconds), stringified integer, or humantime duration")
+            f.write_str(
+                "an integer (seconds), stringified integer, humantime duration, or {\"secs\": N, \
+                 \"nanos\": N} map",
+            )
         }
 
         fn visit_u64<E: de::Error>(self, v: u64) -> Result<Duration, E> {
@@ -108,6 +111,26 @@ where
             }
             // Fall back to humantime ("30s", "2m").
             humantime::parse_duration(s).map_err(|_| E::custom(format!("invalid timeout: {v:?}")))
+        }
+
+        /// Accept `{"secs": 30, "nanos": 0}` — the Duration struct layout
+        /// that some LLMs (e.g. GPT-5.4) emit when they see the JSON schema.
+        fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Duration, A::Error> {
+            let mut secs: Option<u64> = None;
+            let mut nanos: Option<u32> = None;
+
+            while let Some(key) = map.next_key::<String>()? {
+                match key.as_str() {
+                    "secs" => secs = Some(map.next_value()?),
+                    "nanos" => nanos = Some(map.next_value()?),
+                    _ => {
+                        let _ = map.next_value::<de::IgnoredAny>()?;
+                    }
+                }
+            }
+
+            let secs = secs.ok_or_else(|| de::Error::missing_field("secs"))?;
+            Ok(Duration::new(secs, nanos.unwrap_or(0)))
         }
     }
 

@@ -184,6 +184,8 @@ pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyh
 /// Single tool's progress state within a streaming turn.
 struct ToolProgress {
     id:         String,
+    /// Raw tool name from the LLM (e.g. "shell_execute", "read-file").
+    raw_name:   String,
     name:       String,
     activity:   String,
     summary:    String,
@@ -299,7 +301,6 @@ impl ProgressMessage {
 
 use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
 
-/// Format a single tool-progress line.
 /// Format a duration as a compact human-readable string.
 fn format_duration_compact(d: std::time::Duration) -> String {
     let secs = d.as_secs();
@@ -312,149 +313,74 @@ fn format_duration_compact(d: std::time::Duration) -> String {
     }
 }
 
-fn format_tool_line(t: &ToolProgress, loading_hint: &str) -> String {
-    if t.finished {
-        let time = t
-            .duration
-            .map(|d| format!(" ({})", format_duration_compact(d)))
-            .unwrap_or_default();
-        if t.success {
-            format!("\u{2705} {}{time}", t.activity)
-        } else {
-            match &t.error {
-                Some(err) => {
-                    let short_err: String = err.chars().take(60).collect();
-                    format!("\u{274c} {}{time}: {short_err}", t.activity)
-                }
-                None => format!("\u{274c} {}{time}", t.activity),
-            }
-        }
-    } else if t.activity == rara_kernel::io::stages::THINKING {
-        loading_hint.to_string()
-    } else {
-        format!("正在{}…", t.activity)
-    }
-}
-
-/// A phase is a group of consecutive tools with the same activity label.
-struct Phase {
-    activity:       String,
-    count:          usize,
-    all_finished:   bool,
-    all_success:    bool,
-    total_duration: Option<std::time::Duration>,
-    first_error:    Option<String>,
-    /// Summary of the first tool in this phase (e.g. file path, command).
-    first_summary:  String,
-}
-
-/// Group consecutive tools by activity label into phases.
-fn aggregate_phases(tools: &[ToolProgress]) -> Vec<Phase> {
-    let mut phases: Vec<Phase> = Vec::new();
-
-    for tool in tools {
-        let merge = phases
-            .last()
-            .map(|p| p.activity == tool.activity)
-            .unwrap_or(false);
-
-        if merge {
-            let phase = phases.last_mut().unwrap();
-            phase.count += 1;
-            phase.all_finished = phase.all_finished && tool.finished;
-            phase.all_success = phase.all_success && tool.success;
-            if let Some(d) = tool.duration {
-                phase.total_duration =
-                    Some(phase.total_duration.unwrap_or(std::time::Duration::ZERO) + d);
-            }
-            if phase.first_error.is_none() {
-                phase.first_error = tool.error.clone();
-            }
-        } else {
-            phases.push(Phase {
-                activity:       tool.activity.clone(),
-                count:          1,
-                all_finished:   tool.finished,
-                all_success:    tool.success,
-                total_duration: tool.duration,
-                first_error:    tool.error.clone(),
-                first_summary:  tool.summary.clone(),
-            });
-        }
-    }
-
-    phases
-}
-
-/// Format a single phase line.
+/// Format a single tool line for per-tool progress display.
 ///
-/// When the phase contains a single tool (`count == 1`) and has a non-empty
-/// summary, the summary is appended so the user can see *what* was called
-/// (e.g. file path, shell command, search query).
-fn format_phase_line(phase: &Phase, loading_hint: &str) -> String {
-    use crate::tool_display::truncate_summary;
+/// Format: `{status} {emoji} {verb} {summary} {elapsed}`
+/// Three states: ⏳ in-progress, ✅ success, ❌ failure.
+fn format_tool_line(t: &ToolProgress) -> String {
+    use crate::tool_display::{tool_emoji, truncate_summary};
 
-    // Truncate at 60 chars for Telegram's narrow viewport; the full text
-    // is preserved in the trace detail accessible via the "📊 详情" button.
-    let suffix = if phase.count == 1 && !phase.first_summary.is_empty() {
-        format!(" — {}", truncate_summary(&phase.first_summary, 60))
-    } else {
+    let emoji = tool_emoji(&t.raw_name);
+    let is_shell = matches!(t.raw_name.as_str(), "shell_execute" | "bash");
+    let verb = if is_shell { "$" } else { &t.name };
+    let summary = truncate_summary(&t.summary, 50);
+    let summary_part = if summary.is_empty() {
         String::new()
+    } else {
+        format!(" {summary}")
     };
 
-    if phase.all_finished {
-        let time = phase
-            .total_duration
-            .map(|d| format!(" ({})", format_duration_compact(d)))
+    if t.finished {
+        let dur = t
+            .duration
+            .map(|d| format!(" {}", format_duration_compact(d)))
             .unwrap_or_default();
-        if phase.all_success {
-            format!("\u{2705} {}{time}{suffix}", phase.activity)
+        if t.success {
+            format!("\u{2705} {emoji} {verb}{summary_part}{dur}")
         } else {
-            match &phase.first_error {
-                // Error message takes priority over summary.
-                Some(err) => {
-                    let short_err: String = err.chars().take(60).collect();
-                    format!("\u{274c} {}{time}: {short_err}", phase.activity)
-                }
-                None => format!("\u{274c} {}{time}{suffix}", phase.activity),
-            }
+            let err_suffix = t
+                .error
+                .as_ref()
+                .map(|e| {
+                    let short: String = e.chars().take(40).collect();
+                    format!(": {short}")
+                })
+                .unwrap_or_default();
+            format!("\u{274c} {emoji} {verb}{summary_part}{dur}{err_suffix}")
         }
-    } else if phase.activity == rara_kernel::io::stages::THINKING {
-        loading_hint.to_string()
+    } else if t.activity == rara_kernel::io::stages::THINKING {
+        String::new()
     } else {
-        // Append a randomly-sampled spinner verb on each render so the
-        // message visibly changes during long tool runs — the static
-        // "正在{activity}…" looked frozen for 2+ minutes.
-        let verb = super::spinner_verbs::random_verb();
-        format!("正在{}… ({verb}){suffix}", phase.activity)
+        let elapsed = format_duration_compact(t.started_at.elapsed());
+        format!("\u{23f3} {emoji} {verb}{summary_part} {elapsed}")
     }
 }
 
-/// Render tool progress lines for display in Telegram.
-///
 /// Build a thinking hint: show the first line of reasoning preview if
 /// available, otherwise fall back to the poetic loading hint.
 fn thinking_hint(progress: &ProgressMessage) -> String {
     let preview = progress.reasoning_preview.trim();
     if preview.is_empty() {
-        return format!("🧠 {}", progress.loading_hint);
+        return format!("\u{1f9e0} {}", progress.loading_hint);
     }
-    // Take the first non-empty line, truncated to 60 chars for Telegram.
     let first_line = preview
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or(preview);
     let truncated: String = first_line.chars().take(60).collect();
     let ellipsis = if first_line.chars().count() > 60 {
-        "…"
+        "\u{2026}"
     } else {
         ""
     };
-    format!("🧠 {truncated}{ellipsis}")
+    format!("\u{1f9e0} {truncated}{ellipsis}")
 }
 
-/// Consecutive tools with the same activity label are aggregated into a single
-/// line to avoid noisy repetition (e.g. 3x "检查 MCP" becomes one line).
+/// Render per-tool progress lines for display in Telegram.
+///
+/// Each tool gets its own line with emoji + verb + summary + elapsed.
+/// When there are more than 5 tools, older finished ones are collapsed
+/// into a single summary line.
 fn render_progress(
     tools: &[ToolProgress],
     turn_elapsed: std::time::Duration,
@@ -464,72 +390,76 @@ fn render_progress(
         if !progress.thinking {
             return String::new();
         }
+        let verb = super::spinner_verbs::random_verb().to_lowercase();
         let mut lines = vec![thinking_hint(progress)];
-        lines.push(format!("✳️ {}", format_duration_compact(turn_elapsed)));
+        lines.push(format!(
+            "\u{2733}\u{fe0f} {verb}... {}",
+            format_duration_compact(turn_elapsed)
+        ));
         return lines.join("\n");
     }
 
-    // Aggregate consecutive tools with the same activity into phases.
-    let phases = aggregate_phases(tools);
     let mut lines = Vec::new();
+    let finished_count = tools.iter().filter(|t| t.finished).count();
+    let total = tools.len();
 
-    // Count in-progress phases.
-    let active = phases.iter().filter(|p| !p.all_finished).count();
-    if active > 1 {
-        lines.push(format!("\u{26a1} {active} 项任务并行中"));
-    }
-
-    let total_phases = phases.len();
-    if total_phases <= 5 {
-        for phase in &phases {
-            lines.push(format_phase_line(phase, &progress.loading_hint));
+    if total <= 5 {
+        for tool in tools {
+            let line = format_tool_line(tool);
+            if !line.is_empty() {
+                lines.push(line);
+            }
         }
     } else {
-        // Compact: collapse older finished phases.
-        let finished_phases: Vec<_> = phases.iter().filter(|p| p.all_finished).collect();
-        let in_progress_phases: Vec<_> = phases.iter().filter(|p| !p.all_finished).collect();
-        let show_last = 2;
-        let collapsed = finished_phases.len().saturating_sub(show_last);
+        // Collapse older finished tools; keep last 2 finished + all in-progress.
+        let show_last_finished = 2usize;
+        let collapse_count = finished_count.saturating_sub(show_last_finished);
 
-        if collapsed > 0 {
-            let collapsed_dur: std::time::Duration = finished_phases[..collapsed]
+        if collapse_count > 0 {
+            let collapsed_dur: std::time::Duration = tools
                 .iter()
-                .filter_map(|p| p.total_duration)
+                .filter(|t| t.finished)
+                .take(collapse_count)
+                .filter_map(|t| t.duration)
                 .sum();
             let dur_str = if collapsed_dur.is_zero() {
                 String::new()
             } else {
                 format!(" ({})", format_duration_compact(collapsed_dur))
             };
-            lines.push(format!("\u{22ef} 已完成 {collapsed} 步{dur_str}"));
+            lines.push(format!("\u{22ef} {collapse_count} tools done{dur_str}"));
         }
 
-        // Last N finished phases.
-        for phase in finished_phases.iter().skip(collapsed) {
-            lines.push(format_phase_line(phase, &progress.loading_hint));
-        }
-
-        // In-progress phases.
-        for phase in &in_progress_phases {
-            lines.push(format_phase_line(phase, &progress.loading_hint));
+        let mut finished_seen = 0usize;
+        for tool in tools {
+            if tool.finished {
+                finished_seen += 1;
+                if finished_seen <= collapse_count {
+                    continue;
+                }
+            }
+            let line = format_tool_line(tool);
+            if !line.is_empty() {
+                lines.push(line);
+            }
         }
     }
 
-    // If all tools are done and LLM is thinking again, show a thinking
-    // hint so the user knows the agent is still working.
-    let all_done = phases.iter().all(|p| p.all_finished);
+    // If all tools are done and LLM is thinking again, show hint.
+    let all_done = tools.iter().all(|t| t.finished);
     if all_done && progress.thinking {
         lines.push(thinking_hint(progress));
     }
 
-    // Footer: elapsed + tokens + thinking
+    // Footer: spinner verb + elapsed + tokens + thinking.
     {
+        let verb = super::spinner_verbs::random_verb().to_lowercase();
         let mut parts = vec![format_duration_compact(turn_elapsed)];
 
         if progress.input_tokens > 0 || progress.output_tokens > 0 {
             let in_str = format_token_count(progress.input_tokens);
             let out_str = format_token_count(progress.output_tokens);
-            parts.push(format!("↑{in_str} ↓{out_str}"));
+            parts.push(format!("\u{2191}{in_str} \u{2193}{out_str}"));
         }
 
         if progress.thinking_ms > 0 {
@@ -539,7 +469,10 @@ fn render_progress(
             }
         }
 
-        lines.push(format!("✳️ {}", parts.join(" · ")));
+        lines.push(format!(
+            "\u{2733}\u{fe0f} {verb}... {}",
+            parts.join(" \u{00b7} ")
+        ));
     }
 
     lines.join("\n")
@@ -580,10 +513,11 @@ fn render_plan_progress(progress: &ProgressMessage) -> String {
 
         // Nest tool calls under the running step.
         if matches!(step.status, StepStatus::Running) && !tools.is_empty() {
-            let phases = aggregate_phases(tools);
-            for phase in &phases {
-                let tool_line = format_phase_line(phase, &progress.loading_hint);
-                lines.push(format!("  {tool_line}"));
+            for tool in tools {
+                let tool_line = format_tool_line(tool);
+                if !tool_line.is_empty() {
+                    lines.push(format!("  {tool_line}"));
+                }
             }
         }
     }
@@ -3100,6 +3034,7 @@ fn spawn_stream_forwarder(
                             let activity = tool_activity_label(&name).to_owned();
                             progress.tools.push(ToolProgress {
                                 id,
+                                raw_name: name,
                                 name: display,
                                 activity,
                                 summary,
@@ -4199,6 +4134,7 @@ mod render_progress_tests {
     fn finished_tool(name: &str) -> ToolProgress {
         ToolProgress {
             id:         "tool-1".into(),
+            raw_name:   name.into(),
             name:       name.into(),
             activity:   name.into(),
             summary:    String::new(),
