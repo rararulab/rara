@@ -1739,9 +1739,19 @@ impl IOSubsystem {
         };
         let targets = resolve_delivery_targets(candidates, &envelope.routing);
 
+        let payload_variant = match &envelope.payload {
+            OutboundPayload::Reply { content, .. } => {
+                format!("Reply(len={})", content.as_text().len())
+            }
+            OutboundPayload::Progress { stage, .. } => format!("Progress({stage})"),
+            OutboundPayload::Error { code, .. } => format!("Error({code})"),
+        };
         tracing::info!(
             targets = targets.len(),
             adapters = self.adapters.len(),
+            has_origin = envelope.origin_endpoint.is_some(),
+            routing = ?envelope.routing,
+            payload = %payload_variant,
             "deliver_to_endpoints"
         );
 
