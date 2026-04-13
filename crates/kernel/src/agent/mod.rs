@@ -1052,6 +1052,9 @@ pub(crate) async fn run_agent_loop(
     // Distinguishes "user stopped via limit" from "max iterations exhausted"
     // in the post-loop exit logic — they produce different user messages.
     let mut stopped_by_limit = false;
+    // Set when a new user message interrupts the turn — the turn should
+    // exit quietly without emitting exhaustion warnings or fallback text.
+    let mut was_interrupted = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1090,6 +1093,7 @@ pub(crate) async fn run_agent_loop(
             stream_handle.emit(StreamEvent::Progress {
                 stage: "interrupted".to_string(),
             });
+            was_interrupted = true;
             break;
         }
         // ── Auto-fold: pressure-driven context compression ───────────
@@ -2644,6 +2648,7 @@ pub(crate) async fn run_agent_loop(
             stream_handle.emit(StreamEvent::Progress {
                 stage: "interrupted".to_string(),
             });
+            was_interrupted = true;
             break;
         }
 
@@ -2668,7 +2673,16 @@ pub(crate) async fn run_agent_loop(
     }
 
     // Determine exit reason and build appropriate error/message.
-    let exhaustion_error = if stopped_by_limit {
+    let exhaustion_error = if was_interrupted {
+        // Turn interrupted by a new user message — exit quietly.
+        // No warning, no fallback text. The buffered message will
+        // trigger a fresh turn with full context.
+        info!(
+            tool_calls_made,
+            "agent turn interrupted, yielding to new message"
+        );
+        format!("interrupted after {tool_calls_made} tool calls")
+    } else if stopped_by_limit {
         // User clicked "stop" or tool call limit timed out — not an exhaustion error.
         let msg = format!("agent stopped by user/timeout after {tool_calls_made} tool calls");
         warn!(

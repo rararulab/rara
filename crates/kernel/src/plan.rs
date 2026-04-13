@@ -24,7 +24,10 @@
 //! `run_agent_loop` so the kernel can route to either.
 
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -344,8 +347,8 @@ pub(crate) async fn run_plan_loop(
     // Use an index-based loop so we can replace plan.steps on replan.
     let mut step_idx = 0;
     while step_idx < plan.steps.len() {
-        if turn_cancel.is_cancelled() {
-            warn!(session_key = %session_key, step = step_idx, "plan executor: cancelled");
+        if turn_cancel.is_cancelled() || interrupted.load(Ordering::Relaxed) {
+            warn!(session_key = %session_key, step = step_idx, "plan executor: cancelled/interrupted");
             break;
         }
 
@@ -449,9 +452,9 @@ pub(crate) async fn run_plan_loop(
             status_text: end_status,
         });
 
-        // If interrupted during step execution, exit immediately
+        // If cancelled or interrupted during step execution, exit immediately
         // without replan or further processing.
-        if turn_cancel.is_cancelled() {
+        if turn_cancel.is_cancelled() || interrupted.load(Ordering::Relaxed) {
             break;
         }
 
