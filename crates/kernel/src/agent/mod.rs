@@ -851,6 +851,14 @@ Excessively long context may cause model call failures. In this case, you MAY us
 `tape-info` to check token usage and you SHOULD use `tape-anchor` to shorten the \
 retrieved history.
 
+**Task delegation**: Use the `task` tool to delegate focused subtasks to a background \
+agent. Pick a task_type: `explore` for codebase research (read-only, fast), `bash` for \
+shell operations, `general-purpose` for complex multi-step work with full tool access. \
+Provide a complete prompt with all necessary context — the child agent does not see your \
+conversation. Use `explore` when your task requires more than 3 search queries or spans \
+multiple files. You can launch multiple tasks concurrently to investigate independent \
+questions in parallel.
+
 **On-demand tool activation**: Call `discover-tools` BEFORE using any tool from \
 the discoverable list below. These are search keywords, NOT callable tools. \
 Example: `discover-tools({{"query":"marketplace"}})`. \
