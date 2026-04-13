@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Flat KV settings HTTP API.
+//! MVCC-versioned settings HTTP API.
 //!
 //! | Method | Path                                    | Description            |
 //! |--------|-----------------------------------------|------------------------|
@@ -84,23 +84,18 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
         .with_state(provider);
 
     // Version routes use Arc<SettingsSvc> directly — these methods live on the
-    // concrete type, not the SettingsProvider trait.
+    // concrete type, not the SettingsProvider trait. Nested under a fixed prefix
+    // so they cannot collide with the `{*key}` wildcard.
     let version_router = axum::Router::new()
-        .route("/api/v1/settings/versions", get(list_versions))
-        .route(
-            "/api/v1/settings/versions/current",
-            get(get_current_version),
-        )
-        .route("/api/v1/settings/versions/{n}", get(snapshot_at_version))
-        .route(
-            "/api/v1/settings/versions/{n}/rollback",
-            post(rollback_to_version),
-        )
+        .route("/", get(list_versions))
+        .route("/current", get(get_current_version))
+        .route("/{n}", get(snapshot_at_version))
+        .route("/{n}/rollback", post(rollback_to_version))
         .with_state(svc);
 
-    // Version routes merged first so they take precedence over the `{*key}`
-    // wildcard.
-    OpenApiRouter::from(version_router.merge(settings_router))
+    let combined = settings_router.nest("/api/v1/settings/versions", version_router);
+
+    OpenApiRouter::from(combined)
 }
 
 // -- request / response types -----------------------------------------------

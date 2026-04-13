@@ -155,10 +155,13 @@ fn maybe_mask(key: &str, value: &str) -> String {
         .iter()
         .any(|frag| key_lower.contains(frag));
     if is_sensitive {
-        if value.len() < MASK_VISIBLE_LEN {
+        // Use char iterator to avoid panic on multi-byte UTF-8 values.
+        let char_count = value.chars().count();
+        if char_count < MASK_VISIBLE_LEN {
             "****".to_owned()
         } else {
-            format!("{}****", &value[..MASK_VISIBLE_LEN])
+            let prefix: String = value.chars().take(MASK_VISIBLE_LEN).collect();
+            format!("{prefix}****")
         }
     } else {
         value.to_owned()

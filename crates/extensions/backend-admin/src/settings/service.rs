@@ -24,6 +24,7 @@ use rara_domain_shared::settings::SettingsProvider;
 use snafu::Whatever;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tokio::sync::watch;
+use tracing::warn;
 
 /// Internal prefix applied to all settings keys in the version table.
 const PREFIX: &str = "settings.";
@@ -51,33 +52,30 @@ impl SettingsSvc {
     /// Notify subscribers after a mutation.
     fn notify(&self) { let _ = self.tx.send(()); }
 
-    /// Bump global version counter atomically, return the new version.
-    async fn next_version(&self) -> anyhow::Result<i64> {
+    /// Bump version counter and append entries in a single transaction.
+    ///
+    /// Returns the new version number. If `entries` is empty, returns the
+    /// current version without writing anything.
+    async fn versioned_write(&self, entries: Vec<(String, Option<String>)>) -> anyhow::Result<i64> {
+        if entries.is_empty() {
+            return self.current_version().await;
+        }
+        let mut tx = self.pool.begin().await?;
         let (ver,): (i64,) = sqlx::query_as(
             "UPDATE settings_version_counter SET current = current + 1 WHERE id = 1 RETURNING \
              current",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
-        Ok(ver)
-    }
 
-    /// Append version log entries. `value = None` means tombstone (delete).
-    async fn append_version_log(
-        &self,
-        version: i64,
-        entries: &[(String, Option<String>)],
-    ) -> anyhow::Result<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
         let mut builder =
             QueryBuilder::<Sqlite>::new("INSERT INTO settings_version (version, key, value) ");
-        builder.push_values(entries, |mut row, (key, value)| {
-            row.push_bind(version).push_bind(key).push_bind(value);
+        builder.push_values(&entries, |mut row, (key, value)| {
+            row.push_bind(ver).push_bind(key).push_bind(value);
         });
-        builder.build().execute(&self.pool).await?;
-        Ok(())
+        builder.build().execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(ver)
     }
 
     /// Read the current global version number.
@@ -116,44 +114,70 @@ impl SettingsSvc {
             .collect())
     }
 
-    /// List version log entries.
+    /// List version log entries (limited to the most recent `limit` versions).
     pub async fn list_versions(&self, limit: i64) -> anyhow::Result<Vec<VersionEntry>> {
         let rows: Vec<VersionEntry> = sqlx::query_as(
-            "SELECT version, key, value, changed_at
-             FROM settings_version
-             ORDER BY version DESC, key ASC
-             LIMIT ?1",
+            "SELECT sv.version, sv.key, sv.value, sv.changed_at
+             FROM settings_version sv
+             WHERE sv.version IN (
+                 SELECT DISTINCT version FROM settings_version
+                 ORDER BY version DESC
+                 LIMIT ?1
+             )
+             ORDER BY sv.version DESC, sv.key ASC",
         )
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows)
+
+        // Strip the internal `settings.` prefix so consumers see clean keys.
+        Ok(rows
+            .into_iter()
+            .map(|mut e| {
+                if let Some(stripped) = e.key.strip_prefix(PREFIX) {
+                    e.key = stripped.to_owned();
+                }
+                e
+            })
+            .collect())
     }
 
     /// Rollback to a specific version (forward operation — creates a new
     /// version).
+    ///
+    /// Fails if `target_version` is outside the valid range `[0, current]`.
     pub async fn rollback_to(&self, target_version: i64) -> anyhow::Result<i64> {
+        let current_ver = self.current_version().await?;
+        anyhow::ensure!(
+            target_version >= 0 && target_version <= current_ver,
+            "target version {target_version} does not exist (current: {current_ver})"
+        );
+
         let target_snap = self.snapshot(target_version).await?;
         let current = self.list().await;
 
-        let mut patches = HashMap::new();
+        let mut entries: Vec<(String, Option<String>)> = Vec::new();
         for (k, v) in &target_snap {
             if current.get(k) != Some(v) {
-                patches.insert(k.clone(), Some(v.clone()));
+                let prefixed = format!("{PREFIX}{k}");
+                let json_val = serde_json::to_string(v).expect("String is always valid JSON");
+                entries.push((prefixed, Some(json_val)));
             }
         }
         for k in current.keys() {
             if !target_snap.contains_key(k.as_str()) {
-                patches.insert(k.clone(), None);
+                let prefixed = format!("{PREFIX}{k}");
+                entries.push((prefixed, None));
             }
         }
 
-        if patches.is_empty() {
-            return self.current_version().await;
+        if entries.is_empty() {
+            return Ok(current_ver);
         }
 
-        self.batch_update(patches).await?;
-        self.current_version().await
+        let new_ver = self.versioned_write(entries).await?;
+        self.notify();
+        Ok(new_ver)
     }
 }
 
@@ -162,7 +186,7 @@ impl SettingsSvc {
 pub struct VersionEntry {
     /// The version number this entry belongs to.
     pub version:    i64,
-    /// The settings key (with `settings.` prefix).
+    /// The settings key (prefix-stripped, e.g. `llm.provider`).
     pub key:        String,
     /// The value, or `None` for tombstones.
     pub value:      Option<String>,
@@ -192,9 +216,8 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
 
     async fn set(&self, key: &str, value: &str) -> anyhow::Result<()> {
         let prefixed = format!("{PREFIX}{key}");
-        let ver = self.next_version().await?;
         let json_val = serde_json::to_string(&value)?;
-        self.append_version_log(ver, &[(prefixed, Some(json_val))])
+        self.versioned_write(vec![(prefixed, Some(json_val))])
             .await?;
         self.notify();
         Ok(())
@@ -202,31 +225,35 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
 
     async fn delete(&self, key: &str) -> anyhow::Result<()> {
         let prefixed = format!("{PREFIX}{key}");
-        let ver = self.next_version().await?;
-        self.append_version_log(ver, &[(prefixed, None)]).await?;
+        self.versioned_write(vec![(prefixed, None)]).await?;
         self.notify();
         Ok(())
     }
 
     async fn list(&self) -> HashMap<String, String> {
-        let ver = self.current_version().await.unwrap_or(i64::MAX);
-        self.snapshot(ver).await.unwrap_or_default()
+        match self.current_version().await {
+            Ok(ver) => self.snapshot(ver).await.unwrap_or_default(),
+            Err(e) => {
+                warn!("failed to read current settings version: {e}");
+                HashMap::new()
+            }
+        }
     }
 
     async fn batch_update(&self, patches: HashMap<String, Option<String>>) -> anyhow::Result<()> {
         if patches.is_empty() {
             return Ok(());
         }
-        let ver = self.next_version().await?;
         let entries: Vec<(String, Option<String>)> = patches
             .into_iter()
             .map(|(key, value)| {
                 let prefixed = format!("{PREFIX}{key}");
-                let json_val = value.map(|v| serde_json::to_string(&v).unwrap());
+                let json_val =
+                    value.map(|v| serde_json::to_string(&v).expect("String is always valid JSON"));
                 (prefixed, json_val)
             })
             .collect();
-        self.append_version_log(ver, &entries).await?;
+        self.versioned_write(entries).await?;
         self.notify();
         Ok(())
     }
@@ -352,5 +379,21 @@ mod tests {
         let new_ver = svc.rollback_to(1).await.unwrap();
         assert_eq!(new_ver, 3); // rollback creates v3
         assert_eq!(svc.get("a").await.unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn rollback_rejects_invalid_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "val").await.unwrap(); // v1
+
+        let err = svc.rollback_to(999).await.unwrap_err();
+        assert!(
+            err.to_string().contains("does not exist"),
+            "expected 'does not exist' error, got: {err}"
+        );
+        // Negative version also rejected.
+        assert!(svc.rollback_to(-1).await.is_err());
     }
 }
