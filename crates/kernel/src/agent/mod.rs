@@ -1081,6 +1081,10 @@ pub(crate) async fn run_agent_loop(
     // How many times we nudged the model for producing an intermediate ack
     // ("I'll look into it...") instead of calling tools.
     let mut ack_nudge_count: usize = 0;
+    // Budget grace call: when max_iterations is about to be exhausted, inject
+    // a summarize nudge and give the model one more chance. Aligned with
+    // hermes-agent _budget_grace_call.
+    let mut budget_grace_injected = false;
     // ── Token & thinking metrics for UsageUpdate (#303) ──────────────
     // These are *cumulative* across all iterations within the turn.
     // `cumulative_output_tokens` sums completion_tokens from every iteration;
@@ -1110,7 +1114,13 @@ pub(crate) async fn run_agent_loop(
         None
     };
 
-    for iteration in 0..max_iterations {
+    // +1 for potential budget grace call (only consumed if grace is injected).
+    for iteration in 0..=max_iterations {
+        // Hard cap: the grace iteration is only allowed if we injected the
+        // grace nudge on the previous iteration. Otherwise stop.
+        if iteration >= max_iterations && !budget_grace_injected {
+            break;
+        }
         // Check interrupt flag — a new user message arrived while this turn
         // was running. Break early so the kernel can drain the pause buffer
         // and start a new turn with the latest message.
@@ -2840,6 +2850,40 @@ pub(crate) async fn run_agent_loop(
                 stage: format!("Processing... ({tool_calls_made} steps completed)"),
             });
             last_progress_at = Instant::now();
+        }
+
+        // Budget grace call: if this is the last normal iteration and the
+        // model has been calling tools (no text-only response yet), inject
+        // a summarize nudge and allow one more iteration. Aligned with
+        // hermes-agent _budget_grace_call.
+        if iteration == max_iterations - 1
+            && !budget_grace_injected
+            && tool_calls_made > 0
+            && last_accumulated_text.is_empty()
+        {
+            budget_grace_injected = true;
+            warn!(
+                iteration,
+                tool_calls_made, "budget nearly exhausted, injecting grace call to summarize"
+            );
+            let grace_msg = "[System: Your tool budget is almost exhausted. Summarize the \
+                             information and actions you have completed so far. Do not call more \
+                             tools.]";
+            let _ = tape
+                .append_message(
+                    tape_name,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": grace_msg,
+                    }),
+                    None,
+                )
+                .await;
+            stream_handle.emit(StreamEvent::Progress {
+                stage: "Budget nearly exhausted — requesting summary...".to_string(),
+            });
+            // Disable tools for the grace iteration so the model must respond with text.
+            tool_defs = vec![];
         }
     }
 
