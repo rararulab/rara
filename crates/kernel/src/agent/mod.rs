@@ -987,19 +987,40 @@ pub(crate) async fn run_agent_loop(
 
     tracing::Span::current().record("model", model.as_str());
 
-    // GPT models narrate plans instead of acting. Inject a stronger
-    // constraint when the resolved model is GPT-family.
-    let effective_prompt = if model.contains("gpt") || model.contains("o3") || model.contains("o4")
-    {
+    // Model-specific tool-use enforcement, aligned with hermes-agent
+    // TOOL_USE_ENFORCEMENT_GUIDANCE + OPENAI_MODEL_EXECUTION_GUIDANCE.
+    let model_lower = model.to_lowercase();
+    let needs_tool_enforcement = ["gpt", "codex", "gemini", "gemma", "grok", "o3", "o4"]
+        .iter()
+        .any(|p| model_lower.contains(p));
+    let effective_prompt = if needs_tool_enforcement {
         format!(
-            "{effective_prompt}\n\n## GPT Anti-Narration\n\nCRITICAL: You tend to describe what \
-             you plan to do instead of doing it.\n\nWRONG: \"I'll look into the build failure and \
-             check the logs.\"\nRIGHT: [call read-file on the log file]\n\nWRONG: \"Let me \
-             analyze the configuration...\"\nRIGHT: [call read-file on config.yaml]\n\nWRONG: \
-             \"Here's my plan: 1. Check X  2. Fix Y  3. Test Z\"\nRIGHT: [call the first tool \
-             immediately]\n\nEvery response MUST contain at least one tool call unless you are \
-             directly answering a question. If you catch yourself writing a plan, stop and call a \
-             tool."
+            "{effective_prompt}\n\n# Tool-use enforcement\nYou MUST use your tools to take action \
+             — do not describe what you would do or plan to do without actually doing it. When \
+             you say you will perform an action (e.g. 'I will run the tests', 'Let me check the \
+             file'), you MUST immediately make the corresponding tool call in the same response. \
+             Never end your turn with a promise of future action — execute it now.\nKeep working \
+             until the task is actually complete. Do not stop with a summary of what you plan to \
+             do next time. If you have tools available that can accomplish the task, use them \
+             instead of telling the user what you would do.\nEvery response should either (a) \
+             contain tool calls that make progress, or (b) deliver a final result to the user. \
+             Responses that only describe intentions without acting are not acceptable.\n\n# \
+             Execution discipline\n<tool_persistence>\n- Use tools whenever they improve \
+             correctness, completeness, or grounding.\n- Do not stop early when another tool call \
+             would materially improve the result.\n- If a tool returns empty or partial results, \
+             retry with a different query or strategy before giving up.\n- Keep calling tools \
+             until: (1) the task is complete, AND (2) you have verified the \
+             result.\n</tool_persistence>\n\n<mandatory_tool_use>\nNEVER answer these from memory \
+             — ALWAYS use a tool:\n- Arithmetic, math, calculations → use bash\n- File contents, \
+             sizes, line counts → use read-file, grep, or bash\n- Git history, branches, diffs → \
+             use bash\n- Current facts (versions, docs, APIs) → use \
+             fetch\n</mandatory_tool_use>\n\n<act_dont_ask>\nWhen a question has an obvious \
+             default interpretation, act on it immediately instead of asking for clarification. \
+             Only ask for clarification when the ambiguity genuinely changes what tool you would \
+             call.\n</act_dont_ask>\n\n<verification>\nBefore finalizing your response:\n- \
+             Correctness: does the output satisfy every stated requirement?\n- Grounding: are \
+             factual claims backed by tool outputs or provided context?\n- If required context is \
+             missing, use a lookup tool — do NOT guess.\n</verification>"
         )
     } else {
         effective_prompt
