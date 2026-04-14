@@ -165,6 +165,7 @@ impl KernelHandle {
             parent_id,
             desired_session_key,
             reply_tx,
+            None, // no child_result_tx for top-level spawns
         );
         self.event_queue
             .push(event)
@@ -467,6 +468,13 @@ impl KernelHandle {
         manifest: AgentManifest,
         input: String,
     ) -> Result<AgentHandle> {
+        // Create the result channel BEFORE pushing the event so that
+        // handle_spawn_agent stores it on the Session at creation time.
+        // This closes the race window where a fast-completing child turn
+        // could find result_tx = None and skip cleanup_process, leaking
+        // the parent's child_semaphore permit.
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
+
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let event = KernelEventEnvelope::spawn_agent(
             manifest,
@@ -475,20 +483,13 @@ impl KernelHandle {
             Some(session_key),
             None,
             reply_tx,
+            Some(result_tx),
         );
         self.syscall_push(event).await?;
 
         let child_key = reply_rx.await.map_err(|_| KernelError::SpawnFailed {
             message: "spawn reply channel closed".to_string(),
         })??;
-
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel(64);
-
-        // Store result_tx in the child session so cleanup_process can send
-        // the result back to the awaiting parent.
-        self.process_table.with_mut(&child_key, |session| {
-            session.result_tx = Some(result_tx);
-        });
 
         Ok(AgentHandle {
             session_key: child_key,
