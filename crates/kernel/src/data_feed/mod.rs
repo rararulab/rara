@@ -20,9 +20,18 @@
 //! - [`FeedEventId`] — strongly-typed UUID identifier for deduplication.
 //! - [`FeedStore`] — async persistence trait for events and read cursors.
 //! - [`FeedFilter`] — query criteria for filtered event retrieval.
+//! - [`DataFeed`] — trait for external data source implementations.
+//! - [`DataFeedConfig`] / [`FeedType`] — persisted configuration types.
+//! - [`DataFeedRegistry`] — runtime registry managing feed configs and tasks.
 
+mod config;
 mod event;
+mod feed;
+mod registry;
 mod store;
 
+pub use config::{DataFeedConfig, FeedType};
 pub use event::{FeedEvent, FeedEventId};
+pub use feed::DataFeed;
+pub use registry::DataFeedRegistry;
 pub use store::{FeedFilter, FeedStore};
