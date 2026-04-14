@@ -48,7 +48,8 @@ use crate::{
                    code review, analysis)\n\nWHEN NOT TO USE:\n- Single tool call — just call the \
                    tool directly\n- Tasks needing user interaction — child agents cannot ask the \
                    user\n\nIMPORTANT: The child agent has NO memory of your conversation. Pass \
-                   ALL relevant context (file paths, error messages, constraints) in the prompt."
+                   ALL relevant context (file paths, error messages, constraints) in the prompt.",
+    tier = "core"
 )]
 pub struct TaskTool {
     handle:      KernelHandle,
