@@ -125,6 +125,9 @@ pub fn rara_tool_names() -> Vec<rara_kernel::tool::ToolName> {
         // Tape memory (2 Core; info/anchors/entries/between/checkout are Deferred)
         tool_names::TAPE_ANCHOR.clone(),
         tool_names::TAPE_SEARCH.clone(),
+        // Background task delegation
+        tool_names::TASK.clone(),
+        tool_names::SPAWN_BACKGROUND.clone(),
         // Discovery
         ToolName::new(DiscoverToolsTool::TOOL_NAME),
     ]
@@ -292,7 +295,14 @@ mod tests {
         let names = rara_tool_names();
         // Only Core tools appear in the manifest; deferred tools (kernel,
         // marketplace, schedule-*, etc.) are discovered on demand.
-        for expected in ["bash", "tape-anchor", "tape-search", "discover-tools"] {
+        for expected in [
+            "bash",
+            "tape-anchor",
+            "tape-search",
+            "task",
+            "spawn-background",
+            "discover-tools",
+        ] {
             assert!(names.iter().any(|n| n == expected), "missing: {expected}");
         }
         // Verify deferred tools are NOT in the core list.
@@ -323,8 +333,8 @@ mod tests {
     fn rara_core_tool_count_stays_slim() {
         let names = rara_tool_names();
         assert!(
-            names.len() <= 10,
-            "Core tool set has {} tools — keep it under 10 to control token costs. Use tier = \
+            names.len() <= 12,
+            "Core tool set has {} tools — keep it under 12 to control token costs. Use tier = \
              \"deferred\" for non-essential tools.",
             names.len()
         );
