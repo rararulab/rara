@@ -63,56 +63,56 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
     #[serde(default = "default_database_config")]
-    pub database:               DatabaseConfig,
+    pub database: DatabaseConfig,
     /// HTTP server bind / limits.
-    pub http:                   RestServerConfig,
+    pub http: RestServerConfig,
     /// gRPC server bind / limits.
-    pub grpc:                   GrpcServerConfig,
+    pub grpc: GrpcServerConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
-    pub telemetry:              TelemetryConfig,
+    pub telemetry: TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_token:            Option<String>,
+    pub owner_token: Option<String>,
     /// LLM provider configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm:                    Option<flatten::LlmConfig>,
+    pub llm: Option<flatten::LlmConfig>,
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub telegram:               Option<flatten::TelegramConfig>,
+    pub telegram: Option<flatten::TelegramConfig>,
     /// WeChat iLink Bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wechat:                 Option<flatten::WechatConfig>,
+    pub wechat: Option<flatten::WechatConfig>,
     /// Composio credentials (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub composio:               Option<flatten::ComposioConfig>,
+    pub composio: Option<flatten::ComposioConfig>,
     /// Configured users with platform identity mappings (required).
-    pub users:                  Vec<crate::boot::UserConfig>,
+    pub users: Vec<crate::boot::UserConfig>,
     /// Maximum ingress messages per user per minute (rate limiting).
     #[serde(default = "default_max_ingress_per_minute")]
     pub max_ingress_per_minute: u32,
     /// Mita proactive agent configuration (required).
-    pub mita:                   MitaConfig,
+    pub mita: MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub knowledge:              Option<flatten::KnowledgeConfig>,
+    pub knowledge: Option<flatten::KnowledgeConfig>,
     /// Speech-to-Text configuration (optional).
     /// When present, `base_url` is required — startup fails if missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stt:                    Option<rara_stt::SttConfig>,
+    pub stt: Option<rara_stt::SttConfig>,
     /// Text-to-Speech configuration (optional).
     /// When present, voice replies are enabled for channels that support it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tts:                    Option<rara_tts::TtsConfig>,
+    pub tts: Option<rara_tts::TtsConfig>,
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gateway:                Option<GatewayConfig>,
+    pub gateway: Option<GatewayConfig>,
     /// Symphony autonomous coding agent orchestrator (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symphony:               Option<rara_symphony::SymphonyConfig>,
+    pub symphony: Option<rara_symphony::SymphonyConfig>,
     /// Context folding (auto-anchor) configuration for the kernel.
     #[serde(default)]
-    pub context_folding:        rara_kernel::kernel::ContextFoldingConfig,
+    pub context_folding: rara_kernel::kernel::ContextFoldingConfig,
     /// Lightpanda browser subsystem (optional).
     ///
     /// When present, rara starts a Lightpanda CDP server and registers all
@@ -120,7 +120,7 @@ pub struct AppConfig {
     /// or when the binary is not installed, browser tools are not available and
     /// rara falls back to `http-fetch` for web access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser:                Option<rara_browser::BrowserConfig>,
+    pub browser: Option<rara_browser::BrowserConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -143,10 +143,10 @@ pub struct GatewayConfig {
         deserialize_with = "humantime_serde::deserialize",
         serialize_with = "humantime_serde::serialize"
     )]
-    pub check_interval:       Duration,
+    pub check_interval: Duration,
     /// Total health confirmation timeout in seconds.
     #[serde(default = "gateway_defaults::health_timeout")]
-    pub health_timeout:       u64,
+    pub health_timeout: u64,
     /// HTTP health poll interval (e.g. "2s").
     #[serde(
         default = "gateway_defaults::health_poll_interval",
@@ -159,28 +159,40 @@ pub struct GatewayConfig {
     pub max_restart_attempts: u32,
     /// Whether to auto-apply upstream updates.
     #[serde(default = "gateway_defaults::auto_update")]
-    pub auto_update:          bool,
+    pub auto_update: bool,
     /// Bind address for the gateway admin HTTP API.
     #[serde(default = "gateway_defaults::bind_address")]
-    pub bind_address:         String,
+    pub bind_address: String,
     /// Repository URL for commit links in notifications (e.g. "<https://github.com/rararulab/rara>").
-    pub repo_url:             String,
+    pub repo_url: String,
     /// Telegram bot token for the gateway management bot (separate from rara's
     /// bot).
-    pub bot_token:            String,
+    pub bot_token: String,
     /// Telegram chat ID for the gateway bot (typically the admin's private
     /// chat).
-    pub chat_id:              i64,
+    pub chat_id: i64,
 }
 
 mod gateway_defaults {
     use std::time::Duration;
-    pub fn check_interval() -> Duration { Duration::from_secs(300) }
-    pub fn health_timeout() -> u64 { 30 }
-    pub fn health_poll_interval() -> Duration { Duration::from_secs(2) }
-    pub fn max_restart_attempts() -> u32 { 3 }
-    pub fn auto_update() -> bool { true }
-    pub fn bind_address() -> String { "127.0.0.1:25556".to_owned() }
+    pub fn check_interval() -> Duration {
+        Duration::from_secs(300)
+    }
+    pub fn health_timeout() -> u64 {
+        30
+    }
+    pub fn health_poll_interval() -> Duration {
+        Duration::from_secs(2)
+    }
+    pub fn max_restart_attempts() -> u32 {
+        3
+    }
+    pub fn auto_update() -> bool {
+        true
+    }
+    pub fn bind_address() -> String {
+        "127.0.0.1:25556".to_owned()
+    }
 }
 
 /// General OTLP telemetry configuration.
@@ -194,8 +206,12 @@ pub struct TelemetryConfig {
     pub otlp_protocol: Option<String>,
 }
 
-fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
-fn default_max_ingress_per_minute() -> u32 { 30 }
+fn default_database_config() -> DatabaseConfig {
+    DatabaseConfig::builder().build()
+}
+fn default_max_ingress_per_minute() -> u32 {
+    30
+}
 
 // ---------------------------------------------------------------------------
 // StartOptions
@@ -543,13 +559,11 @@ pub async fn start_with_options(
 
     let dock_store_path = rara_paths::data_dir().join("dock");
     let dock_state = rara_dock::DockRouterState {
-        store:         std::sync::Arc::new(rara_dock::DockSessionStore::new(dock_store_path)),
-        tape_service:  Some(rara.tape_service.clone()),
+        store: std::sync::Arc::new(rara_dock::DockSessionStore::new(dock_store_path)),
+        tape_service: Some(rara.tape_service.clone()),
         kernel_handle: Some(kernel_handle.clone()),
         mutation_sink: rara.dock_mutation_sink.clone(),
-        in_flight:     std::sync::Arc::new(parking_lot::Mutex::new(
-            std::collections::HashSet::new(),
-        )),
+        in_flight: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
     };
     let dock_routes = rara_dock::dock_router(dock_state);
 
@@ -601,9 +615,13 @@ pub async fn start_with_options(
     // Build command handlers shared across all channels.
     let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
         use rara_channels::telegram::commands::{
-            BasicCommandHandler, DebugCommandHandler, McpCommandHandler, SessionCommandHandler,
-            StatusCommandHandler, StopCommandHandler, TapeCommandHandler,
+            AnchorModeCommandHandler, BasicCommandHandler, DebugCommandHandler, McpCommandHandler,
+            SessionCommandHandler, StatusCommandHandler, StopCommandHandler, TapeCommandHandler,
         };
+        let anchor_mode_handler = std::sync::Arc::new(AnchorModeCommandHandler::new(
+            settings_provider.clone(),
+            config.context_folding.clone(),
+        ));
         let session_handler = std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone()));
         let stop_handler = std::sync::Arc::new(StopCommandHandler::new(
             bot_client.clone(),
@@ -619,6 +637,7 @@ pub async fn start_with_options(
         // Collect all command definitions so /help can list them.
         use rara_kernel::channel::command::CommandHandler as _;
         let all_commands: Vec<rara_kernel::channel::command::CommandDefinition> = [
+            anchor_mode_handler.commands(),
             session_handler.commands(),
             stop_handler.commands(),
             status_handler.commands(),
@@ -632,6 +651,7 @@ pub async fn start_with_options(
         let mcp_handler = std::sync::Arc::new(McpCommandHandler::new(bot_client.clone()));
         vec![
             basic_handler,
+            anchor_mode_handler,
             session_handler,
             stop_handler,
             status_handler,
@@ -900,12 +920,12 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:               Option<oneshot::Sender<()>>,
-    running:                   Arc<AtomicBool>,
-    cancellation_token:        CancellationToken,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    running: Arc<AtomicBool>,
+    cancellation_token: CancellationToken,
     /// Kernel handle (for injecting inbound messages, accessing stream hub,
     /// endpoint registry, etc.).
-    pub kernel_handle:         Option<rara_kernel::handle::KernelHandle>,
+    pub kernel_handle: Option<rara_kernel::handle::KernelHandle>,
     /// Command handlers shared across all channels (Telegram, CLI, etc.).
     pub command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>>,
     /// User question manager for the ask-user tool (CLI needs it to subscribe
@@ -928,10 +948,14 @@ impl AppHandle {
 
     /// Check if the application is still running.
     #[must_use]
-    pub fn is_running(&self) -> bool { self.running.load(Ordering::SeqCst) }
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
 
     /// Wait for the application to shutdown.
-    pub async fn wait_for_shutdown(&self) { self.cancellation_token.cancelled().await; }
+    pub async fn wait_for_shutdown(&self) {
+        self.cancellation_token.cancelled().await;
+    }
 }
 
 async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {

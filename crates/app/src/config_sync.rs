@@ -43,9 +43,9 @@ const DEBOUNCE_MS: u64 = 1500;
 
 /// Bidirectional sync between config.yaml and the settings KV store.
 pub struct ConfigFileSync {
-    settings:          Arc<dyn SettingsProvider>,
-    app_config:        Arc<RwLock<AppConfig>>,
-    config_path:       PathBuf,
+    settings: Arc<dyn SettingsProvider>,
+    app_config: Arc<RwLock<AppConfig>>,
+    config_path: PathBuf,
     last_written_hash: Arc<AtomicU64>,
 }
 
@@ -88,6 +88,7 @@ impl ConfigFileSync {
             cfg.telegram = new_config.telegram;
             cfg.composio = new_config.composio;
             cfg.knowledge = new_config.knowledge;
+            cfg.context_folding = new_config.context_folding;
         }
         info!("config.yaml synced to settings store");
         Ok(())
@@ -96,7 +97,7 @@ impl ConfigFileSync {
     /// Write current settings back to config.yaml.
     async fn writeback_to_file(&self) -> anyhow::Result<()> {
         let all_settings = self.settings.list().await;
-        let (llm, telegram, wechat, composio, knowledge) =
+        let (context_folding, llm, telegram, wechat, composio, knowledge) =
             flatten::unflatten_from_settings(&all_settings);
 
         let yaml = {
@@ -106,6 +107,12 @@ impl ConfigFileSync {
             cfg.wechat = wechat;
             cfg.composio = composio;
             cfg.knowledge = knowledge;
+            if let Some(context_folding) = context_folding {
+                cfg.context_folding.enabled = context_folding.enabled;
+                cfg.context_folding.fold_threshold = context_folding.fold_threshold;
+                cfg.context_folding.min_entries_between_folds =
+                    context_folding.min_entries_between_folds;
+            }
             serde_yaml::to_string(&*cfg)?
         };
 
@@ -200,6 +207,7 @@ impl ConfigFileSync {
                                 cfg.telegram = new_config.telegram;
                                 cfg.composio = new_config.composio;
                                 cfg.knowledge = new_config.knowledge;
+                                cfg.context_folding = new_config.context_folding;
                             }
                             info!("config file change detected and synced to settings");
                         }
@@ -300,6 +308,12 @@ gateway:
   repo_url: "https://github.com/example/repo"
   bot_token: "456:DEF"
   chat_id: 789
+
+context_folding:
+  enabled: true
+  fold_threshold: 0.75
+  min_entries_between_folds: 30
+  fold_model: "fold-model"
 "#;
 
     #[test]
@@ -373,6 +387,23 @@ gateway:
                 .and_then(|k| k.embedding_model.as_deref()),
         );
 
+        assert_eq!(
+            config.context_folding.enabled,
+            reparsed.context_folding.enabled,
+        );
+        assert_eq!(
+            config.context_folding.fold_threshold,
+            reparsed.context_folding.fold_threshold,
+        );
+        assert_eq!(
+            config.context_folding.min_entries_between_folds,
+            reparsed.context_folding.min_entries_between_folds,
+        );
+        assert_eq!(
+            config.context_folding.fold_model,
+            reparsed.context_folding.fold_model,
+        );
+
         // None fields should stay None
         assert_eq!(
             config
@@ -383,6 +414,22 @@ gateway:
                 .telegram
                 .as_ref()
                 .and_then(|t| t.allowed_group_chat_id.as_deref()),
+        );
+    }
+
+    #[test]
+    fn context_folding_yaml_roundtrip() {
+        let config: AppConfig = serde_yaml::from_str(TEST_YAML).expect("TEST_YAML should parse");
+        let serialized = serde_yaml::to_string(&config).expect("AppConfig should serialize");
+        let reparsed: AppConfig =
+            serde_yaml::from_str(&serialized).expect("serialized YAML should reparse");
+
+        assert_eq!(reparsed.context_folding.enabled, true);
+        assert_eq!(reparsed.context_folding.fold_threshold, 0.75);
+        assert_eq!(reparsed.context_folding.min_entries_between_folds, 30);
+        assert_eq!(
+            reparsed.context_folding.fold_model.as_deref(),
+            Some("fold-model")
         );
     }
 }

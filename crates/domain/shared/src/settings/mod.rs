@@ -22,6 +22,10 @@ use std::collections::HashMap;
 
 /// Well-known setting key constants.
 pub mod keys {
+    pub const CONTEXT_FOLDING_ENABLED: &str = "context_folding.enabled";
+    pub const CONTEXT_FOLDING_FOLD_THRESHOLD: &str = "context_folding.fold_threshold";
+    pub const CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS: &str =
+        "context_folding.min_entries_between_folds";
     pub const LLM_DEFAULT_PROVIDER: &str = "llm.default_provider";
     pub const LLM_PROVIDER: &str = "llm.provider";
     pub const LLM_PROVIDERS_OPENROUTER_BASE_URL: &str = "llm.providers.openrouter.base_url";

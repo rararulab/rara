@@ -40,6 +40,7 @@
 //! sends `Syscall` variants through the unified event queue.
 
 use std::{
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -87,11 +88,11 @@ use crate::{
 pub struct ContextFoldingConfig {
     /// Whether automatic context folding is enabled.
     #[default = false]
-    pub enabled:                   bool,
+    pub enabled: bool,
     /// Context pressure ratio at which auto-fold triggers (below the 0.70
     /// warning threshold).
     #[default = 0.60]
-    pub fold_threshold:            f64,
+    pub fold_threshold: f64,
     /// Minimum number of new tape entries since the last auto-fold before
     /// another fold is allowed (cooldown).
     #[default = 15]
@@ -99,7 +100,146 @@ pub struct ContextFoldingConfig {
     /// Model to use for fold summarization.  `None` falls back to the
     /// session's current model.
     #[default(_code = "None")]
-    pub fold_model:                Option<String>,
+    pub fold_model: Option<String>,
+}
+
+/// User-facing preset for automatic context folding aggressiveness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextFoldingPreset {
+    Chat,
+    Balanced,
+    DeepWork,
+}
+
+impl ContextFoldingPreset {
+    pub const ALL: [Self; 3] = [Self::Chat, Self::Balanced, Self::DeepWork];
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "chat" => Some(Self::Chat),
+            "balanced" => Some(Self::Balanced),
+            "deep-work" | "deep_work" => Some(Self::DeepWork),
+            _ => None,
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Balanced => "balanced",
+            Self::DeepWork => "deep-work",
+        }
+    }
+
+    pub fn practical_effect(self) -> &'static str {
+        match self {
+            Self::Chat => "Folds more frequently to keep the working window smaller.",
+            Self::Balanced => {
+                "Keeps the current default balance between folding and local context."
+            }
+            Self::DeepWork => "Preserves more recent local context and folds less often.",
+        }
+    }
+
+    pub fn config(self, fold_model: Option<String>) -> ContextFoldingConfig {
+        let (enabled, fold_threshold, min_entries_between_folds) = match self {
+            Self::Chat => (true, 0.45, 8),
+            Self::Balanced => (true, 0.60, 15),
+            Self::DeepWork => (true, 0.75, 30),
+        };
+
+        ContextFoldingConfig {
+            enabled,
+            fold_threshold,
+            min_entries_between_folds,
+            fold_model,
+        }
+    }
+
+    pub fn matches(self, config: &ContextFoldingConfig) -> bool {
+        let preset = self.config(None);
+        config.enabled == preset.enabled
+            && approx_fold_threshold_eq(config.fold_threshold, preset.fold_threshold)
+            && config.min_entries_between_folds == preset.min_entries_between_folds
+    }
+}
+
+fn approx_fold_threshold_eq(left: f64, right: f64) -> bool {
+    (left - right).abs() < 1e-9
+}
+
+fn parse_context_folding_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+pub fn matching_context_folding_preset(
+    config: &ContextFoldingConfig,
+) -> Option<ContextFoldingPreset> {
+    ContextFoldingPreset::ALL
+        .into_iter()
+        .find(|preset| preset.matches(config))
+}
+
+pub fn context_folding_mode_name(config: &ContextFoldingConfig) -> &'static str {
+    matching_context_folding_preset(config)
+        .map(ContextFoldingPreset::slug)
+        .unwrap_or("custom")
+}
+
+pub fn context_folding_settings_patch(
+    config: &ContextFoldingConfig,
+) -> HashMap<String, Option<String>> {
+    use rara_domain_shared::settings::keys;
+
+    HashMap::from([
+        (
+            keys::CONTEXT_FOLDING_ENABLED.to_owned(),
+            Some(config.enabled.to_string()),
+        ),
+        (
+            keys::CONTEXT_FOLDING_FOLD_THRESHOLD.to_owned(),
+            Some(config.fold_threshold.to_string()),
+        ),
+        (
+            keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS.to_owned(),
+            Some(config.min_entries_between_folds.to_string()),
+        ),
+    ])
+}
+
+pub async fn effective_context_folding_config(
+    settings: &dyn rara_domain_shared::settings::SettingsProvider,
+    base: &ContextFoldingConfig,
+) -> ContextFoldingConfig {
+    use rara_domain_shared::settings::keys;
+
+    let enabled = settings
+        .get(keys::CONTEXT_FOLDING_ENABLED)
+        .await
+        .as_deref()
+        .and_then(parse_context_folding_bool)
+        .unwrap_or(base.enabled);
+    let fold_threshold = settings
+        .get(keys::CONTEXT_FOLDING_FOLD_THRESHOLD)
+        .await
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(base.fold_threshold);
+    let min_entries_between_folds = settings
+        .get(keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS)
+        .await
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(base.min_entries_between_folds);
+
+    ContextFoldingConfig {
+        enabled,
+        fold_threshold,
+        min_entries_between_folds,
+        fold_model: base.fold_model.clone(),
+    }
 }
 
 /// Kernel configuration.
@@ -107,48 +247,48 @@ pub struct ContextFoldingConfig {
 pub struct KernelConfig {
     /// Maximum number of concurrent agent processes globally.
     #[default = 16]
-    pub max_concurrency:         usize,
+    pub max_concurrency: usize,
     /// Default maximum number of children per agent.
     #[default = 8]
-    pub default_child_limit:     usize,
+    pub default_child_limit: usize,
     /// Default max LLM iterations per agent turn.
     #[default = 60]
-    pub default_max_iterations:  usize,
+    pub default_max_iterations: usize,
     /// Hard cap for one tool execution wave inside a turn.
     ///
     /// Must be greater than any individual tool's own timeout (e.g. bash
     /// defaults to 120 s) so per-tool timeouts fire first and only the
     /// offending tool is killed rather than the entire wave.
     #[default(_code = "Duration::from_secs(180)")]
-    pub tool_execution_timeout:  Duration,
+    pub tool_execution_timeout: Duration,
     /// Default per-tool timeout applied when a tool's
     /// `execution_timeout()` returns `None`.
     ///
     /// Must be strictly less than `tool_execution_timeout` so the per-tool
     /// timeout fires before the global wave timeout.
     #[default(_code = "Duration::from_secs(120)")]
-    pub default_tool_timeout:    Duration,
+    pub default_tool_timeout: Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
-    pub memory_quota_per_agent:  usize,
+    pub memory_quota_per_agent: usize,
     /// Mita heartbeat interval. `None` disables the heartbeat.
     #[default(_code = "None")]
     pub mita_heartbeat_interval: Option<Duration>,
     // Event queue configuration. Controls whether the kernel uses a single
     // global queue (`num_shards = 0`) or sharded parallel processing.
-    pub event_queue:             ShardedEventQueueConfig,
+    pub event_queue: ShardedEventQueueConfig,
     /// Context folding (auto-anchor) configuration.
-    pub context_folding:         ContextFoldingConfig,
+    pub context_folding: ContextFoldingConfig,
     /// Ingress retry / dead-letter configuration.
     ///
     /// Controls how `push_with_retry` handles `IOError::Full` from the
     /// sharded queue when channel adapters publish messages. See
     /// [`crate::queue::push_with_retry`].
-    pub ingress:                 crate::queue::IngressConfig,
+    pub ingress: crate::queue::IngressConfig,
     /// Tool execution hook commands (PreToolUse / PostToolUse /
     /// PostToolUseFailure).
-    pub hooks:                   HooksConfig,
+    pub hooks: HooksConfig,
 }
 
 /// Shared reference to a
@@ -170,53 +310,53 @@ pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
 /// flattened directly into this struct.
 pub struct Kernel {
     /// Kernel configuration.
-    config:                KernelConfig,
+    config: KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:         Arc<SessionTable>,
+    process_table: Arc<SessionTable>,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore:      Arc<Semaphore>,
+    global_semaphore: Arc<Semaphore>,
     /// Unified security subsystem (auth + authz + approval).
-    security:              SecurityRef,
+    security: SecurityRef,
     /// Agent registry for looking up named agent definitions.
-    agent_registry:        AgentRegistryRef,
+    agent_registry: AgentRegistryRef,
     /// Tape service for session message persistence.
-    tape_service:          TapeService,
+    tape_service: TapeService,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
-    session_index:         SessionIndexRef,
+    session_index: SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
-    settings:              SettingsRef,
+    settings: SettingsRef,
     /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
     /// tool_registry, event_bus).
-    syscall:               SyscallDispatcher,
+    syscall: SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
     /// Bundled I/O subsystem (ingress, stream hub, delivery).
-    io:                    Arc<IOSubsystem>,
+    io: Arc<IOSubsystem>,
     /// Unified event queue for all kernel interactions.
-    event_queue:           ShardedQueueRef,
+    event_queue: ShardedQueueRef,
     /// Sharded event queue backing the kernel event loop.
     ///
     /// Always present. When `num_shards == 0` (single-queue mode), all
     /// events are routed to the global queue and processed by a single
     /// `EventProcessor`. When `num_shards > 0`, events are distributed
     /// across N shard queues for parallel processing.
-    sharded_queue:         ShardedQueueRef,
+    sharded_queue: ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
-    started_at:            Timestamp,
+    started_at: Timestamp,
     /// Knowledge layer service for long-term memory extraction.
-    knowledge:             crate::memory::knowledge::KnowledgeServiceRef,
+    knowledge: crate::memory::knowledge::KnowledgeServiceRef,
     /// Security guard pipeline (taint tracking + pattern scanning).
-    guard_pipeline:        Arc<crate::guard::pipeline::GuardPipeline>,
+    guard_pipeline: Arc<crate::guard::pipeline::GuardPipeline>,
     /// Tool execution hook runner (PreToolUse / PostToolUse /
     /// PostToolUseFailure).
-    hook_runner:           HookRunnerRef,
+    hook_runner: HookRunnerRef,
     /// Execution trace service for persisting turn-level traces.
-    trace_service:         crate::trace::TraceService,
+    trace_service: crate::trace::TraceService,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: crate::handle::SkillPromptProvider,
     /// Lifecycle hook registry for turn/fold/delegation events.
-    lifecycle_hooks:       crate::lifecycle::LifecycleHookRegistry,
+    lifecycle_hooks: crate::lifecycle::LifecycleHookRegistry,
 }
 
 impl Kernel {
@@ -1024,10 +1164,10 @@ impl Kernel {
         self.lifecycle_hooks
             .fire_delegation_done(&crate::lifecycle::DelegationResult {
                 parent_session: parent_id,
-                child_session:  child_id,
-                task:           String::new(),
-                success:        result.success,
-                output:         result.output.clone(),
+                child_session: child_id,
+                task: String::new(),
+                success: result.success,
+                output: result.output.clone(),
             })
             .await;
 
@@ -1260,10 +1400,10 @@ impl Kernel {
             // Notify parent if this is a child process.
             if let Some(parent_id) = parent_id {
                 let result = rt.result.clone().unwrap_or(AgentRunLoopResult {
-                    output:     "process ended".to_string(),
+                    output: "process ended".to_string(),
                     iterations: 0,
                     tool_calls: 0,
-                    success:    false,
+                    success: false,
                 });
 
                 // Send final result through mpsc channel if spawn_child is waiting.
@@ -1335,15 +1475,15 @@ impl Kernel {
             None => {
                 let now = chrono::Utc::now();
                 let entry = crate::session::SessionEntry {
-                    key:           SessionKey::new(),
-                    title:         None,
-                    model:         None,
+                    key: SessionKey::new(),
+                    title: None,
+                    model: None,
                     system_prompt: None,
                     message_count: 0,
-                    preview:       None,
-                    metadata:      None,
-                    created_at:    now,
-                    updated_at:    now,
+                    preview: None,
+                    metadata: None,
+                    created_at: now,
+                    updated_at: now,
                 };
                 let session = match self.io.session_index().create_session(&entry).await {
                     Ok(s) => s,
@@ -1357,10 +1497,10 @@ impl Kernel {
                 if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
                     let binding = crate::session::ChannelBinding {
                         channel_type: msg.source.channel_type,
-                        chat_id:      chat_id.to_string(),
-                        session_key:  session.key.clone(),
-                        created_at:   now,
-                        updated_at:   now,
+                        chat_id: chat_id.to_string(),
+                        session_key: session.key.clone(),
+                        created_at: now,
+                        updated_at: now,
                     };
                     if let Err(e) = self.io.session_index().bind_channel(&binding).await {
                         warn!(error = %e, "failed to bind channel to new session");
@@ -1584,15 +1724,15 @@ impl Kernel {
             None => {
                 let now = chrono::Utc::now();
                 let entry = crate::session::SessionEntry {
-                    key:           SessionKey::new(),
-                    title:         None,
-                    model:         None,
+                    key: SessionKey::new(),
+                    title: None,
+                    model: None,
                     system_prompt: None,
                     message_count: 0,
-                    preview:       None,
-                    metadata:      None,
-                    created_at:    now,
-                    updated_at:    now,
+                    preview: None,
+                    metadata: None,
+                    created_at: now,
+                    updated_at: now,
                 };
                 let session = match self.io.session_index().create_session(&entry).await {
                     Ok(s) => s,
@@ -1604,10 +1744,10 @@ impl Kernel {
                 if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
                     let binding = crate::session::ChannelBinding {
                         channel_type: msg.source.channel_type,
-                        chat_id:      chat_id.to_string(),
-                        session_key:  session.key.clone(),
-                        created_at:   now,
-                        updated_at:   now,
+                        chat_id: chat_id.to_string(),
+                        session_key: session.key.clone(),
+                        created_at: now,
+                        updated_at: now,
                     };
                     if let Err(e) = self.io.session_index().bind_channel(&binding).await {
                         warn!(error = %e, "group: failed to bind channel to new session");
@@ -1906,15 +2046,15 @@ impl Kernel {
         //   - the response stream is closed
         //   - a TurnCompleted(Err) event is pushed so the process returns to Ready
         struct TurnGuard {
-            event_queue:     ShardedQueueRef,
-            stream_hub:      Arc<crate::io::StreamHub>,
-            stream_id:       StreamId,
-            typing_refresh:  Option<tokio::task::JoinHandle<()>>,
-            session_key:     SessionKey,
-            msg_id:          MessageId,
-            user:            crate::identity::UserId,
+            event_queue: ShardedQueueRef,
+            stream_hub: Arc<crate::io::StreamHub>,
+            stream_id: StreamId,
+            typing_refresh: Option<tokio::task::JoinHandle<()>>,
+            session_key: SessionKey,
+            msg_id: MessageId,
+            user: crate::identity::UserId,
             origin_endpoint: Option<crate::io::Endpoint>,
-            completed:       bool,
+            completed: bool,
         }
 
         impl Drop for TurnGuard {
@@ -2393,15 +2533,15 @@ impl Kernel {
 
             // -- 7b: Arm the TurnGuard --
             let mut turn_guard = TurnGuard {
-                event_queue:     event_queue.clone(),
-                stream_hub:      Arc::clone(&stream_hub_ref),
-                stream_id:       stream_id.clone(),
-                typing_refresh:  Some(typing_refresh),
-                session_key:     session_key.clone(),
-                msg_id:          msg_id.clone(),
-                user:            user.clone(),
+                event_queue: event_queue.clone(),
+                stream_hub: Arc::clone(&stream_hub_ref),
+                stream_id: stream_id.clone(),
+                typing_refresh: Some(typing_refresh),
+                session_key: session_key.clone(),
+                msg_id: msg_id.clone(),
+                user: user.clone(),
                 origin_endpoint: origin_endpoint.clone(),
-                completed:       false,
+                completed: false,
             };
 
             // Wrap the core turn work in catch_unwind so that if a panic
@@ -2678,19 +2818,19 @@ impl Kernel {
             };
             let turn_result = match &result {
                 Ok(turn) => crate::lifecycle::TurnResult {
-                    success:     turn.trace.success,
-                    iterations:  turn.iterations,
-                    tool_calls:  turn.tool_calls,
-                    output:      turn.text.clone(),
-                    error:       turn.trace.error.clone(),
+                    success: turn.trace.success,
+                    iterations: turn.iterations,
+                    tool_calls: turn.tool_calls,
+                    output: turn.text.clone(),
+                    error: turn.trace.error.clone(),
                     duration_ms: turn.trace.duration_ms,
                 },
                 Err(err) => crate::lifecycle::TurnResult {
-                    success:     false,
-                    iterations:  0,
-                    tool_calls:  0,
-                    output:      String::new(),
-                    error:       Some(err.clone()),
+                    success: false,
+                    iterations: 0,
+                    tool_calls: 0,
+                    output: String::new(),
+                    error: Some(err.clone()),
                     duration_ms: 0,
                 },
             };
@@ -2749,10 +2889,10 @@ impl Kernel {
                 }
 
                 let result = AgentRunLoopResult {
-                    output:     turn.text.clone(),
+                    output: turn.text.clone(),
                     iterations: turn.iterations,
                     tool_calls: turn.tool_calls,
-                    success:    turn.trace.success,
+                    success: turn.trace.success,
                 };
                 let _ = self.process_table.set_result(session_key, result.clone());
 
@@ -3143,6 +3283,51 @@ fn acquire_parent_child_permit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+
+    struct TestSettings {
+        values: HashMap<String, String>,
+        tx: tokio::sync::watch::Sender<()>,
+        rx: tokio::sync::watch::Receiver<()>,
+    }
+
+    impl TestSettings {
+        fn new(values: HashMap<String, String>) -> Self {
+            let (tx, rx) = tokio::sync::watch::channel(());
+            Self { values, tx, rx }
+        }
+    }
+
+    #[async_trait]
+    impl rara_domain_shared::settings::SettingsProvider for TestSettings {
+        async fn get(&self, key: &str) -> Option<String> {
+            self.values.get(key).cloned()
+        }
+
+        async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn delete(&self, _key: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn list(&self) -> HashMap<String, String> {
+            self.values.clone()
+        }
+
+        async fn batch_update(
+            &self,
+            _patches: HashMap<String, Option<String>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+            let _ = self.tx.send(());
+            self.rx.clone()
+        }
+    }
 
     /// A parent session with `max_children = 2` allows two child permits to
     /// be acquired and rejects the third with `SpawnLimitReached`. Releasing
@@ -3185,5 +3370,49 @@ mod tests {
             matches!(err, KernelError::SessionNotFound { .. }),
             "expected SessionNotFound, got {err:?}"
         );
+    }
+
+    #[test]
+    fn context_folding_preset_matching_ignores_fold_model() {
+        let config = ContextFoldingConfig {
+            fold_model: Some("fold-model".to_owned()),
+            ..ContextFoldingPreset::Chat.config(None)
+        };
+
+        assert_eq!(
+            matching_context_folding_preset(&config),
+            Some(ContextFoldingPreset::Chat)
+        );
+        assert_eq!(context_folding_mode_name(&config), "chat");
+    }
+
+    #[tokio::test]
+    async fn context_folding_settings_overlay_preserves_fold_model() {
+        use rara_domain_shared::settings::keys;
+
+        let base = ContextFoldingConfig {
+            fold_model: Some("fold-model".to_owned()),
+            ..ContextFoldingPreset::Balanced.config(None)
+        };
+        let settings = TestSettings::new(HashMap::from([
+            (keys::CONTEXT_FOLDING_ENABLED.to_owned(), "true".to_owned()),
+            (
+                keys::CONTEXT_FOLDING_FOLD_THRESHOLD.to_owned(),
+                "0.75".to_owned(),
+            ),
+            (
+                keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS.to_owned(),
+                "30".to_owned(),
+            ),
+        ]));
+
+        let effective = effective_context_folding_config(&settings, &base).await;
+
+        assert_eq!(effective.fold_model.as_deref(), Some("fold-model"));
+        assert_eq!(
+            matching_context_folding_preset(&effective),
+            Some(ContextFoldingPreset::DeepWork)
+        );
+        assert_eq!(context_folding_mode_name(&effective), "deep-work");
     }
 }

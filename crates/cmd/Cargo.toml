@@ -60,6 +60,9 @@ yunara-store.workspace = true
 shadow-rs = { workspace = true }
 
 [dev-dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+rara-domain-shared = { workspace = true }
 rara-sessions = { workspace = true }
 tempfile.workspace = true
 

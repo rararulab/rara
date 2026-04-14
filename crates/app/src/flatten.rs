@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::AppConfig;
+use rara_kernel::kernel::ContextFoldingConfig;
 
 // ---------------------------------------------------------------------------
 // LLM config types
@@ -47,7 +48,7 @@ pub struct LlmConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_provider: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub providers:        HashMap<String, ProviderConfig>,
+    pub providers: HashMap<String, ProviderConfig>,
 }
 
 /// Configuration for a single LLM provider (OpenAI-compatible).
@@ -60,14 +61,14 @@ pub struct LlmConfig {
 #[serde(default)]
 pub struct ProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url:        Option<String>,
+    pub base_url: Option<String>,
     /// Required for all providers. For Ollama, use any placeholder value (e.g.
     /// `"ollama"`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key:         Option<String>,
+    pub api_key: Option<String>,
     /// Default model for this provider.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_model:   Option<String>,
+    pub default_model: Option<String>,
     /// Fallback models to try when the default is unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_models: Option<Vec<String>>,
@@ -82,13 +83,13 @@ pub struct ProviderConfig {
 #[serde(default)]
 pub struct TelegramConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bot_token:               Option<String>,
+    pub bot_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chat_id:                 Option<String>,
+    pub chat_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_group_chat_id:   Option<String>,
+    pub allowed_group_chat_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub group_policy:            Option<String>,
+    pub group_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_channel_id: Option<String>,
 }
@@ -106,7 +107,7 @@ pub struct WechatConfig {
     pub account_id: Option<String>,
     /// Base URL for the WeChat iLink API (defaults to production endpoint).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url:   Option<String>,
+    pub base_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +119,7 @@ pub struct WechatConfig {
 #[serde(default)]
 pub struct ComposioConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key:   Option<String>,
+    pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_id: Option<String>,
 }
@@ -141,15 +142,15 @@ pub struct ComposioConfig {
 #[serde(default)]
 pub struct KnowledgeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedding_model:      Option<String>,
+    pub embedding_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding_dimensions: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub search_top_k:         Option<u32>,
+    pub search_top_k: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub extractor_model:      Option<String>,
+    pub extractor_model: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +160,7 @@ pub struct KnowledgeConfig {
 /// Flatten all config-file sections into settings key-value pairs.
 pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
+    flatten_context_folding(&config.context_folding, &mut pairs);
     if let Some(ref llm) = config.llm {
         flatten_llm(llm, &mut pairs);
     }
@@ -175,6 +177,23 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
         flatten_knowledge(k, &mut pairs);
     }
     pairs
+}
+
+fn flatten_context_folding(config: &ContextFoldingConfig, out: &mut Vec<(String, String)>) {
+    use rara_domain_shared::settings::keys;
+
+    out.push((
+        keys::CONTEXT_FOLDING_ENABLED.into(),
+        config.enabled.to_string(),
+    ));
+    out.push((
+        keys::CONTEXT_FOLDING_FOLD_THRESHOLD.into(),
+        config.fold_threshold.to_string(),
+    ));
+    out.push((
+        keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS.into(),
+        config.min_entries_between_folds.to_string(),
+    ));
 }
 
 fn flatten_llm(llm: &LlmConfig, out: &mut Vec<(String, String)>) {
@@ -271,6 +290,7 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
 pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
     pairs: &HashMap<String, String, S>,
 ) -> (
+    Option<ContextFoldingConfig>,
     Option<LlmConfig>,
     Option<TelegramConfig>,
     Option<WechatConfig>,
@@ -278,12 +298,50 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
     Option<KnowledgeConfig>,
 ) {
     (
+        unflatten_context_folding(pairs),
         unflatten_llm(pairs),
         unflatten_telegram(pairs),
         unflatten_wechat(pairs),
         unflatten_composio(pairs),
         unflatten_knowledge(pairs),
     )
+}
+
+fn parse_context_folding_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn unflatten_context_folding(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<ContextFoldingConfig> {
+    use rara_domain_shared::settings::keys;
+
+    let enabled = pairs
+        .get(keys::CONTEXT_FOLDING_ENABLED)
+        .and_then(|value| parse_context_folding_bool(value));
+    let fold_threshold = pairs
+        .get(keys::CONTEXT_FOLDING_FOLD_THRESHOLD)
+        .and_then(|value| value.parse::<f64>().ok());
+    let min_entries_between_folds = pairs
+        .get(keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS)
+        .and_then(|value| value.parse::<usize>().ok());
+
+    if enabled.is_none() && fold_threshold.is_none() && min_entries_between_folds.is_none() {
+        return None;
+    }
+
+    let defaults = ContextFoldingConfig::default();
+    Some(ContextFoldingConfig {
+        enabled: enabled.unwrap_or(defaults.enabled),
+        fold_threshold: fold_threshold.unwrap_or(defaults.fold_threshold),
+        min_entries_between_folds: min_entries_between_folds
+            .unwrap_or(defaults.min_entries_between_folds),
+        fold_model: None,
+    })
 }
 
 fn unflatten_llm(
@@ -311,9 +369,9 @@ fn unflatten_llm(
     for name in &provider_names {
         found = true;
         let p = ProviderConfig {
-            base_url:        pairs.get(&format!("{prefix}{name}.base_url")).cloned(),
-            api_key:         pairs.get(&format!("{prefix}{name}.api_key")).cloned(),
-            default_model:   pairs.get(&format!("{prefix}{name}.default_model")).cloned(),
+            base_url: pairs.get(&format!("{prefix}{name}.base_url")).cloned(),
+            api_key: pairs.get(&format!("{prefix}{name}.api_key")).cloned(),
+            default_model: pairs.get(&format!("{prefix}{name}.default_model")).cloned(),
             fallback_models: pairs
                 .get(&format!("{prefix}{name}.fallback_models"))
                 .map(|v| v.split(',').map(|s| s.trim().to_string()).collect()),
@@ -423,16 +481,22 @@ mod tests {
 
     #[test]
     fn roundtrip_flatten_unflatten() {
+        let context_folding = ContextFoldingConfig {
+            enabled: true,
+            fold_threshold: 0.75,
+            min_entries_between_folds: 30,
+            fold_model: Some("fold-model".into()),
+        };
         let llm = LlmConfig {
             default_provider: Some("ollama".into()),
-            providers:        {
+            providers: {
                 let mut m = HashMap::new();
                 m.insert(
                     "ollama".into(),
                     ProviderConfig {
-                        base_url:        Some("http://localhost:11434/v1".into()),
-                        api_key:         Some("ollama".into()),
-                        default_model:   Some("qwen3:32b".into()),
+                        base_url: Some("http://localhost:11434/v1".into()),
+                        api_key: Some("ollama".into()),
+                        default_model: Some("qwen3:32b".into()),
                         fallback_models: Some(vec!["qwen3:14b".into(), "llama3:8b".into()]),
                     },
                 );
@@ -441,28 +505,29 @@ mod tests {
         };
 
         let telegram = TelegramConfig {
-            bot_token:               Some("123:ABC".into()),
-            chat_id:                 Some("456".into()),
-            allowed_group_chat_id:   Some("-789".into()),
-            group_policy:            Some("mention_or_small_group".into()),
+            bot_token: Some("123:ABC".into()),
+            chat_id: Some("456".into()),
+            allowed_group_chat_id: Some("-789".into()),
+            group_policy: Some("mention_or_small_group".into()),
             notification_channel_id: Some("-100".into()),
         };
 
         let composio = ComposioConfig {
-            api_key:   Some("cmp_test_key".into()),
+            api_key: Some("cmp_test_key".into()),
             entity_id: Some("workspace-default".into()),
         };
 
         let knowledge = KnowledgeConfig {
-            embedding_model:      Some("text-embedding-3-small".into()),
+            embedding_model: Some("text-embedding-3-small".into()),
             embedding_dimensions: Some(1536),
-            search_top_k:         Some(10),
+            search_top_k: Some(10),
             similarity_threshold: Some(0.85),
-            extractor_model:      Some("gpt-4o-mini".into()),
+            extractor_model: Some("gpt-4o-mini".into()),
         };
 
         // Flatten
         let mut flat = Vec::new();
+        flatten_context_folding(&context_folding, &mut flat);
         flatten_llm(&llm, &mut flat);
         flatten_telegram(&telegram, &mut flat);
         flatten_composio(&composio, &mut flat);
@@ -470,7 +535,18 @@ mod tests {
         let map: HashMap<String, String> = flat.into_iter().collect();
 
         // Unflatten
-        let (got_llm, got_tg, _got_wechat, got_composio, got_know) = unflatten_from_settings(&map);
+        let (got_cf, got_llm, got_tg, _got_wechat, got_composio, got_know) =
+            unflatten_from_settings(&map);
+
+        // --- Context folding ---
+        let got_cf = got_cf.expect("context_folding should be Some");
+        assert_eq!(got_cf.enabled, context_folding.enabled);
+        assert_eq!(got_cf.fold_threshold, context_folding.fold_threshold);
+        assert_eq!(
+            got_cf.min_entries_between_folds,
+            context_folding.min_entries_between_folds
+        );
+        assert!(got_cf.fold_model.is_none());
 
         // --- LLM ---
         let got_llm = got_llm.expect("llm should be Some");
@@ -516,11 +592,40 @@ mod tests {
     #[test]
     fn unflatten_empty_map_returns_none() {
         let map = HashMap::new();
-        let (llm, tg, wechat, composio, know) = unflatten_from_settings(&map);
+        let (context_folding, llm, tg, wechat, composio, know) = unflatten_from_settings(&map);
+        assert!(context_folding.is_none());
         assert!(wechat.is_none());
         assert!(llm.is_none());
         assert!(tg.is_none());
         assert!(composio.is_none());
         assert!(know.is_none());
+    }
+
+    #[test]
+    fn context_folding_flatten_unflatten_roundtrip() {
+        let context_folding = ContextFoldingConfig {
+            enabled: true,
+            fold_threshold: 0.45,
+            min_entries_between_folds: 8,
+            fold_model: Some("fold-model".into()),
+        };
+        let mut flat = Vec::new();
+        flatten_context_folding(&context_folding, &mut flat);
+        let map: HashMap<String, String> = flat.into_iter().collect();
+
+        let (got_context_folding, _, _, _, _, _) = unflatten_from_settings(&map);
+        let got_context_folding =
+            got_context_folding.expect("context_folding should be reconstructed");
+
+        assert_eq!(got_context_folding.enabled, context_folding.enabled);
+        assert_eq!(
+            got_context_folding.fold_threshold,
+            context_folding.fold_threshold
+        );
+        assert_eq!(
+            got_context_folding.min_entries_between_folds,
+            context_folding.min_entries_between_folds
+        );
+        assert!(got_context_folding.fold_model.is_none());
     }
 }

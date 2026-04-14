@@ -32,8 +32,7 @@ pub(crate) const CHILD_RESULT_SAFETY_LIMIT_BYTES: usize = 8000;
 
 /// Structured-output instructions appended to child agent system prompts
 /// so they self-summarize before returning results to the parent.
-pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str =
-    "\n\nWhen done, provide a structured result:\n1. Summary (2-3 sentences of what you did and \
+pub(crate) const STRUCTURED_OUTPUT_SUFFIX: &str = "\n\nWhen done, provide a structured result:\n1. Summary (2-3 sentences of what you did and \
      the outcome)\n2. Key changes or findings (bullet points)\n3. Issues encountered (if \
      any)\nKeep your final response concise — under 1500 characters.";
 
@@ -81,11 +80,11 @@ enum ContextPressure {
     Normal,
     Warning {
         estimated_tokens: usize,
-        usage_ratio:      f64,
+        usage_ratio: f64,
     },
     Critical {
         estimated_tokens: usize,
-        usage_ratio:      f64,
+        usage_ratio: f64,
     },
 }
 
@@ -141,13 +140,13 @@ pub enum Priority {
 pub struct SandboxConfig {
     /// Allowed file paths (read/write). Path-prefix matching.
     #[serde(default)]
-    pub allowed_paths:      Vec<String>,
+    pub allowed_paths: Vec<String>,
     /// Read-only paths (reads allowed, writes denied). Path-prefix matching.
     #[serde(default)]
-    pub read_only_paths:    Vec<String>,
+    pub read_only_paths: Vec<String>,
     /// Denied paths (takes precedence over allowed and read-only).
     #[serde(default)]
-    pub denied_paths:       Vec<String>,
+    pub denied_paths: Vec<String>,
     /// Whether to create an isolated temp workspace for this agent.
     #[serde(default)]
     pub isolated_workspace: bool,
@@ -203,52 +202,52 @@ impl ExecutionMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentManifest {
     /// Unique name identifying this agent definition.
-    pub name:                   String,
+    pub name: String,
     /// Agent's functional role (chat, scout, planner, worker).
     #[serde(default)]
-    pub role:                   AgentRole,
+    pub role: AgentRole,
     /// Human-readable description.
-    pub description:            String,
+    pub description: String,
     /// LLM model identifier.
     #[serde(default)]
-    pub model:                  Option<String>,
+    pub model: Option<String>,
     /// System prompt defining agent behavior.
-    pub system_prompt:          String,
+    pub system_prompt: String,
     /// Optional personality/mood/voice prompt.
     #[serde(default)]
-    pub soul_prompt:            Option<String>,
+    pub soul_prompt: Option<String>,
     /// Optional hint for provider selection.
     #[serde(default)]
-    pub provider_hint:          Option<String>,
+    pub provider_hint: Option<String>,
     /// Maximum LLM iterations before forced completion.
     #[serde(default)]
-    pub max_iterations:         Option<usize>,
+    pub max_iterations: Option<usize>,
     /// Tool names this agent is allowed to use (empty = inherit parent's
     /// tools).
     #[serde(default)]
-    pub tools:                  Vec<crate::tool::ToolName>,
+    pub tools: Vec<crate::tool::ToolName>,
     /// Tool names the agent is NOT allowed to use (denylist).
     ///
     /// Applied after `tools` allowlist filtering. If `tools` is empty (inherit
     /// all), excluded tools are removed from the full set. If `tools` is
     /// explicit, excluded tools are additionally removed.
     #[serde(default)]
-    pub excluded_tools:         Vec<crate::tool::ToolName>,
+    pub excluded_tools: Vec<crate::tool::ToolName>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
-    pub max_children:           Option<usize>,
+    pub max_children: Option<usize>,
     /// Maximum context window size in tokens.
     #[serde(default)]
-    pub max_context_tokens:     Option<usize>,
+    pub max_context_tokens: Option<usize>,
     /// Dispatch priority for scheduling.
     #[serde(default)]
-    pub priority:               Priority,
+    pub priority: Priority,
     /// Arbitrary metadata for extension.
     #[serde(default)]
-    pub metadata:               serde_json::Value,
+    pub metadata: serde_json::Value,
     /// Optional sandbox configuration for file access control.
     #[serde(default)]
-    pub sandbox:                Option<SandboxConfig>,
+    pub sandbox: Option<SandboxConfig>,
     /// Default execution mode for this agent ("reactive" or "plan").
     /// When set, sessions using this manifest default to this mode
     /// unless overridden by session-level `/msg_version`.
@@ -268,19 +267,19 @@ pub struct AgentManifest {
     /// (e.g. Telegram inline keyboard) should enable this; channels without
     /// UI would hit the 120s timeout and silently stop.
     #[serde(default)]
-    pub tool_call_limit:        Option<usize>,
+    pub tool_call_limit: Option<usize>,
     /// Timeout in seconds for plan-mode worker steps. When a worker exceeds
     /// this duration it is terminated and the step is treated as failed.
     ///
     /// **Default: `None` (uses 300s fallback).**
     #[serde(default)]
-    pub worker_timeout_secs:    Option<u64>,
+    pub worker_timeout_secs: Option<u64>,
     /// Maximum self-elected continuations per turn.
     ///
     /// When set to `Some(0)`, continuation is disabled entirely.
     /// **Default: `None` (uses [`machine::DEFAULT_MAX_CONTINUATIONS`]).**
     #[serde(default)]
-    pub max_continuations:      Option<usize>,
+    pub max_continuations: Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.
@@ -289,16 +288,16 @@ pub struct AgentEnv {
     /// Optional workspace directory for file operations.
     pub workspace: Option<String>,
     /// Key-value environment variables.
-    pub vars:      HashMap<String, String>,
+    pub vars: HashMap<String, String>,
 }
 
 /// Shared reference to the [`AgentRegistry`].
 pub type AgentRegistryRef = Arc<AgentRegistry>;
 
 pub struct AgentRegistry {
-    builtin:       HashMap<String, AgentManifest>,
-    custom:        DashMap<String, AgentManifest>,
-    agents_dir:    PathBuf,
+    builtin: HashMap<String, AgentManifest>,
+    custom: DashMap<String, AgentManifest>,
+    agents_dir: PathBuf,
     /// Role → agent name mapping for default agent resolution.
     role_defaults: DashMap<Role, String>,
 }
@@ -395,9 +394,13 @@ impl AgentRegistry {
         self.get(name.value())
     }
 
-    pub fn is_builtin(&self, name: &str) -> bool { self.builtin.contains_key(name) }
+    pub fn is_builtin(&self, name: &str) -> bool {
+        self.builtin.contains_key(name)
+    }
 
-    pub fn agents_dir(&self) -> &Path { &self.agents_dir }
+    pub fn agents_dir(&self) -> &Path {
+        &self.agents_dir
+    }
 }
 
 /// Loads [`AgentManifest`] definitions.
@@ -462,11 +465,15 @@ impl ManifestLoader {
     }
 
     /// List all loaded manifests.
-    pub fn list(&self) -> &[AgentManifest] { &self.manifests }
+    pub fn list(&self) -> &[AgentManifest] {
+        &self.manifests
+    }
 }
 
 impl Default for ManifestLoader {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Maximum byte length for result preview strings.
@@ -483,69 +490,69 @@ pub(crate) fn truncate_preview(s: &str, max_bytes: usize) -> String {
 
 /// A tool call being incrementally assembled from streaming deltas.
 struct PendingToolCall {
-    id:            String,
-    name:          String,
+    id: String,
+    name: String,
     arguments_buf: String,
 }
 
 /// Trace of a single tool call within an iteration.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolCallTrace {
-    pub name:           String,
-    pub id:             String,
-    pub duration_ms:    u64,
-    pub success:        bool,
-    pub arguments:      serde_json::Value,
+    pub name: String,
+    pub id: String,
+    pub duration_ms: u64,
+    pub success: bool,
+    pub arguments: serde_json::Value,
     pub result_preview: String,
-    pub error:          Option<String>,
+    pub error: Option<String>,
 }
 
 /// Trace of a single LLM iteration within a turn.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IterationTrace {
-    pub index:          usize,
+    pub index: usize,
     pub first_token_ms: Option<u64>,
-    pub stream_ms:      u64,
+    pub stream_ms: u64,
     /// First 200 chars of accumulated text.
-    pub text_preview:   String,
+    pub text_preview: String,
     /// Full accumulated reasoning text for this iteration.
     pub reasoning_text: Option<String>,
-    pub tool_calls:     Vec<ToolCallTrace>,
+    pub tool_calls: Vec<ToolCallTrace>,
 }
 
 /// Complete trace of a single agent turn.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TurnTrace {
-    pub duration_ms:      u64,
-    pub model:            String,
+    pub duration_ms: u64,
+    pub model: String,
     /// The user message that triggered this turn.
-    pub input_text:       Option<String>,
-    pub iterations:       Vec<IterationTrace>,
-    pub final_text_len:   usize,
+    pub input_text: Option<String>,
+    pub iterations: Vec<IterationTrace>,
+    pub final_text_len: usize,
     pub total_tool_calls: usize,
-    pub success:          bool,
-    pub error:            Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
     /// Rara internal message ID for end-to-end correlation.
     /// For user-triggered turns this is the `InboundMessage.id`;
     /// for proactive turns a fresh ID is generated at dispatch time.
-    pub rara_message_id:  crate::io::MessageId,
+    pub rara_message_id: crate::io::MessageId,
 }
 
 /// Result of a single agent turn.
 #[derive(Debug)]
 pub struct AgentTurnResult {
     /// The final text produced by the agent.
-    pub text:       String,
+    pub text: String,
     /// Number of LLM iterations consumed.
     pub iterations: usize,
     /// Number of tool calls executed.
     pub tool_calls: usize,
     /// Model used for this turn.
-    pub model:      String,
+    pub model: String,
     /// Detailed trace of the turn for observability.
-    pub trace:      TurnTrace,
+    pub trace: TurnTrace,
     /// Structured cascade trace built in real time during the turn.
-    pub cascade:    crate::cascade::CascadeTrace,
+    pub cascade: crate::cascade::CascadeTrace,
 }
 
 impl AgentTurnResult {
@@ -553,22 +560,22 @@ impl AgentTurnResult {
     /// judgment decides Rara should not reply.
     pub fn empty() -> Self {
         Self {
-            text:       String::new(),
+            text: String::new(),
             iterations: 0,
             tool_calls: 0,
-            model:      String::new(),
-            trace:      TurnTrace {
-                duration_ms:      0,
-                model:            String::new(),
-                input_text:       None,
-                iterations:       Vec::new(),
-                final_text_len:   0,
+            model: String::new(),
+            trace: TurnTrace {
+                duration_ms: 0,
+                model: String::new(),
+                input_text: None,
+                iterations: Vec::new(),
+                final_text_len: 0,
                 total_tool_calls: 0,
-                success:          true,
-                error:            None,
-                rara_message_id:  crate::io::MessageId::new(),
+                success: true,
+                error: None,
+                rara_message_id: crate::io::MessageId::new(),
             },
-            cascade:    crate::cascade::CascadeTrace::empty(),
+            cascade: crate::cascade::CascadeTrace::empty(),
         }
     }
 }
@@ -1092,7 +1099,11 @@ pub(crate) async fn run_agent_loop(
     let user_id = Some(tool_context.user_id.as_str());
 
     // ── Context folding state ────────────────────────────────────────
-    let fold_config = &handle.config().context_folding;
+    let fold_config = crate::kernel::effective_context_folding_config(
+        handle.settings().as_ref(),
+        &handle.config().context_folding,
+    )
+    .await;
     // Recover last auto-fold anchor's entry ID from tape so the cooldown
     // survives across turns (not just within a single run_agent_loop call).
     let mut last_fold_entry_id: Option<u64> =
@@ -1346,13 +1357,13 @@ pub(crate) async fn run_agent_loop(
 
         // Build completion request
         let request = llm::CompletionRequest {
-            model:               model.clone(),
-            messages:            request_messages,
-            tools:               tool_defs.clone(),
-            temperature:         Some(0.7),
-            max_tokens:          Some(2048),
-            thinking:            None,
-            tool_choice:         if tool_defs.is_empty() {
+            model: model.clone(),
+            messages: request_messages,
+            tools: tool_defs.clone(),
+            temperature: Some(0.7),
+            max_tokens: Some(2048),
+            thinking: None,
+            tool_choice: if tool_defs.is_empty() {
                 llm::ToolChoice::None
             } else {
                 llm::ToolChoice::Auto
@@ -1362,8 +1373,8 @@ pub(crate) async fn run_agent_loop(
             // especially prone to generating the same paragraph 3-4 times without
             // a penalty. 0.3 is a conservative value that curbs repetition without
             // degrading output quality. See #317.
-            frequency_penalty:   Some(0.3),
-            top_p:               None,
+            frequency_penalty: Some(0.3),
+            top_p: None,
         };
 
         // Start streaming via LlmDriver
@@ -1520,9 +1531,9 @@ pub(crate) async fn run_agent_loop(
                         cumulative_output_tokens =
                             cumulative_output_tokens.saturating_add(u.completion_tokens);
                         stream_handle.emit(StreamEvent::UsageUpdate {
-                            input_tokens:  u.prompt_tokens,
+                            input_tokens: u.prompt_tokens,
                             output_tokens: cumulative_output_tokens,
-                            thinking_ms:   cumulative_thinking_ms,
+                            thinking_ms: cumulative_thinking_ms,
                         });
                     }
                     break;
@@ -2023,8 +2034,8 @@ pub(crate) async fn run_agent_loop(
             let start_args = serde_json::from_str(&tool_call.arguments_buf)
                 .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
             stream_handle.emit(StreamEvent::ToolCallStart {
-                name:      tool_call.name.clone(),
-                id:        tool_call.id.clone(),
+                name: tool_call.name.clone(),
+                id: tool_call.id.clone(),
                 arguments: start_args,
             });
 
@@ -2045,11 +2056,11 @@ pub(crate) async fn run_agent_loop(
                             }),
                             serde_json::to_value(crate::memory::ToolResultMetadata {
                                 rara_message_id: rara_message_id.to_string(),
-                                tool_metrics:    vec![crate::memory::ToolMetric {
-                                    name:        tool_call.name.clone(),
+                                tool_metrics: vec![crate::memory::ToolMetric {
+                                    name: tool_call.name.clone(),
                                     duration_ms: 0,
-                                    success:     false,
-                                    error:       Some(error_message.clone()),
+                                    success: false,
+                                    error: Some(error_message.clone()),
                                 }],
                             })
                             .ok(),
@@ -2057,24 +2068,24 @@ pub(crate) async fn run_agent_loop(
                         .await;
                     let raw_args: String = tool_call.arguments_buf.chars().take(100).collect();
                     stream_handle.emit(StreamEvent::ToolCallEnd {
-                        id:             tool_call.id,
+                        id: tool_call.id,
                         result_preview: error_message.chars().take(200).collect(),
-                        success:        false,
-                        error:          Some(format!("{error_message} | args: {raw_args}")),
+                        success: false,
+                        error: Some(format!("{error_message} | args: {raw_args}")),
                     });
                     continue;
                 }
             };
 
             assistant_tool_calls.push(llm::ToolCallRequest {
-                id:        tool_call.id.clone(),
-                name:      tool_call.name.clone(),
+                id: tool_call.id.clone(),
+                name: tool_call.name.clone(),
                 arguments: tool_call.arguments_buf.clone(),
             });
             if let Some(ref mtx) = milestone_tx {
                 let _ = mtx
                     .send(crate::io::AgentEvent::Milestone {
-                        stage:  "tool_call_start".to_string(),
+                        stage: "tool_call_start".to_string(),
                         detail: Some(tool_call.name.clone()),
                     })
                     .await;
@@ -2547,10 +2558,10 @@ pub(crate) async fn run_agent_loop(
                 .zip(valid_tool_calls.iter())
                 .map(|((success, _, err, duration_ms), (_id, name, _args))| {
                     crate::memory::ToolMetric {
-                        name:        name.clone(),
+                        name: name.clone(),
                         duration_ms: *duration_ms,
-                        success:     *success,
-                        error:       err.clone(),
+                        success: *success,
+                        error: err.clone(),
                     }
                 })
                 .collect();
@@ -2669,15 +2680,15 @@ pub(crate) async fn run_agent_loop(
             let result_preview = truncate_preview(&result_str, RESULT_PREVIEW_MAX_BYTES);
 
             stream_handle.emit(StreamEvent::ToolCallEnd {
-                id:             id.clone(),
+                id: id.clone(),
                 result_preview: result_preview.clone(),
-                success:        *success,
-                error:          err.clone(),
+                success: *success,
+                error: err.clone(),
             });
             if let Some(ref mtx) = milestone_tx {
                 let _ = mtx
                     .send(crate::io::AgentEvent::Milestone {
-                        stage:  "tool_call_end".to_string(),
+                        stage: "tool_call_end".to_string(),
                         detail: Some(format!(
                             "{}: {}",
                             name,
@@ -2773,8 +2784,8 @@ pub(crate) async fn run_agent_loop(
                     next_limit_at = tool_calls_made + limit_interval;
                     stream_handle.emit(StreamEvent::ToolCallLimitResolved {
                         session_key: session_key.to_string(),
-                        limit_id:    current_limit_id,
-                        continued:   true,
+                        limit_id: current_limit_id,
+                        continued: true,
                     });
                 }
                 _ => {
@@ -2783,8 +2794,8 @@ pub(crate) async fn run_agent_loop(
                     warn!(tool_calls_made, "agent loop stopped by user or timeout");
                     stream_handle.emit(StreamEvent::ToolCallLimitResolved {
                         session_key: session_key.to_string(),
-                        limit_id:    current_limit_id,
-                        continued:   false,
+                        limit_id: current_limit_id,
+                        continued: false,
                     });
                     stopped_by_limit = true;
                     break;
@@ -3085,8 +3096,8 @@ mod tests {
         pending.insert(
             0,
             PendingToolCall {
-                id:            "call-1".to_string(),
-                name:          "write-file".to_string(),
+                id: "call-1".to_string(),
+                name: "write-file".to_string(),
                 arguments_buf: "{}".to_string(),
             },
         );

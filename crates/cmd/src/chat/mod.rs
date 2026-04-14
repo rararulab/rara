@@ -117,7 +117,7 @@ impl ChatArgs {
 
         let cli_endpoint = Endpoint {
             channel_type: ChannelType::Cli,
-            address:      EndpointAddress::Cli {
+            address: EndpointAddress::Cli {
                 session_id: session_alias.clone(),
             },
         };
@@ -509,7 +509,7 @@ async fn handle_slash_command(
             let info = CommandInfo {
                 name: cmd_name.to_owned(),
                 args: args.to_owned(),
-                raw:  command.to_owned(),
+                raw: command.to_owned(),
             };
 
             let mut metadata = HashMap::new();
@@ -522,7 +522,7 @@ async fn handle_slash_command(
                 channel_type: ChannelType::Cli,
                 session_key: session_key.to_owned(),
                 user: ChannelUser {
-                    platform_id:  format!("cli:{user_id}"),
+                    platform_id: format!("cli:{user_id}"),
                     display_name: Some(user_id.to_owned()),
                 },
                 metadata,
@@ -552,15 +552,15 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
     let session_index = kernel_handle.session_index();
     let now = Utc::now();
     let new_entry = SessionEntry {
-        key:           SessionKey::new(),
-        title:         None,
-        model:         None,
+        key: SessionKey::new(),
+        title: None,
+        model: None,
         system_prompt: None,
         message_count: 0,
-        preview:       None,
-        metadata:      None,
-        created_at:    now,
-        updated_at:    now,
+        preview: None,
+        metadata: None,
+        created_at: now,
+        updated_at: now,
     };
 
     let created = match session_index.create_session(&new_entry).await {
@@ -575,10 +575,10 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
     let new_alias = short_session_key(&created.key);
     let binding = ChannelBinding {
         channel_type: ChannelType::Cli,
-        chat_id:      new_alias.clone(),
-        session_key:  created.key,
-        created_at:   now,
-        updated_at:   now,
+        chat_id: new_alias.clone(),
+        session_key: created.key,
+        created_at: now,
+        updated_at: now,
     };
 
     if let Err(e) = session_index.bind_channel(&binding).await {
@@ -690,10 +690,10 @@ async fn handle_switch_session(
     let now = Utc::now();
     let binding = ChannelBinding {
         channel_type: ChannelType::Cli,
-        chat_id:      new_alias.clone(),
-        session_key:  entry.key,
-        created_at:   now,
-        updated_at:   now,
+        chat_id: new_alias.clone(),
+        session_key: entry.key,
+        created_at: now,
+        updated_at: now,
     };
 
     if let Err(e) = session_index.bind_channel(&binding).await {
@@ -853,7 +853,9 @@ fn default_model_label(config: &AppConfig) -> String {
     }
 }
 
-fn cli_kernel_user_id(user_id: &str) -> UserId { UserId(user_id.to_owned()) }
+fn cli_kernel_user_id(user_id: &str) -> UserId {
+    UserId(user_id.to_owned())
+}
 
 async fn get_or_create_cli_session(
     session_index: &dyn SessionIndex,
@@ -869,15 +871,15 @@ async fn get_or_create_cli_session(
 
     let now = Utc::now();
     let entry = SessionEntry {
-        key:           SessionKey::new(),
-        title:         Some(chat_id.to_owned()),
-        model:         None,
+        key: SessionKey::new(),
+        title: Some(chat_id.to_owned()),
+        model: None,
         system_prompt: None,
         message_count: 0,
-        preview:       None,
-        metadata:      None,
-        created_at:    now,
-        updated_at:    now,
+        preview: None,
+        metadata: None,
+        created_at: now,
+        updated_at: now,
     };
     let created = session_index
         .create_session(&entry)
@@ -885,10 +887,10 @@ async fn get_or_create_cli_session(
         .whatever_context("Failed to create CLI chat session")?;
     let binding = ChannelBinding {
         channel_type: ChannelType::Cli,
-        chat_id:      chat_id.to_owned(),
-        session_key:  created.key.clone(),
-        created_at:   now,
-        updated_at:   now,
+        chat_id: chat_id.to_owned(),
+        session_key: created.key.clone(),
+        created_at: now,
+        updated_at: now,
     };
     session_index
         .bind_channel(&binding)
@@ -938,8 +940,8 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             total_steps,
             ..
         } => CliEvent::PlanCreated {
-            goal:              compact_summary,
-            total_steps:       total_steps as u32,
+            goal: compact_summary,
+            total_steps: total_steps as u32,
             step_descriptions: Vec::new(),
         },
         StreamEvent::PlanProgress {
@@ -1105,9 +1107,9 @@ fn build_cli_raw_message(
         platform_chat_id: Some(session_key.to_owned()),
         content,
         reply_context: Some(IoReplyContext {
-            thread_id:                None,
+            thread_id: None,
             reply_to_platform_msg_id: None,
-            interaction_type:         InteractionType::Message,
+            interaction_type: InteractionType::Message,
         }),
         metadata: HashMap::new(),
     }
@@ -1131,20 +1133,92 @@ async fn poll_crossterm_event() -> Option<Event> {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use async_trait::async_trait;
+    use rara_channels::telegram::commands::AnchorModeCommandHandler;
     use rara_channels::terminal::CliEvent;
     use rara_kernel::{
+        channel::command::CommandHandler,
         channel::types::{ChannelType, ContentBlock, MessageContent},
         identity::UserId,
         io::StreamEvent,
         session::SessionIndex,
+        testing::TestKernelBuilder,
     };
     use rara_sessions::file_index::FileSessionIndex;
 
     use super::{
-        build_cli_raw_message, cli_kernel_user_id, get_or_create_cli_session, short_session_key,
-        stream_event_to_cli_event,
+        build_cli_raw_message, cli_kernel_user_id, get_or_create_cli_session, handle_slash_command,
+        short_session_key, stream_event_to_cli_event,
     };
     use crate::chat::app::ChatState;
+
+    struct TestSettings {
+        data: tokio::sync::RwLock<HashMap<String, String>>,
+        tx: tokio::sync::watch::Sender<()>,
+        rx: tokio::sync::watch::Receiver<()>,
+    }
+
+    impl TestSettings {
+        fn new() -> Self {
+            let (tx, rx) = tokio::sync::watch::channel(());
+            Self {
+                data: tokio::sync::RwLock::new(HashMap::new()),
+                tx,
+                rx,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl rara_domain_shared::settings::SettingsProvider for TestSettings {
+        async fn get(&self, key: &str) -> Option<String> {
+            self.data.read().await.get(key).cloned()
+        }
+
+        async fn set(&self, key: &str, value: &str) -> anyhow::Result<()> {
+            self.data
+                .write()
+                .await
+                .insert(key.to_owned(), value.to_owned());
+            let _ = self.tx.send(());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> anyhow::Result<()> {
+            self.data.write().await.remove(key);
+            let _ = self.tx.send(());
+            Ok(())
+        }
+
+        async fn list(&self) -> HashMap<String, String> {
+            self.data.read().await.clone()
+        }
+
+        async fn batch_update(
+            &self,
+            patches: HashMap<String, Option<String>>,
+        ) -> anyhow::Result<()> {
+            let mut data = self.data.write().await;
+            for (key, value) in patches {
+                match value {
+                    Some(value) => {
+                        data.insert(key, value);
+                    }
+                    None => {
+                        data.remove(&key);
+                    }
+                }
+            }
+            let _ = self.tx.send(());
+            Ok(())
+        }
+
+        fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+            self.rx.clone()
+        }
+    }
 
     #[tokio::test]
     async fn cli_session_binding_is_created_once_and_reused() {
@@ -1205,7 +1279,7 @@ mod tests {
             "describe",
             vec![ContentBlock::ImageBase64 {
                 media_type: "image/png".to_owned(),
-                data:       "AAAA".to_owned(),
+                data: "AAAA".to_owned(),
             }],
         );
 
@@ -1269,6 +1343,32 @@ mod tests {
 
         state.reset_messages();
         assert!(state.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn anchor_mode_help_includes_registered_handler() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let test_kernel = TestKernelBuilder::new(tmp.path()).build().await;
+        let settings = Arc::new(TestSettings::new());
+        let handler: Arc<dyn CommandHandler> = Arc::new(AnchorModeCommandHandler::new(
+            settings,
+            rara_kernel::kernel::ContextFoldingPreset::Balanced.config(None),
+        ));
+        let mut state = ChatState::new("default".into(), "local".into());
+
+        let result = handle_slash_command(
+            &mut state,
+            "/help",
+            &[handler],
+            "default",
+            "local",
+            &test_kernel.handle,
+        )
+        .await;
+
+        assert!(matches!(result, super::HandleResult::Continue));
+        let help = &state.messages.last().expect("help message").text;
+        assert!(help.contains("/anchor-mode [chat|balanced|deep-work]"));
     }
 
     // -----------------------------------------------------------------------
@@ -1343,7 +1443,7 @@ mod tests {
         super::render_command_result(
             &mut state,
             CmdResult::Photo {
-                data:    vec![],
+                data: vec![],
                 caption: Some("Anchor tree (3 sessions)".to_owned()),
             },
         );
@@ -1359,7 +1459,7 @@ mod tests {
         super::render_command_result(
             &mut state,
             CmdResult::Photo {
-                data:    vec![],
+                data: vec![],
                 caption: None,
             },
         );
@@ -1375,11 +1475,11 @@ mod tests {
         super::render_command_result(
             &mut state,
             CmdResult::HtmlWithKeyboard {
-                html:     "<b>Status</b>\nActive: 1".to_owned(),
+                html: "<b>Status</b>\nActive: 1".to_owned(),
                 keyboard: vec![vec![InlineButton {
-                    text:          "All jobs".to_owned(),
+                    text: "All jobs".to_owned(),
                     callback_data: Some("status_jobs:abc".to_owned()),
-                    url:           None,
+                    url: None,
                 }]],
             },
         );
