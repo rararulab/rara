@@ -417,6 +417,7 @@ async fn handle_slash_command(
                 "/clear          — clear current session display".to_owned(),
                 "/sessions       — list recent sessions".to_owned(),
                 "/switch <key>   — switch to a session by key".to_owned(),
+                "/name <title>   — rename the current session".to_owned(),
                 "/image <path>   — stage a local image for the next turn".to_owned(),
                 "/images         — list staged images".to_owned(),
                 "/clear-images   — clear staged images".to_owned(),
@@ -486,6 +487,11 @@ async fn handle_slash_command(
         "/clear-images" => {
             state.staged_images.clear();
             state.push_message(Role::System, "Cleared staged images.".to_owned());
+            return HandleResult::Continue;
+        }
+        "/name" => {
+            let title = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
+            handle_rename_session(state, session_key, title, kernel_handle).await;
             return HandleResult::Continue;
         }
         _ => {}
@@ -710,6 +716,60 @@ async fn handle_switch_session(
 fn short_session_key(key: &SessionKey) -> String {
     let full = key.to_string();
     full.chars().take(8).collect()
+}
+
+/// Handle the `/name <title>` command: rename the current session.
+async fn handle_rename_session(
+    state: &mut ChatState,
+    session_key: &str,
+    title: Option<&str>,
+    kernel_handle: &KernelHandle,
+) {
+    let Some(title) = title else {
+        state.push_message(Role::System, "Usage: /name <title>".to_owned());
+        return;
+    };
+
+    let session_index = kernel_handle.session_index();
+
+    // Resolve the CLI alias to the internal SessionKey.
+    let binding = match session_index
+        .get_channel_binding(ChannelType::Cli, session_key)
+        .await
+    {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            state.push_message(Role::System, "Session not found.".to_owned());
+            return;
+        }
+        Err(e) => {
+            state.push_message(Role::System, format!("Failed to find session: {e}"));
+            return;
+        }
+    };
+
+    let mut entry = match session_index.get_session(&binding.session_key).await {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
+            state.push_message(Role::System, "Session not found.".to_owned());
+            return;
+        }
+        Err(e) => {
+            state.push_message(Role::System, format!("Failed to get session: {e}"));
+            return;
+        }
+    };
+
+    entry.title = Some(title.to_owned());
+    match session_index.update_session(&entry).await {
+        Ok(_) => {
+            state.session_label = title.to_owned();
+            state.push_message(Role::System, format!("Session renamed to: {title}"));
+        }
+        Err(e) => {
+            state.push_message(Role::System, format!("Failed to rename session: {e}"));
+        }
+    }
 }
 
 /// Render a [`CmdResult`] from a kernel command handler into the chat
