@@ -297,6 +297,14 @@ pub enum KernelEvent {
         #[debug(skip)]
         #[serde(skip_serializing)]
         reply_tx:            oneshot::Sender<crate::error::Result<SessionKey>>,
+        /// Pre-created channel for streaming `AgentEvent`s back to the
+        /// spawner.  Passed through so that `handle_spawn_agent` can store
+        /// it on the `Session` atomically at creation time, closing the
+        /// race window where a fast-completing child turn could miss a
+        /// late-set `result_tx`.
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        child_result_tx:     Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     },
 
     /// Send a control signal to a session.
@@ -462,6 +470,7 @@ impl KernelEventEnvelope {
         parent_id: Option<SessionKey>,
         desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
+        child_result_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     ) -> Self {
         Self {
             base: EventBase::from(desired_session_key.unwrap_or_default()),
@@ -472,6 +481,7 @@ impl KernelEventEnvelope {
                 parent_id,
                 desired_session_key,
                 reply_tx,
+                child_result_tx,
             },
         }
     }
@@ -484,6 +494,7 @@ impl KernelEventEnvelope {
         parent_id: Option<SessionKey>,
         desired_session_key: Option<SessionKey>,
         reply_tx: oneshot::Sender<crate::error::Result<SessionKey>>,
+        child_result_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     ) -> Self {
         Self::create_session(
             manifest,
@@ -492,6 +503,7 @@ impl KernelEventEnvelope {
             parent_id,
             desired_session_key,
             reply_tx,
+            child_result_tx,
         )
     }
 

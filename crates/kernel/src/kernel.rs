@@ -676,8 +676,9 @@ impl Kernel {
                 parent_id,
                 desired_session_key,
                 reply_tx,
+                child_result_tx,
             } => {
-                // CreateSession from SessionHandle::create_child() — subagent.
+                // CreateSession from SessionHandle — subagent or top-level.
                 let result = self
                     .handle_spawn_agent(
                         manifest,
@@ -687,6 +688,7 @@ impl Kernel {
                         None,
                         desired_session_key,
                         None,
+                        child_result_tx,
                     )
                     .await;
                 let _ = reply_tx.send(result);
@@ -780,6 +782,10 @@ impl Kernel {
         // The originating channel endpoint, stored in the session so that
         // reply routing works even for synthetic re-entry messages.
         origin_endpoint: Option<crate::io::Endpoint>,
+        // Pre-created channel for streaming AgentEvents back to the spawner.
+        // Set at creation time to avoid the race where a fast-completing child
+        // turn checks result_tx before the spawner has a chance to set it.
+        child_result_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
     ) -> crate::Result<SessionKey> {
         // Validate principal.
         let principal = self.security.resolve_principal(&principal).await?;
@@ -841,7 +847,7 @@ impl Kernel {
             created_at: jiff::Timestamp::now(),
             finished_at: None,
             result: None,
-            result_tx: None,
+            result_tx: child_result_tx,
             created_files: vec![],
             metrics,
             turn_traces: vec![],
@@ -1471,6 +1477,7 @@ impl Kernel {
                 resume_session_id,
                 Some(session_id.clone()),
                 origin_endpoint.clone(),
+                None, // no child_result_tx for user-initiated sessions
             )
             .await;
         match spawn_result {
@@ -1530,6 +1537,7 @@ impl Kernel {
                 None, // no resume
                 None, // independent session, don't pollute the original tape
                 None, // no origin endpoint
+                None, // no child_result_tx for scheduled tasks
             )
             .await
         {
@@ -1760,6 +1768,7 @@ impl Kernel {
                     None,
                     Some(session_key),
                     None,
+                    None, // no child_result_tx for Mita
                 )
                 .await
             {
