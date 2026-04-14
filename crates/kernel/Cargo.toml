@@ -18,6 +18,7 @@ testing = []
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+axum = { workspace = true }
 backon.workspace = true
 base.workspace = true
 base64.workspace = true
@@ -29,6 +30,8 @@ dashmap = "6"
 derive_more = { workspace = true }
 eventsource-stream.workspace = true
 futures.workspace = true
+hex.workspace = true
+hmac.workspace = true
 image.workspace = true
 indexmap.workspace = true
 jiff.workspace = true
@@ -50,10 +53,12 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+sha2.workspace = true
 smart-default.workspace = true
 snafu.workspace = true
 sqlx.workspace = true
 strum = { workspace = true, features = ["derive"] }
+subtle.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }
 tracing.workspace = true
@@ -75,6 +80,7 @@ rara-kernel = { path = ".", features = ["testing"] }
 serde_json.workspace = true
 tempfile.workspace = true
 test-case = "^3"
+tower.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 
 [lints]

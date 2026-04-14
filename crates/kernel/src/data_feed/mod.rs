@@ -23,12 +23,14 @@
 //! - [`DataFeed`] — trait for external data source implementations.
 //! - [`DataFeedConfig`] / [`FeedType`] — persisted configuration types.
 //! - [`DataFeedRegistry`] — runtime registry managing feed configs and tasks.
+//! - [`webhook`] — HTTP POST receiver with HMAC verification and dedup.
 
 mod config;
 mod event;
 mod feed;
 mod registry;
 mod store;
+pub mod webhook;
 
 pub use config::{DataFeedConfig, FeedType};
 pub use event::{FeedEvent, FeedEventId};
