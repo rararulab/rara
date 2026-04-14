@@ -16,19 +16,17 @@
 //!
 //! The registry handles CRUD operations on [`DataFeedConfig`]s and tracks
 //! cancellation tokens for running feed tasks. It does **not** own the
-//! settings persistence layer — callers are responsible for reading
-//! [`configs`](DataFeedRegistry::configs) and writing to the settings
-//! store after mutations.
+//! database persistence layer — callers are responsible for syncing
+//! changes to the `data_feeds` table after mutations.
 //!
 //! # Lifecycle
 //!
-//! 1. On startup, the caller loads configs from settings and calls
-//!    [`restore`](DataFeedRegistry::restore).
+//! 1. On startup, the caller loads configs from the `data_feeds` table and
+//!    calls [`restore`](DataFeedRegistry::restore).
 //! 2. At runtime, `register` / `remove` mutate the in-memory map. The caller
 //!    persists after each mutation.
-//! 3. Concrete feed tasks are started externally (Step 3) — the registry only
-//!    stores their [`CancellationToken`]s so that `remove` can cancel a running
-//!    feed.
+//! 3. Concrete feed tasks are started externally — the registry only stores
+//!    their [`CancellationToken`]s so that `remove` can cancel a running feed.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -70,14 +68,14 @@ impl DataFeedRegistry {
     /// Register a new data feed configuration.
     ///
     /// Returns an error if a feed with the same name is already registered.
-    /// The caller is responsible for persisting configs to settings after
-    /// this call.
+    /// The caller is responsible for persisting configs to the `data_feeds`
+    /// table after this call.
     pub fn register(&self, config: DataFeedConfig) -> crate::Result<()> {
         let mut configs = self.configs.lock();
         if configs.contains_key(&config.name) {
             whatever!("data feed already registered: {}", config.name);
         }
-        info!(name = %config.name, feed_type = ?config.feed_type, "registered data feed");
+        info!(name = %config.name, feed_type = %config.feed_type, "registered data feed");
         configs.insert(config.name.clone(), config);
         Ok(())
     }
@@ -115,13 +113,13 @@ impl DataFeedRegistry {
     /// Return all configs for external persistence.
     ///
     /// This is the serialisation companion to [`restore`](Self::restore) —
-    /// the caller serialises the returned vec to JSON and writes it to the
-    /// settings store.
+    /// the caller serialises the returned vec and writes it to the
+    /// `data_feeds` table.
     pub fn configs(&self) -> Vec<DataFeedConfig> { self.configs.lock().values().cloned().collect() }
 
     /// Bulk-load configs from a previously persisted state.
     ///
-    /// Called once at kernel startup after reading the settings store.
+    /// Called once at kernel startup after reading the `data_feeds` table.
     /// Any existing configs are replaced.
     pub fn restore(&self, configs: Vec<DataFeedConfig>) {
         let mut map = self.configs.lock();
@@ -130,7 +128,7 @@ impl DataFeedRegistry {
         for config in configs {
             map.insert(config.name.clone(), config);
         }
-        info!(count, "restored data feed configs from settings");
+        info!(count, "restored data feed configs from database");
     }
 
     /// Return a clone of the shared event sender.
@@ -140,8 +138,8 @@ impl DataFeedRegistry {
 
     /// Register a cancellation token for a running feed task.
     ///
-    /// Called by the feed spawner (Step 3) after `tokio::spawn`-ing the
-    /// feed's `run` future.
+    /// Called by the feed spawner after `tokio::spawn`-ing the feed's
+    /// `run` future.
     pub fn set_running(&self, name: String, token: CancellationToken) {
         self.running.lock().insert(name, token);
     }
@@ -161,16 +159,20 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::data_feed::FeedType;
+    use crate::data_feed::{FeedType, config::FeedStatus};
 
     fn make_config(name: &str) -> DataFeedConfig {
-        DataFeedConfig {
-            name:       name.to_owned(),
-            feed_type:  FeedType::Webhook,
-            tags:       vec!["test".to_owned()],
-            config:     serde_json::json!({}),
-            created_at: Timestamp::UNIX_EPOCH,
-        }
+        DataFeedConfig::builder()
+            .id(format!("{name}-id"))
+            .name(name.to_owned())
+            .feed_type(FeedType::Webhook)
+            .tags(vec!["test".to_owned()])
+            .transport(serde_json::json!({}))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
+            .build()
     }
 
     #[test]

@@ -17,8 +17,9 @@
 //! Unlike WebSocket or polling feeds, a webhook feed is *passive*: it does not
 //! implement [`DataFeed::run`](super::DataFeed::run). Instead, it exposes an
 //! axum handler that external services POST to. The handler validates HMAC
-//! signatures, deduplicates retried deliveries, constructs a [`FeedEvent`],
-//! and forwards it through the kernel's event channel.
+//! signatures (via [`AuthConfig::Hmac`]),
+//! deduplicates retried deliveries, constructs a [`FeedEvent`], and forwards
+//! it through the kernel's event channel.
 //!
 //! # Route
 //!
@@ -28,13 +29,15 @@
 //!
 //! # Signature verification
 //!
-//! Two header conventions are supported:
+//! When the feed's `auth` is configured as [`AuthConfig::Hmac`], two header
+//! conventions are supported:
 //!
+//! - **Configured header**: the `header` field in the HMAC config determines
+//!   which request header carries the signature.
 //! - **GitHub**: `X-Hub-Signature-256: sha256=<hex>`
-//! - **Generic**: `X-Webhook-Signature: <hex>` (raw HMAC-SHA256 hex digest)
+//! - **Generic**: raw hex HMAC-SHA256 digest in the configured header.
 //!
-//! If a feed has a `secret` configured but the request carries no recognised
-//! signature header, the request is rejected with `401 Unauthorized`.
+//! If auth is `None`, signature verification is skipped.
 
 use std::{
     collections::HashMap,
@@ -58,25 +61,19 @@ use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use super::{DataFeedRegistry, FeedEvent, FeedEventId, FeedType};
+use super::{DataFeedRegistry, FeedEvent, FeedEventId, FeedType, config::AuthConfig};
 
 // ---------------------------------------------------------------------------
-// WebhookConfig — per-feed webhook configuration
+// WebhookTransport — per-feed webhook transport configuration
 // ---------------------------------------------------------------------------
 
-/// Webhook-specific configuration deserialised from a
-/// [DataFeedConfig](super::DataFeedConfig)'s `config` field.
+/// Webhook-specific transport configuration deserialised from a
+/// [`DataFeedConfig`](super::DataFeedConfig)'s `transport` field.
 ///
-/// Stored as JSON inside the generic `serde_json::Value` config field of a
-/// feed registration with [`FeedType::Webhook`].
+/// Stored as JSON inside the `transport` blob of a feed registration
+/// with [`FeedType::Webhook`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebhookConfig {
-    /// HMAC-SHA256 shared secret for signature verification.
-    ///
-    /// When present, every incoming request **must** carry a valid signature
-    /// header. Requests without a recognised signature header are rejected.
-    pub secret: Option<String>,
-
+pub struct WebhookTransport {
     /// Optional list of event types to accept (e.g. `["push",
     /// "pull_request"]`).
     ///
@@ -85,6 +82,10 @@ pub struct WebhookConfig {
     /// list. An empty vec means all event types are accepted.
     #[serde(default)]
     pub events: Vec<String>,
+
+    /// Maximum body size in bytes. Defaults to 1 MiB if absent.
+    #[serde(default)]
+    pub body_size_limit: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -142,8 +143,9 @@ impl WebhookState {
 /// Processing pipeline:
 /// 1. Look up feed config in the registry (404 if not found).
 /// 2. Verify the feed is of type [`FeedType::Webhook`] (400 otherwise).
-/// 3. Deserialise [`WebhookConfig`] from the feed's config blob.
-/// 4. Validate HMAC signature if a secret is configured (401 on failure).
+/// 3. Deserialise [`WebhookTransport`] from the feed's transport blob.
+/// 4. Validate HMAC signature if `auth` is [`AuthConfig::Hmac`] (401 on
+///    failure).
 /// 5. Extract event type from headers / body.
 /// 6. Filter by allowed event types (if configured).
 /// 7. Check idempotency via delivery ID (200 on duplicate).
@@ -176,11 +178,11 @@ pub async fn webhook_handler(
         );
     }
 
-    // 3. Deserialise webhook-specific config.
-    let wh_config: WebhookConfig = match serde_json::from_value(config.config.clone()) {
+    // 3. Deserialise webhook-specific transport config.
+    let wh_transport: WebhookTransport = match serde_json::from_value(config.transport.clone()) {
         Ok(c) => c,
         Err(e) => {
-            warn!(feed_name, error = %e, "invalid webhook config");
+            warn!(feed_name, error = %e, "invalid webhook transport config");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 axum::Json(serde_json::json!({ "error": "invalid webhook config" })),
@@ -188,9 +190,13 @@ pub async fn webhook_handler(
         }
     };
 
-    // 4. HMAC signature verification.
-    if let Some(ref secret) = wh_config.secret {
-        if !verify_hmac(secret, &body, &headers) {
+    // 4. HMAC signature verification via AuthConfig.
+    if let Some(AuthConfig::Hmac {
+        ref secret,
+        ref header,
+    }) = config.auth
+    {
+        if !verify_hmac(secret, header, &body, &headers) {
             warn!(feed_name, "webhook HMAC verification failed");
             return (
                 StatusCode::UNAUTHORIZED,
@@ -203,7 +209,7 @@ pub async fn webhook_handler(
     let event_type = extract_event_type(&headers, &body);
 
     // 6. Filter by allowed event types.
-    if !wh_config.events.is_empty() && !wh_config.events.contains(&event_type) {
+    if !wh_transport.events.is_empty() && !wh_transport.events.contains(&event_type) {
         info!(feed_name, event_type, "webhook event type filtered out");
         return (
             StatusCode::OK,
@@ -272,37 +278,38 @@ pub async fn webhook_handler(
 
 /// Verify HMAC-SHA256 signature from request headers.
 ///
-/// Supports two conventions:
-/// - **GitHub**: `X-Hub-Signature-256: sha256=<hex>`
-/// - **Generic**: `X-Webhook-Signature: <hex>`
+/// Uses the `sig_header_name` from [`AuthConfig::Hmac`] to locate the
+/// signature. Supports two formats:
+///
+/// - **GitHub**: `sha256=<hex>` (prefix stripped automatically)
+/// - **Generic**: raw hex HMAC-SHA256 digest
 ///
 /// Uses constant-time comparison via the [`subtle`] crate to prevent timing
 /// attacks.
-fn verify_hmac(secret: &str, body: &[u8], headers: &HeaderMap) -> bool {
-    // GitHub format: "sha256=<hex>"
-    if let Some(sig_header) = headers.get("x-hub-signature-256") {
-        let sig_str = match sig_header.to_str() {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        let hex_sig = match sig_str.strip_prefix("sha256=") {
-            Some(h) => h,
-            None => return false,
-        };
-        return verify_hex_hmac(secret, body, hex_sig);
-    }
+fn verify_hmac(secret: &str, sig_header_name: &str, body: &[u8], headers: &HeaderMap) -> bool {
+    let sig_header = match headers.get(sig_header_name) {
+        Some(h) => h,
+        None => {
+            // Fall back to well-known header names for compatibility.
+            if let Some(h) = headers.get("x-hub-signature-256") {
+                h
+            } else if let Some(h) = headers.get("x-webhook-signature") {
+                h
+            } else {
+                return false;
+            }
+        }
+    };
 
-    // Generic format: raw hex digest.
-    if let Some(sig_header) = headers.get("x-webhook-signature") {
-        let hex_sig = match sig_header.to_str() {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        return verify_hex_hmac(secret, body, hex_sig);
-    }
+    let sig_str = match sig_header.to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
 
-    // No recognised signature header — reject when a secret is configured.
-    false
+    // Strip "sha256=" prefix if present (GitHub convention).
+    let hex_sig = sig_str.strip_prefix("sha256=").unwrap_or(sig_str);
+
+    verify_hex_hmac(secret, body, hex_sig)
 }
 
 /// Compute HMAC-SHA256 and constant-time compare against the provided hex
@@ -409,25 +416,35 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::data_feed::{DataFeedConfig, FeedType};
+    use crate::data_feed::{DataFeedConfig, FeedType, config::FeedStatus};
 
     /// Helper: register a webhook feed in the registry and return the state.
     fn setup_state(secret: Option<&str>) -> (Arc<WebhookState>, mpsc::Receiver<FeedEvent>) {
         let (event_tx, event_rx) = mpsc::channel(16);
         let registry = Arc::new(DataFeedRegistry::new(event_tx.clone()));
 
-        let wh_config = WebhookConfig {
-            secret: secret.map(|s| s.to_owned()),
-            events: vec![],
+        let auth = secret.map(|s| AuthConfig::Hmac {
+            secret: s.to_owned(),
+            header: "x-hub-signature-256".to_owned(),
+        });
+
+        let wh_transport = WebhookTransport {
+            events:          vec![],
+            body_size_limit: None,
         };
 
-        let feed_config = DataFeedConfig {
-            name:       "test-hook".to_owned(),
-            feed_type:  FeedType::Webhook,
-            tags:       vec!["test".to_owned()],
-            config:     serde_json::to_value(&wh_config).expect("serialise config"),
-            created_at: Timestamp::UNIX_EPOCH,
-        };
+        let feed_config = DataFeedConfig::builder()
+            .id("test-hook-id".to_owned())
+            .name("test-hook".to_owned())
+            .feed_type(FeedType::Webhook)
+            .tags(vec!["test".to_owned()])
+            .transport(serde_json::to_value(&wh_transport).expect("serialise transport"))
+            .maybe_auth(auth)
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
+            .build();
         registry.register(feed_config).expect("register feed");
 
         let state = Arc::new(WebhookState::new(registry, event_tx));
@@ -515,6 +532,8 @@ mod tests {
             .method("POST")
             .uri("/api/v1/webhooks/test-hook")
             .header("content-type", "application/json")
+            // The configured header is "x-hub-signature-256", but this test
+            // uses the fallback "x-webhook-signature" path.
             .header("x-webhook-signature", sig_hex)
             .header("x-webhook-id", "gen-001")
             .body(Body::from(body_bytes.to_vec()))
@@ -617,7 +636,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-hub-signature-256", sig.parse().expect("header"));
 
-        assert!(verify_hmac(secret, body, &headers));
+        assert!(verify_hmac(secret, "x-hub-signature-256", body, &headers));
     }
 
     #[test]
@@ -630,12 +649,22 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-hub-signature-256", sig.parse().expect("header"));
 
-        assert!(!verify_hmac("correct-secret", body, &headers));
+        assert!(!verify_hmac(
+            "correct-secret",
+            "x-hub-signature-256",
+            body,
+            &headers
+        ));
     }
 
     #[test]
     fn verify_hmac_no_header_returns_false() {
         let headers = HeaderMap::new();
-        assert!(!verify_hmac("secret", b"body", &headers));
+        assert!(!verify_hmac(
+            "secret",
+            "x-hub-signature-256",
+            b"body",
+            &headers
+        ));
     }
 }

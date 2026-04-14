@@ -1319,6 +1319,8 @@ impl SyscallTool {
                     "name": c.name,
                     "type": c.feed_type,
                     "tags": c.tags,
+                    "enabled": c.enabled,
+                    "status": c.status,
                     "running": registry.is_running(&c.name),
                     "created_at": c.created_at.to_string(),
                 })
