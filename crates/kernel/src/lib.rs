@@ -31,6 +31,7 @@
 pub mod agent;
 pub mod cascade;
 pub mod channel;
+pub mod data_feed;
 pub mod debug;
 pub mod error;
 pub mod event;
