@@ -377,6 +377,12 @@ impl SyscallDispatcher {
                     }
                     // Plan tools
                     registry.register(Arc::new(crate::tool::create_plan::CreatePlanTool));
+                    // Data feed query tool
+                    if let Some(feed_store) = kernel_handle.feed_store() {
+                        registry.register(Arc::new(crate::tool::data_feed::QueryFeedTool::new(
+                            Arc::clone(feed_store),
+                        )));
+                    }
                     // Self-continuation signal
                     registry.register(Arc::new(crate::tool::continue_work::ContinueWorkTool));
                 }
@@ -1218,6 +1224,115 @@ impl SyscallTool {
             .map_err(|e| anyhow::anyhow!("publish_report failed: {e}"))?;
         Ok(serde_json::json!({ "ok": true }))
     }
+
+    // ========================================================================
+    // Data Feed
+    // ========================================================================
+
+    fn feed_registry(&self) -> anyhow::Result<&std::sync::Arc<crate::data_feed::DataFeedRegistry>> {
+        self.handle
+            .feed_registry()
+            .ok_or_else(|| anyhow::anyhow!("data feed subsystem is not configured"))
+    }
+
+    async fn exec_register_data_feed(
+        &self,
+        feed_data: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let config: crate::data_feed::DataFeedConfig = serde_json::from_value(feed_data)
+            .map_err(|e| anyhow::anyhow!("invalid data feed config: {e}"))?;
+        let name = config.name.clone();
+        self.feed_registry()?.register(config)?;
+        info!(name = %name, "registered data feed via syscall");
+        Ok(serde_json::json!({ "ok": true, "name": name }))
+    }
+
+    async fn exec_subscribe_data_feed(
+        &self,
+        source_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        // Verify the feed exists.
+        let registry = self.feed_registry()?;
+        if registry.get(source_name).is_none() {
+            return Err(anyhow::anyhow!("data feed not found: '{source_name}'"));
+        }
+
+        // Subscribe the current session to the feed's tags via the existing
+        // notification subscription mechanism.
+        let config = registry
+            .get(source_name)
+            .expect("feed existence already verified");
+        let match_tags = config.tags.clone();
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.handle
+            .syscall_push(crate::event::KernelEventEnvelope::syscall(
+                self.session_key,
+                crate::event::Syscall::Subscribe {
+                    match_tags,
+                    on_receive: crate::notification::NotifyAction::ProactiveTurn,
+                    reply_tx: tx,
+                },
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!("subscribe push failed: {e}"))?;
+        let sub_id = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("subscribe: reply channel dropped"))?
+            .map_err(|e| anyhow::anyhow!("subscribe failed: {e}"))?;
+
+        info!(source = source_name, subscription_id = %sub_id, "subscribed to data feed");
+        Ok(serde_json::json!({
+            "ok": true,
+            "source_name": source_name,
+            "subscription_id": sub_id.to_string(),
+        }))
+    }
+
+    async fn exec_unsubscribe_data_feed(
+        &self,
+        source_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        // Verify the feed exists.
+        let registry = self.feed_registry()?;
+        if registry.get(source_name).is_none() {
+            return Err(anyhow::anyhow!("data feed not found: '{source_name}'"));
+        }
+        info!(
+            source = source_name,
+            "unsubscribe_data_feed requested (subscription lookup not yet implemented)"
+        );
+        Ok(serde_json::json!({
+            "ok": true,
+            "source_name": source_name,
+            "message": "Unsubscribe noted. Full subscription lookup will be available after integration.",
+        }))
+    }
+
+    async fn exec_list_data_feeds(&self) -> anyhow::Result<serde_json::Value> {
+        let registry = self.feed_registry()?;
+        let feeds: Vec<serde_json::Value> = registry
+            .list()
+            .into_iter()
+            .map(|c| {
+                serde_json::json!({
+                    "name": c.name,
+                    "type": c.feed_type,
+                    "tags": c.tags,
+                    "running": registry.is_running(&c.name),
+                    "created_at": c.created_at.to_string(),
+                })
+            })
+            .collect();
+        let count = feeds.len();
+        Ok(serde_json::json!({ "feeds": feeds, "count": count }))
+    }
+
+    async fn exec_remove_data_feed(&self, name: &str) -> anyhow::Result<serde_json::Value> {
+        self.feed_registry()?.remove(name)?;
+        info!(name, "removed data feed via syscall");
+        Ok(serde_json::json!({ "ok": true, "name": name }))
+    }
 }
 
 // ============================================================================
@@ -1287,6 +1402,20 @@ enum SyscallParams {
     PublishReport {
         report: serde_json::Value,
     },
+    // -- Data Feed --
+    RegisterDataFeed {
+        feed: serde_json::Value,
+    },
+    SubscribeDataFeed {
+        source_name: String,
+    },
+    UnsubscribeDataFeed {
+        source_name: String,
+    },
+    ListDataFeeds,
+    RemoveDataFeed {
+        name: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -1329,9 +1458,9 @@ impl crate::tool::AgentTool for SyscallTool {
 
     fn description(&self) -> &str {
         "Interact with the kernel: spawn child agents, query status, send signals, manage memory, \
-         publish events. MUST delegate when: 2+ independent subtasks, or long tool-heavy execution \
-         that would bloat context. Use 'spawn' for single tasks, 'spawn_parallel' for multiple \
-         independent tasks with 'agent: worker'."
+         publish events, manage data feeds. MUST delegate when: 2+ independent subtasks, or long \
+         tool-heavy execution that would bloat context. Use 'spawn' for single tasks, \
+         'spawn_parallel' for multiple independent tasks with 'agent: worker'."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1349,7 +1478,9 @@ impl crate::tool::AgentTool for SyscallTool {
                         "mem_store", "mem_recall",
                         "shared_store", "shared_recall",
                         "publish",
-                        "subscribe", "unsubscribe", "publish_report"
+                        "subscribe", "unsubscribe", "publish_report",
+                        "register_data_feed", "subscribe_data_feed", "unsubscribe_data_feed",
+                        "list_data_feeds", "remove_data_feed"
                     ],
                     "description": "The kernel operation to perform."
                 },
@@ -1417,6 +1548,18 @@ impl crate::tool::AgentTool for SyscallTool {
                 "report": {
                     "type": "object",
                     "description": "TaskReport object for publish_report"
+                },
+                "feed": {
+                    "type": "object",
+                    "description": "Data feed config for register_data_feed: {name, feed_type, tags, config, created_at}"
+                },
+                "source_name": {
+                    "type": "string",
+                    "description": "Feed source name for subscribe_data_feed/unsubscribe_data_feed"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Feed name for remove_data_feed"
                 }
             }
         })
@@ -1468,6 +1611,15 @@ impl crate::tool::AgentTool for SyscallTool {
                 self.exec_unsubscribe(&subscription_id).await
             }
             SyscallParams::PublishReport { report } => self.exec_publish_report(report).await,
+            SyscallParams::RegisterDataFeed { feed } => self.exec_register_data_feed(feed).await,
+            SyscallParams::SubscribeDataFeed { source_name } => {
+                self.exec_subscribe_data_feed(&source_name).await
+            }
+            SyscallParams::UnsubscribeDataFeed { source_name } => {
+                self.exec_unsubscribe_data_feed(&source_name).await
+            }
+            SyscallParams::ListDataFeeds => self.exec_list_data_feeds().await,
+            SyscallParams::RemoveDataFeed { name } => self.exec_remove_data_feed(&name).await,
         };
         result.map(Into::into)
     }

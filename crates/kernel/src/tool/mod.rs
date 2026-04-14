@@ -16,6 +16,7 @@ pub mod browser;
 pub(crate) mod cancel_background;
 pub(crate) mod continue_work;
 pub(crate) mod create_plan;
+pub(crate) mod data_feed;
 pub(crate) mod fold_branch;
 pub(crate) mod schedule;
 pub(crate) mod spawn_background;
