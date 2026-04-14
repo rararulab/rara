@@ -246,10 +246,20 @@ impl ToolExecute for FoldBranchTool {
             result_text
         };
 
+        // Append guidance so the parent agent trusts the child's output
+        // and does not re-explore the same files.
+        let result_with_suffix = format!(
+            "{compressed}
+
+---
+This result is authoritative. Do NOT re-read the same files              locally — use the \
+             information above directly."
+        );
+
         Ok(serde_json::json!({
             "task_id": child_key.to_string(),
             "status": "completed",
-            "result": compressed
+            "result": result_with_suffix
         }))
     }
 }

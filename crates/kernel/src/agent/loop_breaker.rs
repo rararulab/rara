@@ -31,9 +31,6 @@ const MAX_RECENT_FINGERPRINTS: usize = 20;
 /// Configuration for tool-call loop detection thresholds.
 #[derive(Debug, Clone, bon::Builder)]
 pub(crate) struct LoopBreakerConfig {
-    /// Issue a warning after this many calls to the same tool.
-    #[builder(default = 15)]
-    pub warn_after:          usize,
     /// Disable a tool after this many calls.
     #[builder(default = 25)]
     pub disable_after:       usize,
@@ -55,13 +52,6 @@ pub(crate) struct LoopBreakerConfig {
 pub(crate) enum LoopIntervention {
     /// No action needed.
     None,
-    /// Warn the LLM to change strategy.
-    Warn {
-        /// Detection pattern that triggered: `"flooding"`.
-        pattern: &'static str,
-        /// Human-readable warning injected into the conversation.
-        message: String,
-    },
     /// Disable specific tools and inform the LLM.
     DisableTools {
         /// Detection pattern: `"exact_duplicate"`, `"flooding"`, or
@@ -89,8 +79,6 @@ pub(crate) struct ToolCallLoopBreaker {
     consecutive_exact:   usize,
     /// Sliding window of recent call fingerprints (newest at back).
     recent_fingerprints: VecDeque<u64>,
-    /// Tools that have already received a warning (at most once each).
-    warned_tools:        HashSet<String>,
     /// Tools that have been disabled (at most once each).
     disabled_tools:      HashSet<String>,
     /// Detection thresholds.
@@ -109,7 +97,6 @@ impl ToolCallLoopBreaker {
             last_fingerprint: None,
             consecutive_exact: 0,
             recent_fingerprints: VecDeque::with_capacity(MAX_RECENT_FINGERPRINTS),
-            warned_tools: HashSet::new(),
             disabled_tools: HashSet::new(),
             config,
             last_tool_name: None,
@@ -221,6 +208,8 @@ impl ToolCallLoopBreaker {
         // --- 3. Same-tool flooding ---
         // Check ALL tools, not just the last one, because multiple tool calls
         // may be recorded in a single iteration (parallel tool calls).
+        // Only DisableTools is used here — intermediate Warn pressure was
+        // removed because it caused models to give up prematurely (hermes #7915).
         for (name, &count) in &self.tool_counts {
             if self.disabled_tools.contains(name) {
                 continue;
@@ -240,17 +229,6 @@ impl ToolCallLoopBreaker {
                     message: format!(
                         "Tool `{name}` has been called {count} times this turn. It is now \
                          disabled. Please adopt a different approach.",
-                    ),
-                };
-            }
-
-            if count >= self.config.warn_after && !self.warned_tools.contains(name) {
-                self.warned_tools.insert(name.clone());
-                return LoopIntervention::Warn {
-                    pattern: "flooding",
-                    message: format!(
-                        "Tool `{name}` has been called {count} times. Consider whether you are \
-                         making progress or stuck in a loop. Try a different approach if needed.",
                     ),
                 };
             }
@@ -283,7 +261,6 @@ mod tests {
     #[test]
     fn config_defaults() {
         let cfg = default_config();
-        assert_eq!(cfg.warn_after, 15);
         assert_eq!(cfg.disable_after, 25);
         assert_eq!(cfg.exact_dup_threshold, 3);
         assert_eq!(cfg.pingpong_cycles, 4);
@@ -343,32 +320,7 @@ mod tests {
         assert_eq!(lb.consecutive_exact, 1); // reset on different args
     }
 
-    // ---- Warn at threshold ----
-
-    #[test]
-    fn warn_at_threshold() {
-        let mut lb = ToolCallLoopBreaker::new(default_config());
-        // Call same tool with different args to avoid exact-dup trigger
-        for i in 0..15 {
-            lb.record("read", &format!("{{{}}}", i));
-            let intervention = lb.check();
-            if i < 14 {
-                assert_eq!(
-                    intervention,
-                    LoopIntervention::None,
-                    "should not warn at call {}",
-                    i + 1
-                );
-            } else {
-                assert!(
-                    matches!(intervention, LoopIntervention::Warn { .. }),
-                    "should warn at call 15"
-                );
-            }
-        }
-    }
-
-    // ---- Disable at threshold ----
+    // ---- Disable at flooding threshold ----
 
     #[test]
     fn disable_at_threshold() {
@@ -385,13 +337,44 @@ mod tests {
         );
     }
 
+    // ---- No intermediate warn before disable ----
+
+    #[test]
+    fn no_warn_before_disable() {
+        let mut lb = ToolCallLoopBreaker::new(default_config());
+        // All calls before disable_after should be None
+        for i in 0..24 {
+            lb.record("read", &format!("{{{}}}", i));
+            let intervention = lb.check();
+            assert_eq!(
+                intervention,
+                LoopIntervention::None,
+                "should not intervene at call {}",
+                i + 1
+            );
+        }
+        // The 25th call triggers disable
+        lb.record("read", "{24}");
+        let intervention = lb.check();
+        assert!(
+            matches!(
+                intervention,
+                LoopIntervention::DisableTools {
+                    pattern: "flooding",
+                    ..
+                }
+            ),
+            "should disable at call 25, got {:?}",
+            intervention,
+        );
+    }
+
     // ---- Exact duplicate fires before flooding ----
 
     #[test]
     fn exact_dup_fires_before_flooding() {
         let cfg = LoopBreakerConfig::builder()
             .exact_dup_threshold(3)
-            .warn_after(10)
             .disable_after(20)
             .build();
         let mut lb = ToolCallLoopBreaker::new(cfg);
@@ -415,7 +398,6 @@ mod tests {
     fn pingpong_detection() {
         let cfg = LoopBreakerConfig::builder()
             .pingpong_cycles(4)
-            .warn_after(100) // high so flooding doesn't interfere
             .disable_after(200)
             .exact_dup_threshold(100)
             .build();
@@ -456,32 +438,9 @@ mod tests {
             lb.record("write", &format!("{{{}}}", i));
             lb.record("list", &format!("{{{}}}", i));
         }
-        // 4 calls per tool, under warn_after=15
+        // 4 calls per tool, under disable_after=25
         let intervention = lb.check();
         assert_eq!(intervention, LoopIntervention::None);
-    }
-
-    // ---- Warn fires only once per tool ----
-
-    #[test]
-    fn warn_only_once_per_tool() {
-        let mut lb = ToolCallLoopBreaker::new(default_config());
-        // Reach warn threshold
-        for i in 0..15 {
-            lb.record("read", &format!("{{{}}}", i));
-        }
-        let first = lb.check();
-        assert!(matches!(first, LoopIntervention::Warn { .. }));
-
-        // One more call — should NOT warn again
-        lb.record("read", "{15}");
-        let second = lb.check();
-        assert_eq!(second, LoopIntervention::None);
-
-        // One more — still no second warning
-        lb.record("read", "{16}");
-        let third = lb.check();
-        assert_eq!(third, LoopIntervention::None);
     }
 
     // ---- Disable fires only once per tool ----
