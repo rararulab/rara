@@ -1191,7 +1191,8 @@ impl Kernel {
             let state = rt.state();
             let parent_id = rt.parent_id;
 
-            // Clear in-flight ledger entry for scheduled job agents.
+            // Clear in-flight ledger entry for scheduled job agents and
+            // deliver the result to the origin session that created the job.
             if manifest_name == "scheduled_job" {
                 if let Some(job_id_str) = rt
                     .manifest
@@ -1204,6 +1205,45 @@ impl Kernel {
                         .and_then(crate::schedule::JobId::from_uuid)
                     {
                         self.syscall.job_wheel().lock().complete_in_flight(&job_id);
+                    }
+                }
+
+                // Inject task result into the origin session so the user's
+                // agent can present it through the normal delivery channel.
+                if let Some(result) = &rt.result {
+                    let origin_key = rt
+                        .manifest
+                        .metadata
+                        .get("origin_session_key")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| SessionKey::try_from_raw(s).ok());
+                    let task_msg = rt
+                        .manifest
+                        .metadata
+                        .get("task_message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("scheduled task");
+
+                    if let Some(origin) = origin_key {
+                        let directive = format!(
+                            "[Scheduled Task Result]\nTask: {task_msg}\n\n{}",
+                            result.output
+                        );
+                        let user_id = crate::identity::UserId(
+                            rt.manifest
+                                .metadata
+                                .get("principal_user_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("system")
+                                .to_string(),
+                        );
+                        let msg = crate::io::InboundMessage::synthetic(directive, user_id, origin);
+                        if let Err(e) = self
+                            .event_queue
+                            .try_push(KernelEventEnvelope::user_message(msg))
+                        {
+                            warn!(%e, "failed to push scheduled task result");
+                        }
                     }
                 }
             }
@@ -1475,6 +1515,8 @@ impl Kernel {
             &trigger_summary,
             &job.message,
             &job.tags,
+            &session_key.to_string(),
+            &job.principal.user_id.0,
         );
 
         // 3. Spawn the agent.
