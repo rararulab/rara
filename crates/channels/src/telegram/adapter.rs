@@ -2180,6 +2180,39 @@ async fn handle_cascade_callback(
     }
 }
 
+/// Handle a dashboard callback: render the requested tab and edit the
+/// message in-place.
+///
+/// Callback data format: `"dash:{tab}:{chat_id}:{msg_id}"`
+async fn handle_dashboard_callback(
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    handle: &KernelHandle,
+) {
+    let _ = bot.answer_callback_query(callback.id.clone()).await;
+
+    let parts: Vec<&str> = data.splitn(4, ':').collect();
+    if parts.len() != 4 {
+        return;
+    }
+
+    let tab = super::dashboard::DashTab::from_str_prefix(parts[1]);
+    let (Ok(cid), Ok(mid)) = (parts[2].parse::<i64>(), parts[3].parse::<i32>()) else {
+        return;
+    };
+
+    let sessions = handle.list_processes();
+    let text = super::dashboard::render_dashboard(tab, &sessions);
+    let keyboard = super::dashboard::dashboard_keyboard(tab, cid, mid);
+
+    let _ = bot
+        .edit_message_text(ChatId(cid), MessageId(mid), &text)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(keyboard)
+        .await;
+}
+
 /// Listens for new approval requests and sends inline keyboard messages
 /// to the originating Telegram chat so the user can approve or deny.
 ///
@@ -2483,6 +2516,10 @@ async fn handle_update(
             }
             if data.starts_with("cas:") {
                 handle_cascade_callback(bot, callback, data, handle).await;
+                return;
+            }
+            if data.starts_with("dash:") {
+                handle_dashboard_callback(bot, callback, data, handle).await;
                 return;
             }
 
@@ -3620,7 +3657,7 @@ fn spawn_stream_forwarder(
                                             "cas:show:{}:{}:{trace_id}",
                                             chat_id, mid.0,
                                         );
-                                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                        let mut buttons = vec![
                                             InlineKeyboardButton::callback(
                                                 "\u{1f4ca} \u{8be6}\u{60c5}",
                                                 callback_data,
@@ -3629,7 +3666,19 @@ fn spawn_stream_forwarder(
                                                 "\u{1f50d} Cascade",
                                                 cascade_cb,
                                             ),
-                                        ]]);
+                                        ];
+                                        // Show Dashboard button when background tasks exist.
+                                        if !progress.background_tasks.is_empty() {
+                                            let dash_cb = format!(
+                                                "dash:tasks:{}:{}",
+                                                chat_id, mid.0,
+                                            );
+                                            buttons.push(InlineKeyboardButton::callback(
+                                                "\u{1f4f1} Dashboard",
+                                                dash_cb,
+                                            ));
+                                        }
+                                        let keyboard = InlineKeyboardMarkup::new(vec![buttons]);
 
                                         let _ = bot
                                             .edit_message_text(ChatId(chat_id), mid, &compact)
