@@ -100,6 +100,12 @@ pub struct KernelHandle {
     job_wheel:             Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: SkillPromptProvider,
+    /// Data feed registry for managing external data sources.
+    /// `None` when the data feed subsystem is not configured.
+    feed_registry:         Option<Arc<crate::data_feed::DataFeedRegistry>>,
+    /// Persistent store for feed events.
+    /// `None` when the data feed subsystem is not configured.
+    feed_store:            Option<crate::data_feed::FeedStoreRef>,
 }
 
 impl KernelHandle {
@@ -121,6 +127,8 @@ impl KernelHandle {
         trace_service: crate::trace::TraceService,
         job_wheel: Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
         skill_prompt_provider: SkillPromptProvider,
+        feed_registry: Option<Arc<crate::data_feed::DataFeedRegistry>>,
+        feed_store: Option<crate::data_feed::FeedStoreRef>,
     ) -> Self {
         Self {
             event_queue,
@@ -138,6 +146,8 @@ impl KernelHandle {
             trace_service,
             job_wheel,
             skill_prompt_provider,
+            feed_registry,
+            feed_store,
         }
     }
 
@@ -385,6 +395,14 @@ impl KernelHandle {
     /// Generate the skills prompt block for injection into the agent system
     /// prompt.
     pub fn skills_prompt(&self) -> String { (self.skill_prompt_provider)() }
+
+    /// Access the data feed registry (if configured).
+    pub fn feed_registry(&self) -> Option<&Arc<crate::data_feed::DataFeedRegistry>> {
+        self.feed_registry.as_ref()
+    }
+
+    /// Access the feed event store (if configured).
+    pub fn feed_store(&self) -> Option<&crate::data_feed::FeedStoreRef> { self.feed_store.as_ref() }
 
     // -- Query methods ------------------------------------------------------
 

@@ -36,4 +36,4 @@ pub use config::{DataFeedConfig, FeedType};
 pub use event::{FeedEvent, FeedEventId};
 pub use feed::DataFeed;
 pub use registry::DataFeedRegistry;
-pub use store::{FeedFilter, FeedStore};
+pub use store::{FeedFilter, FeedStore, FeedStoreRef};

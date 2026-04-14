@@ -94,6 +94,7 @@ pub mod tool_names {
     tool!(SCHEDULE_CRON, "schedule-cron");
     tool!(SCHEDULE_REMOVE, "schedule-remove");
     tool!(SCHEDULE_LIST, "schedule-list");
+    tool!(QUERY_FEED, "query-feed");
     tool!(SPAWN_BACKGROUND, "spawn-background");
     tool!(CANCEL_BACKGROUND, "cancel-background");
     tool!(TASK, "task");

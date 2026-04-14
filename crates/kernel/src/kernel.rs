@@ -379,6 +379,8 @@ impl Kernel {
             self.trace_service.clone(),
             self.syscall.job_wheel().clone(),
             self.skill_prompt_provider.clone(),
+            None, // feed_registry: wired during data feed integration
+            None, // feed_store: wired during data feed integration
         )
     }
 

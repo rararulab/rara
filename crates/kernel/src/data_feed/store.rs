@@ -65,3 +65,6 @@ pub struct FeedFilter {
     /// to a sane upper bound.
     pub limit: usize,
 }
+
+/// Shared reference to a [`FeedStore`] implementation.
+pub type FeedStoreRef = std::sync::Arc<dyn FeedStore>;
