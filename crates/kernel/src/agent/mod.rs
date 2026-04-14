@@ -2957,6 +2957,15 @@ pub(crate) async fn run_agent_loop(
         )
         .await;
 
+    // If interrupted by a new user message, return Interrupted so the
+    // kernel suppresses the empty-text fallback ("I wasn't able to
+    // generate a response") and drains the pause buffer cleanly.
+    // This aligns with the explicit /stop path which returns
+    // Err(Interrupted) via turn_cancel.
+    if was_interrupted {
+        return Err(KernelError::Interrupted);
+    }
+
     Ok(AgentTurnResult {
         text: last_accumulated_text,
         iterations: actual_iterations,
