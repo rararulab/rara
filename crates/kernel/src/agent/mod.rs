@@ -2635,20 +2635,6 @@ pub(crate) async fn run_agent_loop(
             let intervention = loop_breaker.check();
             match intervention {
                 loop_breaker::LoopIntervention::None => {}
-                loop_breaker::LoopIntervention::Warn { pattern, message } => {
-                    warn!(
-                        tool_calls_made,
-                        pattern,
-                        %message,
-                        "loop breaker: injecting strategy-change warning"
-                    );
-                    stream_handle.emit(StreamEvent::LoopBreakerTriggered {
-                        tools: vec![],
-                        pattern: pattern.to_owned(),
-                        tool_calls_made,
-                    });
-                    loop_breaker_warning = Some(message);
-                }
                 loop_breaker::LoopIntervention::DisableTools {
                     pattern,
                     tools,
