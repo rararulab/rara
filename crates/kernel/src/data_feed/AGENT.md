@@ -12,11 +12,17 @@ External data ingestion subsystem: receives events from webhooks, WebSocket stre
 - `feed.rs` — `DataFeed` trait: the abstraction each transport implements (`name`, `tags`, `run`).
 - `registry.rs` — `DataFeedRegistry`: in-memory CRUD for feed configs + cancellation token tracking for running tasks.
 - `webhook.rs` — `WebhookState`, `webhook_handler` (axum POST handler), HMAC-SHA256 verification, idempotency cache, `webhook_routes` for server registration, `WebhookConfig` for per-feed webhook settings.
+- `polling.rs` — `PollingSource`: generic HTTP polling feed with pluggable `ResponseParser` trait. Periodically GETs a URL, passes the response body to the parser, and sends resulting `FeedEvent`s. Resilient: logs warnings on errors but continues polling.
+- `yahoo.rs` — `YahooStockFeed`: Yahoo Finance v8 chart API polling feed. Tracks multiple stock symbols, emits `price_update` events. `parse_chart_response` is the public parsing function, unit-testable with JSON fixtures. Integration tests are `#[ignore]` (require network).
 - `mod.rs` — Re-exports only; no logic.
 
 Data flow: Transport layer (webhook/WS/polling) -> `FeedEvent` -> `FeedStore::append` -> subscription dispatch -> agent session.
 
 Webhook flow: External POST -> `/api/v1/webhooks/{feed_name}` -> `webhook_handler` -> registry lookup -> HMAC verify -> dedup check -> `FeedEvent` -> `event_tx` channel -> kernel.
+
+Polling flow: `PollingSource::run` loop -> `tokio::select!` (cancel vs sleep) -> HTTP GET -> `ResponseParser::parse` -> `FeedEvent`s -> `event_tx` channel.
+
+Yahoo flow: `YahooStockFeed::run` loop -> per-symbol `fetch_symbol` -> Yahoo v8 API -> `parse_chart_response` -> `FeedEvent` with `event_type = "price_update"`.
 
 Registry flow: Caller loads configs from settings -> `DataFeedRegistry::restore` -> runtime `register`/`remove` -> caller persists via `configs()`.
 
@@ -50,6 +56,8 @@ These operate directly on `DataFeedRegistry` via `KernelHandle` — no event que
 - Webhook HMAC verification uses constant-time comparison (`subtle::ConstantTimeEq`) — never use `==` for signature comparison. Violation enables timing attacks.
 - Webhook idempotency cache is in-memory with 1h TTL — process restarts reset it. This is acceptable because `FeedStore::append` is also idempotent on `event.id`.
 - `KernelHandle` fields `feed_registry` and `feed_store` are `Option` — both are `None` until the data feed subsystem is fully wired into kernel bootstrap.
+- `PollingSource` and `YahooStockFeed` must gracefully handle transient HTTP errors — log and continue, never crash the poll loop.
+- Yahoo integration tests MUST be `#[ignore]` — they require network access and must not block CI.
 
 ## What NOT To Do
 
@@ -60,10 +68,12 @@ These operate directly on `DataFeedRegistry` via `KernelHandle` — no event que
 - Do NOT use `==` for HMAC signature comparison in webhook.rs — use `subtle::ConstantTimeEq` to prevent timing attacks.
 - Do NOT add webhook-specific config fields to `DataFeedConfig` — webhook settings go in `WebhookConfig` and are stored inside `DataFeedConfig::config` as JSON.
 - Do NOT add new `Syscall` enum variants for data feed operations — they operate directly on `DataFeedRegistry` (synchronous) via `KernelHandle`, not through the event queue.
+- Do NOT make Yahoo integration tests run in CI — always mark with `#[ignore]` since Yahoo Finance API may rate-limit or change without notice.
+- Do NOT embed API keys in `YahooStockFeed` — the v8 chart endpoint is keyless; if future endpoints need auth, use the credential store.
 
 ## Dependencies
 
-- Upstream: `base` (for `define_id!` macro), `jiff` (timestamps), `crate::session` (for `SessionKey`), `parking_lot`, `tokio_util` (CancellationToken), `axum` (webhook handler types), `hmac`/`sha2`/`subtle`/`hex` (signature verification).
+- Upstream: `base` (for `define_id!` macro), `jiff` (timestamps), `crate::session` (for `SessionKey`), `parking_lot`, `tokio_util` (CancellationToken), `axum` (webhook handler types), `hmac`/`sha2`/`subtle`/`hex` (signature verification), `reqwest` (polling HTTP client).
 - Downstream: `query-feed` tool (in `tool/data_feed.rs`), kernel syscall actions (in `syscall.rs`), kernel startup (restore), server route registration (via `webhook_routes`).
 - DB: `feed_events` + `feed_read_cursors` tables (migration in `crates/rara-model/migrations/`).
 - Settings: feed configs persisted via `SettingsProvider` KV store (key: `data_feeds.configs`).
