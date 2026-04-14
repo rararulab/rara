@@ -1037,8 +1037,16 @@ pub(crate) async fn run_agent_loop(
     // True while the current iteration is a recovery attempt (tools disabled).
     // Reset after the recovery iteration produces a successful response.
     let mut in_llm_error_recovery = false;
-    let mut loop_breaker =
-        loop_breaker::ToolCallLoopBreaker::new(loop_breaker::LoopBreakerConfig::builder().build());
+    let flooding_exempt: std::collections::HashSet<String> = tools
+        .iter()
+        .filter(|(_, t)| t.is_read_only(&serde_json::Value::Null))
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    let mut loop_breaker = loop_breaker::ToolCallLoopBreaker::new(
+        loop_breaker::LoopBreakerConfig::builder()
+            .flooding_exempt(flooding_exempt)
+            .build(),
+    );
     let mut loop_breaker_warning: Option<String> = None;
 
     // ── Self-continuation signal state ──────────────────────────────
