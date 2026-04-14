@@ -36,7 +36,7 @@ use crate::{
                    instruction), `description` (short status label), and `system_prompt` (agent \
                    behavior). Optional: `name`, `tools`, `model`, `max_iterations`. The agent \
                    runs independently and results are delivered when complete.",
-    tier = "core"
+    tier = "deferred"
 )]
 pub struct SpawnBackgroundTool {
     handle:      KernelHandle,
