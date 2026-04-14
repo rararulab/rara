@@ -18,7 +18,7 @@
 //! `editMessageText` + `InlineKeyboardMarkup` for navigation.  No external
 //! URL or Mini App required — the entire UI lives in native Telegram messages.
 
-use rara_kernel::session::{SessionState, SessionStats};
+use rara_kernel::session::{SessionKey, SessionState, SessionStats};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 // ── Tab enum ────────────────────────────────────────────────────────────
@@ -48,12 +48,26 @@ impl DashTab {
     }
 }
 
+// ── Session scoping ─────────────────────────────────────────────────────
+
+/// Filter `all_sessions` to only those belonging to `root` and its children.
+///
+/// This enforces per-chat isolation: a Telegram chat should only see the
+/// session it is bound to (the root) and any children spawned from it.
+pub fn scoped_sessions(all_sessions: &[SessionStats], root: SessionKey) -> Vec<&SessionStats> {
+    all_sessions
+        .iter()
+        .filter(|s| s.session_key == root || s.parent_id == Some(root))
+        .collect()
+}
+
 // ── Rendering ───────────────────────────────────────────────────────────
 
 /// Render the full dashboard message body (HTML) for the given tab.
 ///
-/// The `sessions` slice should come from `KernelHandle::list_processes()`.
-pub fn render_dashboard(tab: DashTab, sessions: &[SessionStats]) -> String {
+/// The `sessions` slice should already be scoped to the requesting chat
+/// via [`scoped_sessions`].
+pub fn render_dashboard(tab: DashTab, sessions: &[&SessionStats]) -> String {
     let mut out = String::with_capacity(1024);
 
     match tab {
@@ -61,17 +75,24 @@ pub fn render_dashboard(tab: DashTab, sessions: &[SessionStats]) -> String {
         DashTab::Sessions => render_sessions_tab(sessions, &mut out),
     }
 
-    // Hard-truncate to 4000 chars (Telegram limit is 4096; leave buffer for
-    // HTML entities that may expand during display).
-    out.truncate(4000);
+    truncate_html_safe(&mut out, 4000);
     out
 }
 
 /// Build the inline keyboard for the dashboard.
 ///
-/// Layout: `[📋 Tasks] [🖥 Sessions] [🔄]`
-/// The active tab gets a `·` suffix.
-pub fn dashboard_keyboard(active_tab: DashTab, chat_id: i64, msg_id: i32) -> InlineKeyboardMarkup {
+/// Layout row 1: `[📋 Tasks] [🖥 Sessions] [🔄]`
+/// Layout row 2 (if trace_id present): `[← Back]`
+///
+/// When `trace_id` is `Some`, a second row with a Back button is added so
+/// users can return to the execution trace view.  The active tab gets a `·`
+/// suffix.
+pub fn dashboard_keyboard(
+    active_tab: DashTab,
+    chat_id: i64,
+    msg_id: i32,
+    trace_id: Option<&str>,
+) -> InlineKeyboardMarkup {
     let tasks_label = if active_tab == DashTab::Tasks {
         "\u{1f4cb} Tasks \u{b7}"
     } else {
@@ -83,36 +104,52 @@ pub fn dashboard_keyboard(active_tab: DashTab, chat_id: i64, msg_id: i32) -> Inl
         "\u{1f5a5} Sessions"
     };
 
-    let tasks_cb = format!("dash:tasks:{chat_id}:{msg_id}");
-    let sess_cb = format!("dash:sess:{chat_id}:{msg_id}");
-    let refresh_cb = format!("dash:{}:{chat_id}:{msg_id}", active_tab.callback_key(),);
+    // Embed trace_id in tab callbacks so it survives tab switches.
+    let tid = trace_id.unwrap_or("-");
+    let tasks_cb = format!("dash:tasks:{chat_id}:{msg_id}:{tid}");
+    let sess_cb = format!("dash:sess:{chat_id}:{msg_id}:{tid}");
+    let refresh_cb = format!(
+        "dash:{}:{chat_id}:{msg_id}:{tid}",
+        active_tab.callback_key()
+    );
 
-    InlineKeyboardMarkup::new(vec![vec![
+    let mut rows = vec![vec![
         InlineKeyboardButton::callback(tasks_label, tasks_cb),
         InlineKeyboardButton::callback(sess_label, sess_cb),
         InlineKeyboardButton::callback("\u{1f504}", refresh_cb),
-    ]])
+    ]];
+
+    // Back button to restore trace view — only if we have a real trace_id.
+    if let Some(tid) = trace_id {
+        let back_cb = format!("trace:hide:{chat_id}:{msg_id}:{tid}");
+        rows.push(vec![InlineKeyboardButton::callback(
+            "\u{2190} Back",
+            back_cb,
+        )]);
+    }
+
+    InlineKeyboardMarkup::new(rows)
 }
 
 // ── Tasks tab ───────────────────────────────────────────────────────────
 
-fn render_tasks_tab(sessions: &[SessionStats], out: &mut String) {
+fn render_tasks_tab(sessions: &[&SessionStats], out: &mut String) {
     out.push_str("\u{1f4ca} <b>rara \u{b7} Tasks</b>\n");
     out.push_str("───────────────\n");
 
     // Background tasks = child sessions (parent_id.is_some()).
-    let children: Vec<&SessionStats> = sessions.iter().filter(|s| s.parent_id.is_some()).collect();
+    let children: Vec<&&SessionStats> = sessions.iter().filter(|s| s.parent_id.is_some()).collect();
 
     if children.is_empty() {
         out.push_str("\nNo background tasks.\n");
         return;
     }
 
-    let running: Vec<&&SessionStats> = children
+    let running: Vec<&&&SessionStats> = children
         .iter()
         .filter(|s| matches!(s.state, SessionState::Active | SessionState::Ready))
         .collect();
-    let done: Vec<&&SessionStats> = children
+    let done: Vec<&&&SessionStats> = children
         .iter()
         .filter(|s| matches!(s.state, SessionState::Suspended | SessionState::Paused))
         .collect();
@@ -157,7 +194,7 @@ fn push_task_line(s: &SessionStats, finished: bool, out: &mut String) {
 
 // ── Sessions tab ────────────────────────────────────────────────────────
 
-fn render_sessions_tab(sessions: &[SessionStats], out: &mut String) {
+fn render_sessions_tab(sessions: &[&SessionStats], out: &mut String) {
     out.push_str("\u{1f4ca} <b>rara \u{b7} Sessions</b>\n");
     out.push_str("───────────────\n");
 
@@ -227,6 +264,21 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Truncate an HTML string at a safe boundary: on a char boundary that is
+/// not inside an HTML tag or entity.  Falls back to the last `\n` before
+/// `max_len` to avoid splitting a line mid-tag.
+fn truncate_html_safe(s: &mut String, max_len: usize) {
+    if s.len() <= max_len {
+        return;
+    }
+    // Find the last newline at or before max_len (char-safe since '\n' is ASCII).
+    let cut = s[..max_len]
+        .rfind('\n')
+        .unwrap_or_else(|| s.floor_char_boundary(max_len));
+    s.truncate(cut);
+    s.push_str("\n<i>… truncated</i>");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,8 +293,10 @@ mod tests {
     #[test]
     fn keyboard_callback_data_within_64_bytes() {
         use teloxide::types::InlineKeyboardButtonKind;
-        // Worst case: supergroup chat_id is ~14 digits, msg_id ~10 digits.
-        let kb = dashboard_keyboard(DashTab::Tasks, -1001234567890, 2147483647);
+        // Worst case: supergroup chat_id ~14 digits, msg_id ~10 digits,
+        // trace_id = ULID (26 chars).
+        let tid = "01JRWQY1234567890ABCDEFGH";
+        let kb = dashboard_keyboard(DashTab::Tasks, -1001234567890, 2147483647, Some(tid));
         for row in &kb.inline_keyboard {
             for btn in row {
                 if let InlineKeyboardButtonKind::CallbackData(ref data) = btn.kind {
@@ -273,6 +327,22 @@ mod tests {
     fn render_empty_tasks() {
         let text = render_dashboard(DashTab::Tasks, &[]);
         assert!(text.contains("No background tasks"));
+    }
+
+    #[test]
+    fn truncate_html_safe_preserves_valid_html() {
+        let mut s = "line1\nline2\nline3\nline4".to_string();
+        truncate_html_safe(&mut s, 12);
+        // Should cut at newline before pos 12, not mid-line.
+        assert!(s.starts_with("line1\nline2"));
+        assert!(s.ends_with("truncated</i>"));
+    }
+
+    #[test]
+    fn truncate_html_safe_noop_when_short() {
+        let mut s = "short".to_string();
+        truncate_html_safe(&mut s, 4000);
+        assert_eq!(s, "short");
     }
 
     #[test]

@@ -2183,7 +2183,10 @@ async fn handle_cascade_callback(
 /// Handle a dashboard callback: render the requested tab and edit the
 /// message in-place.
 ///
-/// Callback data format: `"dash:{tab}:{chat_id}:{msg_id}"`
+/// Callback data format: `"dash:{tab}:{chat_id}:{msg_id}:{trace_id}"`
+///
+/// Sessions are scoped to the chat's bound session + children so that
+/// one chat cannot inspect another chat's sessions.
 async fn handle_dashboard_callback(
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
@@ -2192,8 +2195,8 @@ async fn handle_dashboard_callback(
 ) {
     let _ = bot.answer_callback_query(callback.id.clone()).await;
 
-    let parts: Vec<&str> = data.splitn(4, ':').collect();
-    if parts.len() != 4 {
+    let parts: Vec<&str> = data.splitn(5, ':').collect();
+    if parts.len() < 4 {
         return;
     }
 
@@ -2201,10 +2204,26 @@ async fn handle_dashboard_callback(
     let (Ok(cid), Ok(mid)) = (parts[2].parse::<i64>(), parts[3].parse::<i32>()) else {
         return;
     };
+    let trace_id = parts.get(4).filter(|t| **t != "-").copied();
 
-    let sessions = handle.list_processes();
-    let text = super::dashboard::render_dashboard(tab, &sessions);
-    let keyboard = super::dashboard::dashboard_keyboard(tab, cid, mid);
+    // Scope sessions to this chat's bound session + its children.
+    let chat_id_str = cid.to_string();
+    let all_sessions = handle.list_processes();
+    let scoped = if let Ok(Some(binding)) = handle
+        .session_index()
+        .get_channel_binding(
+            rara_kernel::channel::types::ChannelType::Telegram,
+            &chat_id_str,
+        )
+        .await
+    {
+        super::dashboard::scoped_sessions(&all_sessions, binding.session_key)
+    } else {
+        vec![]
+    };
+
+    let text = super::dashboard::render_dashboard(tab, &scoped);
+    let keyboard = super::dashboard::dashboard_keyboard(tab, cid, mid, trace_id);
 
     let _ = bot
         .edit_message_text(ChatId(cid), MessageId(mid), &text)
@@ -3668,9 +3687,10 @@ fn spawn_stream_forwarder(
                                             ),
                                         ];
                                         // Show Dashboard button when background tasks exist.
+                                        // Include trace_id so the dashboard can offer a Back button.
                                         if !progress.background_tasks.is_empty() {
                                             let dash_cb = format!(
-                                                "dash:tasks:{}:{}",
+                                                "dash:tasks:{}:{}:{trace_id}",
                                                 chat_id, mid.0,
                                             );
                                             buttons.push(InlineKeyboardButton::callback(
