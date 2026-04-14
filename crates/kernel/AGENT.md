@@ -234,31 +234,61 @@ Detects when the agent is stuck calling the same tool repeatedly without progres
 
 ---
 
-## Background Task Delegation
+## Agent Delegation Tools
 
-Two tools for spawning background agents:
+Three tools for spawning child agents, split by execution model:
 
-- **`task`** (Core tier) — high-level preset-based delegation. LLM picks a
-  `task_type` (`general-purpose` or `bash`) and provides a prompt. System
-  prompt, tools, and limits are resolved from presets in
-  `tool/task/presets.rs`. This is the primary delegation interface.
+### Async (fire-and-forget)
 
-- **`spawn-background`** (Deferred tier) — low-level escape hatch. LLM
-  provides raw `system_prompt`, `tools`, `model`, and `max_iterations`.
-  Use only when presets don't fit.
+- **`task`** (Core) — high-level preset-based delegation. LLM picks a
+  `task_type` (`general-purpose`, `bash`, or `explore`) and provides a
+  prompt. System prompt, tools, and iteration limits are resolved from
+  presets in `tool/task/presets.rs`. This is the primary delegation
+  interface for everyday use.
 
-Both tools share the same underlying machinery: `spawn_child` +
-`register_background_task` + fire-and-forget result delivery via proactive
-turn.
+- **`spawn-background`** (Core) — low-level delegation. LLM provides raw
+  `system_prompt`, `tools`, `model`, and `max_iterations`. Use when
+  presets don't fit (custom system prompt, specific model, etc.).
 
-**Anti-nesting invariant:** Task presets set `excluded_tools` on the child
-`AgentManifest` to prevent recursive subagent spawning. The exclusion list
-includes `task`, `spawn-background`, and `create-plan`.
+Both async tools share `background_common::spawn_and_register_background`.
+Results are delivered via proactive turn when the child completes.
+
+### Sync (blocks until result)
+
+- **`fold-branch`** (Deferred) — spawns a child, waits for completion,
+  compresses the result via `ContextFolder` (target ≤ 2000 chars), and
+  returns it inline as a tool result. Use when the parent needs the
+  result to continue reasoning (e.g. "read this, then decide").
+  Timeout default: 120s, sends `Signal::Terminate` on expiry.
+
+### Tool Tier System
+
+Tools are registered in `ToolRegistry` with one of two tiers:
+
+| Tier | Behavior | Token cost |
+|------|----------|------------|
+| **Core** | Always in the LLM tool list. Must be listed in `rara_tool_names()` (`app/src/tools/mod.rs`). | Every turn |
+| **Deferred** | Hidden until discovered via `discover-tools`. Activated on demand. | Only after activation |
+
+`filtered_for_manifest()` enforces this: it keeps tools that are either
+(a) in the manifest allowlist, or (b) Deferred tier when `discover-tools`
+is in the allowlist. **A Core-tier tool NOT in `rara_tool_names()` is
+invisible** — it passes neither filter. Always add Core tools to the
+manifest.
+
+### Anti-nesting invariant
+
+Task presets and `spawn-background` set `excluded_tools` on the child
+`AgentManifest` via `recursive_tool_denylist()` to prevent recursive
+subagent spawning. The exclusion list includes `task`,
+`spawn-background`, `create-plan`, `ask-user`, and `continue-work`.
 
 ### What NOT To Do
 
 - Do NOT add new task presets without setting `excluded_tools` — omitting the exclusion list allows the child agent to spawn its own children, leading to unbounded recursion
 - Do NOT bypass `presets.rs` by copying preset logic inline — all preset definitions must live in one place for auditability
+- Do NOT mark a tool as Core tier without adding it to `rara_tool_names()` — it will be invisible to the agent (neither in the active tool list nor discoverable)
+- Do NOT use `fold-branch` for tasks that don't need inline results — it blocks the parent's turn; use `task` or `spawn-background` for independent work
 
 ---
 
