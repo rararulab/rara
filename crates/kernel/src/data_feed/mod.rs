@@ -21,22 +21,23 @@
 //! - [`FeedStore`] — async persistence trait for events and read cursors.
 //! - [`FeedFilter`] — query criteria for filtered event retrieval.
 //! - [`DataFeed`] — trait for external data source implementations.
-//! - [`DataFeedConfig`] / [`FeedType`] — persisted configuration types.
+//! - [`DataFeedConfig`] / [`FeedType`] / [`FeedStatus`] — persisted
+//!   configuration types.
+//! - [`AuthConfig`] — unified authentication configuration for all transports.
 //! - [`DataFeedRegistry`] — runtime registry managing feed configs and tasks.
 //! - [`webhook`] — HTTP POST receiver with HMAC verification and dedup.
-//! - [`polling`] — generic HTTP polling source with pluggable response parser.
-//! - [`yahoo`] — Yahoo Finance stock price polling feed.
+//! - [`polling`] — config-driven HTTP polling source with pass-through
+//!   response.
 
-mod config;
+pub mod config;
 mod event;
 mod feed;
 pub mod polling;
 mod registry;
 mod store;
 pub mod webhook;
-pub mod yahoo;
 
-pub use config::{DataFeedConfig, FeedType};
+pub use config::{AuthConfig, DataFeedConfig, FeedStatus, FeedType};
 pub use event::{FeedEvent, FeedEventId};
 pub use feed::DataFeed;
 pub use registry::DataFeedRegistry;
