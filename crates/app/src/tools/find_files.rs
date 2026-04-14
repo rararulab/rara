@@ -57,7 +57,8 @@ pub struct FindFilesResult {
 #[derive(ToolDef)]
 #[tool(
     name = "find-files",
-    description = "Find files by glob pattern, sorted by modification time; respects .gitignore.",
+    description = "Find files by glob pattern, sorted by modification time; respects .gitignore. \
+                   Note: brace expansion {a,b} is NOT supported — use separate calls or *.ext.",
     read_only,
     concurrency_safe
 )]
@@ -100,16 +101,6 @@ fn find_files_in_process(
     search_root: &Path,
     limit: usize,
 ) -> anyhow::Result<FindFilesResult> {
-    // The glob crate does not support brace expansion {a,b}.  Detect the
-    // pattern (braces containing a comma) and return a clear error rather
-    // than silently matching zero files.
-    if pattern.contains('{') && pattern.contains(',') && pattern.contains('}') {
-        anyhow::bail!(
-            "Brace expansion {{a,b}} is not supported in glob patterns. Use separate find-files \
-             calls for each alternative, or a simpler pattern like *.ext."
-        );
-    }
-
     let glob_pattern = glob::Pattern::new(pattern).context("invalid glob pattern")?;
 
     let walker = ignore::WalkBuilder::new(search_root)
