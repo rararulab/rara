@@ -36,6 +36,8 @@ pub fn scheduled_job_manifest(
     trigger_summary: &str,
     message: &str,
     tags: &[String],
+    origin_session_key: &str,
+    principal_user_id: &str,
 ) -> AgentManifest {
     let tags_str = if tags.is_empty() {
         String::new()
@@ -71,6 +73,9 @@ pub fn scheduled_job_manifest(
         priority: Priority::default(),
         metadata: serde_json::json!({
             "scheduled_job_id": job_id,
+            "origin_session_key": origin_session_key,
+            "principal_user_id": principal_user_id,
+            "task_message": message,
         }),
         sandbox: None,
         default_execution_mode: None,
