@@ -343,17 +343,22 @@ impl SessionService {
     // -- channel bindings ---------------------------------------------------
 
     /// Bind an external channel (e.g. Telegram chat) to a session key.
+    ///
+    /// `thread_id` associates the binding with a specific forum topic when
+    /// present.
     #[instrument(skip(self))]
     pub async fn bind_channel(
         &self,
         channel_type: ChannelType,
         chat_id: String,
         session_key: SessionKey,
+        thread_id: Option<&str>,
     ) -> Result<ChannelBinding, ChatError> {
         let now = Utc::now();
         let binding = ChannelBinding {
             channel_type,
             chat_id,
+            thread_id: thread_id.map(str::to_owned),
             session_key,
             created_at: now,
             updated_at: now,
@@ -363,15 +368,19 @@ impl SessionService {
     }
 
     /// Look up which session an external channel is currently bound to.
+    ///
+    /// `thread_id` narrows the lookup to a specific forum topic (Telegram
+    /// supergroup threads).  Pass `None` for non-forum contexts.
     #[instrument(skip(self))]
     pub async fn get_channel_session(
         &self,
         channel_type: ChannelType,
         chat_id: &str,
+        thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, ChatError> {
         let binding = self
             .session_index
-            .get_channel_binding(channel_type, chat_id)
+            .get_channel_binding(channel_type, chat_id, thread_id)
             .await?;
         Ok(binding)
     }

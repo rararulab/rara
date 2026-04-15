@@ -110,12 +110,13 @@ impl BotServiceClient for KernelBotServiceClient {
         &self,
         channel_type: &str,
         chat_id: &str,
+        thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, BotServiceError> {
         let ct: ChannelType = channel_type.parse().map_err(|_| BotServiceError::Service {
             message: format!("unknown channel type: {channel_type}"),
         })?;
         self.sessions
-            .get_channel_binding(ct, chat_id)
+            .get_channel_binding(ct, chat_id, thread_id)
             .await
             .map(|opt| opt.as_ref().map(binding_to_client))
             .context(SessionSnafu)
@@ -126,6 +127,7 @@ impl BotServiceClient for KernelBotServiceClient {
         channel_type: &str,
         chat_id: &str,
         session_key: &str,
+        thread_id: Option<&str>,
     ) -> Result<ChannelBinding, BotServiceError> {
         let ct: ChannelType = channel_type.parse().map_err(|_| BotServiceError::Service {
             message: format!("unknown channel type: {channel_type}"),
@@ -137,6 +139,7 @@ impl BotServiceClient for KernelBotServiceClient {
         let binding = ks::ChannelBinding {
             channel_type: ct,
             chat_id:      chat_id.to_owned(),
+            thread_id:    thread_id.map(str::to_owned),
             session_key:  key,
             created_at:   now,
             updated_at:   now,
@@ -298,6 +301,7 @@ impl BotServiceClient for KernelBotServiceClient {
         chat_id: &str,
         session_key: &str,
         anchor_name: Option<&str>,
+        thread_id: Option<&str>,
     ) -> Result<CheckoutResult, BotServiceError> {
         // Treat empty anchor argument the same as omitted argument.
         let anchor_name = anchor_name.map(str::trim).filter(|name| !name.is_empty());
@@ -306,7 +310,8 @@ impl BotServiceClient for KernelBotServiceClient {
             Some(anchor_name) => {
                 // `/checkout <anchor>` => create child session then rebind chat.
                 let child_key = self.checkout_anchor(session_key, anchor_name).await?;
-                self.bind_channel("telegram", chat_id, &child_key).await?;
+                self.bind_channel("telegram", chat_id, &child_key, thread_id)
+                    .await?;
                 Ok(CheckoutResult::ForkedFromAnchor {
                     anchor_name: anchor_name.to_owned(),
                     session_key: child_key,
@@ -317,7 +322,8 @@ impl BotServiceClient for KernelBotServiceClient {
                 let Some(parent_key) = self.parent_session(session_key).await? else {
                     return Ok(CheckoutResult::NoParent);
                 };
-                self.bind_channel("telegram", chat_id, &parent_key).await?;
+                self.bind_channel("telegram", chat_id, &parent_key, thread_id)
+                    .await?;
                 Ok(CheckoutResult::SwitchedToParent {
                     session_key: parent_key,
                 })
@@ -597,6 +603,7 @@ mod tests {
             &self,
             channel_type: ChannelType,
             chat_id: &str,
+            _thread_id: Option<&str>,
         ) -> Result<Option<ChannelBinding>, SessionError> {
             Ok(self
                 .bindings

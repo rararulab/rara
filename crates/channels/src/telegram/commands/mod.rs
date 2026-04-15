@@ -72,3 +72,16 @@ pub(crate) fn extract_chat_id(
             message: "missing telegram_chat_id in command context".into(),
         })
 }
+
+/// Extract optional Telegram thread ID from command/callback metadata.
+///
+/// Returns `None` for non-forum chats (the common case).
+pub(crate) fn extract_thread_id(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<String> {
+    metadata.get("telegram_thread_id").and_then(|v| {
+        v.as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| v.as_str().map(String::from))
+    })
+}

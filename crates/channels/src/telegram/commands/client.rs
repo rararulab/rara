@@ -142,18 +142,26 @@ pub trait BotServiceClient: Send + Sync {
     // -- Session management --------------------------------------------------
 
     /// Look up the session bound to a channel.
+    ///
+    /// `thread_id` narrows the lookup to a specific forum topic (Telegram
+    /// supergroup threads).  Pass `None` for non-forum contexts.
     async fn get_channel_session(
         &self,
         channel_type: &str,
         chat_id: &str,
+        thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, BotServiceError>;
 
     /// Create or update a channel-to-session binding.
+    ///
+    /// `thread_id` associates the binding with a specific forum topic when
+    /// present.
     async fn bind_channel(
         &self,
         channel_type: &str,
         chat_id: &str,
         session_key: &str,
+        thread_id: Option<&str>,
     ) -> Result<ChannelBinding, BotServiceError>;
 
     /// Create a new chat session and return the generated session key.
@@ -213,6 +221,7 @@ pub trait BotServiceClient: Send + Sync {
         chat_id: &str,
         session_key: &str,
         anchor_name: Option<&str>,
+        thread_id: Option<&str>,
     ) -> Result<CheckoutResult, BotServiceError>;
 
     // -- Job discovery -------------------------------------------------------

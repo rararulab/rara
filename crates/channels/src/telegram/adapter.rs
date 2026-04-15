@@ -123,17 +123,48 @@ use rara_kernel::{
 };
 use teloxide::{
     payloads::{
-        AnswerCallbackQuerySetters, EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters,
-        SendPhotoSetters,
+        AnswerCallbackQuerySetters, EditMessageTextSetters, GetUpdatesSetters,
+        SendChatActionSetters, SendDocumentSetters, SendMessageSetters, SendPhotoSetters,
+        SendVoiceSetters,
     },
     requests::{Request, Requester},
     types::{
-        AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId,
-        ParseMode, ReplyParameters, Update, UpdateKind,
+        AllowedUpdate, ChatAction, ChatId, ChatKind, ChatPublic, InlineKeyboardButton,
+        InlineKeyboardMarkup, MessageId, ParseMode, PublicChatKind, PublicChatSupergroup,
+        ReplyParameters, Update, UpdateKind,
     },
 };
 use tokio::sync::{RwLock, watch};
 use tracing::{debug, error, info, warn};
+
+/// Convert an `Option<i64>` forum thread ID to teloxide's `ThreadId`.
+///
+/// Telegram forum topics use the root message ID of the topic as the thread
+/// identifier. teloxide wraps this in `ThreadId(MessageId(i32))`.
+#[allow(clippy::single_option_map)]
+fn to_thread_id(thread_id: Option<i64>) -> Option<teloxide::types::ThreadId> {
+    thread_id.map(|tid| {
+        debug_assert!(i32::try_from(tid).is_ok(), "thread_id overflows i32: {tid}");
+        #[allow(clippy::cast_possible_truncation)]
+        teloxide::types::ThreadId(MessageId(tid as i32))
+    })
+}
+
+/// Apply forum topic `thread_id` to a teloxide request builder if present.
+///
+/// Eliminates the repeated 3-line `if let Some(tid) = ...` pattern across
+/// all send_message / send_chat_action / send_photo / send_document /
+/// send_voice call sites (~18 occurrences).
+macro_rules! with_thread_id {
+    ($req:expr, $thread_id:expr) => {{
+        let req = $req;
+        if let Some(tid) = to_thread_id($thread_id) {
+            req.message_thread_id(tid)
+        } else {
+            req
+        }
+    }};
+}
 
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
@@ -1036,6 +1067,12 @@ impl TelegramAdapter {
             .unwrap_or_else(|e| e.into_inner()) = handlers;
     }
 
+    /// Return a clone of the underlying [`teloxide::Bot`] handle.
+    ///
+    /// Used by command handlers that need to call Telegram APIs directly
+    /// (e.g. deleting forum topics on `/clear`).
+    pub fn bot(&self) -> teloxide::Bot { self.bot.clone() }
+
     /// Set the primary chat ID for privileged commands.
     ///
     /// Commands like `/search` and `/jd` are restricted to this chat only.
@@ -1125,7 +1162,12 @@ impl TelegramAdapter {
     }
 
     /// Send binary attachments (images or documents) to a Telegram chat.
-    async fn send_attachments(&self, chat_id: i64, attachments: &[rara_kernel::io::Attachment]) {
+    async fn send_attachments(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        attachments: &[rara_kernel::io::Attachment],
+    ) {
         use teloxide::types::InputFile;
 
         for attachment in attachments {
@@ -1137,17 +1179,15 @@ impl TelegramAdapter {
             };
 
             if attachment.mime_type.starts_with("image/") {
-                let _ = self
-                    .bot
-                    .send_photo(ChatId(chat_id), input_file)
-                    .await
-                    .map_err(|e| warn!("failed to send photo: {e}"));
+                let req =
+                    with_thread_id!(self.bot.send_photo(ChatId(chat_id), input_file), thread_id);
+                let _ = req.await.map_err(|e| warn!("failed to send photo: {e}"));
             } else {
-                let _ = self
-                    .bot
-                    .send_document(ChatId(chat_id), input_file)
-                    .await
-                    .map_err(|e| warn!("failed to send document: {e}"));
+                let req = with_thread_id!(
+                    self.bot.send_document(ChatId(chat_id), input_file),
+                    thread_id
+                );
+                let _ = req.await.map_err(|e| warn!("failed to send document: {e}"));
             }
         }
     }
@@ -1157,7 +1197,7 @@ impl TelegramAdapter {
     /// Returns `true` if the voice note was sent successfully. On any failure
     /// the caller should fall back to a plain text message (graceful
     /// degradation).
-    async fn try_send_voice_reply(&self, chat_id: i64, text: &str) -> bool {
+    async fn try_send_voice_reply(&self, chat_id: i64, thread_id: Option<i64>, text: &str) -> bool {
         let Some(ref tts) = self.tts_service else {
             return false;
         };
@@ -1171,7 +1211,8 @@ impl TelegramAdapter {
         };
 
         let input_file = teloxide::types::InputFile::memory(audio.data).file_name("reply.ogg");
-        if let Err(e) = self.bot.send_voice(ChatId(chat_id), input_file).await {
+        let req = with_thread_id!(self.bot.send_voice(ChatId(chat_id), input_file), thread_id);
+        if let Err(e) = req.await {
             warn!(error = %e, "failed to send voice note, falling back to text");
             return false;
         }
@@ -1185,7 +1226,7 @@ impl ChannelAdapter for TelegramAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
     async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
-        let (chat_id, _thread_id) = match &endpoint.address {
+        let (chat_id, thread_id) = match &endpoint.address {
             EndpointAddress::Telegram { chat_id, thread_id } => (*chat_id, *thread_id),
             _ => {
                 return Err(EgressError::DeliveryFailed {
@@ -1305,13 +1346,16 @@ impl ChannelAdapter for TelegramAdapter {
 
                                 if edit_ok {
                                     for chunk in chunks.iter().skip(1) {
-                                        let _ = self
-                                            .bot
-                                            .send_message(ChatId(chat_id), chunk)
-                                            .parse_mode(ParseMode::Html)
-                                            .await;
+                                        let req = with_thread_id!(
+                                            self.bot
+                                                .send_message(ChatId(chat_id), chunk)
+                                                .parse_mode(ParseMode::Html),
+                                            thread_id
+                                        );
+                                        let _ = req.await;
                                     }
-                                    self.send_attachments(chat_id, &attachments).await;
+                                    self.send_attachments(chat_id, thread_id, &attachments)
+                                        .await;
                                     return Ok(());
                                 }
                                 if let Err(e) = edit_result {
@@ -1335,17 +1379,20 @@ impl ChannelAdapter for TelegramAdapter {
                 // If the inbound was a voice message and TTS is configured,
                 // reply with a voice note (graceful degradation on failure).
                 if self.voice_chat_ids.remove(&chat_id).is_some() && !content.is_empty() {
-                    self.try_send_voice_reply(chat_id, &content).await;
+                    self.try_send_voice_reply(chat_id, thread_id, &content)
+                        .await;
                 }
 
                 if !content.is_empty() {
                     let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
                     let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
                     for (i, chunk) in chunks.iter().enumerate() {
-                        let mut req = self
-                            .bot
-                            .send_message(ChatId(chat_id), chunk)
-                            .parse_mode(ParseMode::Html);
+                        let mut req = with_thread_id!(
+                            self.bot
+                                .send_message(ChatId(chat_id), chunk)
+                                .parse_mode(ParseMode::Html),
+                            thread_id
+                        );
 
                         if i == 0 {
                             if let Some(ref ctx) = reply_context {
@@ -1364,7 +1411,8 @@ impl ChannelAdapter for TelegramAdapter {
                 }
 
                 // Send attachments (images/documents).
-                self.send_attachments(chat_id, &attachments).await;
+                self.send_attachments(chat_id, thread_id, &attachments)
+                    .await;
             }
             PlatformOutbound::StreamChunk {
                 delta, edit_target, ..
@@ -1379,14 +1427,18 @@ impl ChannelAdapter for TelegramAdapter {
                             .await;
                     }
                 } else {
-                    let _ = self.bot.send_message(ChatId(chat_id), &delta).await;
+                    let req =
+                        with_thread_id!(self.bot.send_message(ChatId(chat_id), &delta), thread_id);
+                    let _ = req.await;
                 }
             }
             PlatformOutbound::Progress { .. } => {
-                let _ = self
-                    .bot
-                    .send_chat_action(ChatId(chat_id), ChatAction::Typing)
-                    .await;
+                let req = with_thread_id!(
+                    self.bot
+                        .send_chat_action(ChatId(chat_id), ChatAction::Typing),
+                    thread_id
+                );
+                let _ = req.await;
             }
         }
 
@@ -2249,6 +2301,7 @@ async fn handle_dashboard_callback(
                 .get_channel_binding(
                     rara_kernel::channel::types::ChannelType::Telegram,
                     &chat_id_str,
+                    None,
                 )
                 .await
                 .ok()
@@ -2669,6 +2722,21 @@ async fn handle_update(
     };
 
     let chat_id = msg.chat.id.0;
+    // Extract forum thread_id early so it is available for command dispatch.
+    let mut tg_thread_id: Option<i64> = msg.thread_id.map(|t| i64::from(t.0.0));
+
+    // Detect forum supergroups so we can auto-create a topic when the
+    // message lands in General (no thread_id).
+    let is_forum_chat = matches!(
+        msg.chat.kind,
+        ChatKind::Public(ChatPublic {
+            kind: PublicChatKind::Supergroup(PublicChatSupergroup { is_forum: true, .. }),
+            ..
+        })
+    );
+    // Capture message text before the teloxide `msg` is shadowed by
+    // `handle.resolve()` — used as the forum topic name.
+    let topic_text: Option<String> = msg.text().map(|t| t.to_owned());
 
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
@@ -2837,6 +2905,12 @@ async fn handle_update(
                             "telegram_chat_id".to_owned(),
                             serde_json::Value::Number(chat_id.into()),
                         );
+                        if let Some(tid) = tg_thread_id {
+                            metadata.insert(
+                                "telegram_thread_id".to_owned(),
+                                serde_json::Value::Number(tid.into()),
+                            );
+                        }
 
                         let ctx = CommandContext {
                             channel_type: ChannelType::Telegram,
@@ -2850,7 +2924,7 @@ async fn handle_update(
 
                         match handler.handle(&info, &ctx).await {
                             Ok(result) => {
-                                dispatch_command_result(bot, chat_id, result).await;
+                                dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
                             }
                             Err(e) => {
                                 error!(
@@ -2858,9 +2932,14 @@ async fn handle_update(
                                     error = %e,
                                     "telegram adapter: command handler failed"
                                 );
-                                let _ = bot
-                                    .send_message(ChatId(chat_id), format!("Command failed: {e}"))
-                                    .await;
+                                let req = with_thread_id!(
+                                    bot.send_message(
+                                        ChatId(chat_id),
+                                        format!("Command failed: {e}")
+                                    ),
+                                    tg_thread_id
+                                );
+                                let _ = req.await;
                             }
                         }
                         return;
@@ -2986,18 +3065,22 @@ async fn handle_update(
     let msg = match handle.resolve(raw).await {
         Ok(msg) => msg,
         Err(IOError::SystemBusy) => {
-            let _ = bot
-                .send_message(
+            let req = with_thread_id!(
+                bot.send_message(
                     ChatId(chat_id),
                     "⚠️ System is busy, please try again later.",
-                )
-                .await;
+                ),
+                tg_thread_id
+            );
+            let _ = req.await;
             return;
         }
         Err(IOError::RateLimited { message }) => {
-            let _ = bot
-                .send_message(ChatId(chat_id), format!("\u{26a0}\u{fe0f} {message}"))
-                .await;
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), format!("\u{26a0}\u{fe0f} {message}")),
+                tg_thread_id
+            );
+            let _ = req.await;
             return;
         }
         Err(IOError::IdentityResolutionFailed { .. }) => {
@@ -3027,6 +3110,54 @@ async fn handle_update(
 
     match submit_result {
         Ok(()) => {
+            // --- Auto-create forum topic when message lands in General ---
+            // In forum-enabled supergroups, messages without a thread_id are
+            // in the "General" topic.  We create a dedicated topic so the
+            // reply appears in its own thread, keeping the forum tidy.
+            if is_forum_chat && tg_thread_id.is_none() {
+                let topic_name = topic_text
+                    .as_deref()
+                    .filter(|t| !t.is_empty())
+                    .map(|t| t.chars().take(30).collect::<String>())
+                    .unwrap_or_else(|| "New chat".to_owned());
+
+                match bot.create_forum_topic(ChatId(chat_id), &topic_name).await {
+                    Ok(topic) => {
+                        let new_tid = i64::from(topic.thread_id.0.0);
+                        tg_thread_id = Some(new_tid);
+
+                        // Update the channel binding so future messages in
+                        // this topic resolve to the same session.
+                        if let Some(sid) = &session_id {
+                            let binding = rara_kernel::session::ChannelBinding {
+                                channel_type: ChannelType::Telegram,
+                                chat_id:      chat_id.to_string(),
+                                thread_id:    Some(new_tid.to_string()),
+                                session_key:  *sid,
+                                created_at:   chrono::Utc::now(),
+                                updated_at:   chrono::Utc::now(),
+                            };
+                            if let Err(e) = handle.session_index().bind_channel(&binding).await {
+                                warn!(error = %e, "failed to update channel binding for new forum topic");
+                            }
+                        }
+
+                        // Send a brief intro into the new topic so the user
+                        // sees activity there (the original message stays in
+                        // General).
+                        let intro = format!("\u{1f4ac} {topic_name}");
+                        let _ = with_thread_id!(
+                            bot.send_message(ChatId(chat_id), &intro),
+                            tg_thread_id
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to create forum topic, replying in General");
+                    }
+                }
+            }
+
             // Spawn stream forwarder for progressive editMessageText.
             // (Only needed for direct messages — group proactive messages
             // may not produce a reply, but the forwarder is harmless if idle.)
@@ -3036,6 +3167,7 @@ async fn handle_update(
                     Arc::clone(active_streams),
                     bot.clone(),
                     chat_id,
+                    tg_thread_id,
                     sid,
                     handle.trace_service().clone(),
                     rara_message_id.clone(),
@@ -3044,9 +3176,11 @@ async fn handle_update(
             }
         }
         Err(_) => {
-            let _ = bot
-                .send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。")
-                .await;
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。"),
+                tg_thread_id
+            );
+            let _ = req.await;
         }
     }
 }
@@ -3056,16 +3190,24 @@ async fn handle_update(
 // ---------------------------------------------------------------------------
 
 /// Send a [`CommandResult`] back to the Telegram chat.
-async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: CommandResult) {
+async fn dispatch_command_result(
+    bot: &teloxide::Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    result: CommandResult,
+) {
     match result {
         CommandResult::Text(text) => {
-            let _ = bot.send_message(ChatId(chat_id), text).await;
+            let req = with_thread_id!(bot.send_message(ChatId(chat_id), text), thread_id);
+            let _ = req.await;
         }
         CommandResult::Html(html) => {
-            let _ = bot
-                .send_message(ChatId(chat_id), html)
-                .parse_mode(ParseMode::Html)
-                .await;
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), html)
+                    .parse_mode(ParseMode::Html),
+                thread_id
+            );
+            let _ = req.await;
         }
         CommandResult::HtmlWithKeyboard { html, keyboard } => {
             let rows: Vec<Vec<InlineKeyboardButton>> = keyboard
@@ -3086,11 +3228,13 @@ async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: Comm
                 })
                 .collect();
             let markup = InlineKeyboardMarkup::new(rows);
-            let _ = bot
-                .send_message(ChatId(chat_id), html)
-                .parse_mode(ParseMode::Html)
-                .reply_markup(markup)
-                .await;
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), html)
+                    .parse_mode(ParseMode::Html)
+                    .reply_markup(markup),
+                thread_id
+            );
+            let _ = req.await;
         }
         CommandResult::Photo { data, caption } => {
             use teloxide::types::InputFile;
@@ -3099,6 +3243,7 @@ async fn dispatch_command_result(bot: &teloxide::Bot, chat_id: i64, result: Comm
             if let Some(caption) = caption {
                 request = request.caption(caption);
             }
+            let request = with_thread_id!(request, thread_id);
             let _ = request.await;
         }
         CommandResult::None => {}
@@ -3133,6 +3278,7 @@ fn spawn_stream_forwarder(
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     bot: teloxide::Bot,
     chat_id: i64,
+    thread_id: Option<i64>,
     session_id: rara_kernel::session::SessionKey,
     trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
@@ -3231,7 +3377,7 @@ fn spawn_stream_forwarder(
                             };
 
                             if let Some(req) = flush_req {
-                                let result = flush_edit(&bot, chat_id, &req).await;
+                                let result = flush_edit(&bot, chat_id, thread_id, &req).await;
                                 let split_applied =
                                     matches!(result, FlushResult::Sent(_) | FlushResult::Edited);
                                 apply_flush_result(&active_streams, chat_id, result);
@@ -3274,9 +3420,9 @@ fn spawn_stream_forwarder(
 
                             // Send typing indicator before the first progress message.
                             if progress.message_id.is_none() {
-                                let _ = bot
-                                    .send_chat_action(ChatId(chat_id), ChatAction::Typing)
-                                    .await;
+                                let req = with_thread_id!(bot
+                                    .send_chat_action(ChatId(chat_id), ChatAction::Typing), thread_id);
+                                let _ = req.await;
                             }
 
                             let text = progress.render_text();
@@ -3288,9 +3434,9 @@ fn spawn_stream_forwarder(
                                             .await;
                                     }
                                     None => {
-                                        if let Ok(msg) = bot
-                                            .send_message(ChatId(chat_id), &text)
-                                            .await
+                                        let req = with_thread_id!(bot
+                                            .send_message(ChatId(chat_id), &text), thread_id);
+                                        if let Ok(msg) = req.await
                                         {
                                             progress.message_id = Some(msg.id);
                                         }
@@ -3322,9 +3468,9 @@ fn spawn_stream_forwarder(
                                             .await;
                                     }
                                     None => {
-                                        if let Ok(msg) = bot
-                                            .send_message(ChatId(chat_id), &text)
-                                            .await
+                                        let req = with_thread_id!(bot
+                                            .send_message(ChatId(chat_id), &text), thread_id);
+                                        if let Ok(msg) = req.await
                                         {
                                             progress.message_id = Some(msg.id);
                                         }
@@ -3383,7 +3529,8 @@ fn spawn_stream_forwarder(
                             // Send initial plan message immediately.
                             let text = progress.render_text();
                             if !text.is_empty() {
-                                match bot.send_message(ChatId(chat_id), &text).await {
+                                let req = with_thread_id!(bot.send_message(ChatId(chat_id), &text), thread_id);
+                                match req.await {
                                     Ok(msg) => { progress.message_id = Some(msg.id); }
                                     Err(e) => { warn!(chat_id, error = %e, "failed to send plan progress message"); }
                                 }
@@ -3540,14 +3687,14 @@ fn spawn_stream_forwarder(
                                 // Send initial thinking message immediately so
                                 // the user sees feedback instead of silence.
                                 if progress.message_id.is_none() {
-                                    let _ = bot
-                                        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
-                                        .await;
+                                    let req = with_thread_id!(bot
+                                        .send_chat_action(ChatId(chat_id), ChatAction::Typing), thread_id);
+                                    let _ = req.await;
                                     let text = progress.render_text();
                                     if !text.is_empty() {
-                                        if let Ok(msg) = bot
-                                            .send_message(ChatId(chat_id), &text)
-                                            .await
+                                        let req = with_thread_id!(bot
+                                            .send_message(ChatId(chat_id), &text), thread_id);
+                                        if let Ok(msg) = req.await
                                         {
                                             progress.message_id = Some(msg.id);
                                         }
@@ -3605,11 +3752,11 @@ fn spawn_stream_forwarder(
                                     format!("limit:stop:{session_key}:{limit_id}"),
                                 ),
                             ]]);
-                            let result = bot
+                            let req = with_thread_id!(bot
                                 .send_message(ChatId(chat_id), &text)
                                 .parse_mode(ParseMode::Html)
-                                .reply_markup(keyboard)
-                                .await;
+                                .reply_markup(keyboard), thread_id);
+                            let result = req.await;
                             if let Err(e) = result {
                                 warn!(error = %e, "forward_stream: failed to send tool call limit prompt");
                             }
@@ -3679,13 +3826,13 @@ fn spawn_stream_forwarder(
                                 // Guard dropped here.
                             };
                             if let Some(req) = flush_req {
-                                let result = flush_edit(&bot, chat_id, &req).await;
+                                let result = flush_edit(&bot, chat_id, thread_id, &req).await;
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
 
                             // ── Pinned status bar: final flush ──
                             pinned.on_stream_close();
-                            flush_pinned_status(&bot, chat_id, &mut pinned, &settings, &pinned_settings_key).await;
+                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key).await;
 
                             // ── Finalize: always create trace + compact summary ──
                             // Every agent turn (including pure text replies) gets a
@@ -3720,10 +3867,10 @@ fn spawn_stream_forwarder(
                                 let mid = if let Some(mid) = progress.message_id {
                                     mid
                                 } else {
-                                    match bot
+                                    let req = with_thread_id!(bot
                                         .send_message(ChatId(chat_id), &compact)
-                                        .parse_mode(ParseMode::Html)
-                                        .await
+                                        .parse_mode(ParseMode::Html), thread_id);
+                                    match req.await
                                     {
                                         Ok(msg) => msg.id,
                                         Err(e) => {
@@ -3814,7 +3961,7 @@ fn spawn_stream_forwarder(
                         // Guard dropped here.
                     };
                     if let Some(req) = flush_req {
-                        let result = flush_edit(&bot, chat_id, &req).await;
+                        let result = flush_edit(&bot, chat_id, thread_id, &req).await;
                         apply_flush_result(&active_streams, chat_id, result);
                     }
 
@@ -3837,9 +3984,9 @@ fn spawn_stream_forwarder(
                                     .await;
                             }
                             None => {
-                                if let Ok(msg) = bot
-                                    .send_message(ChatId(chat_id), &text)
-                                    .await
+                                let req = with_thread_id!(bot
+                                    .send_message(ChatId(chat_id), &text), thread_id);
+                                if let Ok(msg) = req.await
                                 {
                                     progress.message_id = Some(msg.id);
                                 }
@@ -3851,13 +3998,13 @@ fn spawn_stream_forwarder(
 
                     // ── Pinned session card: flush on state change only ──
                     if pinned.needs_flush() {
-                        flush_pinned_status(&bot, chat_id, &mut pinned, &settings, &pinned_settings_key).await;
+                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key).await;
                     }
                 }
                 _ = typing_interval.tick() => {
-                    let _ = bot
-                        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
-                        .await;
+                    let req = with_thread_id!(bot
+                        .send_chat_action(ChatId(chat_id), ChatAction::Typing), thread_id);
+                    let _ = req.await;
                 }
             }
         }
@@ -3957,6 +4104,7 @@ enum FlushResult {
 async fn flush_pinned_status(
     bot: &teloxide::Bot,
     chat_id: i64,
+    thread_id: Option<i64>,
     pinned: &mut super::pinned_status::PinnedSessionCard,
     settings: &Arc<dyn SettingsProvider>,
     settings_key: &str,
@@ -3973,11 +4121,12 @@ async fn flush_pinned_status(
         None => true,
     };
     if need_new_msg {
-        if let Ok(msg) = bot
-            .send_message(ChatId(chat_id), &html)
-            .parse_mode(ParseMode::Html)
-            .await
-        {
+        let req = with_thread_id!(
+            bot.send_message(ChatId(chat_id), &html)
+                .parse_mode(ParseMode::Html),
+            thread_id
+        );
+        if let Ok(msg) = req.await {
             pinned.message_id = Some(msg.id);
             let _ = bot
                 .pin_chat_message(ChatId(chat_id), msg.id)
@@ -3994,14 +4143,20 @@ async fn flush_pinned_status(
 ///
 /// This function does NOT hold any DashMap guard — the caller must extract
 /// the data into a [`FlushRequest`] and drop the guard before calling.
-async fn flush_edit(bot: &teloxide::Bot, chat_id: i64, req: &FlushRequest) -> FlushResult {
+async fn flush_edit(
+    bot: &teloxide::Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    req: &FlushRequest,
+) -> FlushResult {
     if req.message_ids.is_empty() || req.message_ids.last().copied() == Some(MessageId(0)) {
         // First message or new split — send a new message.
-        match bot
-            .send_message(ChatId(chat_id), &req.text_html)
-            .parse_mode(ParseMode::Html)
-            .await
-        {
+        let req2 = with_thread_id!(
+            bot.send_message(ChatId(chat_id), &req.text_html)
+                .parse_mode(ParseMode::Html),
+            thread_id
+        );
+        match req2.await {
             Ok(sent) => FlushResult::Sent(sent.id),
             Err(e) => {
                 warn!(chat_id, error = %e, "telegram stream: failed to send message");

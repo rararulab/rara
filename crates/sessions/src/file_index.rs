@@ -65,10 +65,29 @@ impl FileSessionIndex {
     }
 
     /// Path to a channel binding file.
-    fn binding_path(&self, channel_type: &str, chat_id: &str) -> PathBuf {
-        self.index_dir
-            .join("bindings")
-            .join(format!("{channel_type}_{chat_id}.json"))
+    ///
+    /// When `thread_id` is `Some`, the suffix `_t{id}` is appended so that
+    /// different forum topics within the same chat get separate bindings.
+    fn binding_path(&self, channel_type: &str, chat_id: &str, thread_id: Option<&str>) -> PathBuf {
+        // Sanitize thread_id to prevent path traversal. Telegram sends
+        // integer IDs, but defense-in-depth strips any non-alphanumeric chars.
+        let name = match thread_id {
+            Some(tid) => {
+                let safe_tid: String = tid
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                format!("{channel_type}_{chat_id}_t{safe_tid}.json")
+            }
+            None => format!("{channel_type}_{chat_id}.json"),
+        };
+        self.index_dir.join("bindings").join(name)
     }
 
     /// Atomically write JSON to a file (write .tmp then rename).
@@ -189,11 +208,10 @@ impl SessionIndex for FileSessionIndex {
 
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         let ct = binding.channel_type.to_string();
-        let path = self.binding_path(&ct, &binding.chat_id);
-        let tmp = self
-            .index_dir
-            .join("bindings")
-            .join(format!("{}_{}.json.tmp", ct, binding.chat_id));
+        let path = self.binding_path(&ct, &binding.chat_id, binding.thread_id.as_deref());
+        // Derive tmp path from the sanitized binding path so both go through
+        // the same sanitize logic in binding_path().
+        let tmp = path.with_extension("json.tmp");
 
         let data =
             serde_json::to_vec_pretty(binding).map_err(|source| SessionError::Json { source })?;
@@ -205,8 +223,9 @@ impl SessionIndex for FileSessionIndex {
         &self,
         channel_type: ChannelType,
         chat_id: &str,
+        thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, SessionError> {
-        let path = self.binding_path(&channel_type.to_string(), chat_id);
+        let path = self.binding_path(&channel_type.to_string(), chat_id, thread_id);
         self.read_json(&path).await
     }
 

@@ -134,8 +134,9 @@ pub struct SessionEntry {
 /// to route incoming messages to the correct session without the caller
 /// needing to know the internal session key.
 ///
-/// The composite key `(channel_type, chat_id)` is unique; upserting
-/// a binding with the same composite key will update the target session.
+/// The composite key `(channel_type, chat_id, thread_id)` is unique;
+/// upserting a binding with the same composite key will update the
+/// target session. For non-threaded channels, `thread_id` is `None`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelBinding {
     /// Channel type identifier, e.g.
@@ -145,6 +146,10 @@ pub struct ChannelBinding {
     /// External chat or conversation identifier within the channel
     /// (e.g. Telegram chat id, Slack channel id).
     pub chat_id:      String,
+    /// Optional thread/topic identifier within the chat (e.g. Telegram
+    /// forum topic). `None` for non-threaded conversations.
+    #[serde(default)]
+    pub thread_id:    Option<String>,
     /// The internal session key this binding resolves to.
     pub session_key:  SessionKey,
     /// When this binding was first created.
@@ -188,11 +193,12 @@ pub trait SessionIndex: Send + Sync + 'static {
     /// Upsert a channel binding.
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError>;
 
-    /// Resolve a channel binding by `(channel_type, chat_id)`.
+    /// Resolve a channel binding by `(channel_type, chat_id, thread_id)`.
     async fn get_channel_binding(
         &self,
         channel_type: crate::channel::types::ChannelType,
         chat_id: &str,
+        thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, SessionError>;
 
     /// Resolve the first channel binding that points to the given session.

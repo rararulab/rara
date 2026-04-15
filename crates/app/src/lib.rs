@@ -677,7 +677,9 @@ pub async fn start_with_options(
             BasicCommandHandler, DebugCommandHandler, McpCommandHandler, SessionCommandHandler,
             StatusCommandHandler, StopCommandHandler, TapeCommandHandler,
         };
-        let session_handler = std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone()));
+        let tg_bot = telegram_adapter.as_ref().map(|a| a.bot());
+        let session_handler =
+            std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone(), tg_bot));
         let stop_handler = std::sync::Arc::new(StopCommandHandler::new(
             bot_client.clone(),
             kernel_handle.clone(),
