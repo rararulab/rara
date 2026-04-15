@@ -122,6 +122,7 @@ members = [
     "crates/skills",
     "crates/integrations/mcp",
     "crates/integrations/codex-oauth",
+    "crates/integrations/kimi-oauth",
     "crates/integrations/keyring-store",
     "crates/integrations/pg-credential-store",
     "crates/agents",
@@ -254,6 +255,7 @@ rara-tts = { path = "crates/drivers/tts" }
 rara-channels = { path = "crates/channels" }
 rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }
+rara-kimi-oauth = { path = "crates/integrations/kimi-oauth" }
 rara-composio = { path = "crates/integrations/composio" }
 rara-dock = { path = "crates/rara-dock" }
 rara-domain-shared = { path = "crates/domain/shared" }
