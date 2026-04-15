@@ -97,12 +97,16 @@ impl PollingSource {
     /// Returns an error if the transport config is malformed.
     pub fn from_config(config: &DataFeedConfig) -> anyhow::Result<Self> {
         let transport: PollingTransport = serde_json::from_value(config.transport.clone())?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .build()?;
         Ok(Self {
             name: config.name.clone(),
             tags: config.tags.clone(),
             transport,
             auth: config.auth.clone(),
-            client: reqwest::Client::new(),
+            client,
         })
     }
 }
@@ -126,14 +130,21 @@ impl DataFeed for PollingSource {
             "polling feed started"
         );
 
+        // Fire immediately on startup, then on interval.
+        let mut interval_timer = tokio::time::interval(interval);
+        // First tick completes instantly.
+        interval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
             tokio::select! {
                 () = cancel.cancelled() => {
                     tracing::info!("polling feed cancelled, shutting down");
                     break;
                 }
-                () = tokio::time::sleep(interval) => {
-                    self.poll_once(&tx).await;
+                _ = interval_timer.tick() => {
+                    if !self.poll_once(&tx).await {
+                        break;
+                    }
                 }
             }
         }
@@ -157,12 +168,15 @@ impl PollingSource {
     }
 
     /// Execute a single poll cycle: fetch URL, emit raw response as event.
-    async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) {
+    ///
+    /// Returns `true` to continue polling, `false` if the event channel
+    /// is closed and the loop should stop.
+    async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
         let url = match self.build_url() {
             Ok(u) => u,
             Err(e) => {
                 warn!(error = %e, "failed to build poll URL");
-                return;
+                return true;
             }
         };
 
@@ -187,21 +201,21 @@ impl PollingSource {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "poll fetch failed");
-                return;
+                return true;
             }
         };
 
         let status = response.status();
         if !status.is_success() {
             warn!(%status, "poll received non-success status");
-            return;
+            return true;
         }
 
         let body = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
                 warn!(error = %e, "failed to read poll response body");
-                return;
+                return true;
             }
         };
 
@@ -229,7 +243,10 @@ impl PollingSource {
 
         if tx.send(event).await.is_err() {
             tracing::info!("event channel closed, stopping poll loop");
+            return false;
         }
+
+        true
     }
 }
 
