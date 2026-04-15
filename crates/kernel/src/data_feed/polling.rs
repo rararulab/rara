@@ -384,4 +384,59 @@ mod tests {
             "URL should contain query auth param: {url}"
         );
     }
+
+    /// End-to-end test: config-driven PollingSource fetches real Yahoo Finance
+    /// data. Validates that a user can connect any REST API by filling in
+    /// URL + interval + headers — zero Rust code needed.
+    #[tokio::test]
+    async fn yahoo_finance_polling_e2e() {
+        let config = DataFeedConfig::builder()
+            .id("yahoo-test".to_owned())
+            .name("yahoo-aapl".to_owned())
+            .feed_type(crate::data_feed::FeedType::Polling)
+            .tags(vec!["stock".to_owned(), "yahoo".to_owned(), "aapl".to_owned()])
+            .transport(serde_json::json!({
+                "url": "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d",
+                "interval_secs": 1,
+                "headers": { "User-Agent": "Mozilla/5.0" }
+            }))
+            .enabled(true)
+            .status(crate::data_feed::FeedStatus::Idle)
+            .created_at(jiff::Timestamp::now())
+            .updated_at(jiff::Timestamp::now())
+            .build();
+
+        let source = PollingSource::from_config(&config).expect("config should parse");
+        let cancel = CancellationToken::new();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            let _ = source.run(tx, cancel_clone).await;
+        });
+
+        let event = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+            .await
+            .expect("should receive event within 30s")
+            .expect("channel should not close");
+
+        assert_eq!(event.source_name, "yahoo-aapl");
+        assert_eq!(event.event_type, "poll_response");
+        assert!(event.tags.contains(&"stock".to_owned()));
+
+        // Verify payload is real Yahoo Finance JSON (pass-through).
+        let chart = &event.payload["chart"];
+        assert!(
+            !chart.is_null(),
+            "payload should contain 'chart': {}",
+            event.payload
+        );
+        let meta = &chart["result"][0]["meta"];
+        assert_eq!(meta["symbol"], "AAPL");
+        let price = meta["regularMarketPrice"].as_f64();
+        assert!(price.is_some(), "should have regularMarketPrice");
+        assert!(price.unwrap() > 0.0, "price should be positive");
+
+        cancel.cancel();
+    }
 }
