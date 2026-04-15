@@ -872,12 +872,17 @@ async fn try_build_telegram(
     tg_config.group_policy = group_policy;
 
     let adapter = Arc::new(
-        rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
-            .whatever_context("failed to build telegram adapter")?
-            .with_config(tg_config)
-            .with_user_question_manager(user_question_manager)
-            .with_stt_service(stt_service)
-            .with_tts_service(tts_service),
+        rara_channels::telegram::TelegramAdapter::with_proxy(
+            &token,
+            vec![],
+            proxy.as_deref(),
+            Arc::clone(&settings),
+        )
+        .whatever_context("failed to build telegram adapter")?
+        .with_config(tg_config)
+        .with_user_question_manager(user_question_manager)
+        .with_stt_service(stt_service)
+        .with_tts_service(tts_service),
     );
 
     let config_handle = adapter.config_handle();

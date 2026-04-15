@@ -101,6 +101,7 @@ static TOOL_CALL_TAG_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
+use rara_domain_shared::settings::SettingsProvider;
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
@@ -318,7 +319,7 @@ impl ProgressMessage {
 use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
 
 /// Format a duration as a compact human-readable string.
-fn format_duration_compact(d: std::time::Duration) -> String {
+pub(super) fn format_duration_compact(d: std::time::Duration) -> String {
     let secs = d.as_secs();
     if secs < 1 {
         format!("{}ms", d.as_millis())
@@ -598,7 +599,7 @@ fn render_background_tasks(tasks: &[BackgroundTaskState], lines: &mut Vec<String
     }
 }
 
-fn format_token_count(tokens: u32) -> String {
+pub(super) fn format_token_count(tokens: u32) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
     } else if tokens >= 1_000 {
@@ -935,6 +936,8 @@ pub struct TelegramAdapter {
     /// Chat IDs whose most recent inbound message was a voice note.
     /// Checked at egress to decide whether to reply with a voice note.
     voice_chat_ids:        Arc<DashSet<i64>>,
+    /// Settings provider for persisting pinned message IDs across restarts.
+    settings:              Arc<dyn SettingsProvider>,
 }
 
 impl TelegramAdapter {
@@ -945,7 +948,11 @@ impl TelegramAdapter {
     /// - `bot` — a configured [`teloxide::Bot`] instance
     /// - `allowed_chat_ids` — list of Telegram chat IDs that are permitted to
     ///   interact with the adapter. Pass an empty vec to allow all chats.
-    pub fn new(bot: teloxide::Bot, allowed_chat_ids: Vec<i64>) -> Self {
+    pub fn new(
+        bot: teloxide::Bot,
+        allowed_chat_ids: Vec<i64>,
+        settings: Arc<dyn SettingsProvider>,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             bot,
@@ -963,6 +970,7 @@ impl TelegramAdapter {
             stt_service: None,
             tts_service: None,
             voice_chat_ids: Arc::new(DashSet::new()),
+            settings,
         }
     }
 
@@ -975,9 +983,10 @@ impl TelegramAdapter {
         token: &str,
         allowed_chat_ids: Vec<i64>,
         proxy: Option<&str>,
+        settings: Arc<dyn SettingsProvider>,
     ) -> Result<Self, anyhow::Error> {
         let bot = build_bot(token, proxy)?;
-        Ok(Self::new(bot, allowed_chat_ids))
+        Ok(Self::new(bot, allowed_chat_ids, settings))
     }
 
     /// Create a new Telegram adapter with a custom polling timeout.
@@ -1432,6 +1441,7 @@ impl ChannelAdapter for TelegramAdapter {
             .into();
         let stt_service = self.stt_service.clone();
         let voice_chat_ids = Arc::clone(&self.voice_chat_ids);
+        let settings = Arc::clone(&self.settings);
 
         // Register slash-menu with Telegram so '/' shows available commands.
         {
@@ -1508,6 +1518,7 @@ impl ChannelAdapter for TelegramAdapter {
                 callback_handlers,
                 stt_service,
                 voice_chat_ids,
+                settings,
             )
             .await;
         });
@@ -1562,6 +1573,7 @@ async fn polling_loop(
     callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
     stt_service: Option<rara_stt::SttService>,
     voice_chat_ids: Arc<DashSet<i64>>,
+    settings: Arc<dyn SettingsProvider>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1620,6 +1632,7 @@ async fn polling_loop(
                     let callback_handlers = Arc::clone(&callback_handlers);
                     let stt = stt_service.clone();
                     let voice_ids = Arc::clone(&voice_chat_ids);
+                    let stg = Arc::clone(&settings);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1634,6 +1647,7 @@ async fn polling_loop(
                             &callback_handlers,
                             &stt,
                             &voice_ids,
+                            &stg,
                         )
                         .await;
                     });
@@ -2492,6 +2506,7 @@ async fn handle_update(
     callback_handlers: &[Arc<dyn CallbackHandler>],
     stt_service: &Option<rara_stt::SttService>,
     voice_chat_ids: &Arc<DashSet<i64>>,
+    settings: &Arc<dyn SettingsProvider>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -3024,6 +3039,7 @@ async fn handle_update(
                     sid,
                     handle.trace_service().clone(),
                     rara_message_id.clone(),
+                    Arc::clone(settings),
                 );
             }
         }
@@ -3120,6 +3136,7 @@ fn spawn_stream_forwarder(
     session_id: rara_kernel::session::SessionKey,
     trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
+    settings: Arc<dyn SettingsProvider>,
 ) {
     use rara_kernel::io::{PlanStepStatus, StreamEvent};
 
@@ -3167,6 +3184,21 @@ fn spawn_stream_forwarder(
 
         let mut progress = ProgressMessage::new(rara_message_id);
         let mut progress_dirty = false;
+
+        // Pinned session card — a stable summary pinned to the chat top.
+        // Restore persisted message ID so we can continue editing after restart.
+        let session_label = session_id.to_string();
+        let mut pinned = super::pinned_status::PinnedSessionCard::new(
+            chat_id,
+            session_label.clone(),
+            session_label,
+        );
+        let pinned_settings_key = format!("telegram.pinned_message.{chat_id}");
+        if let Some(raw) = settings.get(&pinned_settings_key).await {
+            if let Ok(id) = raw.parse::<i32>() {
+                pinned.message_id = Some(MessageId(id));
+            }
+        }
 
         loop {
             tokio::select! {
@@ -3222,6 +3254,7 @@ fn spawn_stream_forwarder(
                         Ok(StreamEvent::ToolCallStart { name, id, arguments }) => {
                             // Transition out of thinking phase.
                             progress.thinking = false;
+                            pinned.on_tool_start();
 
                             let (display, summary) = tool_display_info(&name, &arguments);
                             let activity = tool_activity_label(&name).to_owned();
@@ -3278,6 +3311,7 @@ fn spawn_stream_forwarder(
                                 tp.result_hint =
                                     crate::tool_display::tool_result_hint(&tp.raw_name, &result_preview);
                             }
+                            pinned.on_tool_end();
 
                             let text = progress.render_text();
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
@@ -3483,6 +3517,7 @@ fn spawn_stream_forwarder(
                             progress.input_tokens = input_tokens;
                             progress.output_tokens = output_tokens;
                             progress.thinking_ms = thinking_ms;
+                            pinned.on_usage_update(input_tokens, output_tokens, thinking_ms);
                             // Trigger a progress re-render if we have a message
                             if progress.message_id.is_some() || !progress.tools.is_empty() {
                                 let text = progress.render_text();
@@ -3547,6 +3582,7 @@ fn spawn_stream_forwarder(
                             // TurnMetrics arrives just before stream close —
                             // stash for the ExecutionTrace built in RecvError::Closed.
                             progress.model = model;
+                            pinned.on_turn_metrics(progress.model.clone());
                             progress.iterations = iterations;
                         }
                         // Tool call limit: send inline keyboard with continue/stop
@@ -3585,6 +3621,7 @@ fn spawn_stream_forwarder(
                         // messages cannot be updated fast enough for streaming.
                         Ok(StreamEvent::ToolOutput { .. }) => {}
                         Ok(StreamEvent::BackgroundTaskStarted { task_id, agent_name, description }) => {
+                            pinned.on_background_task_started(task_id.clone(), agent_name.clone());
                             progress.background_tasks.push(BackgroundTaskState {
                                 task_id,
                                 agent_name,
@@ -3596,6 +3633,7 @@ fn spawn_stream_forwarder(
                             progress_dirty = true;
                         }
                         Ok(StreamEvent::BackgroundTaskDone { task_id, status }) => {
+                            pinned.on_background_task_done(&task_id);
                             if let Some(task) = progress.background_tasks.iter_mut().find(|t| t.task_id == task_id) {
                                 task.finished = true;
                                 task.status = Some(status);
@@ -3644,6 +3682,10 @@ fn spawn_stream_forwarder(
                                 let result = flush_edit(&bot, chat_id, &req).await;
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
+
+                            // ── Pinned status bar: final flush ──
+                            pinned.on_stream_close();
+                            flush_pinned_status(&bot, chat_id, &mut pinned, &settings, &pinned_settings_key).await;
 
                             // ── Finalize: always create trace + compact summary ──
                             // Every agent turn (including pure text replies) gets a
@@ -3806,6 +3848,11 @@ fn spawn_stream_forwarder(
                         progress.last_edit = Instant::now();
                         progress_dirty = false;
                     }
+
+                    // ── Pinned session card: flush on state change only ──
+                    if pinned.needs_flush() {
+                        flush_pinned_status(&bot, chat_id, &mut pinned, &settings, &pinned_settings_key).await;
+                    }
                 }
                 _ = typing_interval.tick() => {
                     let _ = bot
@@ -3892,6 +3939,54 @@ enum FlushResult {
     RateLimited,
     /// Send failed.
     SendFailed,
+}
+
+/// Flush the pinned session card to Telegram.
+///
+/// Three scenarios, in priority order:
+///
+/// 1. **`message_id` is `Some` and edit succeeds** — normal path; the existing
+///    pinned message is updated in-place.
+///
+/// 2. **`message_id` is `Some` but edit fails** — the persisted message was
+///    deleted by the user or expired. We fall through to scenario 3.
+///
+/// 3. **`message_id` is `None`** (first flush of this turn, or fallback from
+///    scenario 2) — send a new message, pin it silently, and persist the new ID
+///    so subsequent turns reuse it instead of accumulating orphan messages.
+async fn flush_pinned_status(
+    bot: &teloxide::Bot,
+    chat_id: i64,
+    pinned: &mut super::pinned_status::PinnedSessionCard,
+    settings: &Arc<dyn SettingsProvider>,
+    settings_key: &str,
+) {
+    use teloxide::payloads::PinChatMessageSetters;
+
+    let html = pinned.render();
+    let need_new_msg = match pinned.message_id {
+        Some(mid) => bot
+            .edit_message_text(ChatId(chat_id), mid, &html)
+            .parse_mode(ParseMode::Html)
+            .await
+            .is_err(),
+        None => true,
+    };
+    if need_new_msg {
+        if let Ok(msg) = bot
+            .send_message(ChatId(chat_id), &html)
+            .parse_mode(ParseMode::Html)
+            .await
+        {
+            pinned.message_id = Some(msg.id);
+            let _ = bot
+                .pin_chat_message(ChatId(chat_id), msg.id)
+                .disable_notification(true)
+                .await;
+            let _ = settings.set(settings_key, &msg.id.0.to_string()).await;
+        }
+    }
+    pinned.mark_flushed();
 }
 
 /// Flush accumulated text to Telegram via `sendMessage` (first time) or
