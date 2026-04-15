@@ -979,7 +979,7 @@ async fn stream_chat_completions(
 
         match maybe_event {
             Ok(Some(event_result)) => {
-                let event = event_result.map_err(|e| KernelError::Provider {
+                let event = event_result.map_err(|e| KernelError::RetryableServer {
                     message: format!("SSE stream error: {}", crate::error::format_error_chain(&e))
                         .into(),
                 })?;
@@ -1311,7 +1311,7 @@ async fn stream_responses_api(
                 }
             }
             Ok(Some(Err(e))) => {
-                return Err(KernelError::Provider {
+                return Err(KernelError::RetryableServer {
                     message: format!("Responses API SSE error: {e}").into(),
                 });
             }
