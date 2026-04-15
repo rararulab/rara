@@ -60,6 +60,7 @@ import {
   Sun,
   Palette,
   Wifi,
+  Radio,
 } from "lucide-react";
 import {
   Dialog,
@@ -77,8 +78,9 @@ import { getBackendUrl, setBackendUrl } from "@/api/client";
 import Skills from "@/pages/Skills";
 import Agents from "@/pages/Agents";
 import McpServers from "@/pages/McpServers";
+import DataFeedsPanel from "@/components/DataFeedsPanel";
 
-type SettingsPage = "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools" | "security";
+type SettingsPage = "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools" | "security" | "data-feeds";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
@@ -514,7 +516,7 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
     const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["general", "providers", "agents", "skills", "mcp", "channels", "tools", "security"];
+    const allowed: SettingsPage[] = ["general", "providers", "agents", "skills", "mcp", "channels", "tools", "security", "data-feeds"];
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
@@ -636,6 +638,7 @@ export default function Settings() {
     { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail" },
     { id: "tools", label: "Tools", icon: <Settings2 className="h-4 w-4" />, summary: "Composio, memory integrations" },
     { id: "security", label: "Security", icon: <Shield className="h-4 w-4" />, summary: "Filesystem sandbox" },
+    { id: "data-feeds", label: "Data Feeds", icon: <Radio className="h-4 w-4" />, summary: "External event sources" },
   ];
 
   return (
@@ -1221,6 +1224,13 @@ export default function Settings() {
               </CardContent>
             </Card>
           </>
+        )}
+
+        {/* ── Data Feeds ── */}
+        {activeCategory === "data-feeds" && (
+          <div className="data-panel p-4">
+            <DataFeedsPanel />
+          </div>
         )}
 
       </div>
