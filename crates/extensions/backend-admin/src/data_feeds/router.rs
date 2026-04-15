@@ -77,12 +77,6 @@ struct UpdateFeedRequest {
     auth:      Option<serde_json::Value>,
 }
 
-/// Request body for toggling feed enabled state.
-#[derive(Debug, Deserialize)]
-struct ToggleFeedRequest {
-    enabled: bool,
-}
-
 /// Query parameters for event listing.
 #[derive(Debug, Deserialize)]
 struct EventQueryParams {
@@ -230,10 +224,9 @@ async fn delete_feed(
 async fn toggle_feed(
     State(svc): State<DataFeedSvc>,
     Path(id): Path<String>,
-    Json(body): Json<ToggleFeedRequest>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
     let toggled = svc
-        .toggle_feed(&id, body.enabled)
+        .toggle_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
 
