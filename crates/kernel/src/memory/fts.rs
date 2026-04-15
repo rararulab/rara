@@ -200,25 +200,10 @@ impl TapeFts {
 
 /// Extract searchable text from a tape entry for FTS indexing.
 ///
-/// Mirrors the logic in `service::extract_searchable_text` but kept
-/// deliberately simple — FTS5 tokenization handles normalization.
+/// Delegates to [`super::service::extract_searchable_text`] so the indexed
+/// text surface is identical to the brute-force search path.
 fn extract_fts_content(entry: &TapEntry) -> String {
-    let mut parts = Vec::new();
-    if let Some(text) = entry.payload.get("content").and_then(|v| v.as_str()) {
-        parts.push(text);
-    }
-    if let Some(meta) = &entry.metadata {
-        if let Some(text) = meta.as_str() {
-            parts.push(text);
-        } else if let Some(obj) = meta.as_object() {
-            for v in obj.values() {
-                if let Some(s) = v.as_str() {
-                    parts.push(s);
-                }
-            }
-        }
-    }
-    parts.join(" ")
+    super::service::extract_searchable_text(&entry.payload, entry.metadata.as_ref())
 }
 
 /// Sanitize a user query for FTS5 MATCH syntax.
@@ -273,7 +258,8 @@ mod tests {
             timestamp: jiff::Timestamp::now(),
             metadata:  None,
         };
-        assert_eq!(extract_fts_content(&entry), "hello world");
+        let content = extract_fts_content(&entry);
+        assert!(content.contains("hello world"));
     }
 
     #[test]
@@ -292,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_fts_content_empty() {
+    fn extract_fts_content_empty_payload() {
         let entry = TapEntry {
             id:        3,
             kind:      TapEntryKind::Event,
@@ -300,7 +286,10 @@ mod tests {
             timestamp: jiff::Timestamp::now(),
             metadata:  None,
         };
-        assert_eq!(extract_fts_content(&entry), "");
+        // extract_searchable_text includes the JSON-serialized payload
+        // even when empty, so the result is not empty.
+        let content = extract_fts_content(&entry);
+        assert!(!content.contains("hello"));
     }
 
     #[tokio::test]

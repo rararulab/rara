@@ -1152,7 +1152,7 @@ fn normalize_search_text(text: &str) -> String {
 }
 
 /// Extract searchable text from a message payload and metadata.
-fn extract_searchable_text(payload: &Value, metadata: Option<&Value>) -> String {
+pub(super) fn extract_searchable_text(payload: &Value, metadata: Option<&Value>) -> String {
     let mut parts = Vec::new();
     if let Some(text) = payload.get("content").and_then(Value::as_str) {
         parts.push(text.to_owned());
