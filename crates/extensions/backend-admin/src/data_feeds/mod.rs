@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # rara-backend-admin
+//! Data Feed management HTTP API.
 //!
-//! Unified HTTP admin routes for all backend subsystems: settings,
-//! models, MCP servers, skills, data feeds, and domain routes (chat).
+//! Provides CRUD endpoints for data feed configurations and paginated
+//! event history queries.
 
-pub mod agents;
-pub mod chat;
-pub mod data_feeds;
-pub mod kernel;
-pub mod mcp;
-pub mod settings;
-pub mod skills;
-pub mod state;
-pub mod system_routes;
+pub mod router;
+pub mod service;
+
+pub use router::data_feed_routes;
+pub use service::DataFeedSvc;
