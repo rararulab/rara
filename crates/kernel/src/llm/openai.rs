@@ -2716,6 +2716,10 @@ mod tests {
                     "second system text missing"
                 );
                 assert!(t.contains("Hello"), "user text missing");
+                // Verify system text precedes user text.
+                let pos_sys = t.find("You are a helpful assistant.").unwrap();
+                let pos_usr = t.find("Hello").unwrap();
+                assert!(pos_sys < pos_usr, "system text must precede user text");
             }
             _ => panic!("expected Some(WireContent::Text)"),
         }
@@ -2783,6 +2787,10 @@ mod tests {
             Some(WireContent::Text(t)) => {
                 assert!(t.contains("Follow these rules."), "developer text missing");
                 assert!(t.contains("Hello"), "user text missing");
+                // Verify developer text precedes user text.
+                let pos_dev = t.find("Follow these rules.").unwrap();
+                let pos_usr = t.find("Hello").unwrap();
+                assert!(pos_dev < pos_usr, "developer text must precede user text");
             }
             _ => panic!("expected Some(WireContent::Text)"),
         }
@@ -2837,6 +2845,61 @@ mod tests {
                 assert_eq!(t.as_ref(), "Hello");
             }
             _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_multimodal_user_preserves_content() {
+        use crate::llm::types::ContentBlock;
+
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![
+                Message::system("You are helpful."),
+                Message {
+                    role:         Role::User,
+                    content:      MessageContent::Multimodal(vec![
+                        ContentBlock::Text {
+                            text: "Describe this".to_string(),
+                        },
+                        ContentBlock::ImageUrl {
+                            url: "https://example.com/img.png".to_string(),
+                        },
+                    ]),
+                    tool_calls:   vec![],
+                    tool_call_id: None,
+                },
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        // System text emitted as separate preceding user message;
+        // original multimodal message preserved.
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].role, "user");
+        assert_eq!(chat_req.messages[1].role, "user");
+
+        // First message: system text as plain text.
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(t.contains("You are helpful."), "system text missing");
+            }
+            _ => panic!("expected system-as-user to be Text"),
+        }
+
+        // Second message: multimodal content preserved.
+        match &chat_req.messages[1].content {
+            Some(WireContent::Multimodal(_)) => {}
+            _ => panic!("expected multimodal content to be preserved"),
         }
     }
 }
