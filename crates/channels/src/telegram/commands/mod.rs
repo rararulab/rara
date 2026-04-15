@@ -21,6 +21,7 @@
 //!
 //! ## Modules
 //!
+//! - [`anchor_mode`]: `/anchor_mode` command.
 //! - [`client`]: Backend service client trait and response types.
 //! - [`basic`]: `/start` and `/help` commands.
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
@@ -31,6 +32,7 @@
 //! - [`callbacks`]: Inline keyboard callback handlers.
 
 pub mod anchor_dot;
+pub mod anchor_mode;
 pub mod basic;
 pub mod callbacks;
 pub mod client;
@@ -41,6 +43,7 @@ pub mod session;
 pub mod status;
 pub mod tape;
 
+pub use anchor_mode::AnchorModeCommandHandler;
 pub use basic::BasicCommandHandler;
 pub use callbacks::{
     SessionDeleteCallbackHandler, SessionDeleteCancelHandler, SessionDeleteConfirmHandler,

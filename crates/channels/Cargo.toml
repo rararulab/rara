@@ -15,6 +15,7 @@ futures = { workspace = true }
 image = { workspace = true }
 jiff = { workspace = true }
 rand = { workspace = true }
+rara-domain-shared = { workspace = true }
 rara-dock = { workspace = true }
 rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }

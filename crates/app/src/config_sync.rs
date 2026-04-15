@@ -86,8 +86,10 @@ impl ConfigFileSync {
             let mut cfg = self.app_config.write().await;
             cfg.llm = new_config.llm;
             cfg.telegram = new_config.telegram;
+            cfg.wechat = new_config.wechat;
             cfg.composio = new_config.composio;
             cfg.knowledge = new_config.knowledge;
+            cfg.context_folding = new_config.context_folding;
         }
         info!("config.yaml synced to settings store");
         Ok(())
@@ -96,7 +98,7 @@ impl ConfigFileSync {
     /// Write current settings back to config.yaml.
     async fn writeback_to_file(&self) -> anyhow::Result<()> {
         let all_settings = self.settings.list().await;
-        let (llm, telegram, wechat, composio, knowledge) =
+        let (llm, telegram, wechat, composio, knowledge, context_folding) =
             flatten::unflatten_from_settings(&all_settings);
 
         let yaml = {
@@ -106,6 +108,7 @@ impl ConfigFileSync {
             cfg.wechat = wechat;
             cfg.composio = composio;
             cfg.knowledge = knowledge;
+            cfg.context_folding = context_folding;
             serde_yaml::to_string(&*cfg)?
         };
 
@@ -198,8 +201,10 @@ impl ConfigFileSync {
                                 let mut cfg = self.app_config.write().await;
                                 cfg.llm = new_config.llm;
                                 cfg.telegram = new_config.telegram;
+                                cfg.wechat = new_config.wechat;
                                 cfg.composio = new_config.composio;
                                 cfg.knowledge = new_config.knowledge;
+                                cfg.context_folding = new_config.context_folding;
                             }
                             info!("config file change detected and synced to settings");
                         }

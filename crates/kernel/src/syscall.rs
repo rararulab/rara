@@ -360,10 +360,15 @@ impl SyscallDispatcher {
                         ),
                     ));
                     // Fold-branch tool (synchronous child with result compression)
+                    let fold_config = crate::kernel::ContextFoldingConfig::resolve_from_settings(
+                        kernel_handle.settings().as_ref(),
+                        &self.config.context_folding,
+                    )
+                    .await;
                     if let Ok((fold_driver, fold_model)) = self.driver_registry.resolve(
                         "fold-branch",
                         None,
-                        self.config.context_folding.fold_model.as_deref(),
+                        fold_config.fold_model.as_deref(),
                     ) {
                         let context_folder = Arc::new(crate::agent::fold::ContextFolder::new(
                             fold_driver,

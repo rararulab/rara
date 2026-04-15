@@ -174,6 +174,7 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     if let Some(ref k) = config.knowledge {
         flatten_knowledge(k, &mut pairs);
     }
+    flatten_context_folding(&config.context_folding, &mut pairs);
     pairs
 }
 
@@ -260,6 +261,29 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
     }
 }
 
+fn flatten_context_folding(
+    config: &rara_kernel::kernel::ContextFoldingConfig,
+    out: &mut Vec<(String, String)>,
+) {
+    use rara_domain_shared::settings::keys;
+
+    out.push((
+        keys::CONTEXT_FOLDING_ENABLED.into(),
+        config.enabled.to_string(),
+    ));
+    out.push((
+        keys::CONTEXT_FOLDING_FOLD_THRESHOLD.into(),
+        config.fold_threshold.to_string(),
+    ));
+    out.push((
+        keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS.into(),
+        config.min_entries_between_folds.to_string(),
+    ));
+    if let Some(ref fold_model) = config.fold_model {
+        out.push((keys::CONTEXT_FOLDING_FOLD_MODEL.into(), fold_model.clone()));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Unflatten logic
 // ---------------------------------------------------------------------------
@@ -276,6 +300,7 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
     Option<WechatConfig>,
     Option<ComposioConfig>,
     Option<KnowledgeConfig>,
+    rara_kernel::kernel::ContextFoldingConfig,
 ) {
     (
         unflatten_llm(pairs),
@@ -283,6 +308,7 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
         unflatten_wechat(pairs),
         unflatten_composio(pairs),
         unflatten_knowledge(pairs),
+        unflatten_context_folding(pairs),
     )
 }
 
@@ -417,6 +443,34 @@ fn unflatten_knowledge(
     })
 }
 
+fn unflatten_context_folding(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> rara_kernel::kernel::ContextFoldingConfig {
+    use rara_domain_shared::settings::keys;
+
+    let defaults = rara_kernel::kernel::ContextFoldingConfig::default();
+    let enabled = pairs
+        .get(keys::CONTEXT_FOLDING_ENABLED)
+        .and_then(|value| value.parse::<bool>().ok())
+        .unwrap_or(defaults.enabled);
+    let fold_threshold = pairs
+        .get(keys::CONTEXT_FOLDING_FOLD_THRESHOLD)
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(defaults.fold_threshold);
+    let min_entries_between_folds = pairs
+        .get(keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(defaults.min_entries_between_folds);
+    let fold_model = pairs.get(keys::CONTEXT_FOLDING_FOLD_MODEL).cloned();
+
+    rara_kernel::kernel::ContextFoldingConfig {
+        enabled,
+        fold_threshold,
+        min_entries_between_folds,
+        fold_model,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +514,12 @@ mod tests {
             similarity_threshold: Some(0.85),
             extractor_model:      Some("gpt-4o-mini".into()),
         };
+        let context_folding = rara_kernel::kernel::ContextFoldingConfig {
+            enabled:                   true,
+            fold_threshold:            0.6,
+            min_entries_between_folds: 15,
+            fold_model:                Some("gpt-4.1-mini".into()),
+        };
 
         // Flatten
         let mut flat = Vec::new();
@@ -467,10 +527,12 @@ mod tests {
         flatten_telegram(&telegram, &mut flat);
         flatten_composio(&composio, &mut flat);
         flatten_knowledge(&knowledge, &mut flat);
+        flatten_context_folding(&context_folding, &mut flat);
         let map: HashMap<String, String> = flat.into_iter().collect();
 
         // Unflatten
-        let (got_llm, got_tg, _got_wechat, got_composio, got_know) = unflatten_from_settings(&map);
+        let (got_llm, got_tg, _got_wechat, got_composio, got_know, got_context_folding) =
+            unflatten_from_settings(&map);
 
         // --- LLM ---
         let got_llm = got_llm.expect("llm should be Some");
@@ -511,16 +573,32 @@ mod tests {
             knowledge.similarity_threshold
         );
         assert_eq!(got_know.extractor_model, knowledge.extractor_model);
+
+        // --- Context folding ---
+        assert_eq!(got_context_folding.enabled, context_folding.enabled);
+        assert_eq!(
+            got_context_folding.fold_threshold,
+            context_folding.fold_threshold
+        );
+        assert_eq!(
+            got_context_folding.min_entries_between_folds,
+            context_folding.min_entries_between_folds
+        );
+        assert_eq!(got_context_folding.fold_model, context_folding.fold_model);
     }
 
     #[test]
     fn unflatten_empty_map_returns_none() {
         let map = HashMap::new();
-        let (llm, tg, wechat, composio, know) = unflatten_from_settings(&map);
+        let (llm, tg, wechat, composio, know, context_folding) = unflatten_from_settings(&map);
         assert!(wechat.is_none());
         assert!(llm.is_none());
         assert!(tg.is_none());
         assert!(composio.is_none());
         assert!(know.is_none());
+        assert_eq!(
+            context_folding.fold_threshold,
+            rara_kernel::kernel::ContextFoldingConfig::default().fold_threshold
+        );
     }
 }
