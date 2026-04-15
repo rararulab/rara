@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmCredentialResolverRef, StreamDelta,
-    driver::LlmDriver, openai::OpenAiDriver,
+    driver::LlmDriver, openai::OpenAiDriver, types::Role,
 };
 use crate::error::Result;
 
@@ -43,10 +43,18 @@ impl KimiCodeDriver {
     }
 }
 
+/// Filter empty assistant messages that Kimi rejects with 400.
+fn sanitize_request(mut request: CompletionRequest) -> CompletionRequest {
+    request.messages.retain(|m| {
+        !(m.role == Role::Assistant && m.tool_calls.is_empty() && m.content.as_text().is_empty())
+    });
+    request
+}
+
 #[async_trait]
 impl LlmDriver for KimiCodeDriver {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        self.inner.complete(request).await
+        self.inner.complete(sanitize_request(request)).await
     }
 
     async fn stream(
@@ -54,7 +62,7 @@ impl LlmDriver for KimiCodeDriver {
         request: CompletionRequest,
         tx: mpsc::Sender<StreamDelta>,
     ) -> Result<CompletionResponse> {
-        self.inner.stream(request, tx).await
+        self.inner.stream(sanitize_request(request), tx).await
     }
 
     async fn model_context_length(&self, _model: &str) -> Option<usize> { Some(128_000) }

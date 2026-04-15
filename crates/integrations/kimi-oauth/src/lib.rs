@@ -287,6 +287,8 @@ async fn kimi_common_headers() -> Result<Vec<(String, String)>> {
     let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
 
     Ok(vec![
+        // Kimi server whitelists coding agents by User-Agent.
+        ("User-Agent".into(), "KimiCLI/0.0.1".into()),
         ("X-Msh-Platform".into(), "kimi_cli".into()),
         ("X-Msh-Version".into(), "0.0.1".into()),
         ("X-Msh-Device-Name".into(), device_name),
