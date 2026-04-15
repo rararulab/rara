@@ -923,6 +923,8 @@ pub struct TelegramAdapter {
     user_question_manager: Option<UserQuestionManagerRef>,
     /// Optional STT service for transcribing voice messages to text.
     stt_service:           Option<rara_stt::SttService>,
+    /// Optional configuration for the post-transcription LLM correction pass.
+    stt_correction:        Option<rara_stt::SttCorrectionConfig>,
     /// Optional TTS service for synthesizing voice replies.
     tts_service:           Option<rara_tts::TtsService>,
     /// Chat IDs whose most recent inbound message was a voice note.
@@ -954,6 +956,7 @@ impl TelegramAdapter {
             active_streams: Arc::new(DashMap::new()),
             user_question_manager: None,
             stt_service: None,
+            stt_correction: None,
             tts_service: None,
             voice_chat_ids: Arc::new(DashSet::new()),
         }
@@ -1073,6 +1076,22 @@ impl TelegramAdapter {
     #[must_use]
     pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
         self.stt_service = stt;
+        self
+    }
+
+    /// Attach an optional STT correction config.
+    ///
+    /// When `SttCorrectionConfig::enabled` is `true`, raw transcriptions are
+    /// routed through a fast LLM that fixes obvious speech-recognition
+    /// mistakes before delivery. The driver registry is read from the bound
+    /// `KernelHandle` at message-handling time, so no extra plumbing is
+    /// required.
+    #[must_use]
+    pub fn with_stt_correction(
+        mut self,
+        correction: Option<rara_stt::SttCorrectionConfig>,
+    ) -> Self {
+        self.stt_correction = correction;
         self
     }
 
@@ -1424,6 +1443,7 @@ impl ChannelAdapter for TelegramAdapter {
             .clone()
             .into();
         let stt_service = self.stt_service.clone();
+        let stt_correction = self.stt_correction.clone();
         let voice_chat_ids = Arc::clone(&self.voice_chat_ids);
 
         // Register slash-menu with Telegram so '/' shows available commands.
@@ -1500,6 +1520,7 @@ impl ChannelAdapter for TelegramAdapter {
                 command_handlers,
                 callback_handlers,
                 stt_service,
+                stt_correction,
                 voice_chat_ids,
             )
             .await;
@@ -1554,6 +1575,7 @@ async fn polling_loop(
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
     callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
     stt_service: Option<rara_stt::SttService>,
+    stt_correction: Option<rara_stt::SttCorrectionConfig>,
     voice_chat_ids: Arc<DashSet<i64>>,
 ) {
     let mut offset: Option<i32> = None;
@@ -1612,6 +1634,7 @@ async fn polling_loop(
                     let command_handlers = Arc::clone(&command_handlers);
                     let callback_handlers = Arc::clone(&callback_handlers);
                     let stt = stt_service.clone();
+                    let stt_corr = stt_correction.clone();
                     let voice_ids = Arc::clone(&voice_chat_ids);
                     tokio::spawn(async move {
                         handle_update(
@@ -1626,6 +1649,7 @@ async fn polling_loop(
                             &command_handlers,
                             &callback_handlers,
                             &stt,
+                            stt_corr.as_ref(),
                             &voice_ids,
                         )
                         .await;
@@ -2484,6 +2508,7 @@ async fn handle_update(
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
     stt_service: &Option<rara_stt::SttService>,
+    stt_correction: Option<&rara_stt::SttCorrectionConfig>,
     voice_chat_ids: &Arc<DashSet<i64>>,
 ) {
     // Read a snapshot of the runtime config for this update.
@@ -2923,11 +2948,25 @@ async fn handle_update(
                         tracing::info!(len = text.len(), "voice message transcribed");
                         // Mark this chat so egress replies with a voice note.
                         voice_chat_ids.insert(chat_id);
+
+                        // Layer B: optional LLM correction (non-fatal on failure).
+                        let corrected = crate::voice::maybe_correct(
+                            &text,
+                            stt_correction,
+                            Some(handle.driver_registry()),
+                        )
+                        .await;
+
+                        // Layer A: annotate so the downstream LLM treats the
+                        // text as speech-recognised input that may contain
+                        // mistakes.
+                        let annotated = crate::voice::annotate_voice(&corrected);
+
                         let combined = match raw.content {
                             MessageContent::Text(ref caption) if !caption.trim().is_empty() => {
-                                format!("{caption}\n\n{text}")
+                                format!("{caption}\n\n{annotated}")
                             }
-                            _ => text,
+                            _ => annotated,
                         };
                         RawPlatformMessage {
                             content: MessageContent::Text(combined),

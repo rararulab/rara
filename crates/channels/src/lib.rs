@@ -27,6 +27,7 @@
 pub mod telegram;
 pub mod terminal;
 pub mod tool_display;
+pub mod voice;
 pub mod web;
 pub mod wechat;
 
