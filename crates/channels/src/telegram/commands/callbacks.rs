@@ -52,24 +52,35 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
         let session_key = &context.data["switch:".len()..];
         let chat_id = super::extract_chat_id(&context.metadata)?;
 
-        // Verify session still exists before binding to prevent ghost bindings.
-        if self.client.get_session(session_key).await.is_err() {
-            return Ok(CallbackResult::SendMessage {
-                text: "Session no longer exists.".to_owned(),
-            });
-        }
+        // Fetch session — also serves as an existence check.
+        let detail = match self.client.get_session(session_key).await {
+            Ok(d) => d,
+            Err(_) => {
+                return Ok(CallbackResult::SendMessage {
+                    text: "Session no longer exists.".to_owned(),
+                });
+            }
+        };
 
         match self
             .client
             .bind_channel("telegram", &chat_id, session_key)
             .await
         {
-            Ok(_) => Ok(CallbackResult::SendMessage {
-                text: format!(
-                    "Switched to session: <code>{}</code>",
-                    html_escape(session_key)
-                ),
-            }),
+            Ok(_) => {
+                let title = detail
+                    .title
+                    .as_deref()
+                    .or(detail.preview.as_deref())
+                    .unwrap_or("Untitled");
+                Ok(CallbackResult::SendMessage {
+                    text: format!(
+                        "Switched to session: <b>{}</b>\n<code>{}</code>",
+                        html_escape(title),
+                        html_escape(session_key),
+                    ),
+                })
+            }
             Err(e) => Ok(CallbackResult::SendMessage {
                 text: format!("Failed to switch session: {e}"),
             }),
@@ -101,7 +112,11 @@ impl CallbackHandler for SessionDetailCallbackHandler {
 
         match self.client.get_session(session_key).await {
             Ok(detail) => {
-                let title = detail.title.as_deref().unwrap_or("Untitled");
+                let title = detail
+                    .title
+                    .as_deref()
+                    .or(detail.preview.as_deref())
+                    .unwrap_or("Untitled");
                 let model = detail.model.as_deref().unwrap_or("(default)");
                 let text = format!(
                     "<b>{}</b>\nKey: <code>{}</code>\nModel: {}\nCreated: {}\nLast active: {}",

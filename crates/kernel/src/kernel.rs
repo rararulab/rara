@@ -3048,7 +3048,7 @@ async fn generate_session_title(
         .find_map(|e| {
             let p = &e.payload;
             if p.get("role")?.as_str()? == "user" {
-                p.get("content")?.as_str().map(String::from)
+                extract_text_content(p.get("content")?)
             } else {
                 None
             }
@@ -3065,7 +3065,7 @@ async fn generate_session_title(
         .find_map(|e| {
             let p = &e.payload;
             if p.get("role")?.as_str()? == "assistant" {
-                p.get("content")?.as_str().map(String::from)
+                extract_text_content(p.get("content")?)
             } else {
                 None
             }
@@ -3142,6 +3142,23 @@ async fn generate_session_title(
     }
 
     Ok(())
+}
+
+/// Extract text from a tape entry's `content` field, handling both plain
+/// strings and multimodal content-block arrays
+/// (`[{"type":"text","text":"…"}]`).
+fn extract_text_content(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(blocks) => blocks.iter().find_map(|b| {
+            if b.get("type")?.as_str()? == "text" {
+                b.get("text")?.as_str().map(String::from)
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }
 }
 
 /// Acquire a permit from the parent session's `child_semaphore` to enforce

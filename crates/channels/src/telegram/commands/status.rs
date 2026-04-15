@@ -100,7 +100,11 @@ impl CommandHandler for StatusCommandHandler {
         // -- Section 1: Session metadata ------------------------------------
         match self.client.get_session(&session_key_str).await {
             Ok(detail) => {
-                let title = detail.title.as_deref().unwrap_or("Untitled");
+                let title = detail
+                    .title
+                    .as_deref()
+                    .or(detail.preview.as_deref())
+                    .unwrap_or("Untitled");
                 let short_key = &detail.key[..8];
                 let _ = writeln!(text, "<b>Session</b>");
                 let _ = writeln!(text, "Title: {}", html_escape(title));

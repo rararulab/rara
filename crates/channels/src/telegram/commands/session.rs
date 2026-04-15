@@ -239,7 +239,11 @@ impl SessionCommandHandler {
         match self.client.get_session(&session_key).await {
             Ok(detail) => {
                 let mut text = String::new();
-                let title = detail.title.as_deref().unwrap_or("Untitled");
+                let title = detail
+                    .title
+                    .as_deref()
+                    .or(detail.preview.as_deref())
+                    .unwrap_or("Untitled");
                 let _ = writeln!(text, "<b>Session:</b> {}", html_escape(title));
                 let _ = writeln!(
                     text,
