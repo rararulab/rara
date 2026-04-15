@@ -228,6 +228,8 @@ pub enum TapEntryKind {
     Plan,
     /// Structured task report from background/scheduled tasks.
     TaskReport,
+    /// External data feed event appended via silent-append delivery.
+    FeedEvent,
 }
 
 // ---------------------------------------------------------------------------

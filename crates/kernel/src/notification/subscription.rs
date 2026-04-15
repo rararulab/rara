@@ -119,11 +119,15 @@ pub struct SubscriptionRegistry {
 /// Interior state behind the `RwLock`.
 struct RegistryInner {
     /// Primary store: sub_id → Subscription.
-    subs:      HashMap<Uuid, Subscription>,
+    subs:             HashMap<Uuid, Subscription>,
     /// Inverted index: (owner, tag) → set of sub_ids.
-    tag_index: HashMap<(UserId, String), HashSet<Uuid>>,
+    tag_index:        HashMap<(UserId, String), HashSet<Uuid>>,
+    /// Owner-agnostic inverted index: tag → set of sub_ids.
+    /// Used by [`SubscriptionRegistry::match_tags_any_owner`] for O(M) lookup
+    /// on system-level events (e.g. data feed events).
+    global_tag_index: HashMap<String, HashSet<Uuid>>,
     /// Path to the JSON persistence file.
-    path:      PathBuf,
+    path:             PathBuf,
 }
 
 impl RegistryInner {
@@ -131,10 +135,15 @@ impl RegistryInner {
     fn from_entries(entries: Vec<Subscription>, path: PathBuf) -> Self {
         let mut subs = HashMap::new();
         let mut tag_index: HashMap<(UserId, String), HashSet<Uuid>> = HashMap::new();
+        let mut global_tag_index: HashMap<String, HashSet<Uuid>> = HashMap::new();
         for sub in entries {
             for tag in &sub.match_tags {
                 tag_index
                     .entry((sub.owner.clone(), tag.clone()))
+                    .or_default()
+                    .insert(sub.id);
+                global_tag_index
+                    .entry(tag.clone())
                     .or_default()
                     .insert(sub.id);
             }
@@ -143,22 +152,27 @@ impl RegistryInner {
         Self {
             subs,
             tag_index,
+            global_tag_index,
             path,
         }
     }
 
-    /// Insert a subscription into the primary store and inverted index.
+    /// Insert a subscription into the primary store and inverted indices.
     fn insert(&mut self, sub: Subscription) {
         for tag in &sub.match_tags {
             self.tag_index
                 .entry((sub.owner.clone(), tag.clone()))
                 .or_default()
                 .insert(sub.id);
+            self.global_tag_index
+                .entry(tag.clone())
+                .or_default()
+                .insert(sub.id);
         }
         self.subs.insert(sub.id, sub);
     }
 
-    /// Remove a subscription from the primary store and inverted index.
+    /// Remove a subscription from the primary store and inverted indices.
     fn remove(&mut self, id: Uuid) -> Option<Subscription> {
         if let Some(sub) = self.subs.remove(&id) {
             for tag in &sub.match_tags {
@@ -167,6 +181,12 @@ impl RegistryInner {
                     set.remove(&id);
                     if set.is_empty() {
                         self.tag_index.remove(&key);
+                    }
+                }
+                if let Some(set) = self.global_tag_index.get_mut(tag) {
+                    set.remove(&id);
+                    if set.is_empty() {
+                        self.global_tag_index.remove(tag);
                     }
                 }
             }
@@ -276,6 +296,31 @@ impl SubscriptionRegistry {
         let mut result = Vec::new();
         for tag in tags {
             if let Some(ids) = inner.tag_index.get(&(publisher.clone(), tag.clone())) {
+                for id in ids {
+                    if seen.insert(*id) {
+                        if let Some(sub) = inner.subs.get(id) {
+                            result.push(sub.clone());
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Find all subscriptions matching any of the given tags across **all**
+    /// owners.
+    ///
+    /// Unlike [`match_tags`](Self::match_tags) which scopes to a single
+    /// publisher, this variant is used for system-level events (e.g. data feed
+    /// events) that are not owned by a specific user. Uses the
+    /// `global_tag_index` for O(M) lookup where M is the number of event tags.
+    pub async fn match_tags_any_owner(&self, tags: &[String]) -> Vec<Subscription> {
+        let inner = self.inner.read().await;
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for tag in tags {
+            if let Some(ids) = inner.global_tag_index.get(tag) {
                 for id in ids {
                     if seen.insert(*id) {
                         if let Some(sub) = inner.subs.get(id) {
