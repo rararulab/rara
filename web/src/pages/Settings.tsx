@@ -177,6 +177,15 @@ const BUILTIN_PROVIDERS: ProviderDef[] = [
     enabledKey: KEYS.LLM_PROVIDERS_CODEX_ENABLED,
     fields: [],
   },
+  {
+    id: "kimi-code",
+    name: "Kimi Code",
+    description: "Kimi Code platform. Run `kimi auth login` first.",
+    enabledKey: "llm.providers.kimi-code.enabled",
+    fields: [
+      { key: "llm.providers.kimi-code.default_model", label: "Default Model", placeholder: "kimi-k2.5" },
+    ],
+  },
 ];
 
 const BUILTIN_PROVIDER_IDS = new Set(BUILTIN_PROVIDERS.map((p) => p.id));
