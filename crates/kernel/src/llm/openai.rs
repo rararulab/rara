@@ -2677,4 +2677,166 @@ mod tests {
             _ => panic!("expected Some(WireContent::Text)"),
         }
     }
+
+    #[test]
+    fn minimax_multiple_system_messages_merged() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![
+                Message::system("You are a helpful assistant."),
+                Message::system("Answer concisely."),
+                Message::user("Hello"),
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        for msg in &chat_req.messages {
+            assert_ne!(msg.role, "system");
+        }
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(
+                    t.contains("You are a helpful assistant."),
+                    "first system text missing"
+                );
+                assert!(
+                    t.contains("Answer concisely."),
+                    "second system text missing"
+                );
+                assert!(t.contains("Hello"), "user text missing");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_system_only_creates_synthetic_user() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![Message::system("You are a helpful assistant.")],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert_eq!(t.as_ref(), "You are a helpful assistant.");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_developer_messages_merged() {
+        let developer_msg = Message {
+            role:         Role::Developer,
+            content:      MessageContent::Text("Follow these rules.".into()),
+            tool_calls:   vec![],
+            tool_call_id: None,
+        };
+
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![developer_msg, Message::user("Hello")],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        for msg in &chat_req.messages {
+            assert_ne!(msg.role, "developer");
+            assert_ne!(msg.role, "system");
+        }
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(t.contains("Follow these rules."), "developer text missing");
+                assert!(t.contains("Hello"), "user text missing");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn non_minimax_system_role_preserved() {
+        let request = CompletionRequest {
+            model:               "gpt-4o".to_string(),
+            messages:            vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello"),
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].role, "system");
+        assert_eq!(chat_req.messages[1].role, "user");
+    }
+
+    #[test]
+    fn minimax_empty_system_message_filtered() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![Message::system(""), Message::user("Hello")],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert_eq!(t.as_ref(), "Hello");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
 }
