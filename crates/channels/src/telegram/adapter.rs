@@ -2180,6 +2180,76 @@ async fn handle_cascade_callback(
     }
 }
 
+/// Handle a dashboard callback: render the requested tab and edit the
+/// message in-place.
+///
+/// Callback data format: `"dash:{tab}:{chat_id}:{msg_id}:{trace_id}"`
+///
+/// Sessions are scoped to the chat's bound session + children so that
+/// one chat cannot inspect another chat's sessions.
+async fn handle_dashboard_callback(
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+    handle: &KernelHandle,
+) {
+    let _ = bot.answer_callback_query(callback.id.clone()).await;
+
+    let parts: Vec<&str> = data.splitn(5, ':').collect();
+    if parts.len() < 4 {
+        return;
+    }
+
+    let tab = super::dashboard::DashTab::from_str_prefix(parts[1]);
+    let (Ok(cid), Ok(mid)) = (parts[2].parse::<i64>(), parts[3].parse::<i32>()) else {
+        return;
+    };
+    let trace_id = parts.get(4).filter(|t| **t != "-").copied();
+
+    // Scope sessions to the originating session (from trace_id) + its
+    // children.  This anchors the dashboard to the session that produced
+    // the message, not the chat's *current* binding — so `/new` or
+    // `/checkout` won't make old Dashboard buttons show the wrong session.
+    let all_sessions = handle.list_processes();
+    let root_key = match trace_id {
+        Some(tid) => handle
+            .trace_service()
+            .get_session_id(tid)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| rara_kernel::session::SessionKey::try_from_raw(&s).ok()),
+        None => {
+            // Fallback for dashboards opened without a trace_id (e.g.
+            // future `/dashboard` command): use the chat's current binding.
+            let chat_id_str = cid.to_string();
+            handle
+                .session_index()
+                .get_channel_binding(
+                    rara_kernel::channel::types::ChannelType::Telegram,
+                    &chat_id_str,
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|b| b.session_key)
+        }
+    };
+    let scoped = match root_key {
+        Some(key) => super::dashboard::scoped_sessions(&all_sessions, key),
+        None => vec![],
+    };
+
+    let text = super::dashboard::render_dashboard(tab, &scoped);
+    let keyboard = super::dashboard::dashboard_keyboard(tab, cid, mid, trace_id);
+
+    let _ = bot
+        .edit_message_text(ChatId(cid), MessageId(mid), &text)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(keyboard)
+        .await;
+}
+
 /// Listens for new approval requests and sends inline keyboard messages
 /// to the originating Telegram chat so the user can approve or deny.
 ///
@@ -2483,6 +2553,10 @@ async fn handle_update(
             }
             if data.starts_with("cas:") {
                 handle_cascade_callback(bot, callback, data, handle).await;
+                return;
+            }
+            if data.starts_with("dash:") {
+                handle_dashboard_callback(bot, callback, data, handle).await;
                 return;
             }
 
@@ -3620,7 +3694,7 @@ fn spawn_stream_forwarder(
                                             "cas:show:{}:{}:{trace_id}",
                                             chat_id, mid.0,
                                         );
-                                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                                        let mut buttons = vec![
                                             InlineKeyboardButton::callback(
                                                 "\u{1f4ca} \u{8be6}\u{60c5}",
                                                 callback_data,
@@ -3629,7 +3703,20 @@ fn spawn_stream_forwarder(
                                                 "\u{1f50d} Cascade",
                                                 cascade_cb,
                                             ),
-                                        ]]);
+                                        ];
+                                        // Show Dashboard button when background tasks exist.
+                                        // Include trace_id so the dashboard can offer a Back button.
+                                        if !progress.background_tasks.is_empty() {
+                                            let dash_cb = format!(
+                                                "dash:tasks:{}:{}:{trace_id}",
+                                                chat_id, mid.0,
+                                            );
+                                            buttons.push(InlineKeyboardButton::callback(
+                                                "\u{1f4f1} Dashboard",
+                                                dash_cb,
+                                            ));
+                                        }
+                                        let keyboard = InlineKeyboardMarkup::new(vec![buttons]);
 
                                         let _ = bot
                                             .edit_message_text(ChatId(chat_id), mid, &compact)

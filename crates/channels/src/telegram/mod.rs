@@ -16,6 +16,7 @@
 
 pub mod adapter;
 pub mod commands;
+pub mod dashboard;
 pub mod latex;
 pub mod loading_hints;
 pub mod markdown;
