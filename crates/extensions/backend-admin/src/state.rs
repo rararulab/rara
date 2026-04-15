@@ -20,17 +20,19 @@
 use std::sync::Arc;
 
 use snafu::Whatever;
-use sqlx::SqlitePool;
 use tracing::info;
+
+use crate::data_feeds::DataFeedRouterState;
 
 /// Backend domain-service state.
 ///
 /// Owns all domain services needed for HTTP admin routes.
 #[derive(Clone)]
 pub struct BackendState {
-    pub session_service: crate::chat::service::SessionService,
-    pub settings_svc:    crate::settings::SettingsSvc,
-    pub data_feed_svc:   crate::data_feeds::DataFeedSvc,
+    pub session_service:   crate::chat::service::SessionService,
+    pub settings_svc:      crate::settings::SettingsSvc,
+    /// Data feed router state with both persistence and registry.
+    pub feed_router_state: DataFeedRouterState,
 }
 
 impl BackendState {
@@ -44,7 +46,7 @@ impl BackendState {
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
         model_lister: rara_kernel::llm::LlmModelListerRef,
-        pool: SqlitePool,
+        feed_router_state: DataFeedRouterState,
     ) -> Result<Self, Whatever> {
         // -- domain services -------------------------------------------------
 
@@ -58,13 +60,10 @@ impl BackendState {
         );
         info!("Session service initialized");
 
-        let data_feed_svc = crate::data_feeds::DataFeedSvc::new(pool);
-        info!("DataFeed service initialized");
-
         Ok(Self {
             session_service,
             settings_svc,
-            data_feed_svc,
+            feed_router_state,
         })
     }
 
@@ -107,9 +106,9 @@ impl BackendState {
         // Kernel observability routes (stats, sessions, approvals, audit).
         router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
 
-        // Data feed management routes.
+        // Data feed management routes (with registry sync).
         router = router.merge(crate::data_feeds::data_feed_routes(
-            self.data_feed_svc.clone(),
+            self.feed_router_state.clone(),
         ));
 
         (router, api)

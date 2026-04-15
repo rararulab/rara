@@ -37,6 +37,7 @@ sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = "0.32.0"
 utoipa = { workspace = true }
