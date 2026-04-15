@@ -513,6 +513,14 @@ impl TapeService {
         };
 
         self.store.reset(tape_name).await?;
+
+        // Clean up derived FTS index so stale rows don't survive reset.
+        if let Some(fts) = &self.fts {
+            if let Err(e) = fts.remove_tape(tape_name).await {
+                tracing::warn!(%e, tape_name, "FTS cleanup failed on reset");
+            }
+        }
+
         let handoff_state = HandoffState {
             owner: Some("human".into()),
             extra: archive_path
@@ -536,7 +544,15 @@ impl TapeService {
     /// Unlike [`Self::reset`], this does not create a new bootstrap anchor —
     /// the tape is simply removed. Used when deleting a session entirely.
     pub async fn delete_tape(&self, tape_name: &str) -> TapResult<()> {
-        self.store.reset(tape_name).await
+        self.store.reset(tape_name).await?;
+
+        if let Some(fts) = &self.fts {
+            if let Err(e) = fts.remove_tape(tape_name).await {
+                tracing::warn!(%e, tape_name, "FTS cleanup failed on delete");
+            }
+        }
+
+        Ok(())
     }
 
     /// Create a new tape at `target` containing all entries from `source`
