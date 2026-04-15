@@ -99,12 +99,6 @@ struct UpdateFeedRequest {
     auth:      Option<serde_json::Value>,
 }
 
-/// Request body for toggling feed enabled state.
-#[derive(Debug, Deserialize)]
-struct ToggleFeedRequest {
-    enabled: bool,
-}
-
 /// Query parameters for event listing.
 #[derive(Debug, Deserialize)]
 struct EventQueryParams {
@@ -290,15 +284,15 @@ async fn delete_feed(
     }
 }
 
-/// `PUT /api/v1/data-feeds/{id}/toggle` — enable or disable a feed.
+/// `PUT /api/v1/data-feeds/{id}/toggle` — flip the enabled state (no body
+/// needed).
 async fn toggle_feed(
     State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
-    Json(body): Json<ToggleFeedRequest>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
     let toggled = state
         .svc
-        .toggle_feed(&id, body.enabled)
+        .toggle_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
 
@@ -326,7 +320,7 @@ async fn toggle_feed(
     }
 
     // Start task if now enabled, stop already handled by remove above.
-    if body.enabled {
+    if feed.enabled {
         start_feed_task(&feed, &state.registry);
     }
 
