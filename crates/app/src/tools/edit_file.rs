@@ -96,14 +96,21 @@ impl ToolExecute for EditFileTool {
         tokio::fs::write(&file_path, &new_content)
             .await
             .context(format!("failed to write file {}", file_path.display()))?;
-        let old_lines = content.lines().count();
-        let new_lines = new_content.lines().count();
+        let diff = similar::TextDiff::from_lines(&content, &new_content);
+        let (mut added, mut removed) = (0usize, 0usize);
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                similar::ChangeTag::Insert => added += 1,
+                similar::ChangeTag::Delete => removed += 1,
+                similar::ChangeTag::Equal => {}
+            }
+        }
 
         Ok(EditFileResult {
             replacements:  if replace_all { count } else { 1 },
             file_path:     file_path.display().to_string(),
-            lines_added:   new_lines.saturating_sub(old_lines),
-            lines_removed: old_lines.saturating_sub(new_lines),
+            lines_added:   added,
+            lines_removed: removed,
         })
     }
 }
