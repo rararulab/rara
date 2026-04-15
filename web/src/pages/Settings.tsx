@@ -1017,7 +1017,7 @@ export default function Settings() {
 
         {/* ── Agents ── */}
         {activeCategory === "agents" && (
-          <div className="data-panel p-4">
+          <div className="data-panel flex flex-col overflow-hidden">
             <Agents />
           </div>
         )}

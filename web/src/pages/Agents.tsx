@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAgents, createAgent, deleteAgent } from "@/api/agents";
 import { settingsApi } from "@/api/client";
@@ -22,7 +22,6 @@ import type { AgentResponse, CreateAgentRequest } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -57,6 +56,7 @@ import {
   Plus,
   Settings2,
   Trash2,
+  FileText,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -294,137 +294,6 @@ function CreateAgentDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Configure Agent Dialog (per-agent provider/model override via settings)
-// ---------------------------------------------------------------------------
-
-function ConfigureAgentDialog({
-  open,
-  onOpenChange,
-  agent,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  agent: AgentResponse;
-}) {
-  const queryClient = useQueryClient();
-  const providerKey = `llm.agents.${agent.name}.provider`;
-  const modelKey = `llm.agents.${agent.name}.model`;
-
-  const settingsQuery = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => settingsApi.list(),
-  });
-
-  const currentProvider = settingsQuery.data?.[providerKey] ?? "";
-  const currentModel = settingsQuery.data?.[modelKey] ?? "";
-
-  const [provider, setProvider] = useState("");
-  const [model, setModel] = useState("");
-  const [initialized, setInitialized] = useState(false);
-
-  // Sync from loaded settings once
-  if (settingsQuery.data && !initialized) {
-    setProvider(currentProvider);
-    setModel(currentModel);
-    setInitialized(true);
-  }
-
-  // Reset when dialog opens for a different agent
-  const handleOpenChange = (isOpen: boolean) => {
-    if (!isOpen) {
-      setInitialized(false);
-    }
-    onOpenChange(isOpen);
-  };
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const patches: Record<string, string | null> = {};
-      if (provider !== currentProvider) {
-        patches[providerKey] = provider || null;
-      }
-      if (model !== currentModel) {
-        patches[modelKey] = model || null;
-      }
-      if (Object.keys(patches).length > 0) {
-        await settingsApi.batchUpdate(patches);
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
-      handleOpenChange(false);
-    },
-  });
-
-  const hasChanges = provider !== currentProvider || model !== currentModel;
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Configure: {agent.name}</DialogTitle>
-          <DialogDescription>
-            Override the provider and model for this agent. Leave empty to use
-            the global default.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="cfg-provider">Provider Override</Label>
-            <Select
-              value={provider || "__none__"}
-              onValueChange={(v) => setProvider(v === "__none__" ? "" : v)}
-            >
-              <SelectTrigger id="cfg-provider">
-                <SelectValue placeholder="Use default provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Use default</SelectItem>
-                <SelectItem value="openrouter">openrouter</SelectItem>
-                <SelectItem value="ollama">ollama</SelectItem>
-                <SelectItem value="codex">codex</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground font-mono">
-              {providerKey}
-            </p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="cfg-model">Model Override</Label>
-            <Input
-              id="cfg-model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="e.g. openai/gpt-4o (leave empty for default)"
-              className="font-mono text-sm"
-            />
-            <p className="text-xs text-muted-foreground font-mono">
-              {modelKey}
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => saveMutation.mutate()}
-            disabled={!hasChanges || saveMutation.isPending}
-          >
-            {saveMutation.isPending ? "Saving..." : "Save"}
-          </Button>
-        </DialogFooter>
-        {saveMutation.isError && (
-          <p className="text-sm text-destructive mt-2">
-            Error: {(saveMutation.error as Error).message}
-          </p>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Delete Confirmation Dialog
 // ---------------------------------------------------------------------------
 
@@ -478,94 +347,251 @@ function DeleteAgentDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Agent Card
+// Agent List Item (left panel)
 // ---------------------------------------------------------------------------
 
-function AgentCard({
+function AgentListItem({
   agent,
-  onConfigure,
-  onDelete,
+  isSelected,
+  onClick,
 }: {
   agent: AgentResponse;
-  onConfigure: () => void;
-  onDelete: () => void;
+  isSelected: boolean;
+  onClick: () => void;
 }) {
   return (
-    <div className="rounded-lg border bg-card p-4 space-y-3">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <Bot className="h-5 w-5 text-muted-foreground shrink-0" />
-          <h3 className="font-semibold text-lg truncate">{agent.name}</h3>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
+        isSelected ? "bg-accent" : "hover:bg-accent/50"
+      }`}
+    >
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+        <Bot className="h-4 w-4 text-muted-foreground" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium">{agent.name}</span>
           {agent.builtin && (
-            <Badge variant="secondary" className="text-xs gap-1">
-              <Lock className="h-3 w-3" />
-              Built-in
-            </Badge>
+            <Lock className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
-          {agent.role && (
-            <Badge variant={roleBadgeVariant(agent.role)} className="text-xs">
-              {agent.role}
-            </Badge>
-          )}
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-xs text-muted-foreground">
+            {agent.role ?? "Agent"}
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Overview Tab (right panel)
+// ---------------------------------------------------------------------------
+
+function OverviewTab({ agent }: { agent: AgentResponse }) {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-1.5">
+        <h3 className="text-sm font-medium">Description</h3>
+        <p className="text-sm text-muted-foreground">
+          {agent.description || "No description"}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-medium">Model</h3>
+          <p className="text-sm text-muted-foreground font-mono">
+            {agent.model ?? "Default"}
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-medium">Provider</h3>
+          <p className="text-sm text-muted-foreground font-mono">
+            {agent.provider_hint ?? "Default"}
+          </p>
         </div>
       </div>
 
-      {/* Description */}
-      <p className="text-sm text-muted-foreground line-clamp-2">
-        {agent.description || "No description"}
-      </p>
-
-      {/* Model & Provider */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>
-          Model:{" "}
-          <span className="font-mono">
-            {agent.model ?? "Default"}
-          </span>
-        </span>
-        <span>
-          Provider:{" "}
-          <span className="font-mono">
-            {agent.provider_hint ?? "Default"}
-          </span>
-        </span>
-        {agent.max_iterations != null && (
-          <span>Max Iterations: {agent.max_iterations}</span>
-        )}
-      </div>
-
-      {/* Tools */}
-      {agent.tools.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {agent.tools.slice(0, 8).map((tool) => (
-            <Badge key={tool} variant="outline" className="text-xs">
-              {tool}
-            </Badge>
-          ))}
-          {agent.tools.length > 8 && (
-            <Badge variant="outline" className="text-xs">
-              +{agent.tools.length - 8} more
-            </Badge>
-          )}
+      {agent.max_iterations != null && (
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-medium">Max Iterations</h3>
+          <p className="text-sm text-muted-foreground">
+            {agent.max_iterations}
+          </p>
         </div>
       )}
 
-      <Separator />
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium">Tools</h3>
+        {agent.tools.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {agent.tools.map((tool) => (
+              <Badge key={tool} variant="outline" className="text-xs">
+                {tool}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No tools assigned</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
-      {/* Footer: actions */}
-      <div className="flex items-center justify-end gap-1">
+// ---------------------------------------------------------------------------
+// Configure Tab (right panel)
+// ---------------------------------------------------------------------------
+
+function ConfigureTab({ agent }: { agent: AgentResponse }) {
+  const queryClient = useQueryClient();
+  const providerKey = `llm.agents.${agent.name}.provider`;
+  const modelKey = `llm.agents.${agent.name}.model`;
+
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsApi.list(),
+  });
+
+  const currentProvider = settingsQuery.data?.[providerKey] ?? "";
+  const currentModel = settingsQuery.data?.[modelKey] ?? "";
+
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [initialized, setInitialized] = useState(false);
+
+  if (settingsQuery.data && !initialized) {
+    setProvider(currentProvider);
+    setModel(currentModel);
+    setInitialized(true);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const patches: Record<string, string | null> = {};
+      if (provider !== currentProvider) {
+        patches[providerKey] = provider || null;
+      }
+      if (model !== currentModel) {
+        patches[modelKey] = model || null;
+      }
+      if (Object.keys(patches).length > 0) {
+        await settingsApi.batchUpdate(patches);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const hasChanges = provider !== currentProvider || model !== currentModel;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-sm font-medium">Provider / Model Override</h3>
+        <p className="text-sm text-muted-foreground mt-1">
+          Override the provider and model for this agent. Leave empty to use the
+          global default.
+        </p>
+      </div>
+      <div className="space-y-4 max-w-md">
+        <div className="space-y-1.5">
+          <Label htmlFor="cfg-provider">Provider Override</Label>
+          <Select
+            value={provider || "__none__"}
+            onValueChange={(v) => setProvider(v === "__none__" ? "" : v)}
+          >
+            <SelectTrigger id="cfg-provider">
+              <SelectValue placeholder="Use default provider" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Use default</SelectItem>
+              <SelectItem value="openrouter">openrouter</SelectItem>
+              <SelectItem value="ollama">ollama</SelectItem>
+              <SelectItem value="codex">codex</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground font-mono">
+            {providerKey}
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cfg-model">Model Override</Label>
+          <Input
+            id="cfg-model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="e.g. openai/gpt-4o (leave empty for default)"
+            className="font-mono text-sm"
+          />
+          <p className="text-xs text-muted-foreground font-mono">{modelKey}</p>
+        </div>
         <Button
-          variant="ghost"
-          size="sm"
-          onClick={onConfigure}
-          title="Configure provider/model override"
+          onClick={() => saveMutation.mutate()}
+          disabled={!hasChanges || saveMutation.isPending}
         >
-          <Settings2 className="h-4 w-4 mr-1" />
-          Configure
+          {saveMutation.isPending ? "Saving..." : "Save Changes"}
         </Button>
+        {saveMutation.isError && (
+          <p className="text-sm text-destructive">
+            Error: {(saveMutation.error as Error).message}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent Detail (right panel)
+// ---------------------------------------------------------------------------
+
+type DetailTab = "overview" | "configure";
+
+const detailTabs: { id: DetailTab; label: string; icon: typeof FileText }[] = [
+  { id: "overview", label: "Overview", icon: FileText },
+  { id: "configure", label: "Configure", icon: Settings2 },
+];
+
+function AgentDetail({
+  agent,
+  onDelete,
+}: {
+  agent: AgentResponse;
+  onDelete: () => void;
+}) {
+  const [activeTab, setActiveTab] = useState<DetailTab>("overview");
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Header */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold truncate">{agent.name}</h2>
+            {agent.builtin && (
+              <Badge variant="secondary" className="text-xs gap-1">
+                <Lock className="h-3 w-3" />
+                Built-in
+              </Badge>
+            )}
+            {agent.role && (
+              <Badge
+                variant={roleBadgeVariant(agent.role)}
+                className="text-xs"
+              >
+                {agent.role}
+              </Badge>
+            )}
+          </div>
+        </div>
         {!agent.builtin && (
           <Button
             variant="ghost"
@@ -578,20 +604,69 @@ function AgentCard({
           </Button>
         )}
       </div>
+
+      {/* Tabs */}
+      <div className="flex border-b px-6">
+        {detailTabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
+              activeTab === tab.id
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <tab.icon className="h-3.5 w-3.5" />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {activeTab === "overview" && <OverviewTab agent={agent} />}
+        {activeTab === "configure" && (
+          <ConfigureTab key={agent.name} agent={agent} />
+        )}
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Loading Skeleton
+// Loading Skeleton (two-panel)
 // ---------------------------------------------------------------------------
 
 function AgentsSkeleton() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {Array.from({ length: 3 }).map((_, i) => (
-        <Skeleton key={i} className="h-52 rounded-lg" />
-      ))}
+    <div className="flex flex-1 min-h-0">
+      <div className="w-72 border-r">
+        <div className="flex h-12 items-center justify-between border-b px-4">
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-6 w-6 rounded" />
+        </div>
+        <div className="divide-y">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton className="h-8 w-8 rounded-lg" />
+              <div className="flex-1 space-y-1.5">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-3 w-16" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 p-6 space-y-6">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-7 w-7 rounded-md" />
+          <Skeleton className="h-5 w-32" />
+        </div>
+        <Skeleton className="h-8 w-full rounded-lg" />
+        <Skeleton className="h-8 w-full rounded-lg" />
+        <Skeleton className="h-8 w-3/4 rounded-lg" />
+      </div>
     </div>
   );
 }
@@ -602,9 +677,7 @@ function AgentsSkeleton() {
 
 export default function Agents() {
   const [createOpen, setCreateOpen] = useState(false);
-  const [configureAgent, setConfigureAgent] = useState<AgentResponse | null>(
-    null
-  );
+  const [selectedName, setSelectedName] = useState<string>("");
   const [deleteAgentItem, setDeleteAgentItem] =
     useState<AgentResponse | null>(null);
 
@@ -618,84 +691,115 @@ export default function Agents() {
     queryFn: fetchAgents,
   });
 
-  // Sort: builtin first, then by name
-  const sortedAgents = agents
-    ? [...agents].sort((a, b) => {
-        if (a.builtin !== b.builtin) return a.builtin ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      })
-    : [];
+  const sortedAgents = useMemo(
+    () =>
+      agents
+        ? [...agents].sort((a, b) => {
+            if (a.builtin !== b.builtin) return a.builtin ? -1 : 1;
+            return a.name.localeCompare(b.name);
+          })
+        : [],
+    [agents]
+  );
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Agents</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage agent definitions and per-agent provider/model overrides.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          New Agent
-        </Button>
-      </div>
+  // Auto-select first agent when list loads or selection becomes invalid
+  useEffect(() => {
+    if (
+      sortedAgents.length > 0 &&
+      !sortedAgents.some((a) => a.name === selectedName)
+    ) {
+      setSelectedName(sortedAgents[0]!.name);
+    }
+  }, [sortedAgents, selectedName]);
 
-      <Separator />
+  const selected = sortedAgents.find((a) => a.name === selectedName) ?? null;
 
-      {/* Content */}
-      {isLoading && <AgentsSkeleton />}
+  if (isLoading) {
+    return <AgentsSkeleton />;
+  }
 
-      {isError && (
+  if (isError) {
+    return (
+      <div className="p-6">
         <div className="rounded-lg border border-destructive/50 p-4 text-sm text-destructive">
           Failed to load agents: {(error as Error).message}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {agents && agents.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
-          <Bot className="h-10 w-10 text-muted-foreground mb-3" />
-          <p className="text-lg font-medium">No agents defined</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            Get started by creating your first custom agent.
-          </p>
-          <Button className="mt-4" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" />
-            New Agent
+  return (
+    <div className="flex flex-1 min-h-0">
+      {/* Left panel — agent list */}
+      <div className="w-72 shrink-0 overflow-y-auto border-r">
+        <div className="flex h-12 items-center justify-between border-b px-4">
+          <h1 className="text-sm font-semibold">Agents</h1>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="h-4 w-4 text-muted-foreground" />
           </Button>
         </div>
-      )}
 
-      {sortedAgents.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sortedAgents.map((agent) => (
-            <AgentCard
-              key={agent.name}
-              agent={agent}
-              onConfigure={() => setConfigureAgent(agent)}
-              onDelete={() => setDeleteAgentItem(agent)}
-            />
-          ))}
-        </div>
-      )}
+        {sortedAgents.length === 0 ? (
+          <div className="flex flex-col items-center justify-center px-4 py-12">
+            <Bot className="h-8 w-8 text-muted-foreground/40" />
+            <p className="mt-3 text-sm text-muted-foreground">No agents yet</p>
+            <Button
+              onClick={() => setCreateOpen(true)}
+              size="sm"
+              className="mt-3"
+            >
+              <Plus className="h-3 w-3" />
+              Create Agent
+            </Button>
+          </div>
+        ) : (
+          <div className="divide-y">
+            {sortedAgents.map((agent) => (
+              <AgentListItem
+                key={agent.name}
+                agent={agent}
+                isSelected={agent.name === selectedName}
+                onClick={() => setSelectedName(agent.name)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Right panel — agent detail */}
+      <div className="flex-1 min-w-0">
+        {selected ? (
+          <AgentDetail
+            key={selected.name}
+            agent={selected}
+            onDelete={() => setDeleteAgentItem(selected)}
+          />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+            <Bot className="h-10 w-10 text-muted-foreground/30" />
+            <p className="mt-3 text-sm">Select an agent to view details</p>
+            <Button
+              onClick={() => setCreateOpen(true)}
+              size="sm"
+              className="mt-3"
+            >
+              <Plus className="h-3 w-3" />
+              Create Agent
+            </Button>
+          </div>
+        )}
+      </div>
 
       {/* Dialogs */}
       {createOpen && (
         <CreateAgentDialog
           open={createOpen}
           onOpenChange={(open) => setCreateOpen(open)}
-        />
-      )}
-
-      {configureAgent && (
-        <ConfigureAgentDialog
-          key={configureAgent.name}
-          open={true}
-          onOpenChange={(open) => {
-            if (!open) setConfigureAgent(null);
-          }}
-          agent={configureAgent}
         />
       )}
 
