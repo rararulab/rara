@@ -28,6 +28,7 @@ pub(crate) struct FtsHit {
 ///
 /// All operations are best-effort — callers should fall back to brute-force
 /// search when FTS returns an error.
+#[derive(Debug, Clone)]
 pub(crate) struct TapeFts {
     pool: SqlitePool,
 }
