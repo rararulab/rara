@@ -133,6 +133,7 @@ mod anchors;
 mod context;
 mod error;
 mod fork_metadata;
+pub(crate) mod fts;
 pub mod knowledge;
 mod service;
 mod store;
