@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Binary entry point for the rara application — provides the `rara` CLI with subcommands for server, chat, gateway, symphony, and top (process monitoring).
+Binary entry point for the rara application — provides the `rara` CLI with subcommands for server, chat, gateway, and top (process monitoring).
 
 ## Architecture
 
 ### Key modules
 
-- `src/main.rs` — `Cli` struct with clap-derived subcommands: `server`, `chat`, `top`, `gateway`, `symphony`. Each subcommand loads `AppConfig`, initializes logging, and delegates to the appropriate crate.
+- `src/main.rs` — `Cli` struct with clap-derived subcommands: `server`, `chat`, `top`, `gateway`. Each subcommand loads `AppConfig`, initializes logging, and delegates to the appropriate crate.
 - `src/chat/` — Interactive CLI chat mode using `TerminalAdapter`.
 - `src/top/` — `top`-like process monitoring command.
 - `src/build_info.rs` — Compile-time version and author metadata.
@@ -20,7 +20,6 @@ Binary entry point for the rara application — provides the `rara` CLI with sub
 | `rara server` | Start the full application (HTTP + gRPC + kernel + channels) |
 | `rara chat` | Interactive terminal chat session |
 | `rara gateway` | Supervisor that spawns/monitors/restarts the agent server |
-| `rara symphony` | Standalone symphony orchestrator for issue-to-agent sync |
 | `rara top` | Process monitoring dashboard |
 
 ### Critical startup sequence
@@ -44,6 +43,6 @@ Binary entry point for the rara application — provides the `rara` CLI with sub
 
 ## Dependencies
 
-**Upstream:** `rara-app` (application orchestration), `rara-channels` (terminal adapter, telegram bot builder), `rara-symphony`, `rara-paths`, `common-telemetry`.
+**Upstream:** `rara-app` (application orchestration), `rara-channels` (terminal adapter, telegram bot builder), `rara-paths`, `common-telemetry`.
 
 **Downstream:** None (this is the final binary).

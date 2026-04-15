@@ -281,7 +281,6 @@ async fn real_model_soak_test_survives_long_tape_pressure() {
     config.grpc.server_address = "127.0.0.1:0".to_string();
     config.gateway = None;
     config.telegram = None;
-    config.symphony = None;
 
     let mut app = start_with_options(config, StartOptions::default())
         .await

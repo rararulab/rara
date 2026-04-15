@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bot, LayoutDashboard, Settings } from 'lucide-react';
+import { Activity, LayoutDashboard, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
@@ -129,15 +129,6 @@ export default function DashboardLayout() {
           >
             <Activity className="h-3.5 w-3.5" />
             Kernel
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => navigate('/symphony')}
-          >
-            <Bot className="h-3.5 w-3.5" />
-            Symphony
           </Button>
           <Button
             variant="ghost"

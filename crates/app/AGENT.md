@@ -48,7 +48,7 @@ Application orchestration crate that wires all subsystems together, boots the ke
 
 ## Dependencies
 
-**Upstream (depends on):** `rara-kernel`, `rara-server`, `rara-channels`, `rara-sessions`, `rara-agents`, `rara-soul`, `rara-symphony`, `rara-skills`, `rara-dock`, `rara-paths`, `rara-mcp`, `rara-model` (migrations), `yunara-store`, `rara-backend-admin`.
+**Upstream (depends on):** `rara-kernel`, `rara-server`, `rara-channels`, `rara-sessions`, `rara-agents`, `rara-soul`, `rara-skills`, `rara-dock`, `rara-paths`, `rara-mcp`, `rara-model` (migrations), `yunara-store`, `rara-backend-admin`.
 
 **Downstream (depended on by):** `crates/cmd` (the binary entry point).
 

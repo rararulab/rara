@@ -32,4 +32,4 @@ Git operations library — provides SSH key management, repository cloning, work
 
 **Upstream:** `git2`, `rara-paths` (key storage location).
 
-**Downstream:** `rara-symphony` (may use for worktree management alongside its own `git2` usage).
+**Downstream:** None currently.

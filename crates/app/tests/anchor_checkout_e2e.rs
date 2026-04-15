@@ -72,7 +72,6 @@ async fn anchor_checkout_roundtrip() {
     config.grpc.server_address = "127.0.0.1:0".to_string();
     config.gateway = None;
     config.telegram = None;
-    config.symphony = None;
 
     let mut app = start_with_options(config, StartOptions::default())
         .await

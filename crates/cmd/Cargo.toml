@@ -39,7 +39,6 @@ rara-channels = { workspace = true }
 rara-codex-oauth.workspace = true
 rara-kernel = { workspace = true }
 rara-paths.workspace = true
-rara-symphony.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

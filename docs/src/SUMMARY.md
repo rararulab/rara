@@ -11,7 +11,6 @@
 - [Agent Tools](agent-tools.md)
 - [Memory System](memory-system.md)
 - [Gateway Supervisor](gateway.md)
-- [Symphony Orchestrator](symphony.md)
 - [Scheduled & Background Tasks](scheduled-and-background-tasks.md)
 - [Proactive Agent (Agent Soul)](proactive-agent.md)
 - [Typst Resume System](typst-resume-system.md)

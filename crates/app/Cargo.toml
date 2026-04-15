@@ -53,7 +53,6 @@ rara-stt = { workspace = true }
 rara-tts = { workspace = true }
 rara-skills.workspace = true
 rara-soul.workspace = true
-rara-symphony.workspace = true
 rara-tool-macro.workspace = true
 fff-search = { workspace = true }
 fff-query-parser = { workspace = true }

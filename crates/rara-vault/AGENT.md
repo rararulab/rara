@@ -74,12 +74,10 @@ secret/rara/
 │   ├── llm          # { default_provider, providers: { ... } }
 │   ├── mita         # { heartbeat_interval }
 │   ├── knowledge    # { embedding_model, dimensions, ... }
-│   └── symphony     # { enabled, poll_interval, ... }
 ├── secrets/         # 敏感信息（严格 ACL）
 │   ├── telegram     # { bot_token }
 │   ├── llm          # { providers: { openrouter: { api_key } } }
 │   ├── composio     # { api_key, entity_id }
-│   └── symphony     # { linear_api_key }
 └── users/           # 用户身份
     └── ryan         # { role, platforms: [...] }
 ```

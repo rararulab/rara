@@ -54,7 +54,6 @@ var layerMap = map[string]int{
 
 	// Layer 1 — core primitives (depend only on layer 0)
 	"rara-soul":         1,
-	"rara-symphony":     1,
 	"rara-skills":       1,
 	"rara-vault":        1,
 	"rara-composio":     1,
