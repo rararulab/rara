@@ -72,6 +72,7 @@ tracing = { workspace = true }
 uuid.workspace = true
 walkdir = "2.5.0"
 yunara-store = { workspace = true }
+similar = "3.1.0"
 
 [dev-dependencies]
 common-telemetry.workspace = true

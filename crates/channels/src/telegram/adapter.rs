@@ -184,17 +184,19 @@ pub fn build_bot(token: &str, proxy: Option<&str>) -> Result<teloxide::Bot, anyh
 
 /// Single tool's progress state within a streaming turn.
 struct ToolProgress {
-    id:         String,
+    id:          String,
     /// Raw tool name from the LLM (e.g. "shell_execute", "read-file").
-    raw_name:   String,
-    name:       String,
-    activity:   String,
-    summary:    String,
-    started_at: Instant,
-    finished:   bool,
-    success:    bool,
-    duration:   Option<std::time::Duration>,
-    error:      Option<String>,
+    raw_name:    String,
+    name:        String,
+    activity:    String,
+    summary:     String,
+    started_at:  Instant,
+    finished:    bool,
+    success:     bool,
+    duration:    Option<std::time::Duration>,
+    error:       Option<String>,
+    /// Compact result hint extracted from `ToolCallEnd::result_preview`.
+    result_hint: Option<String>,
 }
 
 /// Status of a single plan step.
@@ -349,8 +351,13 @@ fn format_tool_line(t: &ToolProgress) -> String {
             .duration
             .map(|d| format!(" {}", format_duration_compact(d)))
             .unwrap_or_default();
+        let hint = t
+            .result_hint
+            .as_ref()
+            .map(|h| format!(" {h}"))
+            .unwrap_or_default();
         if t.success {
-            format!("\u{2705} {emoji} {verb}{summary_part}{dur}")
+            format!("\u{2705} {emoji} {verb}{summary_part}{hint}{dur}")
         } else {
             let err_suffix = t
                 .error
@@ -3229,6 +3236,7 @@ fn spawn_stream_forwarder(
                                 success: false,
                                 duration: None,
                                 error: None,
+                                result_hint: None,
                             });
 
                             // Send typing indicator before the first progress message.
@@ -3261,12 +3269,14 @@ fn spawn_stream_forwarder(
                                 progress_dirty = true;
                             }
                         }
-                        Ok(StreamEvent::ToolCallEnd { id, success, error, .. }) => {
+                        Ok(StreamEvent::ToolCallEnd { id, result_preview, success, error }) => {
                             if let Some(tp) = progress.tools.iter_mut().find(|t| t.id == id) {
                                 tp.finished = true;
                                 tp.success = success;
                                 tp.duration = Some(tp.started_at.elapsed());
                                 tp.error = error;
+                                tp.result_hint =
+                                    crate::tool_display::tool_result_hint(&tp.raw_name, &result_preview);
                             }
 
                             let text = progress.render_text();
@@ -4361,16 +4371,17 @@ mod render_progress_tests {
     /// something to display.
     fn finished_tool(name: &str) -> ToolProgress {
         ToolProgress {
-            id:         "tool-1".into(),
-            raw_name:   name.into(),
-            name:       name.into(),
-            activity:   name.into(),
-            summary:    String::new(),
-            started_at: Instant::now(),
-            finished:   true,
-            success:    true,
-            duration:   Some(std::time::Duration::from_millis(100)),
-            error:      None,
+            id:          "tool-1".into(),
+            raw_name:    name.into(),
+            name:        name.into(),
+            activity:    name.into(),
+            summary:     String::new(),
+            started_at:  Instant::now(),
+            finished:    true,
+            success:     true,
+            duration:    Some(std::time::Duration::from_millis(100)),
+            error:       None,
+            result_hint: None,
         }
     }
 
