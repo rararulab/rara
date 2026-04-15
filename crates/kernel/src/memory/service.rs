@@ -1795,4 +1795,89 @@ mod tests {
         assert!(text.contains("main system prompt"), "missing main prompt");
         assert!(text.contains("previous context"), "missing anchor context");
     }
+
+    // ---- FTS lifecycle integration tests ----
+
+    /// Create a [`TapeService`] with FTS enabled via an in-memory SQLite pool.
+    async fn temp_tape_service_with_fts(dir: &Path) -> TapeService {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        sqlx::query(
+            "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind \
+             UNINDEXED, entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 \
+             remove_diacritics 2')",
+        )
+        .execute(&pool)
+        .await
+        .expect("create fts table");
+        sqlx::query(
+            "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT \
+             NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create meta table");
+
+        let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
+        TapeService::with_fts(store, pool)
+    }
+
+    #[tokio::test]
+    async fn fts_reset_clears_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service_with_fts(tmp.path()).await;
+        let tape = "fts-reset-test";
+
+        // Append and index a message.
+        svc.append_message(tape, json!({"content": "unique-token-xyz"}), None)
+            .await
+            .unwrap();
+
+        // FTS search should find it (triggers backfill).
+        let hits = svc
+            .search(tape, "unique-token-xyz", 10, false)
+            .await
+            .unwrap();
+        assert!(
+            !hits.is_empty(),
+            "should find the message via brute-force or FTS"
+        );
+
+        // Reset the tape.
+        svc.reset(tape, false).await.unwrap();
+
+        // After reset, FTS index should be cleared — search returns nothing.
+        let hits = svc
+            .search(tape, "unique-token-xyz", 10, false)
+            .await
+            .unwrap();
+        assert!(hits.is_empty(), "FTS should be cleared after reset");
+    }
+
+    #[tokio::test]
+    async fn fts_delete_tape_clears_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service_with_fts(tmp.path()).await;
+        let tape = "fts-delete-test";
+
+        svc.append_message(tape, json!({"content": "delete-me-token"}), None)
+            .await
+            .unwrap();
+
+        // Trigger backfill via search.
+        let hits = svc
+            .search(tape, "delete-me-token", 10, false)
+            .await
+            .unwrap();
+        assert!(!hits.is_empty());
+
+        // Delete the tape.
+        svc.delete_tape(tape).await.unwrap();
+
+        // FTS index should be empty.
+        let fts = svc.fts.as_ref().expect("FTS should be Some");
+        let hwm = fts.last_indexed_id(tape).await.unwrap();
+        assert_eq!(hwm, 0, "HWM should be 0 after delete");
+    }
 }
