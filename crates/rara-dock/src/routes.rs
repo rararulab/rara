@@ -254,6 +254,7 @@ async fn ensure_dock_kernel_session(
     let binding = ChannelBinding {
         channel_type: rara_kernel::channel::types::ChannelType::Web,
         chat_id: dock_session_id.to_string(),
+        thread_id: None,
         session_key,
         created_at: now,
         updated_at: now,

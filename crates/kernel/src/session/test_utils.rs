@@ -27,7 +27,7 @@ use crate::channel::types::ChannelType;
 #[derive(Default)]
 pub struct InMemorySessionIndex {
     pub sessions: DashMap<String, SessionEntry>,
-    pub bindings: DashMap<(ChannelType, String), ChannelBinding>,
+    pub bindings: DashMap<(ChannelType, String, Option<String>), ChannelBinding>,
 }
 
 impl InMemorySessionIndex {
@@ -81,7 +81,11 @@ impl SessionIndex for InMemorySessionIndex {
 
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         self.bindings.insert(
-            (binding.channel_type, binding.chat_id.clone()),
+            (
+                binding.channel_type,
+                binding.chat_id.clone(),
+                binding.thread_id.clone(),
+            ),
             binding.clone(),
         );
         Ok(binding.clone())
@@ -91,10 +95,15 @@ impl SessionIndex for InMemorySessionIndex {
         &self,
         channel_type: ChannelType,
         chat_id: &str,
+        thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(self
             .bindings
-            .get(&(channel_type, chat_id.to_owned()))
+            .get(&(
+                channel_type,
+                chat_id.to_owned(),
+                thread_id.map(|s| s.to_owned()),
+            ))
             .map(|entry| entry.clone()))
     }
 

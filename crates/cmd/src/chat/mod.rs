@@ -576,6 +576,7 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
     let binding = ChannelBinding {
         channel_type: ChannelType::Cli,
         chat_id:      new_alias.clone(),
+        thread_id:    None,
         session_key:  created.key,
         created_at:   now,
         updated_at:   now,
@@ -618,7 +619,7 @@ async fn handle_list_sessions(
 
     // Resolve the current session's internal key for comparison.
     let current_internal_key = session_index
-        .get_channel_binding(ChannelType::Cli, current_session_key)
+        .get_channel_binding(ChannelType::Cli, current_session_key, None)
         .await
         .ok()
         .flatten()
@@ -691,6 +692,7 @@ async fn handle_switch_session(
     let binding = ChannelBinding {
         channel_type: ChannelType::Cli,
         chat_id:      new_alias.clone(),
+        thread_id:    None,
         session_key:  entry.key,
         created_at:   now,
         updated_at:   now,
@@ -734,7 +736,7 @@ async fn handle_rename_session(
 
     // Resolve the CLI alias to the internal SessionKey.
     let binding = match session_index
-        .get_channel_binding(ChannelType::Cli, session_key)
+        .get_channel_binding(ChannelType::Cli, session_key, None)
         .await
     {
         Ok(Some(b)) => b,
@@ -860,7 +862,7 @@ async fn get_or_create_cli_session(
     chat_id: &str,
 ) -> Result<SessionKey, Whatever> {
     if let Some(binding) = session_index
-        .get_channel_binding(ChannelType::Cli, chat_id)
+        .get_channel_binding(ChannelType::Cli, chat_id, None)
         .await
         .whatever_context("Failed to load CLI channel binding")?
     {
@@ -886,6 +888,7 @@ async fn get_or_create_cli_session(
     let binding = ChannelBinding {
         channel_type: ChannelType::Cli,
         chat_id:      chat_id.to_owned(),
+        thread_id:    None,
         session_key:  created.key.clone(),
         created_at:   now,
         updated_at:   now,
@@ -1159,7 +1162,7 @@ mod tests {
             .await
             .expect("second session");
         let binding = session_index
-            .get_channel_binding(ChannelType::Cli, "default")
+            .get_channel_binding(ChannelType::Cli, "default", None)
             .await
             .expect("binding query")
             .expect("binding");

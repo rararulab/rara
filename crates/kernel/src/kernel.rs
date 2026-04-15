@@ -1377,20 +1377,7 @@ impl Kernel {
                         return;
                     }
                 };
-                // Write a (channel_type, chat_id) → session_key binding so
-                // IOSubsystem can resolve future messages from this chat.
-                if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
-                    let binding = crate::session::ChannelBinding {
-                        channel_type: msg.source.channel_type,
-                        chat_id:      chat_id.to_string(),
-                        session_key:  session.key.clone(),
-                        created_at:   now,
-                        updated_at:   now,
-                    };
-                    if let Err(e) = self.io.session_index().bind_channel(&binding).await {
-                        warn!(error = %e, "failed to bind channel to new session");
-                    }
-                }
+                self.bind_channel_for_message(&msg, &session.key).await;
                 session.key
             }
         };
@@ -1626,18 +1613,7 @@ impl Kernel {
                         return;
                     }
                 };
-                if let Some(chat_id) = msg.source.platform_chat_id.as_deref() {
-                    let binding = crate::session::ChannelBinding {
-                        channel_type: msg.source.channel_type,
-                        chat_id:      chat_id.to_string(),
-                        session_key:  session.key.clone(),
-                        created_at:   now,
-                        updated_at:   now,
-                    };
-                    if let Err(e) = self.io.session_index().bind_channel(&binding).await {
-                        warn!(error = %e, "group: failed to bind channel to new session");
-                    }
-                }
+                self.bind_channel_for_message(&msg, &session.key).await;
                 session.key
             }
         };
@@ -1757,6 +1733,34 @@ impl Kernel {
 
     /// Handle a periodic Mita heartbeat.
     ///
+    /// Bind a channel (chat_id + optional thread_id) to a session key so
+    /// future messages from the same source resolve to the same session.
+    async fn bind_channel_for_message(
+        &self,
+        msg: &crate::io::InboundMessage,
+        session_key: &crate::session::SessionKey,
+    ) {
+        let Some(chat_id) = msg.source.platform_chat_id.as_deref() else {
+            return;
+        };
+        let thread_id = msg
+            .reply_context
+            .as_ref()
+            .and_then(|rc| rc.thread_id.clone());
+        let now = chrono::Utc::now();
+        let binding = crate::session::ChannelBinding {
+            channel_type: msg.source.channel_type,
+            chat_id: chat_id.to_string(),
+            thread_id,
+            session_key: session_key.clone(),
+            created_at: now,
+            updated_at: now,
+        };
+        if let Err(e) = self.io.session_index().bind_channel(&binding).await {
+            warn!(error = %e, "failed to bind channel to session");
+        }
+    }
+
     /// Ensures the long-lived Mita session exists (spawning it if necessary)
     /// and delivers a heartbeat message to it.
     async fn handle_mita_heartbeat(&self) {

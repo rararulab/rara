@@ -72,10 +72,10 @@ impl CommandHandler for TapeCommandHandler {
 
 impl TapeCommandHandler {
     async fn handle_anchors(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
         let session_key = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => binding.session_key,
@@ -121,10 +121,10 @@ impl TapeCommandHandler {
         args: &str,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
         let session_key = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => binding.session_key,
@@ -147,6 +147,7 @@ impl TapeCommandHandler {
                 } else {
                     Some(anchor_name)
                 },
+                thread_id.as_deref(),
             )
             .await
         {

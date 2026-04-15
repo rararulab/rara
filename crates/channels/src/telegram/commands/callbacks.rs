@@ -51,6 +51,7 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
     async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
         let session_key = &context.data["switch:".len()..];
         let chat_id = super::extract_chat_id(&context.metadata)?;
+        let thread_id = super::extract_thread_id(&context.metadata);
 
         // Fetch session — also serves as an existence check.
         let detail = match self.client.get_session(session_key).await {
@@ -64,7 +65,7 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
 
         match self
             .client
-            .bind_channel("telegram", &chat_id, session_key)
+            .bind_channel("telegram", &chat_id, session_key, thread_id.as_deref())
             .await
         {
             Ok(_) => {

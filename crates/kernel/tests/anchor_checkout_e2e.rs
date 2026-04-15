@@ -82,6 +82,7 @@ impl SessionIndex for TestSessionIndex {
         &self,
         _channel_type: rara_kernel::channel::types::ChannelType,
         _chat_id: &str,
+        _thread_id: Option<&str>,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(None)
     }

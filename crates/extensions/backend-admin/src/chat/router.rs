@@ -401,6 +401,7 @@ async fn bind_channel(
             parse_channel_type(&req.channel_type)?,
             req.chat_id,
             parse_session_key(&req.session_key)?,
+            None,
         )
         .await?;
     Ok(Json(binding))
@@ -426,7 +427,7 @@ async fn get_channel_binding(
     Path((channel_type, chat_id)): Path<(String, String)>,
 ) -> Result<Json<Option<ChannelBinding>>, ChatError> {
     let binding = service
-        .get_channel_session(parse_channel_type(&channel_type)?, &chat_id)
+        .get_channel_session(parse_channel_type(&channel_type)?, &chat_id, None)
         .await?;
     Ok(Json(binding))
 }

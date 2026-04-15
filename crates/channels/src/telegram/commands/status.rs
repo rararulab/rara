@@ -73,12 +73,12 @@ impl CommandHandler for StatusCommandHandler {
         _command: &CommandInfo,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         // Resolve the active session for this channel.
         let session_key_str = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => binding.session_key,

@@ -27,6 +27,7 @@ use rara_kernel::{
     handle::KernelHandle,
     session::Signal,
 };
+use teloxide::prelude::Requester;
 
 use super::client::BotServiceClient;
 
@@ -36,10 +37,15 @@ const SESSIONS_LIST_LIMIT: u32 = 10;
 /// Handles session management commands.
 pub struct SessionCommandHandler {
     client: Arc<dyn BotServiceClient>,
+    /// Telegram bot handle for direct API calls (e.g. deleting forum topics).
+    /// `None` when running outside a Telegram context.
+    bot:    Option<teloxide::Bot>,
 }
 
 impl SessionCommandHandler {
-    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
+    pub fn new(client: Arc<dyn BotServiceClient>, bot: Option<teloxide::Bot>) -> Self {
+        Self { client, bot }
+    }
 }
 
 #[async_trait]
@@ -93,11 +99,14 @@ impl CommandHandler for SessionCommandHandler {
 impl SessionCommandHandler {
     /// `/new` — create a new session and bind the channel to it.
     async fn handle_new(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         match self.client.create_session(None).await {
             Ok(key) => {
-                let _ = self.client.bind_channel(channel_type, &chat_id, &key).await;
+                let _ = self
+                    .client
+                    .bind_channel(channel_type, &chat_id, &key, thread_id.as_deref())
+                    .await;
                 Ok(CommandResult::Text("New chat session started.".to_owned()))
             }
             Err(e) => Ok(CommandResult::Text(format!(
@@ -107,12 +116,16 @@ impl SessionCommandHandler {
     }
 
     /// `/clear` — clear all messages in the current session.
+    ///
+    /// When executed inside a forum topic (`thread_id` is present), this also
+    /// deletes the session + channel binding and removes the Telegram topic
+    /// itself so the user gets a clean slate without leftover empty topics.
     async fn handle_clear(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => {
@@ -121,7 +134,18 @@ impl SessionCommandHandler {
                     .clear_session_messages(&binding.session_key)
                     .await
                 {
-                    Ok(()) => Ok(CommandResult::Text("Session history cleared.".to_owned())),
+                    Ok(()) => {
+                        // Inside a forum topic: fully tear down the session and
+                        // delete the topic so there is no leftover empty thread.
+                        if let Some(ref tid) = thread_id {
+                            let _ = self.client.delete_session(&binding.session_key).await;
+                            self.try_delete_forum_topic(&chat_id, tid).await;
+                            // The topic is gone — any reply would fail, so return
+                            // None to signal the adapter not to send a response.
+                            return Ok(CommandResult::None);
+                        }
+                        Ok(CommandResult::Text("Session history cleared.".to_owned()))
+                    }
                     Err(e) => Ok(CommandResult::Text(format!("Failed to clear: {e}"))),
                 }
             }
@@ -132,6 +156,26 @@ impl SessionCommandHandler {
         }
     }
 
+    /// Best-effort deletion of a Telegram forum topic.
+    ///
+    /// Silently ignores errors (missing permissions, invalid IDs) because the
+    /// session data is already cleaned up at this point — failing to remove the
+    /// UI topic is cosmetic, not critical.
+    async fn try_delete_forum_topic(&self, chat_id: &str, thread_id: &str) {
+        let Some(ref bot) = self.bot else { return };
+        let Ok(chat_id_i64) = chat_id.parse::<i64>() else {
+            return;
+        };
+        let Ok(tid_i32) = thread_id.parse::<i32>() else {
+            return;
+        };
+
+        let thread = teloxide::types::ThreadId(teloxide::types::MessageId(tid_i32));
+        let _ = bot
+            .delete_forum_topic(teloxide::types::ChatId(chat_id_i64), thread)
+            .await;
+    }
+
     /// `/sessions` — list sessions as a pure inline keyboard.
     ///
     /// Active session shows a checkmark and triggers `detail:` callback;
@@ -140,11 +184,11 @@ impl SessionCommandHandler {
         &self,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         let active_key = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => Some(binding.session_key),
@@ -216,11 +260,11 @@ impl SessionCommandHandler {
 
     /// `/usage` — show details about the current session.
     async fn handle_usage(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         let session_key = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => binding.session_key,
@@ -281,11 +325,11 @@ impl SessionCommandHandler {
         args: &str,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         let session_key = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => binding.session_key,
@@ -372,11 +416,11 @@ impl CommandHandler for StopCommandHandler {
         _command: &CommandInfo,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let (channel_type, chat_id) = extract_channel_info(context);
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
 
         let session_key = match self
             .client
-            .get_channel_session(channel_type, &chat_id)
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
             .await
         {
             Ok(Some(binding)) => binding.session_key,
@@ -407,7 +451,9 @@ impl CommandHandler for StopCommandHandler {
 /// For Telegram contexts the chat_id comes from the `telegram_chat_id`
 /// metadata entry.  For CLI contexts the chat_id comes from `cli_chat_id`.
 /// Falls back to `"unknown"` / `"0"` when the expected key is missing.
-pub(crate) fn extract_channel_info(context: &CommandContext) -> (&'static str, String) {
+pub(crate) fn extract_channel_info(
+    context: &CommandContext,
+) -> (&'static str, String, Option<String>) {
     use rara_kernel::channel::types::ChannelType;
 
     match context.channel_type {
@@ -417,7 +463,7 @@ pub(crate) fn extract_channel_info(context: &CommandContext) -> (&'static str, S
                 .get("cli_chat_id")
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_else(|| "0".to_owned());
-            ("cli", chat_id)
+            ("cli", chat_id, None)
         }
         ChannelType::Telegram => {
             let chat_id = context
@@ -429,7 +475,12 @@ pub(crate) fn extract_channel_info(context: &CommandContext) -> (&'static str, S
                         .or_else(|| v.as_str().map(String::from))
                 })
                 .unwrap_or_else(|| "0".to_owned());
-            ("telegram", chat_id)
+            let thread_id = context.metadata.get("telegram_thread_id").and_then(|v| {
+                v.as_i64()
+                    .map(|n| n.to_string())
+                    .or_else(|| v.as_str().map(String::from))
+            });
+            ("telegram", chat_id, thread_id)
         }
         _ => {
             let chat_id = context
@@ -437,7 +488,7 @@ pub(crate) fn extract_channel_info(context: &CommandContext) -> (&'static str, S
                 .get("chat_id")
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_else(|| "0".to_owned());
-            ("unknown", chat_id)
+            ("unknown", chat_id, None)
         }
     }
 }

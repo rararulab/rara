@@ -268,12 +268,14 @@ impl InboundMessage {
         match self.source.channel_type {
             ChannelType::Telegram => {
                 let chat_id = self.source.platform_chat_id.as_ref()?.parse::<i64>().ok()?;
+                let thread_id = self
+                    .reply_context
+                    .as_ref()
+                    .and_then(|rc| rc.thread_id.as_deref())
+                    .and_then(|t| t.parse::<i64>().ok());
                 Some(Endpoint {
                     channel_type: ChannelType::Telegram,
-                    address:      EndpointAddress::Telegram {
-                        chat_id,
-                        thread_id: None,
-                    },
+                    address:      EndpointAddress::Telegram { chat_id, thread_id },
                 })
             }
             ChannelType::Wechat => {
@@ -1553,11 +1555,15 @@ impl IOSubsystem {
         span.record("user_id", tracing::field::display(&user_id.0));
 
         // 3. Look up channel binding (pure lookup, no creation)
+        let thread_id = raw
+            .reply_context
+            .as_ref()
+            .and_then(|rc| rc.thread_id.as_deref());
         let session_key = match raw.platform_chat_id.as_deref() {
             Some(chat_id) => {
                 match self
                     .session_index
-                    .get_channel_binding(raw.channel_type, chat_id)
+                    .get_channel_binding(raw.channel_type, chat_id, thread_id)
                     .await
                 {
                     Ok(Some(binding)) => {
@@ -1684,11 +1690,16 @@ impl IOSubsystem {
             ChannelType::Telegram => {
                 let chat_id_str = msg.source.platform_chat_id.as_ref();
                 let chat_id = chat_id_str.and_then(|s| s.parse::<i64>().ok());
+                let thread_id = msg
+                    .reply_context
+                    .as_ref()
+                    .and_then(|rc| rc.thread_id.as_deref())
+                    .and_then(|t| t.parse::<i64>().ok());
                 chat_id.map(|id| Endpoint {
                     channel_type: ChannelType::Telegram,
                     address:      EndpointAddress::Telegram {
-                        chat_id:   id,
-                        thread_id: None,
+                        chat_id: id,
+                        thread_id,
                     },
                 })
             }
