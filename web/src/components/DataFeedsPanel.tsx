@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   dataFeedsApi,
@@ -165,21 +165,7 @@ const TIME_FILTERS = [
   { value: "30d", label: "Last 30 days" },
 ] as const;
 
-function sinceFromFilter(filter: string): string {
-  const now = new Date();
-  switch (filter) {
-    case "1h":
-      return new Date(now.getTime() - 3600_000).toISOString();
-    case "24h":
-      return new Date(now.getTime() - 86400_000).toISOString();
-    case "7d":
-      return new Date(now.getTime() - 7 * 86400_000).toISOString();
-    case "30d":
-      return new Date(now.getTime() - 30 * 86400_000).toISOString();
-    default:
-      return new Date(now.getTime() - 86400_000).toISOString();
-  }
-}
+
 
 // ---------------------------------------------------------------------------
 // Empty auth/transport helpers
@@ -758,7 +744,7 @@ function EventHistoryView({
   const [offset, setOffset] = useState(0);
   const limit = 50;
 
-  const since = useMemo(() => sinceFromFilter(timeFilter), [timeFilter]);
+  const since = timeFilter;
 
   const eventsQuery = useQuery({
     queryKey: ["data-feed-events", feed.id, since, offset],
