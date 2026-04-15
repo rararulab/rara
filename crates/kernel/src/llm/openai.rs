@@ -1892,14 +1892,16 @@ struct WireImageUrl<'a> {
 
 #[derive(Serialize)]
 struct WireMessage<'a> {
-    role:         &'static str,
+    role:              &'static str,
     /// Per OpenAI spec, assistant messages with tool_calls may have `content:
     /// null`.
-    content:      Option<WireContent<'a>>,
+    content:           Option<WireContent<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls:   Option<Vec<WireToolCallRef<'a>>>,
+    tool_calls:        Option<Vec<WireToolCallRef<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<&'a str>,
+    tool_call_id:      Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -2078,6 +2080,7 @@ impl<'a> WireMessage<'a> {
             content,
             tool_calls,
             tool_call_id: msg.tool_call_id.as_deref(),
+            reasoning_content: msg.reasoning_content.as_deref(),
         }
     }
 }

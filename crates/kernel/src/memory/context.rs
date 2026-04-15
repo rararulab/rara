@@ -119,7 +119,14 @@ fn append_tool_call_entry(messages: &mut Vec<Message>, entry: &TapEntry) -> Vec<
     }
 
     if !tool_calls.is_empty() {
-        messages.push(Message::assistant_with_tool_calls("", tool_calls));
+        let reasoning = entry
+            .payload
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .map(String::from);
+        messages.push(Message::assistant_with_tool_calls_and_reasoning(
+            "", tool_calls, reasoning,
+        ));
     }
 
     pending
