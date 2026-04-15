@@ -24,6 +24,7 @@
 pub mod codex;
 pub mod driver;
 pub mod image;
+pub mod kimi;
 pub mod openai;
 pub mod registry;
 pub mod scripted;

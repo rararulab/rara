@@ -3,7 +3,7 @@
 //! This crate reads OAuth tokens persisted by
 //! [kimi-cli](https://github.com/nicepkg/kimi-cli) at
 //! `~/.kimi/credentials/kimi-code.json` and provides a
-//! [`KimiCredentialResolver`] that injects the required
+//! `KimiCredentialResolver` that injects the required
 //! `Authorization` + `X-Msh-*` headers for the Kimi Code platform.
 //!
 //! Users authenticate via `kimi auth login` in kimi-cli; rara

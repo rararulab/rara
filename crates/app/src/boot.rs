@@ -350,20 +350,24 @@ async fn build_driver_registry(
         .collect();
 
     for &name in &provider_names {
-        let base_url_key = format!("llm.providers.{name}.base_url");
-        let no_proxy = all_settings
-            .get(&base_url_key)
-            .map_or(false, |url| rara_kernel::llm::is_local_url(url));
-        registry.register_driver(
-            name,
-            Arc::new(OpenAiDriver::from_settings(
-                settings.clone(),
+        // kimi-code uses a dedicated OAuth driver — skip OpenAiDriver registration.
+        if name != "kimi-code" {
+            let base_url_key = format!("llm.providers.{name}.base_url");
+            let no_proxy = all_settings
+                .get(&base_url_key)
+                .map_or(false, |url| rara_kernel::llm::is_local_url(url));
+            registry.register_driver(
                 name,
-                OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-                no_proxy,
-            )),
-        );
+                Arc::new(OpenAiDriver::from_settings(
+                    settings.clone(),
+                    name,
+                    OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+                    no_proxy,
+                )),
+            );
+        }
 
+        // Model config applies to ALL providers including kimi-code.
         // Read per-provider default_model and fallback_models
         let model_key = format!("llm.providers.{name}.default_model");
         if let Some(default_model) = all_settings
@@ -440,6 +444,24 @@ async fn build_driver_registry(
         }
         Ok(None) => {} // No tokens configured — skip
         Err(e) => tracing::warn!("failed to load codex OAuth tokens: {e}"),
+    }
+
+    // -- kimi-code (Kimi Code platform via shared kimi-cli OAuth) ---------------
+
+    match rara_kimi_oauth::load_tokens().await {
+        Ok(Some(_)) => {
+            registry.register_driver(
+                "kimi-code",
+                Arc::new(rara_kernel::llm::kimi::KimiCodeDriver::new(Arc::new(
+                    rara_kimi_oauth::KimiCredentialResolver,
+                ))),
+            );
+            info!("kimi-code driver registered (OAuth tokens found)");
+        }
+        Ok(None) => {
+            tracing::debug!("kimi-code: no OAuth tokens found, skipping");
+        }
+        Err(e) => tracing::warn!("failed to load kimi OAuth tokens: {e}"),
     }
 
     info!(
