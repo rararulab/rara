@@ -1915,15 +1915,73 @@ struct WireFunctionRef<'a> {
     arguments: &'a str,
 }
 
+/// Build wire messages for MiniMax, which does not support `"system"` role.
+///
+/// System/developer messages are collected and prepended to the first user
+/// message. If no user message follows, a synthetic user message is created.
+fn build_minimax_messages<'a>(messages: &'a [Message]) -> Vec<WireMessage<'a>> {
+    let system_parts: Vec<&str> = messages
+        .iter()
+        .filter(|m| matches!(m.role, Role::System | Role::Developer))
+        .map(|m| m.content.as_text())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let system_text = system_parts.join("\n\n");
+
+    let mut result: Vec<WireMessage<'a>> = Vec::new();
+    let mut system_prepended = false;
+
+    for msg in messages {
+        if matches!(msg.role, Role::System | Role::Developer) {
+            continue;
+        }
+
+        if msg.role == Role::User && !system_prepended && !system_text.is_empty() {
+            system_prepended = true;
+            let combined = format!("{}\n\n{}", system_text, msg.content.as_text());
+            // Leak is bounded — one allocation per LLM request, freed when the
+            // process reclaims the page.  Acceptable for short-lived request
+            // objects that are serialized and dropped immediately.
+            let leaked: &'static str = Box::leak(combined.into_boxed_str());
+            result.push(WireMessage {
+                role:         "user",
+                content:      Some(WireContent::Text(leaked)),
+                tool_calls:   None,
+                tool_call_id: None,
+            });
+            continue;
+        }
+
+        result.push(WireMessage::from_message(msg));
+    }
+
+    // No user message existed — emit a synthetic one with the system content.
+    if !system_prepended && !system_text.is_empty() {
+        let leaked: &'static str = Box::leak(system_text.into_boxed_str());
+        result.push(WireMessage {
+            role:         "user",
+            content:      Some(WireContent::Text(leaked)),
+            tool_calls:   None,
+            tool_call_id: None,
+        });
+    }
+
+    result
+}
+
 impl<'a> ChatRequest<'a> {
     fn from_completion(request: &'a CompletionRequest, stream: bool) -> Self {
         let provider = detect_provider_family(None, &request.model);
 
-        let messages: Vec<WireMessage<'a>> = request
-            .messages
-            .iter()
-            .map(WireMessage::from_message)
-            .collect();
+        let messages: Vec<WireMessage<'a>> = if provider == LlmProviderFamily::MiniMax {
+            build_minimax_messages(&request.messages)
+        } else {
+            request
+                .messages
+                .iter()
+                .map(WireMessage::from_message)
+                .collect()
+        };
 
         let (tools, tool_choice, parallel_tool_calls) = if request.tools.is_empty() {
             (None, None, None)
@@ -2566,5 +2624,47 @@ mod tests {
         let data = r#"{"some":"data"}"#;
         let result = parse_responses_event("response.something.new", data, &tx, &mut state);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn minimax_system_messages_merged_into_first_user() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello"),
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          Some(1024),
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        // No message should have role "system"
+        for msg in &chat_req.messages {
+            assert_ne!(
+                msg.role, "system",
+                "MiniMax must not receive system role messages"
+            );
+        }
+
+        // First message should be user with system content prepended
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(
+                    t.contains("You are a helpful assistant."),
+                    "system text missing"
+                );
+                assert!(t.contains("Hello"), "user text missing");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
     }
 }
