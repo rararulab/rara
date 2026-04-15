@@ -56,8 +56,7 @@ var layerMap = map[string]int{
 	"rara-soul":         1,
 	"rara-symphony":     1,
 	"rara-skills":       1,
-	"rara-vault":        1,
-	"rara-composio":     1,
+"rara-composio":     1,
 	"rara-keyring-store": 1,
 	"rara-git":          1,
 

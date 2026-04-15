@@ -136,6 +136,7 @@ pub fn rara_tool_names() -> Vec<rara_kernel::tool::ToolName> {
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
     pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub settings_svc:           Arc<rara_backend_admin::settings::SettingsSvc>,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
     pub skill_registry:         rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
@@ -197,7 +198,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(SendFileTool::new()),
         Arc::new(SetAvatarTool::new(deps.settings.clone())),
-        Arc::new(SettingsTool::new(deps.settings.clone())),
+        Arc::new(SettingsTool::new(deps.settings_svc.clone())),
         // Skill tools
         Arc::new(ListSkillsTool::new(deps.skill_registry.clone())),
         Arc::new(CreateSkillTool::new(deps.skill_registry.clone())),

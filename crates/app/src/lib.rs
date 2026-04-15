@@ -321,10 +321,9 @@ pub async fn start_with_options(
         .whatever_context("Failed to initialize infrastructure services")?;
     let pool = db_store.pool().clone();
 
-    let settings_svc =
-        rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
-            .await
-            .whatever_context("Failed to initialize runtime settings")?;
+    let settings_svc = rara_backend_admin::settings::SettingsSvc::load(pool.clone())
+        .await
+        .whatever_context("Failed to initialize runtime settings")?;
 
     let settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider> =
         Arc::new(settings_svc.clone());
@@ -363,6 +362,7 @@ pub async fn start_with_options(
     let rara = crate::boot::boot(
         pool.clone(),
         settings_provider.clone(),
+        Arc::new(settings_svc.clone()),
         &config.users,
         browser_manager,
     )

@@ -132,7 +132,6 @@ members = [
     "crates/extensions/rara-git",
     "crates/soul",
     "crates/symphony",
-    "crates/rara-vault",
     "crates/rara-dock",
     "crates/rara-acp",
     "crates/drivers/browser",
@@ -270,7 +269,6 @@ rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
 rara-soul = { path = "crates/soul" }
 rara-symphony = { path = "crates/symphony" }
-rara-vault = { path = "crates/rara-vault" }
 
 # fff (Fast File Finder) — Cargo git dependencies (not vendored)
 fff-search = { git = "https://github.com/dmtrKovalenko/fff.nvim", features = ["zlob"] }

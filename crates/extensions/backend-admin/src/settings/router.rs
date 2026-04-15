@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Flat KV settings HTTP API.
+//! MVCC-versioned settings HTTP API.
 //!
-//! | Method | Path                       | Description            |
-//! |--------|----------------------------|------------------------|
-//! | GET    | `/api/v1/settings`         | list all               |
-//! | PATCH  | `/api/v1/settings`         | batch update           |
-//! | GET    | `/api/v1/settings/{*key}`  | get one                |
-//! | PUT    | `/api/v1/settings/{*key}`  | set one                |
-//! | DELETE | `/api/v1/settings/{*key}`  | delete one             |
+//! | Method | Path                                    | Description            |
+//! |--------|-----------------------------------------|------------------------|
+//! | GET    | `/api/v1/settings`                      | list all               |
+//! | PATCH  | `/api/v1/settings`                      | batch update           |
+//! | GET    | `/api/v1/settings/{*key}`               | get one                |
+//! | PUT    | `/api/v1/settings/{*key}`               | set one                |
+//! | DELETE | `/api/v1/settings/{*key}`               | delete one             |
+//! | GET    | `/api/v1/settings/versions`             | list recent versions   |
+//! | GET    | `/api/v1/settings/versions/current`     | current version number |
+//! | GET    | `/api/v1/settings/versions/{n}`         | snapshot at version N  |
+//! | POST   | `/api/v1/settings/versions/{n}/rollback`| rollback to version N  |
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -28,19 +32,45 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
 };
 use rara_domain_shared::settings::SettingsProvider;
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::settings::SettingsSvc;
+use crate::settings::{SettingsSvc, service::VersionEntry};
+
+/// Default number of version entries returned by the list endpoint.
+const DEFAULT_VERSION_LIMIT: i64 = 100;
+
+// -- typed response structs for version endpoints --
+
+/// Response for the current version endpoint.
+#[derive(serde::Serialize)]
+struct VersionResponse {
+    version: i64,
+}
+
+/// Response for the snapshot endpoint.
+#[derive(serde::Serialize)]
+struct SnapshotResponse {
+    version:  i64,
+    settings: HashMap<String, String>,
+}
+
+/// Response for the rollback endpoint.
+#[derive(serde::Serialize)]
+struct RollbackResponse {
+    rolled_back_to: i64,
+    new_version:    i64,
+}
 
 // -- state wrapper --
 
 type SharedProvider = Arc<dyn SettingsProvider>;
 
 pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
-    let provider: SharedProvider = Arc::new(svc);
+    let svc = Arc::new(svc);
+    let provider: SharedProvider = svc.clone();
 
     let settings_router = axum::Router::new()
         .route(
@@ -53,7 +83,19 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
         )
         .with_state(provider);
 
-    OpenApiRouter::from(settings_router)
+    // Version routes use Arc<SettingsSvc> directly — these methods live on the
+    // concrete type, not the SettingsProvider trait. Nested under a fixed prefix
+    // so they cannot collide with the `{*key}` wildcard.
+    let version_router = axum::Router::new()
+        .route("/", get(list_versions))
+        .route("/current", get(get_current_version))
+        .route("/{n}", get(snapshot_at_version))
+        .route("/{n}/rollback", post(rollback_to_version))
+        .with_state(svc);
+
+    let combined = settings_router.nest("/api/v1/settings/versions", version_router);
+
+    OpenApiRouter::from(combined)
 }
 
 // -- request / response types -----------------------------------------------
@@ -114,4 +156,72 @@ async fn batch_update_settings(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// -- version handlers
+// -----------------------------------------------------------
+
+/// List recent version log entries.
+async fn list_versions(
+    State(svc): State<Arc<SettingsSvc>>,
+) -> Result<Json<Vec<VersionEntry>>, StatusCode> {
+    svc.list_versions(DEFAULT_VERSION_LIMIT)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Return the current global version number.
+async fn get_current_version(
+    State(svc): State<Arc<SettingsSvc>>,
+) -> Result<Json<VersionResponse>, StatusCode> {
+    svc.current_version()
+        .await
+        .map(|v| Json(VersionResponse { version: v }))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Return a point-in-time snapshot of all settings at version `n`.
+///
+/// Returns 404 if the requested version does not exist.
+async fn snapshot_at_version(
+    State(svc): State<Arc<SettingsSvc>>,
+    Path(version): Path<i64>,
+) -> Result<Json<SnapshotResponse>, (StatusCode, String)> {
+    svc.snapshot(version)
+        .await
+        .map(|settings| Json(SnapshotResponse { version, settings }))
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("does not exist") {
+                (StatusCode::NOT_FOUND, msg)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+        })
+}
+
+/// Rollback settings to the state at version `n` (creates a new version).
+///
+/// Returns 404 if the target version does not exist.
+async fn rollback_to_version(
+    State(svc): State<Arc<SettingsSvc>>,
+    Path(version): Path<i64>,
+) -> Result<Json<RollbackResponse>, (StatusCode, String)> {
+    svc.rollback_to(version)
+        .await
+        .map(|new_version| {
+            Json(RollbackResponse {
+                rolled_back_to: version,
+                new_version,
+            })
+        })
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("does not exist") {
+                (StatusCode::NOT_FOUND, msg)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+        })
 }

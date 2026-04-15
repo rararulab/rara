@@ -12,38 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runtime-changeable settings backed by flat KV store.
+//! Runtime-changeable settings backed by the MVCC `settings_version` table.
 //!
-//! Each setting is stored as a separate row in `kv_table` with a
-//! `settings.` prefix (e.g. `settings.llm.provider`).
+//! Each mutation appends a row with a monotonically increasing global version.
+//! `value = NULL` represents a tombstone (deleted key). Current state is the
+//! snapshot at the maximum version.
 
 use std::{collections::HashMap, sync::Arc};
 
+use rara_domain_shared::settings::SettingsProvider;
 use snafu::Whatever;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tokio::sync::watch;
-use yunara_store::KVStore;
+use tracing::warn;
 
-/// Internal prefix applied to all settings keys in the KV store.
+/// Internal prefix applied to all settings keys in the version table.
 const PREFIX: &str = "settings.";
 
-/// Service that manages flat KV settings with PostgreSQL persistence.
+/// Settings service backed entirely by the MVCC `settings_version` table.
 ///
 /// Implements
-/// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
+/// [`SettingsProvider`].
 #[derive(Clone)]
 pub struct SettingsSvc {
-    kv:   KVStore,
     pool: SqlitePool,
     tx:   Arc<watch::Sender<()>>,
 }
 
 impl SettingsSvc {
-    /// Load settings from the flat KV store.
-    pub async fn load(kv: KVStore, pool: SqlitePool) -> Result<Self, Whatever> {
+    /// Load settings service with the given database pool.
+    pub async fn load(pool: SqlitePool) -> Result<Self, Whatever> {
         let (tx, _rx) = watch::channel(());
         Ok(Self {
-            kv,
             pool,
             tx: Arc::new(tx),
         })
@@ -51,76 +51,388 @@ impl SettingsSvc {
 
     /// Notify subscribers after a mutation.
     fn notify(&self) { let _ = self.tx.send(()); }
+
+    /// Bump version counter and append entries in a single transaction.
+    ///
+    /// Returns the new version number. If `entries` is empty, returns the
+    /// current version without writing anything.
+    async fn versioned_write(&self, entries: Vec<(String, Option<String>)>) -> anyhow::Result<i64> {
+        if entries.is_empty() {
+            return self.current_version().await;
+        }
+        let mut tx = self.pool.begin().await?;
+        let (ver,): (i64,) = sqlx::query_as(
+            "UPDATE settings_version_counter SET current = current + 1 WHERE id = 1 RETURNING \
+             current",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let mut builder =
+            QueryBuilder::<Sqlite>::new("INSERT INTO settings_version (version, key, value) ");
+        builder.push_values(&entries, |mut row, (key, value)| {
+            row.push_bind(ver).push_bind(key).push_bind(value);
+        });
+        builder.build().execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(ver)
+    }
+
+    /// Read the current global version number.
+    pub async fn current_version(&self) -> anyhow::Result<i64> {
+        let (ver,): (i64,) =
+            sqlx::query_as("SELECT current FROM settings_version_counter WHERE id = 1")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(ver)
+    }
+
+    /// Snapshot all settings at a given version (MVCC point-in-time read).
+    ///
+    /// Fails if `version` is outside the valid range `[0, current]`.
+    pub async fn snapshot(&self, version: i64) -> anyhow::Result<HashMap<String, String>> {
+        let current_ver = self.current_version().await?;
+        anyhow::ensure!(
+            version >= 0 && version <= current_ver,
+            "version {version} does not exist (current: {current_ver})"
+        );
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT sv.key, sv.value
+             FROM settings_version sv
+             INNER JOIN (
+                 SELECT key, MAX(version) AS max_ver
+                 FROM settings_version
+                 WHERE version <= ?1
+                 GROUP BY key
+             ) latest ON sv.key = latest.key AND sv.version = latest.max_ver
+             WHERE sv.value IS NOT NULL",
+        )
+        .bind(version)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let stripped = k.strip_prefix(PREFIX)?;
+                let plain: String = serde_json::from_str(&v?).unwrap_or_default();
+                Some((stripped.to_owned(), plain))
+            })
+            .collect())
+    }
+
+    /// List version log entries (limited to the most recent `limit` versions).
+    pub async fn list_versions(&self, limit: i64) -> anyhow::Result<Vec<VersionEntry>> {
+        let rows: Vec<VersionEntry> = sqlx::query_as(
+            "SELECT sv.version, sv.key, sv.value, sv.changed_at
+             FROM settings_version sv
+             WHERE sv.version IN (
+                 SELECT DISTINCT version FROM settings_version
+                 ORDER BY version DESC
+                 LIMIT ?1
+             )
+             ORDER BY sv.version DESC, sv.key ASC",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Strip the internal `settings.` prefix and decode JSON-encoded values
+        // so consumers see clean keys and plain strings.
+        Ok(rows
+            .into_iter()
+            .map(|mut e| {
+                if let Some(stripped) = e.key.strip_prefix(PREFIX) {
+                    e.key = stripped.to_owned();
+                }
+                if let Some(ref raw) = e.value {
+                    if let Ok(decoded) = serde_json::from_str::<String>(raw) {
+                        e.value = Some(decoded);
+                    }
+                }
+                e
+            })
+            .collect())
+    }
+
+    /// Rollback to a specific version (forward operation — creates a new
+    /// version).
+    ///
+    /// Fails if `target_version` is outside the valid range `[0, current]`.
+    pub async fn rollback_to(&self, target_version: i64) -> anyhow::Result<i64> {
+        let current_ver = self.current_version().await?;
+        anyhow::ensure!(
+            target_version >= 0 && target_version <= current_ver,
+            "target version {target_version} does not exist (current: {current_ver})"
+        );
+
+        let target_snap = self.snapshot(target_version).await?;
+        let current = self.list().await;
+
+        let mut entries: Vec<(String, Option<String>)> = Vec::new();
+        for (k, v) in &target_snap {
+            if current.get(k) != Some(v) {
+                let prefixed = format!("{PREFIX}{k}");
+                let json_val = serde_json::to_string(v).expect("String is always valid JSON");
+                entries.push((prefixed, Some(json_val)));
+            }
+        }
+        for k in current.keys() {
+            if !target_snap.contains_key(k.as_str()) {
+                let prefixed = format!("{PREFIX}{k}");
+                entries.push((prefixed, None));
+            }
+        }
+
+        if entries.is_empty() {
+            return Ok(current_ver);
+        }
+
+        let new_ver = self.versioned_write(entries).await?;
+        self.notify();
+        Ok(new_ver)
+    }
+}
+
+/// A single entry in the version log.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct VersionEntry {
+    /// The version number this entry belongs to.
+    pub version:    i64,
+    /// The settings key (prefix-stripped, e.g. `llm.provider`).
+    pub key:        String,
+    /// The value, or `None` for tombstones.
+    pub value:      Option<String>,
+    /// When this entry was created.
+    pub changed_at: String,
 }
 
 #[async_trait::async_trait]
 impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
     async fn get(&self, key: &str) -> Option<String> {
         let prefixed = format!("{PREFIX}{key}");
-        self.kv.get::<String>(&prefixed).await.ok().flatten()
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT value FROM settings_version
+             WHERE key = ?1
+             ORDER BY version DESC LIMIT 1",
+        )
+        .bind(&prefixed)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()?;
+
+        row.and_then(|(v,)| {
+            let raw = v?; // None = tombstone — treat as absent
+            serde_json::from_str(&raw).ok()
+        })
     }
 
     async fn set(&self, key: &str, value: &str) -> anyhow::Result<()> {
         let prefixed = format!("{PREFIX}{key}");
-        self.kv
-            .set(&prefixed, &value.to_owned())
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let json_val = serde_json::to_string(&value)?;
+        self.versioned_write(vec![(prefixed, Some(json_val))])
+            .await?;
         self.notify();
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> anyhow::Result<()> {
         let prefixed = format!("{PREFIX}{key}");
-        self.kv
-            .remove(&prefixed)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.versioned_write(vec![(prefixed, None)]).await?;
         self.notify();
         Ok(())
     }
 
     async fn list(&self) -> HashMap<String, String> {
-        // Query all rows with the settings prefix.
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, value FROM kv_table WHERE key LIKE ?1")
-                .bind(format!("{PREFIX}%"))
-                .fetch_all(&self.pool)
-                .await
-                .unwrap_or_default();
-
-        rows.into_iter()
-            .filter_map(|(k, v)| {
-                let stripped = k.strip_prefix(PREFIX)?;
-                // Values are JSON-encoded strings in the KV store, so we
-                // need to deserialize the outer JSON quotes.
-                let plain: String = serde_json::from_str(&v).unwrap_or(v);
-                Some((stripped.to_owned(), plain))
-            })
-            .collect()
+        match self.current_version().await {
+            Ok(ver) => self.snapshot(ver).await.unwrap_or_default(),
+            Err(e) => {
+                warn!("failed to read current settings version: {e}");
+                HashMap::new()
+            }
+        }
     }
 
     async fn batch_update(&self, patches: HashMap<String, Option<String>>) -> anyhow::Result<()> {
-        for (key, value) in &patches {
-            let prefixed = format!("{PREFIX}{key}");
-            match value {
-                Some(v) => {
-                    self.kv
-                        .set(&prefixed, &v.to_owned())
-                        .await
-                        .map_err(|e| anyhow::anyhow!("{e}"))?;
-                }
-                None => {
-                    self.kv
-                        .remove(&prefixed)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("{e}"))?;
-                }
-            }
+        if patches.is_empty() {
+            return Ok(());
         }
+        let entries: Vec<(String, Option<String>)> = patches
+            .into_iter()
+            .map(|(key, value)| {
+                let prefixed = format!("{PREFIX}{key}");
+                let json_val =
+                    value.map(|v| serde_json::to_string(&v).expect("String is always valid JSON"));
+                (prefixed, json_val)
+            })
+            .collect();
+        self.versioned_write(entries).await?;
         self.notify();
         Ok(())
     }
 
     fn subscribe(&self) -> watch::Receiver<()> { self.tx.subscribe() }
+}
+
+#[cfg(test)]
+mod tests {
+    use rara_domain_shared::settings::SettingsProvider;
+
+    use super::*;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../rara-model/migrations/20260304000000_init.up.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../rara-model/migrations/20260412000000_settings_version.up.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn set_bumps_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("llm.provider", "ollama").await.unwrap();
+        assert_eq!(svc.current_version().await.unwrap(), 1);
+
+        svc.set("llm.provider", "openrouter").await.unwrap();
+        assert_eq!(svc.current_version().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_returns_latest_value() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("key", "v1").await.unwrap();
+        svc.set("key", "v2").await.unwrap();
+        assert_eq!(svc.get("key").await.unwrap(), "v2");
+    }
+
+    #[tokio::test]
+    async fn snapshot_at_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "1").await.unwrap(); // v1
+        svc.set("b", "2").await.unwrap(); // v2
+        svc.set("a", "3").await.unwrap(); // v3
+
+        let snap = svc.snapshot(2).await.unwrap();
+        assert_eq!(snap.get("a").unwrap(), "1");
+        assert_eq!(snap.get("b").unwrap(), "2");
+
+        let snap = svc.snapshot(3).await.unwrap();
+        assert_eq!(snap.get("a").unwrap(), "3");
+    }
+
+    #[tokio::test]
+    async fn delete_creates_tombstone() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("x", "val").await.unwrap(); // v1
+        svc.delete("x").await.unwrap(); // v2 tombstone
+
+        assert!(svc.get("x").await.is_none());
+
+        let snap = svc.snapshot(1).await.unwrap();
+        assert_eq!(snap.get("x").unwrap(), "val");
+
+        let snap = svc.snapshot(2).await.unwrap();
+        assert!(!snap.contains_key("x"));
+    }
+
+    #[tokio::test]
+    async fn batch_update_single_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        let mut patches = HashMap::new();
+        patches.insert("a".to_owned(), Some("1".to_owned()));
+        patches.insert("b".to_owned(), Some("2".to_owned()));
+        svc.batch_update(patches).await.unwrap();
+
+        assert_eq!(svc.current_version().await.unwrap(), 1);
+        assert_eq!(svc.get("a").await.unwrap(), "1");
+        assert_eq!(svc.get("b").await.unwrap(), "2");
+    }
+
+    #[tokio::test]
+    async fn list_returns_current_snapshot() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "1").await.unwrap();
+        svc.set("b", "2").await.unwrap();
+
+        let all = svc.list().await;
+        assert_eq!(all.get("a").unwrap(), "1");
+        assert_eq!(all.get("b").unwrap(), "2");
+    }
+
+    #[tokio::test]
+    async fn rollback_creates_new_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "original").await.unwrap(); // v1
+        svc.set("a", "changed").await.unwrap(); // v2
+
+        let new_ver = svc.rollback_to(1).await.unwrap();
+        assert_eq!(new_ver, 3); // rollback creates v3
+        assert_eq!(svc.get("a").await.unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn snapshot_rejects_future_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "val").await.unwrap(); // v1
+
+        let err = svc.snapshot(999).await.unwrap_err();
+        assert!(
+            err.to_string().contains("does not exist"),
+            "expected 'does not exist' error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_versions_decodes_json_values() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("llm.provider", "openrouter").await.unwrap();
+        let entries = svc.list_versions(10).await.unwrap();
+        let entry = entries.first().expect("should have one entry");
+        // Value should be the plain string, not JSON-encoded.
+        assert_eq!(entry.value.as_deref(), Some("openrouter"));
+    }
+
+    #[tokio::test]
+    async fn rollback_rejects_invalid_version() {
+        let pool = test_pool().await;
+        let svc = SettingsSvc::load(pool).await.unwrap();
+
+        svc.set("a", "val").await.unwrap(); // v1
+
+        let err = svc.rollback_to(999).await.unwrap_err();
+        assert!(
+            err.to_string().contains("does not exist"),
+            "expected 'does not exist' error, got: {err}"
+        );
+        // Negative version also rejected.
+        assert!(svc.rollback_to(-1).await.is_err());
+    }
 }
