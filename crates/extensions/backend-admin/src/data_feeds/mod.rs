@@ -15,10 +15,12 @@
 //! Data Feed management HTTP API.
 //!
 //! Provides CRUD endpoints for data feed configurations and paginated
-//! event history queries.
+//! event history queries. All mutations synchronise both the database
+//! and the in-memory
+//! [`DataFeedRegistry`](rara_kernel::data_feed::DataFeedRegistry).
 
 pub mod router;
 pub mod service;
 
-pub use router::data_feed_routes;
+pub use router::{DataFeedRouterState, data_feed_routes, start_feed_task};
 pub use service::DataFeedSvc;

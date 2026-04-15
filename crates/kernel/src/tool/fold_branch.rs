@@ -249,7 +249,8 @@ impl ToolExecute for FoldBranchTool {
         Ok(serde_json::json!({
             "task_id": child_key.to_string(),
             "status": "completed",
-            "result": compressed
+            "result": compressed,
+            "note": "This result is authoritative. Do NOT re-read the same files locally."
         }))
     }
 }

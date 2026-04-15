@@ -57,7 +57,8 @@ pub struct FindFilesResult {
 #[derive(ToolDef)]
 #[tool(
     name = "find-files",
-    description = "Find files by glob pattern, sorted by modification time; respects .gitignore.",
+    description = "Find files by glob pattern, sorted by modification time; respects .gitignore. \
+                   Note: brace expansion {a,b} is NOT supported — use separate calls or *.ext.",
     read_only,
     concurrency_safe
 )]

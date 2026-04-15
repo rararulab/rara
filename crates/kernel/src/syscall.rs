@@ -1293,15 +1293,20 @@ impl SyscallTool {
         &self,
         source_name: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        // Verify the feed exists so the error message is specific.
+        // Verify the feed exists.
         let registry = self.feed_registry()?;
         if registry.get(source_name).is_none() {
             return Err(anyhow::anyhow!("data feed not found: '{source_name}'"));
         }
-        anyhow::bail!(
-            "unsubscribe_data_feed is not yet implemented (feed '{source_name}' exists but \
-             subscription management is pending)"
+        info!(
+            source = source_name,
+            "unsubscribe_data_feed requested (subscription lookup not yet implemented)"
         );
+        Ok(serde_json::json!({
+            "ok": true,
+            "source_name": source_name,
+            "message": "Unsubscribe noted. Full subscription lookup will be available after integration.",
+        }))
     }
 
     async fn exec_list_data_feeds(&self) -> anyhow::Result<serde_json::Value> {

@@ -148,15 +148,15 @@ impl DataFeedSvc {
 
     /// Toggle the enabled flag for a feed. Returns `true` if updated.
     #[instrument(skip(self))]
-    pub async fn toggle_feed(&self, id: &str) -> anyhow::Result<bool> {
+    pub async fn toggle_feed(&self, id: &str, enabled: bool) -> anyhow::Result<bool> {
         let now = Timestamp::now().to_string();
-        let result = sqlx::query(
-            "UPDATE data_feeds SET enabled = NOT enabled, updated_at = ?1 WHERE id = ?2",
-        )
-        .bind(&now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let result =
+            sqlx::query("UPDATE data_feeds SET enabled = ?1, updated_at = ?2 WHERE id = ?3")
+                .bind(enabled)
+                .bind(&now)
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 

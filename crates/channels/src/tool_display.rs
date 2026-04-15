@@ -267,10 +267,13 @@ pub fn tool_arguments_summary(tool_name: &str, arguments: &serde_json::Value) ->
         "shell_execute" => arguments.get("command").and_then(|v| v.as_str()),
         "web_search" => arguments.get("query").and_then(|v| v.as_str()),
         "web_fetch" => arguments.get("url").and_then(|v| v.as_str()),
-        "read-file" | "write-file" => arguments.get("path").and_then(|v| v.as_str()),
+        "read-file" | "write-file" | "edit-file" => arguments
+            .get("file_path")
+            .or_else(|| arguments.get("path"))
+            .and_then(|v| v.as_str()),
         _ => {
             // Try common field names, then fall back to the first string value.
-            ["query", "command", "input", "path", "url"]
+            ["query", "command", "input", "file_path", "path", "url"]
                 .iter()
                 .find_map(|key| arguments.get(*key).and_then(|v| v.as_str()))
                 .or_else(|| first_string_value(arguments))
@@ -309,7 +312,10 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
         "bash" => arguments.get("command").and_then(|v| v.as_str()),
         "web_search" => arguments.get("query").and_then(|v| v.as_str()),
         "web_fetch" | "http-fetch" => arguments.get("url").and_then(|v| v.as_str()),
-        "read-file" | "write-file" | "edit-file" => arguments.get("path").and_then(|v| v.as_str()),
+        "read-file" | "write-file" | "edit-file" | "multi-edit" => arguments
+            .get("file_path")
+            .or_else(|| arguments.get("path"))
+            .and_then(|v| v.as_str()),
         "find-files" | "list-directory" => arguments.get("path").and_then(|v| v.as_str()),
         "grep" => arguments.get("pattern").and_then(|v| v.as_str()),
         "memory_search" => arguments.get("query").and_then(|v| v.as_str()),
@@ -328,10 +334,19 @@ pub fn tool_display_info(tool_name: &str, arguments: &serde_json::Value) -> (Str
         "read-tape" => arguments.get("session_id").and_then(|v| v.as_str()),
         "create-skill" | "delete-skill" => arguments.get("name").and_then(|v| v.as_str()),
         "settings" => arguments.get("action").and_then(|v| v.as_str()),
-        _ => ["query", "command", "input", "path", "url", "name", "key"]
-            .iter()
-            .find_map(|key| arguments.get(*key).and_then(|v| v.as_str()))
-            .or_else(|| first_string_value(arguments)),
+        _ => [
+            "query",
+            "command",
+            "input",
+            "file_path",
+            "path",
+            "url",
+            "name",
+            "key",
+        ]
+        .iter()
+        .find_map(|key| arguments.get(*key).and_then(|v| v.as_str()))
+        .or_else(|| first_string_value(arguments)),
     };
 
     let summary = raw.map(|s| first_line(s).to_owned()).unwrap_or_default();
@@ -375,6 +390,31 @@ fn first_string_value(value: &serde_json::Value) -> Option<&str> {
     value
         .as_object()
         .and_then(|obj| obj.values().find_map(|v| v.as_str()))
+}
+
+/// Extract a compact result hint from a tool's `result_preview` JSON.
+///
+/// Returns `None` when no useful hint can be produced.  Currently supports:
+/// - `edit-file` / `multi-edit`: `"(+3 -1)"` line-change stats
+/// - `write-file`: `"(wrote N lines)"`
+pub fn tool_result_hint(tool_name: &str, result_preview: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(result_preview).ok()?;
+    match tool_name {
+        "edit-file" | "multi-edit" => {
+            let added = v.get("lines_added").and_then(|n| n.as_u64()).unwrap_or(0);
+            let removed = v.get("lines_removed").and_then(|n| n.as_u64()).unwrap_or(0);
+            if added > 0 || removed > 0 {
+                Some(format!("(+{added} -{removed})"))
+            } else {
+                None
+            }
+        }
+        "write-file" => {
+            let lines = v.get("lines_written").and_then(|n| n.as_u64())?;
+            Some(format!("({lines} lines)"))
+        }
+        _ => None,
+    }
 }
 
 /// Take only the first line of `s`, truncating to `max_chars` with an ellipsis

@@ -243,8 +243,6 @@ impl Kernel {
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
         trace_service: crate::trace::TraceService,
         skill_prompt_provider: crate::handle::SkillPromptProvider,
-        feed_registry: Option<Arc<crate::data_feed::DataFeedRegistry>>,
-        feed_store: Option<crate::data_feed::FeedStoreRef>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
         // Clamp default_tool_timeout so it never exceeds the global wave timeout.
@@ -326,14 +324,28 @@ impl Kernel {
             trace_service,
             skill_prompt_provider,
             lifecycle_hooks: crate::lifecycle::LifecycleHookRegistry::new(),
-            feed_registry,
-            feed_store,
+            feed_registry: None,
+            feed_store: None,
         }
     }
 
     /// Set the lifecycle hook registry (call before `start()`).
     pub fn set_lifecycle_hooks(&mut self, hooks: crate::lifecycle::LifecycleHookRegistry) {
         self.lifecycle_hooks = hooks;
+    }
+
+    /// Wire the data feed subsystem (call before `start()`).
+    ///
+    /// Sets the in-memory feed registry and the persistent feed event store.
+    /// When set, the `KernelHandle` exposes feed operations to syscalls and
+    /// admin routes.
+    pub fn set_feed_subsystem(
+        &mut self,
+        registry: Arc<crate::data_feed::DataFeedRegistry>,
+        store: crate::data_feed::FeedStoreRef,
+    ) {
+        self.feed_registry = Some(registry);
+        self.feed_store = Some(store);
     }
 
     /// List detailed runtime statistics for all processes.

@@ -24,6 +24,12 @@
 //! | PUT    | `/api/v1/data-feeds/{id}/toggle`             | enable/disable feed |
 //! | GET    | `/api/v1/data-feeds/{id}/events`             | query feed events   |
 //! | GET    | `/api/v1/data-feeds/{id}/events/{event_id}` | get single event    |
+//!
+//! All mutations synchronise both the database (via [`DataFeedSvc`]) and the
+//! in-memory [`DataFeedRegistry`]. When a polling-type feed is created and
+//! enabled, a background task is spawned automatically.
+
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -32,15 +38,31 @@ use axum::{
     routing::{get, put},
 };
 use jiff::{Timestamp, ToSpan};
-use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+use rara_kernel::data_feed::{
+    DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, polling::PollingSource,
+};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::service::DataFeedSvc;
 use crate::kernel::problem::ProblemDetails;
 
+/// Shared state for data feed routes.
+///
+/// Contains both the persistence service and the in-memory registry so that
+/// mutations can synchronise both layers.
+#[derive(Clone)]
+pub struct DataFeedRouterState {
+    /// Persistence service for feed configs and events.
+    pub svc:      DataFeedSvc,
+    /// In-memory registry (also holds cancellation tokens for running tasks).
+    pub registry: Arc<DataFeedRegistry>,
+}
+
 /// Build the `/api/v1/data-feeds/...` router.
-pub fn data_feed_routes(svc: DataFeedSvc) -> Router {
+pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
     Router::new()
         .route("/api/v1/data-feeds", get(list_feeds).post(create_feed))
         .route(
@@ -50,7 +72,7 @@ pub fn data_feed_routes(svc: DataFeedSvc) -> Router {
         .route("/api/v1/data-feeds/{id}/toggle", put(toggle_feed))
         .route("/api/v1/data-feeds/{id}/events", get(query_events))
         .route("/api/v1/data-feeds/{id}/events/{event_id}", get(get_event))
-        .with_state(svc)
+        .with_state(state)
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +99,12 @@ struct UpdateFeedRequest {
     auth:      Option<serde_json::Value>,
 }
 
+/// Request body for toggling feed enabled state.
+#[derive(Debug, Deserialize)]
+struct ToggleFeedRequest {
+    enabled: bool,
+}
+
 /// Query parameters for event listing.
 #[derive(Debug, Deserialize)]
 struct EventQueryParams {
@@ -100,20 +128,21 @@ struct EventListResponse {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /api/v1/data-feeds` — list all feeds.
+/// `GET /api/v1/data-feeds` — list all feeds with runtime status.
 async fn list_feeds(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
 ) -> Result<Json<Vec<DataFeedConfig>>, ProblemDetails> {
-    let feeds = svc
+    let feeds = state
+        .svc
         .list_feeds()
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
     Ok(Json(feeds))
 }
 
-/// `POST /api/v1/data-feeds` — create a new feed.
+/// `POST /api/v1/data-feeds` — create a new feed, sync registry, start task.
 async fn create_feed(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Json(body): Json<CreateFeedRequest>,
 ) -> Result<(StatusCode, Json<DataFeedConfig>), ProblemDetails> {
     let auth = body
@@ -136,19 +165,34 @@ async fn create_feed(
         .updated_at(now)
         .build();
 
-    svc.create_feed(&config)
+    // 1. Persist to database.
+    state
+        .svc
+        .create_feed(&config)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
 
+    // 2. Sync to in-memory registry.
+    if let Err(e) = state.registry.register(config.clone()) {
+        warn!(name = %config.name, error = %e, "registry sync failed on create");
+    }
+
+    // 3. Start feed task if enabled.
+    if config.enabled {
+        start_feed_task(&config, &state.registry);
+    }
+
+    info!(name = %config.name, "data feed created via admin API");
     Ok((StatusCode::CREATED, Json(config)))
 }
 
 /// `GET /api/v1/data-feeds/{id}` — get a single feed.
 async fn get_feed(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let feed = svc
+    let feed = state
+        .svc
         .get_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?
@@ -160,12 +204,12 @@ async fn get_feed(
 
 /// `PUT /api/v1/data-feeds/{id}` — update an existing feed.
 async fn update_feed(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateFeedRequest>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    // Fetch existing to preserve status / timestamps / enabled.
-    let existing = svc
+    let existing = state
+        .svc
         .get_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?
@@ -181,7 +225,7 @@ async fn update_feed(
 
     let updated = DataFeedConfig::builder()
         .id(id)
-        .name(body.name)
+        .name(body.name.clone())
         .feed_type(body.feed_type)
         .tags(body.tags)
         .transport(body.transport)
@@ -193,19 +237,45 @@ async fn update_feed(
         .updated_at(Timestamp::now())
         .build();
 
-    svc.update_feed(&updated)
+    // 1. Persist to database.
+    state
+        .svc
+        .update_feed(&updated)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+
+    // 2. Sync registry: remove old entry (cancels running task), re-register.
+    let _ = state.registry.remove(&existing.name);
+    if let Err(e) = state.registry.register(updated.clone()) {
+        warn!(name = %body.name, error = %e, "registry sync failed on update");
+    }
+
+    // 3. Restart feed task if enabled.
+    if updated.enabled {
+        start_feed_task(&updated, &state.registry);
+    }
 
     Ok(Json(updated))
 }
 
-/// `DELETE /api/v1/data-feeds/{id}` — delete a feed.
+/// `DELETE /api/v1/data-feeds/{id}` — stop task, remove from registry and DB.
 async fn delete_feed(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ProblemDetails> {
-    let deleted = svc
+    // Look up the feed name for registry removal.
+    let feed = state.svc.get_feed(&id).await.ok().flatten();
+
+    // 1. Remove from registry (cancels running task if any).
+    if let Some(ref f) = feed {
+        if let Err(e) = state.registry.remove(&f.name) {
+            warn!(name = %f.name, error = %e, "feed not found in registry during delete");
+        }
+    }
+
+    // 2. Delete from database.
+    let deleted = state
+        .svc
         .delete_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
@@ -222,11 +292,13 @@ async fn delete_feed(
 
 /// `PUT /api/v1/data-feeds/{id}/toggle` — enable or disable a feed.
 async fn toggle_feed(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
+    Json(body): Json<ToggleFeedRequest>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let toggled = svc
-        .toggle_feed(&id)
+    let toggled = state
+        .svc
+        .toggle_feed(&id, body.enabled)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
 
@@ -237,8 +309,9 @@ async fn toggle_feed(
         ));
     }
 
-    // Return the updated config.
-    let feed = svc
+    // Fetch updated config.
+    let feed = state
+        .svc
         .get_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?
@@ -246,17 +319,28 @@ async fn toggle_feed(
             ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
         })?;
 
+    // Sync registry: remove (cancels running task), re-register with new state.
+    let _ = state.registry.remove(&feed.name);
+    if let Err(e) = state.registry.register(feed.clone()) {
+        warn!(name = %feed.name, error = %e, "registry sync failed on toggle");
+    }
+
+    // Start task if now enabled, stop already handled by remove above.
+    if body.enabled {
+        start_feed_task(&feed, &state.registry);
+    }
+
     Ok(Json(feed))
 }
 
 /// `GET /api/v1/data-feeds/{id}/events` — query events for a feed.
 async fn query_events(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
     Query(params): Query<EventQueryParams>,
 ) -> Result<Json<EventListResponse>, ProblemDetails> {
-    // Resolve the feed to get its source_name.
-    let feed = svc
+    let feed = state
+        .svc
         .get_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?
@@ -274,7 +358,8 @@ async fn query_events(
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let page = svc
+    let page = state
+        .svc
         .query_events(&feed.name, since, limit, offset)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?;
@@ -288,11 +373,11 @@ async fn query_events(
 
 /// `GET /api/v1/data-feeds/{id}/events/{event_id}` — get a single event.
 async fn get_event(
-    State(svc): State<DataFeedSvc>,
+    State(state): State<DataFeedRouterState>,
     Path((id, event_id)): Path<(String, String)>,
 ) -> Result<Json<rara_kernel::data_feed::FeedEvent>, ProblemDetails> {
-    // Resolve feed name first.
-    let feed = svc
+    let feed = state
+        .svc
         .get_feed(&id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?
@@ -300,7 +385,8 @@ async fn get_event(
             ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
         })?;
 
-    let event = svc
+    let event = state
+        .svc
         .get_event(&feed.name, &event_id)
         .await
         .map_err(|e| ProblemDetails::internal(e.to_string()))?
@@ -309,6 +395,55 @@ async fn get_event(
         })?;
 
     Ok(Json(event))
+}
+
+// ---------------------------------------------------------------------------
+// Feed task lifecycle
+// ---------------------------------------------------------------------------
+
+/// Start a feed source task if the config type supports active operation.
+///
+/// Polling feeds spawn a background tokio task. Webhook feeds are passive
+/// (handled by the webhook axum route). WebSocket feeds are not yet
+/// implemented.
+pub fn start_feed_task(config: &DataFeedConfig, registry: &DataFeedRegistry) {
+    match config.feed_type {
+        FeedType::Polling => {
+            let source = match PollingSource::from_config(config) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        feed = %config.name, error = %e,
+                        "failed to create polling source from config"
+                    );
+                    return;
+                }
+            };
+
+            let cancel = CancellationToken::new();
+            registry.set_running(config.name.clone(), cancel.clone());
+
+            let event_tx = registry.event_tx();
+            let name = config.name.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = source.run(event_tx, cancel).await {
+                    warn!(feed = %name, error = %e, "feed task exited with error");
+                }
+                info!(feed = %name, "polling feed task stopped");
+            });
+        }
+        FeedType::Webhook => {
+            // Webhook is passive — handled by the webhook axum route.
+        }
+        FeedType::WebSocket => {
+            // TODO: Phase 2 — WebSocket client feed.
+            warn!(
+                feed = %config.name,
+                "websocket feed type not yet implemented, skipping task start"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
