@@ -2206,20 +2206,38 @@ async fn handle_dashboard_callback(
     };
     let trace_id = parts.get(4).filter(|t| **t != "-").copied();
 
-    // Scope sessions to this chat's bound session + its children.
-    let chat_id_str = cid.to_string();
+    // Scope sessions to the originating session (from trace_id) + its
+    // children.  This anchors the dashboard to the session that produced
+    // the message, not the chat's *current* binding — so `/new` or
+    // `/checkout` won't make old Dashboard buttons show the wrong session.
     let all_sessions = handle.list_processes();
-    let scoped = if let Ok(Some(binding)) = handle
-        .session_index()
-        .get_channel_binding(
-            rara_kernel::channel::types::ChannelType::Telegram,
-            &chat_id_str,
-        )
-        .await
-    {
-        super::dashboard::scoped_sessions(&all_sessions, binding.session_key)
-    } else {
-        vec![]
+    let root_key = match trace_id {
+        Some(tid) => handle
+            .trace_service()
+            .get_session_id(tid)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| rara_kernel::session::SessionKey::try_from_raw(&s).ok()),
+        None => {
+            // Fallback for dashboards opened without a trace_id (e.g.
+            // future `/dashboard` command): use the chat's current binding.
+            let chat_id_str = cid.to_string();
+            handle
+                .session_index()
+                .get_channel_binding(
+                    rara_kernel::channel::types::ChannelType::Telegram,
+                    &chat_id_str,
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|b| b.session_key)
+        }
+    };
+    let scoped = match root_key {
+        Some(key) => super::dashboard::scoped_sessions(&all_sessions, key),
+        None => vec![],
     };
 
     let text = super::dashboard::render_dashboard(tab, &scoped);
