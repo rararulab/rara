@@ -2951,6 +2951,73 @@ async fn handle_update(
         }
     }
 
+    // ── Reply Keyboard button interception ──
+    // When the user taps a Reply Keyboard button, Telegram sends the
+    // button label as a plain text message. Intercept these before they
+    // reach the kernel so they don't get ingested as conversation turns.
+    if let Some(text) = msg.text() {
+        if super::reply_keyboard::is_new_session_button(text) {
+            // Create a fresh session and bind this chat to it, mirroring
+            // the `/new` command logic.
+            let now = chrono::Utc::now();
+            let new_key = rara_kernel::session::SessionKey::new();
+            let entry = rara_kernel::session::SessionEntry {
+                key:           new_key,
+                title:         None,
+                model:         None,
+                system_prompt: None,
+                message_count: 0,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
+            };
+            let session_index = handle.session_index();
+            match session_index.create_session(&entry).await {
+                Ok(_) => {
+                    let thread_str = tg_thread_id.map(|t| t.to_string());
+                    let binding = rara_kernel::session::ChannelBinding {
+                        channel_type: ChannelType::Telegram,
+                        chat_id:      chat_id.to_string(),
+                        thread_id:    thread_str,
+                        session_key:  new_key,
+                        created_at:   now,
+                        updated_at:   now,
+                    };
+                    let _ = session_index.bind_channel(&binding).await;
+                    // Send confirmation with a fresh Reply Keyboard (reset
+                    // token counters to zero for the new session).
+                    let kb = super::reply_keyboard::build_main_keyboard(0, None, "");
+                    let req = with_thread_id!(
+                        bot.send_message(ChatId(chat_id), "\u{1f195} New session started.")
+                            .reply_markup(kb),
+                        tg_thread_id
+                    );
+                    let _ = req.await;
+                }
+                Err(e) => {
+                    warn!(error = %e, "reply keyboard: failed to create new session");
+                    let req = with_thread_id!(
+                        bot.send_message(
+                            ChatId(chat_id),
+                            format!("Failed to create session: {e}"),
+                        ),
+                        tg_thread_id
+                    );
+                    let _ = req.await;
+                }
+            }
+            return;
+        }
+        // Context and model buttons are informational — tapping them
+        // sends their label text but there is nothing to act on.
+        if super::reply_keyboard::is_context_button(text)
+            || super::reply_keyboard::is_model_button(text)
+        {
+            return;
+        }
+    }
+
     // Convert to RawPlatformMessage.
     let username_guard = bot_username.read().await;
     let username_ref = username_guard.as_deref().unwrap_or("");
@@ -3867,9 +3934,20 @@ fn spawn_stream_forwarder(
                                 let mid = if let Some(mid) = progress.message_id {
                                     mid
                                 } else {
+                                    // Attach Reply Keyboard with updated session
+                                    // status (tokens, model). The keyboard is
+                                    // persistent — Telegram keeps it visible until
+                                    // a new ReplyMarkup replaces it.
+                                    let ctx_limit = super::pinned_status::context_window_for_model(&trace.model);
+                                    let reply_kb = super::reply_keyboard::build_main_keyboard(
+                                        trace.input_tokens,
+                                        ctx_limit,
+                                        &trace.model,
+                                    );
                                     let req = with_thread_id!(bot
                                         .send_message(ChatId(chat_id), &compact)
-                                        .parse_mode(ParseMode::Html), thread_id);
+                                        .parse_mode(ParseMode::Html)
+                                        .reply_markup(reply_kb), thread_id);
                                     match req.await
                                     {
                                         Ok(msg) => msg.id,
