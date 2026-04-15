@@ -115,48 +115,56 @@ pub struct ToolCallRequest {
 /// A single message in a conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role:         Role,
-    pub content:      MessageContent,
+    pub role:              Role,
+    pub content:           MessageContent,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tool_calls:   Vec<ToolCallRequest>,
+    pub tool_calls:        Vec<ToolCallRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+    pub tool_call_id:      Option<String>,
+    /// Reasoning/thinking content from the LLM (e.g. Kimi, DeepSeek).
+    /// Persisted so it can be sent back on subsequent turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 impl Message {
     pub fn system(text: impl Into<String>) -> Self {
         Self {
-            role:         Role::System,
-            content:      MessageContent::Text(text.into()),
-            tool_calls:   Vec::new(),
-            tool_call_id: None,
+            role:              Role::System,
+            content:           MessageContent::Text(text.into()),
+            tool_calls:        Vec::new(),
+            tool_call_id:      None,
+            reasoning_content: None,
         }
     }
 
     pub fn user(text: impl Into<String>) -> Self {
         Self {
-            role:         Role::User,
-            content:      MessageContent::Text(text.into()),
-            tool_calls:   Vec::new(),
-            tool_call_id: None,
+            role:              Role::User,
+            content:           MessageContent::Text(text.into()),
+            tool_calls:        Vec::new(),
+            tool_call_id:      None,
+            reasoning_content: None,
         }
     }
 
     pub fn user_multimodal(blocks: Vec<ContentBlock>) -> Self {
         Self {
-            role:         Role::User,
-            content:      MessageContent::Multimodal(blocks),
-            tool_calls:   Vec::new(),
-            tool_call_id: None,
+            role:              Role::User,
+            content:           MessageContent::Multimodal(blocks),
+            tool_calls:        Vec::new(),
+            tool_call_id:      None,
+            reasoning_content: None,
         }
     }
 
     pub fn assistant(text: impl Into<String>) -> Self {
         Self {
-            role:         Role::Assistant,
-            content:      MessageContent::Text(text.into()),
-            tool_calls:   Vec::new(),
-            tool_call_id: None,
+            role:              Role::Assistant,
+            content:           MessageContent::Text(text.into()),
+            tool_calls:        Vec::new(),
+            tool_call_id:      None,
+            reasoning_content: None,
         }
     }
 
@@ -169,15 +177,32 @@ impl Message {
             content: MessageContent::Text(text.into()),
             tool_calls,
             tool_call_id: None,
+            reasoning_content: None,
+        }
+    }
+
+    /// Create an assistant message with tool calls and optional reasoning.
+    pub fn assistant_with_tool_calls_and_reasoning(
+        text: impl Into<String>,
+        tool_calls: Vec<ToolCallRequest>,
+        reasoning: Option<String>,
+    ) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: MessageContent::Text(text.into()),
+            tool_calls,
+            tool_call_id: None,
+            reasoning_content: reasoning,
         }
     }
 
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
-            role:         Role::Tool,
-            content:      MessageContent::Text(content.into()),
-            tool_calls:   Vec::new(),
-            tool_call_id: Some(tool_call_id.into()),
+            role:              Role::Tool,
+            content:           MessageContent::Text(content.into()),
+            tool_calls:        Vec::new(),
+            tool_call_id:      Some(tool_call_id.into()),
+            reasoning_content: None,
         }
     }
 
@@ -186,10 +211,11 @@ impl Message {
         blocks: Vec<ContentBlock>,
     ) -> Self {
         Self {
-            role:         Role::Tool,
-            content:      MessageContent::Multimodal(blocks),
-            tool_calls:   Vec::new(),
-            tool_call_id: Some(tool_call_id.into()),
+            role:              Role::Tool,
+            content:           MessageContent::Multimodal(blocks),
+            tool_calls:        Vec::new(),
+            tool_call_id:      Some(tool_call_id.into()),
+            reasoning_content: None,
         }
     }
 
@@ -590,8 +616,8 @@ mod tests {
     #[test]
     fn strip_images_replaces_image_blocks_with_notice() {
         let msg = Message {
-            role:         Role::User,
-            content:      MessageContent::Multimodal(vec![
+            role:              Role::User,
+            content:           MessageContent::Multimodal(vec![
                 ContentBlock::Text {
                     text: "look at this".into(),
                 },
@@ -600,8 +626,9 @@ mod tests {
                     data:       "AAAA".into(),
                 },
             ]),
-            tool_calls:   vec![],
-            tool_call_id: None,
+            tool_calls:        vec![],
+            tool_call_id:      None,
+            reasoning_content: None,
         };
         let stripped = msg.strip_images();
         match &stripped.content {

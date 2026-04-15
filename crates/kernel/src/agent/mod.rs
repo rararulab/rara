@@ -1774,10 +1774,17 @@ pub(crate) async fn run_agent_loop(
                 let _ = tape
                     .append_message(
                         tape_name,
-                        serde_json::json!({
-                            "role": "assistant",
-                            "content": &accumulated_text,
-                        }),
+                        {
+                            let mut payload = serde_json::json!({
+                                "role": "assistant",
+                                "content": &accumulated_text,
+                            });
+                            if !accumulated_reasoning.is_empty() {
+                                payload["reasoning_content"] =
+                                    serde_json::json!(&accumulated_reasoning);
+                            }
+                            payload
+                        },
                         None,
                     )
                     .await;
@@ -1853,10 +1860,17 @@ pub(crate) async fn run_agent_loop(
                 let _ = tape
                     .append_message(
                         tape_name,
-                        serde_json::json!({
-                            "role": "assistant",
-                            "content": &accumulated_text,
-                        }),
+                        {
+                            let mut payload = serde_json::json!({
+                                "role": "assistant",
+                                "content": &accumulated_text,
+                            });
+                            if !accumulated_reasoning.is_empty() {
+                                payload["reasoning_content"] =
+                                    serde_json::json!(&accumulated_reasoning);
+                            }
+                            payload
+                        },
                         meta,
                     )
                     .await;
@@ -1898,10 +1912,17 @@ pub(crate) async fn run_agent_loop(
             let _ = tape
                 .append_message(
                     tape_name,
-                    serde_json::json!({
-                        "role": "assistant",
-                        "content": &accumulated_text,
-                    }),
+                    {
+                        let mut payload = serde_json::json!({
+                            "role": "assistant",
+                            "content": &accumulated_text,
+                        });
+                        if !accumulated_reasoning.is_empty() {
+                            payload["reasoning_content"] =
+                                serde_json::json!(&accumulated_reasoning);
+                        }
+                        payload
+                    },
                     meta.clone(),
                 )
                 .await;
@@ -2101,10 +2122,17 @@ pub(crate) async fn run_agent_loop(
             let _ = tape
                 .append_message(
                     tape_name,
-                    serde_json::json!({
-                        "role": "assistant",
-                        "content": &accumulated_text,
-                    }),
+                    {
+                        let mut payload = serde_json::json!({
+                            "role": "assistant",
+                            "content": &accumulated_text,
+                        });
+                        if !accumulated_reasoning.is_empty() {
+                            payload["reasoning_content"] =
+                                serde_json::json!(&accumulated_reasoning);
+                        }
+                        payload
+                    },
                     serde_json::to_value(&meta).ok(),
                 )
                 .await;
@@ -2139,13 +2167,24 @@ pub(crate) async fn run_agent_loop(
                 iteration,
                 stream_ms,
                 first_token_ms,
-                reasoning_content: None,
+                reasoning_content: if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_reasoning.clone())
+                },
             })
             .ok();
             let _ = tape
                 .append_tool_call(
                     tape_name,
-                    serde_json::json!({ "calls": calls_json }),
+                    {
+                        let mut payload = serde_json::json!({ "calls": calls_json });
+                        if !accumulated_reasoning.is_empty() {
+                            payload["reasoning_content"] =
+                                serde_json::json!(&accumulated_reasoning);
+                        }
+                        payload
+                    },
                     tool_call_meta,
                 )
                 .await;
