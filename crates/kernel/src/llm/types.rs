@@ -370,6 +370,8 @@ pub enum LlmProviderFamily {
     Codex,
     /// 智谱 BigModel (GLM series).
     Glm,
+    /// MiniMax (M1, M2.7 series).
+    MiniMax,
     Unknown,
 }
 
@@ -514,12 +516,17 @@ pub(super) fn detect_provider_family(
         Some("openrouter") => return LlmProviderFamily::OpenRouter,
         Some("codex") => return LlmProviderFamily::Codex,
         Some("glm" | "zhipu" | "bigmodel") => return LlmProviderFamily::Glm,
+        Some("minimax") => return LlmProviderFamily::MiniMax,
         _ => {}
     }
 
     let lower = model_name.to_ascii_lowercase();
     if lower.starts_with("glm-") || lower.starts_with("glm4") {
         return LlmProviderFamily::Glm;
+    }
+
+    if lower.starts_with("minimax-") {
+        return LlmProviderFamily::MiniMax;
     }
 
     let trimmed = model_name.trim();
@@ -675,5 +682,25 @@ mod tests {
                 "{model} should NOT be detected as vision-capable"
             );
         }
+    }
+
+    #[test]
+    fn detect_minimax_by_model_name() {
+        assert_eq!(
+            detect_provider_family(None, "MiniMax-M2.7"),
+            LlmProviderFamily::MiniMax,
+        );
+        assert_eq!(
+            detect_provider_family(None, "minimax-m1"),
+            LlmProviderFamily::MiniMax,
+        );
+    }
+
+    #[test]
+    fn detect_minimax_by_provider_hint() {
+        assert_eq!(
+            detect_provider_family(Some("minimax"), "some-model"),
+            LlmProviderFamily::MiniMax,
+        );
     }
 }

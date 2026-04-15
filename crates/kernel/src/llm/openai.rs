@@ -17,7 +17,7 @@
 //! Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 //! like `reasoning_content` that `async-openai` doesn't expose.
 
-use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -1872,7 +1872,7 @@ struct WireToolFunction<'a> {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum WireContent<'a> {
-    Text(&'a str),
+    Text(Cow<'a, str>),
     Multimodal(Vec<WireContentPart<'a>>),
 }
 
@@ -1887,7 +1887,7 @@ enum WireContentPart<'a> {
 
 #[derive(Serialize)]
 struct WireImageUrl<'a> {
-    url: std::borrow::Cow<'a, str>,
+    url: Cow<'a, str>,
 }
 
 #[derive(Serialize)]
@@ -1915,15 +1915,83 @@ struct WireFunctionRef<'a> {
     arguments: &'a str,
 }
 
+/// Build wire messages for MiniMax, which does not support `"system"` role.
+///
+/// System/developer messages are collected and prepended to the first user
+/// message. If no user message follows, a synthetic user message is created.
+fn build_minimax_messages<'a>(messages: &'a [Message]) -> Vec<WireMessage<'a>> {
+    let system_parts: Vec<&str> = messages
+        .iter()
+        .filter(|m| matches!(m.role, Role::System | Role::Developer))
+        .map(|m| m.content.as_text())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let system_text = system_parts.join("\n\n");
+
+    let mut result: Vec<WireMessage<'a>> = Vec::new();
+    let mut system_prepended = false;
+
+    for msg in messages {
+        if matches!(msg.role, Role::System | Role::Developer) {
+            continue;
+        }
+
+        if msg.role == Role::User && !system_prepended && !system_text.is_empty() {
+            system_prepended = true;
+            match &msg.content {
+                MessageContent::Text(user_text) => {
+                    let combined = format!("{}\n\n{}", system_text, user_text);
+                    result.push(WireMessage {
+                        role:         "user",
+                        content:      Some(WireContent::Text(Cow::Owned(combined))),
+                        tool_calls:   None,
+                        tool_call_id: None,
+                    });
+                }
+                MessageContent::Multimodal(_) => {
+                    // Emit system text as a separate preceding user message
+                    // to avoid losing non-text content blocks (images, audio).
+                    result.push(WireMessage {
+                        role:         "user",
+                        content:      Some(WireContent::Text(Cow::Owned(system_text.clone()))),
+                        tool_calls:   None,
+                        tool_call_id: None,
+                    });
+                    result.push(WireMessage::from_message(msg));
+                }
+            }
+            continue;
+        }
+
+        result.push(WireMessage::from_message(msg));
+    }
+
+    // No user message existed — emit a synthetic one with the system content.
+    if !system_prepended && !system_text.is_empty() {
+        result.push(WireMessage {
+            role:         "user",
+            content:      Some(WireContent::Text(Cow::Owned(system_text))),
+            tool_calls:   None,
+            tool_call_id: None,
+        });
+    }
+
+    result
+}
+
 impl<'a> ChatRequest<'a> {
     fn from_completion(request: &'a CompletionRequest, stream: bool) -> Self {
         let provider = detect_provider_family(None, &request.model);
 
-        let messages: Vec<WireMessage<'a>> = request
-            .messages
-            .iter()
-            .map(WireMessage::from_message)
-            .collect();
+        let messages: Vec<WireMessage<'a>> = if provider == LlmProviderFamily::MiniMax {
+            build_minimax_messages(&request.messages)
+        } else {
+            request
+                .messages
+                .iter()
+                .map(WireMessage::from_message)
+                .collect()
+        };
 
         let (tools, tool_choice, parallel_tool_calls) = if request.tools.is_empty() {
             (None, None, None)
@@ -2013,7 +2081,7 @@ impl<'a> WireMessage<'a> {
         };
 
         let wire_content = match &msg.content {
-            MessageContent::Text(text) => WireContent::Text(text),
+            MessageContent::Text(text) => WireContent::Text(Cow::Borrowed(text)),
             MessageContent::Multimodal(blocks) => {
                 let parts = blocks
                     .iter()
@@ -2021,14 +2089,14 @@ impl<'a> WireMessage<'a> {
                         ContentBlock::Text { text } => WireContentPart::Text { text },
                         ContentBlock::ImageUrl { url } => WireContentPart::ImageUrl {
                             image_url: WireImageUrl {
-                                url: std::borrow::Cow::Borrowed(url),
+                                url: Cow::Borrowed(url),
                             },
                         },
                         ContentBlock::ImageBase64 { media_type, data } => {
                             let data_uri = format!("data:{media_type};base64,{data}");
                             WireContentPart::ImageUrl {
                                 image_url: WireImageUrl {
-                                    url: std::borrow::Cow::Owned(data_uri),
+                                    url: Cow::Owned(data_uri),
                                 },
                             }
                         }
@@ -2566,5 +2634,272 @@ mod tests {
         let data = r#"{"some":"data"}"#;
         let result = parse_responses_event("response.something.new", data, &tx, &mut state);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn minimax_system_messages_merged_into_first_user() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello"),
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          Some(1024),
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        // No message should have role "system"
+        for msg in &chat_req.messages {
+            assert_ne!(
+                msg.role, "system",
+                "MiniMax must not receive system role messages"
+            );
+        }
+
+        // First message should be user with system content prepended
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(
+                    t.contains("You are a helpful assistant."),
+                    "system text missing"
+                );
+                assert!(t.contains("Hello"), "user text missing");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_multiple_system_messages_merged() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![
+                Message::system("You are a helpful assistant."),
+                Message::system("Answer concisely."),
+                Message::user("Hello"),
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        for msg in &chat_req.messages {
+            assert_ne!(msg.role, "system");
+        }
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(
+                    t.contains("You are a helpful assistant."),
+                    "first system text missing"
+                );
+                assert!(
+                    t.contains("Answer concisely."),
+                    "second system text missing"
+                );
+                assert!(t.contains("Hello"), "user text missing");
+                // Verify system text precedes user text.
+                let pos_sys = t.find("You are a helpful assistant.").unwrap();
+                let pos_usr = t.find("Hello").unwrap();
+                assert!(pos_sys < pos_usr, "system text must precede user text");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_system_only_creates_synthetic_user() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![Message::system("You are a helpful assistant.")],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert_eq!(t.as_ref(), "You are a helpful assistant.");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_developer_messages_merged() {
+        let developer_msg = Message {
+            role:         Role::Developer,
+            content:      MessageContent::Text("Follow these rules.".into()),
+            tool_calls:   vec![],
+            tool_call_id: None,
+        };
+
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![developer_msg, Message::user("Hello")],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        for msg in &chat_req.messages {
+            assert_ne!(msg.role, "developer");
+            assert_ne!(msg.role, "system");
+        }
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(t.contains("Follow these rules."), "developer text missing");
+                assert!(t.contains("Hello"), "user text missing");
+                // Verify developer text precedes user text.
+                let pos_dev = t.find("Follow these rules.").unwrap();
+                let pos_usr = t.find("Hello").unwrap();
+                assert!(pos_dev < pos_usr, "developer text must precede user text");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn non_minimax_system_role_preserved() {
+        let request = CompletionRequest {
+            model:               "gpt-4o".to_string(),
+            messages:            vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello"),
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].role, "system");
+        assert_eq!(chat_req.messages[1].role, "user");
+    }
+
+    #[test]
+    fn minimax_empty_system_message_filtered() {
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![Message::system(""), Message::user("Hello")],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, "user");
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert_eq!(t.as_ref(), "Hello");
+            }
+            _ => panic!("expected Some(WireContent::Text)"),
+        }
+    }
+
+    #[test]
+    fn minimax_multimodal_user_preserves_content() {
+        use crate::llm::types::ContentBlock;
+
+        let request = CompletionRequest {
+            model:               "MiniMax-M2.7".to_string(),
+            messages:            vec![
+                Message::system("You are helpful."),
+                Message {
+                    role:         Role::User,
+                    content:      MessageContent::Multimodal(vec![
+                        ContentBlock::Text {
+                            text: "Describe this".to_string(),
+                        },
+                        ContentBlock::ImageUrl {
+                            url: "https://example.com/img.png".to_string(),
+                        },
+                    ]),
+                    tool_calls:   vec![],
+                    tool_call_id: None,
+                },
+            ],
+            tools:               vec![],
+            tool_choice:         Default::default(),
+            temperature:         None,
+            max_tokens:          None,
+            top_p:               None,
+            frequency_penalty:   None,
+            thinking:            None,
+            parallel_tool_calls: false,
+        };
+
+        let chat_req = ChatRequest::from_completion(&request, false);
+
+        // System text emitted as separate preceding user message;
+        // original multimodal message preserved.
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].role, "user");
+        assert_eq!(chat_req.messages[1].role, "user");
+
+        // First message: system text as plain text.
+        match &chat_req.messages[0].content {
+            Some(WireContent::Text(t)) => {
+                assert!(t.contains("You are helpful."), "system text missing");
+            }
+            _ => panic!("expected system-as-user to be Text"),
+        }
+
+        // Second message: multimodal content preserved.
+        match &chat_req.messages[1].content {
+            Some(WireContent::Multimodal(_)) => {}
+            _ => panic!("expected multimodal content to be preserved"),
+        }
     }
 }
