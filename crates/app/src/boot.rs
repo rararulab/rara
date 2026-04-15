@@ -139,12 +139,13 @@ pub(crate) async fn boot(
     // -- tape store --------------------------------------------------------
 
     let workspace_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let tape_service = rara_kernel::memory::TapeService::new(
+    let tape_service = rara_kernel::memory::TapeService::with_fts(
         rara_kernel::memory::FileTapeStore::new(rara_paths::memory_dir(), &workspace_path)
             .await
             .whatever_context("Failed to initialize FileTapeStore")?,
+        pool.clone(),
     );
-    info!("TapeService initialized");
+    info!("TapeService initialized (FTS5 enabled)");
 
     // -- Composio auth provider --------------------------------------------
 
