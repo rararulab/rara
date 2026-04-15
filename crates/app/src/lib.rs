@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 // ---------------------------------------------------------------------------
@@ -108,9 +108,6 @@ pub struct AppConfig {
     /// Gateway supervisor configuration (optional — used by `rara gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway:                Option<GatewayConfig>,
-    /// Symphony autonomous coding agent orchestrator (optional).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symphony:               Option<rara_symphony::SymphonyConfig>,
     /// Context folding (auto-anchor) configuration for the kernel.
     #[serde(default)]
     pub context_folding:        rara_kernel::kernel::ContextFoldingConfig,
@@ -600,8 +597,6 @@ pub async fn start_with_options(
         });
     }
 
-    // Symphony status handle removed — symphony is now a standalone sync bridge.
-
     let (domain_routes, _openapi) =
         backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
 
@@ -758,23 +753,6 @@ pub async fn start_with_options(
         }
     }
     info!("Kernel I/O subsystem running");
-
-    // -- Symphony sync bridge -------------------------------------------------
-    if let Some(ref symphony_config) = config.symphony {
-        if symphony_config.enabled {
-            let symphony = rara_symphony::SymphonyService::new(
-                symphony_config.clone(),
-                cancellation_token.clone(),
-                std::env::var("GITHUB_TOKEN").ok(),
-            );
-            tokio::spawn(async move {
-                if let Err(e) = symphony.run().await {
-                    error!(error = %e, "symphony service failed");
-                }
-            });
-            info!("Symphony service started");
-        }
-    }
 
     // Start web frontend dev server (bun run dev) if web/ exists.
     if let Some(web_port) = config.http.web_port {

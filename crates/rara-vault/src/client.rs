@@ -589,10 +589,6 @@ fn is_secret_key(key: &str) -> bool {
     if key.starts_with("llm.providers.") && key.ends_with(".api_key") {
         return true;
     }
-    // Symphony tracker api_key
-    if key.starts_with("symphony.") && key.contains("api_key") {
-        return true;
-    }
     false
 }
 

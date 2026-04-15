@@ -24,7 +24,6 @@ import PiChat from '@/pages/PiChat';
 import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
 import KernelTop from '@/pages/KernelTop';
-import Symphony from '@/pages/Symphony';
 import Dock from '@/pages/Dock';
 
 const STORAGE_KEY = "rara_backend_url";
@@ -54,7 +53,6 @@ export default function App() {
               <Route path="docs" element={<Docs />} />
               <Route path="settings" element={<Settings />} />
               <Route path="kernel-top" element={<KernelTop />} />
-              <Route path="symphony" element={<Symphony />} />
               <Route path="dock" element={<Dock />} />
             </Route>
           </Routes>
