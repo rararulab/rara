@@ -106,6 +106,8 @@ pub struct KernelHandle {
     /// Persistent store for feed events.
     /// `None` when the data feed subsystem is not configured.
     feed_store:            Option<crate::data_feed::FeedStoreRef>,
+    /// Tag-based subscription registry for routing notifications to sessions.
+    subscription_registry: crate::notification::SubscriptionRegistryRef,
 }
 
 impl KernelHandle {
@@ -129,6 +131,7 @@ impl KernelHandle {
         skill_prompt_provider: SkillPromptProvider,
         feed_registry: Option<Arc<crate::data_feed::DataFeedRegistry>>,
         feed_store: Option<crate::data_feed::FeedStoreRef>,
+        subscription_registry: crate::notification::SubscriptionRegistryRef,
     ) -> Self {
         Self {
             event_queue,
@@ -148,6 +151,7 @@ impl KernelHandle {
             skill_prompt_provider,
             feed_registry,
             feed_store,
+            subscription_registry,
         }
     }
 
@@ -404,6 +408,11 @@ impl KernelHandle {
 
     /// Access the feed event store (if configured).
     pub fn feed_store(&self) -> Option<&crate::data_feed::FeedStoreRef> { self.feed_store.as_ref() }
+
+    /// Access the tag-based subscription registry.
+    pub fn subscription_registry(&self) -> &crate::notification::SubscriptionRegistryRef {
+        &self.subscription_registry
+    }
 
     // -- Query methods ------------------------------------------------------
 

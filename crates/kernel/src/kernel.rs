@@ -403,6 +403,7 @@ impl Kernel {
             self.skill_prompt_provider.clone(),
             self.feed_registry.clone(),
             self.feed_store.clone(),
+            Arc::clone(self.syscall.subscription_registry()),
         )
     }
 

@@ -546,10 +546,11 @@ pub async fn start_with_options(
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
     // Spawn the feed dispatch task — consumes events from all transports,
-    // persists them to the feed_events table, and (future) distributes to
-    // subscribing sessions.
+    // persists them to the feed_events table, and routes matching events
+    // to subscribing sessions via SubscriptionRegistry.
     {
         let store = feed_store.clone();
+        let handle = kernel_handle.clone();
         tokio::spawn(async move {
             while let Some(event) = feed_event_rx.recv().await {
                 if let Err(e) = store.append(&event).await {
@@ -559,7 +560,88 @@ pub async fn start_with_options(
                         "failed to persist feed event"
                     );
                 }
-                // TODO: dispatch to subscriber sessions via notification bus
+
+                // Route to subscribers whose tags overlap with the event.
+                let matched = handle
+                    .subscription_registry()
+                    .match_tags_any_owner(&event.tags)
+                    .await;
+                if matched.is_empty() {
+                    continue;
+                }
+
+                let event_json = serde_json::to_value(&event).unwrap_or_default();
+                let payload_pretty =
+                    serde_json::to_string_pretty(&event.payload).unwrap_or_default();
+
+                use rara_kernel::notification::NotifyAction;
+
+                let futs: Vec<_> = matched
+                    .into_iter()
+                    .map(|sub| {
+                        let handle = handle.clone();
+                        let event_json = event_json.clone();
+                        let payload_pretty = payload_pretty.clone();
+                        let source_name = event.source_name.clone();
+                        let event_type = event.event_type.clone();
+                        let tags = event.tags.clone();
+                        async move {
+                            match sub.on_receive {
+                                NotifyAction::ProactiveTurn => {
+                                    if !handle.process_table().contains(&sub.subscriber) {
+                                        warn!(
+                                            subscriber = %sub.subscriber,
+                                            "feed ProactiveTurn downgraded to SilentAppend: \
+                                             subscriber session not in process table"
+                                        );
+                                        let sub_tape = sub.subscriber.to_string();
+                                        let _ = handle
+                                            .tape()
+                                            .store()
+                                            .append(
+                                                &sub_tape,
+                                                rara_kernel::memory::TapEntryKind::FeedEvent,
+                                                event_json,
+                                                None,
+                                            )
+                                            .await;
+                                        return;
+                                    }
+                                    let directive = format!(
+                                        "[FeedEvent] source={source_name} type={event_type} \
+                                         tags={tags:?}\n{payload_pretty}",
+                                    );
+                                    let msg = rara_kernel::io::InboundMessage::synthetic(
+                                        directive,
+                                        sub.owner.clone(),
+                                        sub.subscriber,
+                                    );
+                                    handle.deliver_internal(msg).await;
+                                }
+                                NotifyAction::SilentAppend => {
+                                    let sub_tape = sub.subscriber.to_string();
+                                    let _ = handle
+                                        .tape()
+                                        .store()
+                                        .append(
+                                            &sub_tape,
+                                            rara_kernel::memory::TapEntryKind::FeedEvent,
+                                            event_json,
+                                            None,
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
+                    })
+                    .collect();
+                futures::future::join_all(futs).await;
+
+                info!(
+                    source = %event.source_name,
+                    event_type = %event.event_type,
+                    "feed event dispatched to subscribers"
+                );
             }
             info!("feed dispatch task stopped (channel closed)");
         });
