@@ -4,8 +4,10 @@
 //! truth.  If the FTS database is missing or corrupt, it can be rebuilt from
 //! JSONL on next access.
 //!
-//! The index lives in the shared `sqlx::SqlitePool` managed by `rara-model`,
-//! alongside the `chat_session` and other tables.
+//! SQL operations are isolated in [`repo`]; this module contains only
+//! business logic (entry filtering, text extraction, query sanitization).
+
+mod repo;
 
 use sqlx::SqlitePool;
 use tracing::{debug, warn};
@@ -42,7 +44,7 @@ impl TapeFts {
 
     /// Index a batch of tape entries into FTS5.
     ///
-    /// Only entries with `id > after_id` are indexed.  Updates the
+    /// Only entries with `id > high-water-mark` are indexed.  Updates the
     /// `tape_fts_meta` high-water mark on success.
     pub(crate) async fn index_entries(
         &self,
@@ -50,7 +52,7 @@ impl TapeFts {
         session_key: &str,
         entries: &[TapEntry],
     ) -> Result<usize, sqlx::Error> {
-        let hwm = self.last_indexed_id(tape_name).await.unwrap_or(0);
+        let hwm = repo::get_hwm(&self.pool, tape_name).await.unwrap_or(0) as u64;
 
         let new_entries: Vec<_> = entries.iter().filter(|e| e.id > hwm).collect();
 
@@ -68,7 +70,7 @@ impl TapeFts {
             .collect();
 
         let mut tx = self.pool.begin().await?;
-        let mut count = 0u64;
+        let mut count = 0usize;
 
         for entry in &indexable {
             let content = extract_fts_content(entry);
@@ -76,38 +78,25 @@ impl TapeFts {
                 continue;
             }
             let kind_str = entry.kind.to_string();
-            let entry_id = entry.id as i64;
 
-            sqlx::query(
-                "INSERT INTO tape_fts (content, tape_name, entry_kind, entry_id, session_key) \
-                 VALUES (?, ?, ?, ?, ?)",
+            repo::insert(
+                &mut tx,
+                &content,
+                tape_name,
+                &kind_str,
+                entry.id as i64,
+                session_key,
             )
-            .bind(&content)
-            .bind(tape_name)
-            .bind(&kind_str)
-            .bind(entry_id)
-            .bind(session_key)
-            .execute(&mut *tx)
             .await?;
 
             count += 1;
         }
 
-        // Update high-water mark.
-        let max_id_i64 = max_id as i64;
-        sqlx::query(
-            "INSERT INTO tape_fts_meta (tape_name, last_indexed_id) VALUES (?, ?) ON \
-             CONFLICT(tape_name) DO UPDATE SET last_indexed_id = excluded.last_indexed_id",
-        )
-        .bind(tape_name)
-        .bind(max_id_i64)
-        .execute(&mut *tx)
-        .await?;
-
+        repo::upsert_hwm(&mut tx, tape_name, max_id as i64).await?;
         tx.commit().await?;
 
         debug!(tape_name, count, max_id, "FTS indexed entries");
-        Ok(count as usize)
+        Ok(count)
     }
 
     /// Query FTS5 for matching entries.
@@ -125,74 +114,33 @@ impl TapeFts {
             return Ok(Vec::new());
         }
 
-        let limit_i64 = limit as i64;
+        let rows = repo::search(&self.pool, &fts_query, tape_filter, limit as i64).await?;
 
-        let rows: Vec<(i64, String, f64)> = if let Some(tape) = tape_filter {
-            sqlx::query_as(
-                "SELECT entry_id, tape_name, bm25(tape_fts) AS rank FROM tape_fts WHERE tape_fts \
-                 MATCH ? AND tape_name = ? ORDER BY rank LIMIT ?",
-            )
-            .bind(&fts_query)
-            .bind(tape)
-            .bind(limit_i64)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query_as(
-                "SELECT entry_id, tape_name, bm25(tape_fts) AS rank FROM tape_fts WHERE tape_fts \
-                 MATCH ? ORDER BY rank LIMIT ?",
-            )
-            .bind(&fts_query)
-            .bind(limit_i64)
-            .fetch_all(&self.pool)
-            .await?
-        };
-
-        let hits = rows
+        Ok(rows
             .into_iter()
-            .map(|(entry_id, tape_name, bm25_score)| FtsHit {
-                entry_id: entry_id as u64,
-                tape_name,
-                bm25_score,
+            .map(|r| FtsHit {
+                entry_id:   r.entry_id as u64,
+                tape_name:  r.tape_name,
+                bm25_score: r.bm25_rank,
             })
-            .collect();
-
-        Ok(hits)
+            .collect())
     }
 
     /// Return the high-water mark (last indexed entry ID) for a tape.
     pub(crate) async fn last_indexed_id(&self, tape_name: &str) -> Result<u64, sqlx::Error> {
-        let row: Option<(i64,)> =
-            sqlx::query_as("SELECT last_indexed_id FROM tape_fts_meta WHERE tape_name = ?")
-                .bind(tape_name)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        Ok(row.map(|(id,)| id as u64).unwrap_or(0))
+        Ok(repo::get_hwm(&self.pool, tape_name).await? as u64)
     }
 
-    /// Remove all FTS entries for a tape (used on reset/archive).
+    /// Remove all FTS entries for a tape (used on reset/archive/delete).
     pub(crate) async fn remove_tape(&self, tape_name: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM tape_fts WHERE tape_name = ?")
-            .bind(tape_name)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("DELETE FROM tape_fts_meta WHERE tape_name = ?")
-            .bind(tape_name)
-            .execute(&self.pool)
-            .await?;
+        repo::delete_by_tape(&self.pool, tape_name).await?;
         debug!(tape_name, "FTS entries removed");
         Ok(())
     }
 
     /// Delete all FTS data (full reset).
     pub(crate) async fn clear_all(&self) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM tape_fts")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("DELETE FROM tape_fts_meta")
-            .execute(&self.pool)
-            .await?;
+        repo::delete_all(&self.pool).await?;
         warn!("FTS index cleared — will rebuild on next access");
         Ok(())
     }
@@ -216,8 +164,6 @@ fn sanitize_fts_query(query: &str) -> String {
         .split_whitespace()
         .filter(|t| !t.is_empty())
         .map(|term| {
-            // Wrap each term in double quotes to escape FTS5 operators.
-            // Escape any embedded double quotes.
             let escaped = term.replace('"', "\"\"");
             format!("\"{escaped}\"")
         })
@@ -286,19 +232,15 @@ mod tests {
             timestamp: jiff::Timestamp::now(),
             metadata:  None,
         };
-        // extract_searchable_text includes the JSON-serialized payload
-        // even when empty, so the result is not empty.
         let content = extract_fts_content(&entry);
         assert!(!content.contains("hello"));
     }
 
-    #[tokio::test]
-    async fn roundtrip_index_and_search() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+    /// Helper: create an in-memory pool with the FTS schema.
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
             .await
             .expect("in-memory pool");
-
-        // Create schema manually (migrations don't run on :memory:).
         sqlx::query(
             "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind \
              UNINDEXED, entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 \
@@ -307,7 +249,6 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create fts table");
-
         sqlx::query(
             "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT \
              NULL DEFAULT 0)",
@@ -315,7 +256,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create meta table");
+        pool
+    }
 
+    #[tokio::test]
+    async fn roundtrip_index_and_search() {
+        let pool = test_pool().await;
         let fts = TapeFts::new(pool);
 
         let entries = vec![
