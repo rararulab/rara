@@ -154,6 +154,7 @@ const BUILTIN_PROVIDERS: ProviderDef[] = [
     fields: [
       { key: KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY, label: "API Key", placeholder: "sk-or-v1-...", sensitive: true },
       { key: KEYS.LLM_PROVIDERS_OPENROUTER_BASE_URL, label: "Base URL", placeholder: "https://openrouter.ai/api/v1" },
+      { key: "llm.providers.openrouter.default_model", label: "Default Model", placeholder: "anthropic/claude-sonnet-4" },
     ],
   },
   {
@@ -164,6 +165,7 @@ const BUILTIN_PROVIDERS: ProviderDef[] = [
     fields: [
       { key: KEYS.LLM_PROVIDERS_OLLAMA_API_KEY, label: "API Key", placeholder: "ollama", sensitive: true },
       { key: KEYS.LLM_PROVIDERS_OLLAMA_BASE_URL, label: "Base URL", placeholder: "http://localhost:11434/v1" },
+      { key: "llm.providers.ollama.default_model", label: "Default Model", placeholder: "llama3:8b" },
     ],
   },
   {
@@ -197,6 +199,7 @@ function getProviderList(settings: SettingsMap | undefined): ProviderDef[] {
     fields: [
       { key: `llm.providers.${key}.api_key`, label: "API Key", placeholder: "sk-...", sensitive: true },
       { key: `llm.providers.${key}.base_url`, label: "Base URL", placeholder: "https://..." },
+      { key: `llm.providers.${key}.default_model`, label: "Default Model", placeholder: "gpt-4o" },
     ],
     isCustom: true,
   }));
@@ -409,11 +412,12 @@ function ConnectionCard() {
 }
 
 /** Dialog + button for adding a custom provider. */
-function AddProviderButton({ onAdd }: { onAdd: (name: string, baseUrl: string, apiKey: string) => Promise<void> }) {
+function AddProviderButton({ onAdd }: { onAdd: (name: string, baseUrl: string, apiKey: string, defaultModel: string) => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
   const [saving, setSaving] = useState(false);
 
   const isValid = /^[a-z][a-z0-9_-]*$/.test(name) && baseUrl.trim().length > 0 && apiKey.trim().length > 0;
@@ -422,11 +426,12 @@ function AddProviderButton({ onAdd }: { onAdd: (name: string, baseUrl: string, a
     if (!isValid) return;
     setSaving(true);
     try {
-      await onAdd(name, baseUrl.trim(), apiKey.trim());
+      await onAdd(name, baseUrl.trim(), apiKey.trim(), defaultModel.trim());
       setOpen(false);
       setName("");
       setBaseUrl("");
       setApiKey("");
+      setDefaultModel("");
     } finally {
       setSaving(false);
     }
@@ -478,6 +483,17 @@ function AddProviderButton({ onAdd }: { onAdd: (name: string, baseUrl: string, a
                 placeholder="sk-..."
                 className="h-9 font-mono text-sm"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="add-provider-model">Default Model</Label>
+              <Input
+                id="add-provider-model"
+                value={defaultModel}
+                onChange={(e) => setDefaultModel(e.target.value)}
+                placeholder="gpt-4o"
+                className="h-9 font-mono text-sm"
+              />
+              <p className="text-xs text-muted-foreground">Optional. The model to use when no agent-level override is set.</p>
             </div>
           </div>
           <DialogFooter>
@@ -969,12 +985,16 @@ export default function Settings() {
 
             {/* Add Provider */}
             <AddProviderButton
-              onAdd={async (name, baseUrl, apiKey) => {
-                await settingsApi.batchUpdate({
+              onAdd={async (name, baseUrl, apiKey, defaultModel) => {
+                const patch: Record<string, string> = {
                   [`llm.providers.${name}.api_key`]: apiKey,
                   [`llm.providers.${name}.base_url`]: baseUrl,
                   [`llm.providers.${name}.enabled`]: "true",
-                });
+                };
+                if (defaultModel) {
+                  patch[`llm.providers.${name}.default_model`] = defaultModel;
+                }
+                await settingsApi.batchUpdate(patch);
                 queryClient.invalidateQueries({ queryKey: ["settings"] });
               }}
             />
