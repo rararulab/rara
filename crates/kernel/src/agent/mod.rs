@@ -1092,7 +1092,11 @@ pub(crate) async fn run_agent_loop(
     let user_id = Some(tool_context.user_id.as_str());
 
     // ── Context folding state ────────────────────────────────────────
-    let fold_config = &handle.config().context_folding;
+    let fold_config = crate::kernel::ContextFoldingConfig::resolve_from_settings(
+        handle.settings().as_ref(),
+        &handle.config().context_folding,
+    )
+    .await;
     // Recover last auto-fold anchor's entry ID from tape so the cooldown
     // survives across turns (not just within a single run_agent_loop call).
     let mut last_fold_entry_id: Option<u64> =

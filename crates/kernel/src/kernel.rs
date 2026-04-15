@@ -102,6 +102,45 @@ pub struct ContextFoldingConfig {
     pub fold_model:                Option<String>,
 }
 
+impl ContextFoldingConfig {
+    /// Resolve the runtime-effective config by overlaying settings values on
+    /// top of the boot-time fallback config.
+    pub async fn resolve_from_settings(
+        settings: &dyn rara_domain_shared::settings::SettingsProvider,
+        fallback: &Self,
+    ) -> Self {
+        use rara_domain_shared::settings::keys;
+
+        let enabled = settings
+            .get(keys::CONTEXT_FOLDING_ENABLED)
+            .await
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(fallback.enabled);
+        let fold_threshold = settings
+            .get(keys::CONTEXT_FOLDING_FOLD_THRESHOLD)
+            .await
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(fallback.fold_threshold);
+        let min_entries_between_folds = settings
+            .get(keys::CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS)
+            .await
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(fallback.min_entries_between_folds);
+        let fold_model = match settings.get(keys::CONTEXT_FOLDING_FOLD_MODEL).await {
+            Some(value) if value.trim().is_empty() => None,
+            Some(value) => Some(value),
+            None => fallback.fold_model.clone(),
+        };
+
+        Self {
+            enabled,
+            fold_threshold,
+            min_entries_between_folds,
+            fold_model,
+        }
+    }
+}
+
 /// Kernel configuration.
 #[derive(Debug, Clone, smart_default::SmartDefault)]
 pub struct KernelConfig {

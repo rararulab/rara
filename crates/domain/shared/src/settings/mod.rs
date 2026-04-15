@@ -54,6 +54,11 @@ pub mod keys {
     pub const KNOWLEDGE_SEARCH_TOP_K: &str = "memory.knowledge.search_top_k";
     pub const KNOWLEDGE_SIMILARITY_THRESHOLD: &str = "memory.knowledge.similarity_threshold";
     pub const KNOWLEDGE_EXTRACTOR_MODEL: &str = "memory.knowledge.extractor_model";
+    pub const CONTEXT_FOLDING_ENABLED: &str = "context_folding.enabled";
+    pub const CONTEXT_FOLDING_FOLD_THRESHOLD: &str = "context_folding.fold_threshold";
+    pub const CONTEXT_FOLDING_MIN_ENTRIES_BETWEEN_FOLDS: &str =
+        "context_folding.min_entries_between_folds";
+    pub const CONTEXT_FOLDING_FOLD_MODEL: &str = "context_folding.fold_model";
 }
 
 /// Unified trait for reading and writing flat KV settings.
