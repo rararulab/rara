@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+dirs.workspace = true
 rara-kernel.workspace = true
 reqwest.workspace = true
 serde.workspace = true
