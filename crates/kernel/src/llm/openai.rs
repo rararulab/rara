@@ -17,7 +17,7 @@
 //! Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 //! like `reasoning_content` that `async-openai` doesn't expose.
 
-use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -1872,7 +1872,7 @@ struct WireToolFunction<'a> {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum WireContent<'a> {
-    Text(&'a str),
+    Text(Cow<'a, str>),
     Multimodal(Vec<WireContentPart<'a>>),
 }
 
@@ -1887,7 +1887,7 @@ enum WireContentPart<'a> {
 
 #[derive(Serialize)]
 struct WireImageUrl<'a> {
-    url: std::borrow::Cow<'a, str>,
+    url: Cow<'a, str>,
 }
 
 #[derive(Serialize)]
@@ -1938,17 +1938,28 @@ fn build_minimax_messages<'a>(messages: &'a [Message]) -> Vec<WireMessage<'a>> {
 
         if msg.role == Role::User && !system_prepended && !system_text.is_empty() {
             system_prepended = true;
-            let combined = format!("{}\n\n{}", system_text, msg.content.as_text());
-            // Leak is bounded — one allocation per LLM request, freed when the
-            // process reclaims the page.  Acceptable for short-lived request
-            // objects that are serialized and dropped immediately.
-            let leaked: &'static str = Box::leak(combined.into_boxed_str());
-            result.push(WireMessage {
-                role:         "user",
-                content:      Some(WireContent::Text(leaked)),
-                tool_calls:   None,
-                tool_call_id: None,
-            });
+            match &msg.content {
+                MessageContent::Text(user_text) => {
+                    let combined = format!("{}\n\n{}", system_text, user_text);
+                    result.push(WireMessage {
+                        role:         "user",
+                        content:      Some(WireContent::Text(Cow::Owned(combined))),
+                        tool_calls:   None,
+                        tool_call_id: None,
+                    });
+                }
+                MessageContent::Multimodal(_) => {
+                    // Emit system text as a separate preceding user message
+                    // to avoid losing non-text content blocks (images, audio).
+                    result.push(WireMessage {
+                        role:         "user",
+                        content:      Some(WireContent::Text(Cow::Owned(system_text.clone()))),
+                        tool_calls:   None,
+                        tool_call_id: None,
+                    });
+                    result.push(WireMessage::from_message(msg));
+                }
+            }
             continue;
         }
 
@@ -1957,10 +1968,9 @@ fn build_minimax_messages<'a>(messages: &'a [Message]) -> Vec<WireMessage<'a>> {
 
     // No user message existed — emit a synthetic one with the system content.
     if !system_prepended && !system_text.is_empty() {
-        let leaked: &'static str = Box::leak(system_text.into_boxed_str());
         result.push(WireMessage {
             role:         "user",
-            content:      Some(WireContent::Text(leaked)),
+            content:      Some(WireContent::Text(Cow::Owned(system_text))),
             tool_calls:   None,
             tool_call_id: None,
         });
@@ -2071,7 +2081,7 @@ impl<'a> WireMessage<'a> {
         };
 
         let wire_content = match &msg.content {
-            MessageContent::Text(text) => WireContent::Text(text),
+            MessageContent::Text(text) => WireContent::Text(Cow::Borrowed(text)),
             MessageContent::Multimodal(blocks) => {
                 let parts = blocks
                     .iter()
@@ -2079,14 +2089,14 @@ impl<'a> WireMessage<'a> {
                         ContentBlock::Text { text } => WireContentPart::Text { text },
                         ContentBlock::ImageUrl { url } => WireContentPart::ImageUrl {
                             image_url: WireImageUrl {
-                                url: std::borrow::Cow::Borrowed(url),
+                                url: Cow::Borrowed(url),
                             },
                         },
                         ContentBlock::ImageBase64 { media_type, data } => {
                             let data_uri = format!("data:{media_type};base64,{data}");
                             WireContentPart::ImageUrl {
                                 image_url: WireImageUrl {
-                                    url: std::borrow::Cow::Owned(data_uri),
+                                    url: Cow::Owned(data_uri),
                                 },
                             }
                         }
