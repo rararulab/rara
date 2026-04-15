@@ -106,6 +106,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -135,6 +136,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -159,6 +161,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -185,6 +188,7 @@ mod tests {
             parallel_tool_calls: true,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -209,6 +213,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -238,6 +243,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);

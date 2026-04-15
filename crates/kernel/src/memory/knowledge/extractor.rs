@@ -225,6 +225,7 @@ Output ONLY the JSON array, no markdown fences or explanation."#;
         parallel_tool_calls: false,
         frequency_penalty:   None,
         top_p:               None,
+        emit_reasoning:      false,
     };
 
     let response = driver.complete(request).await.context(LlmSnafu)?;
@@ -297,6 +298,7 @@ async fn update_category_files(
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let response = driver.complete(request).await.context(LlmSnafu)?;

@@ -1921,15 +1921,10 @@ impl<'a> ChatRequest<'a> {
     fn from_completion(request: &'a CompletionRequest, stream: bool) -> Self {
         let provider = detect_provider_family(None, &request.model);
 
-        // Kimi requires reasoning_content on assistant messages when thinking
-        // mode is active.  Most other providers ignore or reject it, so only
-        // emit for models known to need it.
-        let emit_reasoning = request.model.starts_with("kimi-");
-
         let messages: Vec<WireMessage<'a>> = request
             .messages
             .iter()
-            .map(|m| WireMessage::from_message(m, emit_reasoning))
+            .map(|m| WireMessage::from_message(m, request.emit_reasoning))
             .collect();
 
         let (tools, tool_choice, parallel_tool_calls) = if request.tools.is_empty() {
@@ -2294,6 +2289,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -2323,6 +2319,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -2347,6 +2344,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -2373,6 +2371,7 @@ mod tests {
             parallel_tool_calls: true,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -2397,6 +2396,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);
@@ -2426,6 +2426,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let body = build_responses_request(&request, ApiFormat::Responses);

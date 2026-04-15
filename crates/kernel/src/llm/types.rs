@@ -342,6 +342,10 @@ pub struct CompletionRequest {
     /// Nucleus sampling threshold. GLM defaults to 0.95; pass through for all
     /// providers.
     pub top_p:               Option<f32>,
+    /// Whether to include `reasoning_content` on assistant messages in the
+    /// outbound wire format.  Only providers that require thinking round-trip
+    /// (e.g. Kimi) should set this to `true`.
+    pub emit_reasoning:      bool,
 }
 
 // ---------------------------------------------------------------------------
