@@ -270,11 +270,11 @@ pub async fn refresh_tokens(current: &StoredKimiTokens) -> Result<StoredKimiToke
 // ---------------------------------------------------------------------------
 
 /// Build the `X-Msh-*` metadata headers required by Kimi Code platform.
-async fn kimi_common_headers() -> Vec<(String, String)> {
-    let device_id = read_device_id().await.unwrap_or_else(|e| {
-        tracing::warn!("failed to read kimi device_id, using fallback: {e}");
-        "unknown".into()
-    });
+///
+/// Fails if `~/.kimi/device_id` is unreadable — requests with a
+/// placeholder device ID would be rejected by the server anyway.
+async fn kimi_common_headers() -> Result<Vec<(String, String)>> {
+    let device_id = read_device_id().await?;
 
     // Best-effort hostname — no extra crate dependency.
     let device_name = std::process::Command::new("hostname")
@@ -286,14 +286,14 @@ async fn kimi_common_headers() -> Vec<(String, String)> {
 
     let device_model = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
 
-    vec![
+    Ok(vec![
         ("X-Msh-Platform".into(), "kimi_cli".into()),
         ("X-Msh-Version".into(), "0.0.1".into()),
         ("X-Msh-Device-Name".into(), device_name),
         ("X-Msh-Device-Model".into(), device_model),
         ("X-Msh-Os-Version".into(), std::env::consts::OS.into()),
         ("X-Msh-Device-Id".into(), device_id),
-    ]
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -334,8 +334,15 @@ impl LlmCredentialResolver for KimiCredentialResolver {
             }
         }
 
+        let headers =
+            kimi_common_headers()
+                .await
+                .map_err(|e| rara_kernel::error::KernelError::Provider {
+                    message: e.to_string().into(),
+                })?;
+
         let mut cred = LlmCredential::new(KIMI_CODE_BASE_URL, &tokens.access_token);
-        for (name, value) in kimi_common_headers().await {
+        for (name, value) in headers {
             cred = cred.with_header(name, value);
         }
         Ok(cred)

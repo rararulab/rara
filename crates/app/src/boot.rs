@@ -261,6 +261,10 @@ pub(crate) async fn boot(
     let agent_registry = Arc::new(load_default_registry());
 
     // -- default provider model lister / embedder ----------------------------
+    //
+    // OAuth-based providers (kimi-code, codex) don't have base_url/api_key in
+    // settings — they resolve credentials dynamically.  Build the appropriate
+    // OpenAiDriver variant so model listing and embedding work end-to-end.
 
     let default_provider = {
         use rara_domain_shared::settings::keys;
@@ -269,19 +273,30 @@ pub(crate) async fn boot(
             .await
             .unwrap_or_else(|| "openrouter".to_owned())
     };
-    let default_base_url_key = format!("llm.providers.{default_provider}.base_url");
-    let default_no_proxy = settings_provider
-        .get(&default_base_url_key)
-        .await
-        .as_deref()
-        .map_or(false, rara_kernel::llm::is_local_url);
-    let default_driver: Arc<rara_kernel::llm::OpenAiDriver> =
-        Arc::new(rara_kernel::llm::OpenAiDriver::from_settings(
-            settings_provider.clone(),
-            &default_provider,
+    let default_driver: Arc<rara_kernel::llm::OpenAiDriver> = match default_provider.as_str() {
+        "kimi-code" => Arc::new(rara_kernel::llm::OpenAiDriver::with_credential_resolver(
+            Arc::new(rara_kimi_oauth::KimiCredentialResolver),
             rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-            default_no_proxy,
-        ));
+        )),
+        "codex" => Arc::new(rara_kernel::llm::OpenAiDriver::with_credential_resolver(
+            Arc::new(rara_codex_oauth::CodexCredentialResolver),
+            rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+        )),
+        _ => {
+            let base_url_key = format!("llm.providers.{default_provider}.base_url");
+            let no_proxy = settings_provider
+                .get(&base_url_key)
+                .await
+                .as_deref()
+                .map_or(false, rara_kernel::llm::is_local_url);
+            Arc::new(rara_kernel::llm::OpenAiDriver::from_settings(
+                settings_provider.clone(),
+                &default_provider,
+                rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+                no_proxy,
+            ))
+        }
+    };
     let model_lister: rara_kernel::llm::LlmModelListerRef = default_driver.clone();
     let embedder: rara_kernel::llm::LlmEmbedderRef = default_driver;
 
