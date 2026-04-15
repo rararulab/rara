@@ -377,6 +377,31 @@ fn first_string_value(value: &serde_json::Value) -> Option<&str> {
         .and_then(|obj| obj.values().find_map(|v| v.as_str()))
 }
 
+/// Extract a compact result hint from a tool's `result_preview` JSON.
+///
+/// Returns `None` when no useful hint can be produced.  Currently supports:
+/// - `edit-file` / `multi-edit`: `"(+3 -1)"` line-change stats
+/// - `write-file`: `"(wrote N lines)"`
+pub fn tool_result_hint(tool_name: &str, result_preview: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(result_preview).ok()?;
+    match tool_name {
+        "edit-file" | "multi-edit" => {
+            let added = v.get("lines_added").and_then(|n| n.as_u64()).unwrap_or(0);
+            let removed = v.get("lines_removed").and_then(|n| n.as_u64()).unwrap_or(0);
+            if added > 0 || removed > 0 {
+                Some(format!("(+{added} -{removed})"))
+            } else {
+                None
+            }
+        }
+        "write-file" => {
+            let lines = v.get("lines_written").and_then(|n| n.as_u64())?;
+            Some(format!("({lines} lines)"))
+        }
+        _ => None,
+    }
+}
+
 /// Take only the first line of `s`, truncating to `max_chars` with an ellipsis
 /// if needed.
 pub fn truncate_summary(s: &str, max_chars: usize) -> String {

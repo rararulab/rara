@@ -35,8 +35,12 @@ pub struct EditFileParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EditFileResult {
-    pub replacements: usize,
-    pub file_path:    String,
+    pub replacements:  usize,
+    pub file_path:     String,
+    /// Net lines added (0 when lines were only removed).
+    pub lines_added:   usize,
+    /// Net lines removed (0 when lines were only added).
+    pub lines_removed: usize,
 }
 
 /// Layer 1 primitive: edit a file by exact string replacement.
@@ -92,9 +96,14 @@ impl ToolExecute for EditFileTool {
         tokio::fs::write(&file_path, &new_content)
             .await
             .context(format!("failed to write file {}", file_path.display()))?;
+        let old_lines = content.lines().count();
+        let new_lines = new_content.lines().count();
+
         Ok(EditFileResult {
-            replacements: if replace_all { count } else { 1 },
-            file_path:    file_path.display().to_string(),
+            replacements:  if replace_all { count } else { 1 },
+            file_path:     file_path.display().to_string(),
+            lines_added:   new_lines.saturating_sub(old_lines),
+            lines_removed: old_lines.saturating_sub(new_lines),
         })
     }
 }
