@@ -217,6 +217,12 @@ pub struct Kernel {
     skill_prompt_provider: crate::handle::SkillPromptProvider,
     /// Lifecycle hook registry for turn/fold/delegation events.
     lifecycle_hooks:       crate::lifecycle::LifecycleHookRegistry,
+    /// Data feed registry for managing external data sources.
+    /// `None` when the data feed subsystem is not configured.
+    feed_registry:         Option<Arc<crate::data_feed::DataFeedRegistry>>,
+    /// Persistent store for feed events.
+    /// `None` when the data feed subsystem is not configured.
+    feed_store:            Option<crate::data_feed::FeedStoreRef>,
 }
 
 impl Kernel {
@@ -237,6 +243,8 @@ impl Kernel {
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
         trace_service: crate::trace::TraceService,
         skill_prompt_provider: crate::handle::SkillPromptProvider,
+        feed_registry: Option<Arc<crate::data_feed::DataFeedRegistry>>,
+        feed_store: Option<crate::data_feed::FeedStoreRef>,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
         // Clamp default_tool_timeout so it never exceeds the global wave timeout.
@@ -318,6 +326,8 @@ impl Kernel {
             trace_service,
             skill_prompt_provider,
             lifecycle_hooks: crate::lifecycle::LifecycleHookRegistry::new(),
+            feed_registry,
+            feed_store,
         }
     }
 
@@ -379,8 +389,8 @@ impl Kernel {
             self.trace_service.clone(),
             self.syscall.job_wheel().clone(),
             self.skill_prompt_provider.clone(),
-            None, // feed_registry: wired during data feed integration
-            None, // feed_store: wired during data feed integration
+            self.feed_registry.clone(),
+            self.feed_store.clone(),
         )
     }
 

@@ -375,6 +375,7 @@ pub async fn start_with_options(
         settings_provider.clone(),
         settings_svc.clone(),
         rara.model_lister.clone(),
+        pool.clone(),
     )
     .await
     .whatever_context("Failed to initialize BackendState")?;
@@ -467,6 +468,16 @@ pub async fn start_with_options(
         })
     };
 
+    // -- Data feed subsystem ---------------------------------------------------
+    // Create the feed event channel and registry. The receiver will be
+    // consumed by a future feed-dispatch task; for now we hold it to keep
+    // the channel open.
+    let (feed_event_tx, _feed_event_rx) =
+        tokio::sync::mpsc::channel::<rara_kernel::data_feed::FeedEvent>(256);
+    let feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(
+        feed_event_tx.clone(),
+    ));
+
     let mut kernel = rara_kernel::kernel::Kernel::new(
         kernel_config,
         rara.driver_registry.clone(),
@@ -486,6 +497,8 @@ pub async fn start_with_options(
         mcp_tool_provider,
         rara_kernel::trace::TraceService::new(pool.clone()),
         skill_prompt_provider,
+        Some(feed_registry.clone()),
+        None, // feed_store: queries go through backend SQL for now
     );
 
     let cancellation_token = CancellationToken::new();
@@ -553,13 +566,28 @@ pub async fn start_with_options(
     };
     let dock_routes = rara_dock::dock_router(dock_state);
 
-    let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
+    // Webhook feed routes — receives HTTP POST from external services.
+    let webhook_state = Arc::new(rara_kernel::data_feed::webhook::WebhookState::new(
+        feed_registry.clone(),
+        feed_event_tx,
+    ));
+
+    let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> = {
+        let wh = webhook_state;
         Box::new(move |router| {
+            let webhook_router = axum::Router::new()
+                .route(
+                    "/api/v1/webhooks/{feed_name}",
+                    axum::routing::post(rara_kernel::data_feed::webhook::webhook_handler),
+                )
+                .with_state(wh.clone());
             health_routes(router)
                 .merge(domain_routes.clone())
                 .merge(dock_routes.clone())
                 .nest("/api/v1/kernel/chat", web_router.clone())
-        });
+                .merge(webhook_router)
+        })
+    };
 
     info!("Application initialized successfully");
 

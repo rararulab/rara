@@ -405,6 +405,8 @@ impl TestKernelBuilder {
             None, // no dynamic tool provider
             trace_service,
             skill_prompt_provider,
+            None, // feed_registry: not needed in tests
+            None, // feed_store: not needed in tests
         );
 
         let cancel_token = CancellationToken::new();
