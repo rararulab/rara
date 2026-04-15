@@ -19,7 +19,7 @@
 //! | GET    | `/api/v1/data-feeds`                        | list all feeds      |
 //! | POST   | `/api/v1/data-feeds`                        | create feed         |
 //! | GET    | `/api/v1/data-feeds/{id}`                   | get feed detail     |
-//! | PUT    | `/api/v1/data-feeds/{id}`                   | update feed         |
+//! | PUT/PATCH | `/api/v1/data-feeds/{id}`                | partial update feed |
 //! | DELETE | `/api/v1/data-feeds/{id}`                   | delete feed         |
 //! | PUT    | `/api/v1/data-feeds/{id}/toggle`             | enable/disable feed |
 //! | GET    | `/api/v1/data-feeds/{id}/events`             | query feed events   |
@@ -41,7 +41,7 @@ use jiff::{Timestamp, ToSpan};
 use rara_kernel::data_feed::{
     DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, polling::PollingSource,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -67,7 +67,10 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         .route("/api/v1/data-feeds", get(list_feeds).post(create_feed))
         .route(
             "/api/v1/data-feeds/{id}",
-            get(get_feed).put(update_feed).delete(delete_feed),
+            get(get_feed)
+                .put(update_feed)
+                .patch(update_feed)
+                .delete(delete_feed),
         )
         .route("/api/v1/data-feeds/{id}/toggle", put(toggle_feed))
         .route("/api/v1/data-feeds/{id}/events", get(query_events))
@@ -90,13 +93,30 @@ struct CreateFeedRequest {
 }
 
 /// Request body for updating an existing data feed.
+///
+/// All fields are optional — only supplied fields are updated, the rest
+/// keep their current values (partial update / PATCH semantics).
 #[derive(Debug, Deserialize)]
 struct UpdateFeedRequest {
-    name:      String,
-    feed_type: FeedType,
-    tags:      Vec<String>,
-    transport: serde_json::Value,
-    auth:      Option<serde_json::Value>,
+    name:      Option<String>,
+    feed_type: Option<FeedType>,
+    tags:      Option<Vec<String>>,
+    transport: Option<serde_json::Value>,
+    /// Pass `null` to clear auth, omit the field to keep existing auth.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    auth:      Option<Option<serde_json::Value>>,
+}
+
+/// Deserialize a double-`Option` field so that:
+/// - field absent   → outer `None`  (keep existing value)
+/// - field is `null` → `Some(None)` (explicitly clear)
+/// - field has value → `Some(Some(v))`
+fn deserialize_optional_field<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 /// Query parameters for event listing.
@@ -196,7 +216,10 @@ async fn get_feed(
     Ok(Json(feed))
 }
 
-/// `PUT /api/v1/data-feeds/{id}` — update an existing feed.
+/// `PUT /api/v1/data-feeds/{id}` — partial update of an existing feed.
+///
+/// Only fields present in the request body are changed; omitted fields
+/// keep their current values.
 async fn update_feed(
     State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
@@ -211,18 +234,27 @@ async fn update_feed(
             ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
         })?;
 
-    let auth = body
-        .auth
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|e| ProblemDetails::bad_request(format!("invalid auth config: {e}")))?;
+    // Merge: supplied field wins, otherwise keep existing.
+    let new_name = body.name.unwrap_or(existing.name.clone());
+
+    let auth = match body.auth {
+        // Field omitted → keep existing auth.
+        None => existing.auth.clone(),
+        // Explicit `null` → clear auth.
+        Some(None) => None,
+        // New value → parse and replace.
+        Some(Some(v)) => Some(
+            serde_json::from_value(v)
+                .map_err(|e| ProblemDetails::bad_request(format!("invalid auth config: {e}")))?,
+        ),
+    };
 
     let updated = DataFeedConfig::builder()
         .id(id)
-        .name(body.name.clone())
-        .feed_type(body.feed_type)
-        .tags(body.tags)
-        .transport(body.transport)
+        .name(new_name.clone())
+        .feed_type(body.feed_type.unwrap_or(existing.feed_type))
+        .tags(body.tags.unwrap_or(existing.tags))
+        .transport(body.transport.unwrap_or(existing.transport))
         .maybe_auth(auth)
         .enabled(existing.enabled)
         .status(existing.status)
@@ -241,7 +273,7 @@ async fn update_feed(
     // 2. Sync registry: remove old entry (cancels running task), re-register.
     let _ = state.registry.remove(&existing.name);
     if let Err(e) = state.registry.register(updated.clone()) {
-        warn!(name = %body.name, error = %e, "registry sync failed on update");
+        warn!(name = %new_name, error = %e, "registry sync failed on update");
     }
 
     // 3. Restart feed task if enabled.
