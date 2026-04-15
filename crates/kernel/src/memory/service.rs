@@ -92,11 +92,20 @@ pub fn current_tape() -> String {
 #[derive(Debug, Clone)]
 pub struct TapeService {
     store: FileTapeStore,
+    fts:   Option<super::fts::TapeFts>,
 }
 
 impl TapeService {
     /// Create a service backed by the given store.
-    pub fn new(store: FileTapeStore) -> Self { Self { store } }
+    pub fn new(store: FileTapeStore) -> Self { Self { store, fts: None } }
+
+    /// Create a service with FTS5 full-text search support.
+    pub fn with_fts(store: FileTapeStore, pool: sqlx::SqlitePool) -> Self {
+        Self {
+            store,
+            fts: Some(super::fts::TapeFts::new(pool)),
+        }
+    }
 
     /// Access the underlying [`FileTapeStore`] for low-level operations such as
     /// fork/merge/discard that require direct store access.
@@ -223,9 +232,22 @@ impl TapeService {
         payload: Value,
         metadata: Option<Value>,
     ) -> TapResult<TapEntry> {
-        self.store
+        let entry = self
+            .store
             .append(tape_name, TapEntryKind::Message, payload, metadata)
-            .await
+            .await?;
+
+        // Best-effort FTS indexing — errors are logged, never propagated.
+        if let Some(fts) = &self.fts {
+            if let Err(e) = fts
+                .index_entries(tape_name, tape_name, std::slice::from_ref(&entry))
+                .await
+            {
+                tracing::warn!(%e, tape_name, "FTS index failed on append");
+            }
+        }
+
+        Ok(entry)
     }
 
     /// Append a tool-call entry.
@@ -683,6 +705,9 @@ impl TapeService {
     }
 
     /// Search message entries using ranked Unicode-aware text matching.
+    ///
+    /// When FTS5 is available, uses it for candidate retrieval then re-ranks
+    /// with the existing scorer.  Falls back to brute-force on FTS error.
     pub async fn search(
         &self,
         tape_name: &str,
@@ -694,7 +719,42 @@ impl TapeService {
         if normalized_query.is_empty() {
             return Ok(Vec::new());
         }
-        let query_terms = extract_query_terms(&normalized_query);
+
+        // Try FTS candidate retrieval first.
+        if let Some(fts) = &self.fts {
+            let tape_filter = if all_tapes { None } else { Some(tape_name) };
+
+            // Lazy backfill: ensure all tapes are indexed before querying.
+            if let Err(e) = self.backfill_fts(fts, tape_name, all_tapes).await {
+                tracing::warn!(%e, "FTS backfill failed, falling back to brute-force");
+            } else {
+                // Fetch 3x candidates so re-ranking has room to filter.
+                match fts.search(query, tape_filter, limit * 3).await {
+                    Ok(hits) if !hits.is_empty() => {
+                        return self.rerank_fts_hits(&hits, &normalized_query, limit).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, "FTS search failed, falling back to brute-force");
+                    }
+                    _ => {} // empty hits — fall through to brute-force
+                }
+            }
+        }
+
+        // Brute-force fallback (original path).
+        self.search_brute_force(tape_name, &normalized_query, limit, all_tapes)
+            .await
+    }
+
+    /// Brute-force search over all entries (original algorithm).
+    async fn search_brute_force(
+        &self,
+        tape_name: &str,
+        normalized_query: &str,
+        limit: usize,
+        all_tapes: bool,
+    ) -> TapResult<Vec<TapEntry>> {
+        let query_terms = extract_query_terms(normalized_query);
         let query_scorer = (normalized_query.chars().count() >= MIN_FUZZY_QUERY_LENGTH)
             .then(|| RatioBatchComparator::new(normalized_query.chars()));
 
@@ -716,7 +776,91 @@ impl TapeService {
                     entry.metadata.as_ref(),
                 ));
                 let Some(score) = score_search_candidate(
-                    &normalized_query,
+                    normalized_query,
+                    &query_terms,
+                    &searchable_text,
+                    query_scorer.as_ref(),
+                ) else {
+                    continue;
+                };
+                results.push(SearchMatch { score, entry });
+            }
+        }
+
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| right.entry.id.cmp(&left.entry.id))
+        });
+        results.truncate(limit);
+
+        Ok(results.into_iter().map(|item| item.entry).collect())
+    }
+
+    /// Backfill FTS index for tapes that have un-indexed entries.
+    async fn backfill_fts(
+        &self,
+        fts: &super::fts::TapeFts,
+        tape_name: &str,
+        all_tapes: bool,
+    ) -> Result<(), sqlx::Error> {
+        let tape_names = if all_tapes {
+            self.store.list_tapes().await.unwrap_or_default()
+        } else {
+            vec![tape_name.to_owned()]
+        };
+
+        for name in &tape_names {
+            let entries = self
+                .store
+                .read(name)
+                .await
+                .unwrap_or_default()
+                .unwrap_or_default();
+            if entries.is_empty() {
+                continue;
+            }
+            fts.index_entries(name, name, &entries).await?;
+        }
+        Ok(())
+    }
+
+    /// Load full entries for FTS hits and re-rank with the existing scorer.
+    async fn rerank_fts_hits(
+        &self,
+        hits: &[super::fts::FtsHit],
+        normalized_query: &str,
+        limit: usize,
+    ) -> TapResult<Vec<TapEntry>> {
+        let query_terms = extract_query_terms(normalized_query);
+        let query_scorer = (normalized_query.chars().count() >= MIN_FUZZY_QUERY_LENGTH)
+            .then(|| RatioBatchComparator::new(normalized_query.chars()));
+
+        // Collect entry IDs grouped by tape for batch loading.
+        let mut by_tape: std::collections::HashMap<&str, Vec<u64>> =
+            std::collections::HashMap::new();
+        for hit in hits {
+            by_tape
+                .entry(&hit.tape_name)
+                .or_default()
+                .push(hit.entry_id);
+        }
+
+        let mut results = Vec::new();
+        for (tape, ids) in &by_tape {
+            let entries = self.store.read(tape).await?.unwrap_or_default();
+            let id_set: std::collections::HashSet<u64> = ids.iter().copied().collect();
+            for entry in entries {
+                if !id_set.contains(&entry.id) {
+                    continue;
+                }
+                let searchable_text = normalize_search_text(&extract_searchable_text(
+                    &entry.payload,
+                    entry.metadata.as_ref(),
+                ));
+                let Some(score) = score_search_candidate(
+                    normalized_query,
                     &query_terms,
                     &searchable_text,
                     query_scorer.as_ref(),
