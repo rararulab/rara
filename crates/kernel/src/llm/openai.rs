@@ -1921,10 +1921,15 @@ impl<'a> ChatRequest<'a> {
     fn from_completion(request: &'a CompletionRequest, stream: bool) -> Self {
         let provider = detect_provider_family(None, &request.model);
 
+        // Kimi requires reasoning_content on assistant messages when thinking
+        // mode is active.  Most other providers ignore or reject it, so only
+        // emit for models known to need it.
+        let emit_reasoning = request.model.starts_with("kimi-");
+
         let messages: Vec<WireMessage<'a>> = request
             .messages
             .iter()
-            .map(WireMessage::from_message)
+            .map(|m| WireMessage::from_message(m, emit_reasoning))
             .collect();
 
         let (tools, tool_choice, parallel_tool_calls) = if request.tools.is_empty() {
@@ -2005,7 +2010,7 @@ impl<'a> ChatRequest<'a> {
 }
 
 impl<'a> WireMessage<'a> {
-    fn from_message(msg: &'a Message) -> Self {
+    fn from_message(msg: &'a Message, emit_reasoning: bool) -> Self {
         let role = match msg.role {
             Role::System => "system",
             Role::Developer => "developer",
@@ -2080,7 +2085,11 @@ impl<'a> WireMessage<'a> {
             content,
             tool_calls,
             tool_call_id: msg.tool_call_id.as_deref(),
-            reasoning_content: msg.reasoning_content.as_deref(),
+            reasoning_content: if emit_reasoning {
+                msg.reasoning_content.as_deref()
+            } else {
+                None
+            },
         }
     }
 }
