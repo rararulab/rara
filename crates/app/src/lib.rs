@@ -19,6 +19,7 @@ pub mod gateway;
 // Re-export `rara_kernel::tool` so the `ToolDef` proc macro can resolve
 // `crate::tool::AgentTool` in derived impls.
 pub(crate) use rara_kernel::tool;
+mod feed_store;
 mod tools;
 mod web_server;
 
@@ -369,12 +370,41 @@ pub async fn start_with_options(
     .await
     .whatever_context("Failed to boot kernel dependencies")?;
 
+    // -- Data feed subsystem --------------------------------------------------
+    // Create the event channel and registry. The registry holds in-memory
+    // feed configs + cancellation tokens; the channel carries FeedEvents
+    // from all transports to the dispatch task.
+    let (feed_event_tx, mut feed_event_rx) =
+        tokio::sync::mpsc::channel::<rara_kernel::data_feed::FeedEvent>(256);
+    let feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(feed_event_tx));
+    let feed_store: rara_kernel::data_feed::FeedStoreRef =
+        Arc::new(crate::feed_store::SqliteFeedStore::new(pool.clone()));
+    let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pool.clone());
+
+    // Restore feed configs from database into registry.
+    match feed_svc.list_feeds().await {
+        Ok(configs) => {
+            let count = configs.len();
+            feed_registry.restore(configs);
+            info!(count, "restored data feed configs from database");
+        }
+        Err(e) => {
+            warn!(error = %e, "failed to restore data feed configs, starting with empty registry");
+        }
+    }
+
+    let feed_router_state = rara_backend_admin::data_feeds::DataFeedRouterState {
+        svc:      feed_svc,
+        registry: feed_registry.clone(),
+    };
+
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),
         rara.tape_service.clone(),
         settings_provider.clone(),
         settings_svc.clone(),
         rara.model_lister.clone(),
+        feed_router_state,
     )
     .await
     .whatever_context("Failed to initialize BackendState")?;
@@ -510,7 +540,41 @@ pub async fn start_with_options(
         ],
     ));
 
+    // Wire data feed subsystem into the kernel before start().
+    kernel.set_feed_subsystem(feed_registry.clone(), feed_store.clone());
+
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
+
+    // Spawn the feed dispatch task — consumes events from all transports,
+    // persists them to the feed_events table, and (future) distributes to
+    // subscribing sessions.
+    {
+        let store = feed_store.clone();
+        tokio::spawn(async move {
+            while let Some(event) = feed_event_rx.recv().await {
+                if let Err(e) = store.append(&event).await {
+                    warn!(
+                        source = %event.source_name,
+                        error = %e,
+                        "failed to persist feed event"
+                    );
+                }
+                // TODO: dispatch to subscriber sessions via notification bus
+            }
+            info!("feed dispatch task stopped (channel closed)");
+        });
+    }
+
+    // Start polling feed tasks for all enabled polling-type feeds that were
+    // restored from the database.
+    {
+        let configs = feed_registry.list();
+        for config in &configs {
+            if config.enabled {
+                rara_backend_admin::data_feeds::start_feed_task(config, &feed_registry);
+            }
+        }
+    }
 
     // Wire DispatchRaraTool and ListSessionsTool with the now-available
     // KernelHandle.
@@ -553,11 +617,20 @@ pub async fn start_with_options(
     };
     let dock_routes = rara_dock::dock_router(dock_state);
 
+    // Build webhook routes for passive data feed ingestion.
+    let webhook_state = Arc::new(rara_kernel::data_feed::webhook::WebhookState::new(
+        feed_registry.clone(),
+        feed_registry.event_tx(),
+    ));
+    let webhook_router =
+        (rara_kernel::data_feed::webhook::webhook_routes(webhook_state))(axum::Router::new());
+
     let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
         Box::new(move |router| {
             health_routes(router)
                 .merge(domain_routes.clone())
                 .merge(dock_routes.clone())
+                .merge(webhook_router.clone())
                 .nest("/api/v1/kernel/chat", web_router.clone())
         });
 

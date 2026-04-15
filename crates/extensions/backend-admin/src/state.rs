@@ -15,20 +15,24 @@
 //! Backend domain-service state — holds all HTTP admin services and routes.
 //!
 //! [`BackendState`] is the domain-service half of the old `AppState` god
-//! object.  It wires session (chat) and settings.
+//! object.  It wires session (chat), settings, and data feeds.
 
 use std::sync::Arc;
 
 use snafu::Whatever;
 use tracing::info;
 
+use crate::data_feeds::DataFeedRouterState;
+
 /// Backend domain-service state.
 ///
 /// Owns all domain services needed for HTTP admin routes.
 #[derive(Clone)]
 pub struct BackendState {
-    pub session_service: crate::chat::service::SessionService,
-    pub settings_svc:    crate::settings::SettingsSvc,
+    pub session_service:   crate::chat::service::SessionService,
+    pub settings_svc:      crate::settings::SettingsSvc,
+    /// Data feed router state with both persistence and registry.
+    pub feed_router_state: DataFeedRouterState,
 }
 
 impl BackendState {
@@ -42,6 +46,7 @@ impl BackendState {
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
         model_lister: rara_kernel::llm::LlmModelListerRef,
+        feed_router_state: DataFeedRouterState,
     ) -> Result<Self, Whatever> {
         // -- domain services -------------------------------------------------
 
@@ -58,6 +63,7 @@ impl BackendState {
         Ok(Self {
             session_service,
             settings_svc,
+            feed_router_state,
         })
     }
 
@@ -100,6 +106,11 @@ impl BackendState {
         // Kernel observability routes (stats, sessions, approvals, audit).
         router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
 
+        // Data feed management routes (with registry sync).
+        router = router.merge(crate::data_feeds::data_feed_routes(
+            self.feed_router_state.clone(),
+        ));
+
         (router, api)
     }
 
@@ -115,7 +126,8 @@ impl BackendState {
             tags(
                 (name = "chat", description = "Chat sessions and messaging"),
                 (name = "settings", description = "Runtime settings"),
-                (name = "system", description = "System utilities")
+                (name = "system", description = "System utilities"),
+                (name = "data-feeds", description = "Data feed management")
             )
         )]
         struct ApiDoc;
