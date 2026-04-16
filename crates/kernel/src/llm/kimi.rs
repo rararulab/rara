@@ -72,6 +72,4 @@ impl LlmDriver for KimiCodeDriver {
     }
 
     async fn model_context_length(&self, _model: &str) -> Option<usize> { Some(128_000) }
-
-    async fn model_supports_vision(&self, _model: &str) -> Option<bool> { Some(true) }
 }

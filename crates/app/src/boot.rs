@@ -354,7 +354,8 @@ async fn build_driver_registry(
             )
         })?;
 
-    let registry = Arc::new(DriverRegistry::new(&default_provider));
+    let catalog = Arc::new(rara_kernel::llm::OpenRouterCatalog::new());
+    let registry = Arc::new(DriverRegistry::new(&default_provider, catalog));
 
     // -- auto-discover providers from settings --------------------------------
 
