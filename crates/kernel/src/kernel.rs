@@ -2463,7 +2463,20 @@ impl Kernel {
                     // Carry the platform-native user id (e.g. Telegram
                     // `msg.from.id`) so interactive tools can bind pending
                     // prompts to the actual responder in shared chats.
-                    origin_platform_user_id: Some(msg.source.platform_user_id.clone()),
+                    //
+                    // Suppress for `ChannelType::Internal` synthetic
+                    // re-entry (e.g. `handle_spawn_agent` bootstrap
+                    // turns), where `platform_user_id` carries the
+                    // kernel `UserId.0` instead of a real platform id.
+                    // Surfacing that string would make the Telegram
+                    // identity gate compare `callback.from.id` against
+                    // a kernel username, locking out the real
+                    // originator on a session's first guarded turn
+                    // (Codex review of #1467).
+                    origin_platform_user_id: match msg.source.channel_type {
+                        crate::channel::types::ChannelType::Internal => None,
+                        _ => Some(msg.source.platform_user_id.clone()),
+                    },
                     event_queue: event_queue.clone(),
                     rara_message_id: msg_id.clone(),
                     context_window_tokens: 0,

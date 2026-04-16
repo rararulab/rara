@@ -53,6 +53,41 @@ use uuid::Uuid;
 /// cancelled when the user resolves an approval before the timeout fires.
 static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::new(DashMap::new);
 
+/// Per-question identity gate state for a pending guard approval prompt.
+///
+/// Inserted by [`approval_listener`] after the inline-keyboard prompt has
+/// been rendered, removed by [`handle_guard_callback`] (on resolve) or by
+/// the per-request expiry task spawned alongside the prompt. When
+/// `expected_platform_user_id` is set, [`handle_guard_callback`] rejects
+/// approve/deny presses from any other user — strictly narrower than the
+/// chat-level `allowed_user_ids` gate so the original asker (and only them)
+/// can resolve a guard prompt that was raised inside a shared chat.
+// `_id` postfix on `request_id`/`prompt_chat_id`/`prompt_msg_id` is the
+// established naming for kernel/Telegram identifiers across the adapter
+// (see `PendingUserQuestion`); renaming would obscure the meaning.
+#[allow(clippy::struct_field_names)]
+struct PendingGuardApproval {
+    request_id:                Uuid,
+    /// Telegram `from.id` (as a string) of the user who triggered the turn
+    /// that produced this approval request. `None` when the originating
+    /// turn carries no platform identity (synthetic re-entry, background
+    /// jobs, syscall path); in that case identity-gate enforcement is
+    /// skipped and only the chat-level gate applies.
+    expected_platform_user_id: Option<String>,
+    /// Chat where the approval prompt was rendered. Kept for the expiry
+    /// task and for parity with [`PendingUserQuestion::prompt_location`].
+    prompt_chat_id:            i64,
+    /// Telegram message id of the rendered prompt — combined with
+    /// `prompt_chat_id` to form a stable address for the expiry task.
+    prompt_msg_id:             MessageId,
+}
+
+/// Pending guard-approval index keyed by the kernel-generated approval
+/// request UUID. Mirrors [`PENDING_USER_QUESTIONS`] in spirit: the kernel
+/// owns the UUID, the adapter owns the per-platform identity gate.
+static PENDING_GUARD_APPROVALS: LazyLock<DashMap<Uuid, PendingGuardApproval>> =
+    LazyLock::new(DashMap::new);
+
 /// Pending user-question entry stored in [`PENDING_USER_QUESTIONS`].
 struct PendingUserQuestion {
     question_id:               Uuid,
@@ -1872,6 +1907,34 @@ async fn handle_guard_callback(
         }
     };
 
+    // Per-request identity gate: reject presses from anyone but the user
+    // who triggered the turn that produced this approval request, so other
+    // members of a shared chat (who already passed the chat-level gate
+    // above) cannot resolve a guard prompt meant for the original asker.
+    //
+    // The gate is enforced only when the kernel recorded an expected
+    // identity — `None` falls through to chat-level auth (preserves
+    // pre-existing behavior for syscall-driven approvals and synthetic
+    // re-entries that have no platform user identity).
+    let caller_pid = callback.from.id.0.to_string();
+    if let Some(entry) = PENDING_GUARD_APPROVALS.get(&request_id) {
+        if let Some(expected) = entry.expected_platform_user_id.as_deref() {
+            if expected != caller_pid {
+                warn!(
+                    request_id = %request_id,
+                    caller_pid,
+                    "guard callback: identity gate rejected non-asker"
+                );
+                let _ = bot
+                    .answer_callback_query(callback.id.clone())
+                    .text("⚠️ Only the originator can approve this prompt")
+                    .show_alert(true)
+                    .await;
+                return;
+            }
+        }
+    }
+
     let decided_by = callback
         .from
         .username
@@ -1880,10 +1943,13 @@ async fn handle_guard_callback(
         .to_string();
 
     // Cancel the auto-expiry task before resolving so it cannot race with the
-    // message edit below.
+    // message edit below. Identity-gate state is removed here too — once we
+    // commit to resolving, no further presses should be accepted for this
+    // request.
     if let Some((_, abort_handle)) = GUARD_EXPIRY_HANDLES.remove(&request_id) {
         abort_handle.abort();
     }
+    PENDING_GUARD_APPROVALS.remove(&request_id);
 
     let result =
         handle
@@ -2441,25 +2507,48 @@ async fn approval_listener(
                     }
                 };
 
-                // Resolve the originating chat from the session's channel
-                // binding; fall back to primary_chat_id when unavailable.
-                let binding_chat_id = session_index
-                    .get_channel_binding_by_session(&req.session_key)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|b| b.chat_id.parse::<i64>().ok());
+                // Resolve the destination in priority order:
+                //
+                //   1. `req.origin_endpoint` when it points at Telegram —
+                //      preserves `(chat_id, thread_id)` so the prompt
+                //      surfaces in the same forum topic the user was
+                //      chatting in (mirrors the routing fix in #1462 for
+                //      ask-user prompts).
+                //   2. Session channel binding (chat-level fallback when
+                //      the originating turn carried no Telegram endpoint,
+                //      e.g. heartbeat-driven background turns).
+                //   3. `primary_chat_id` (config-level fallback for
+                //      web/cli/synthetic origins).
+                //
+                // `thread_id` is preserved only on the (1) path; the
+                // chat-level fallbacks have no per-thread context.
+                let (chat_id, thread_id) = match &req.origin_endpoint {
+                    Some(Endpoint {
+                        address: EndpointAddress::Telegram { chat_id, thread_id },
+                        ..
+                    }) => (*chat_id, *thread_id),
+                    _ => {
+                        let binding_chat_id = session_index
+                            .get_channel_binding_by_session(&req.session_key)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|b| b.chat_id.parse::<i64>().ok());
 
-                let chat_id = binding_chat_id.or_else(|| {
-                    let cfg = config.read().unwrap_or_else(|e| e.into_inner());
-                    cfg.primary_chat_id
-                });
-                let Some(chat_id) = chat_id else {
-                    warn!(
-                        session_key = %req.session_key,
-                        "telegram approval listener: no channel binding and no primary_chat_id configured"
-                    );
-                    continue;
+                        let chat_id = binding_chat_id.or_else(|| {
+                            let cfg = config.read().unwrap_or_else(|e| e.into_inner());
+                            cfg.primary_chat_id
+                        });
+                        let Some(chat_id) = chat_id else {
+                            warn!(
+                                session_key = %req.session_key,
+                                request_id = %req.id,
+                                "telegram approval listener: no Telegram origin, no channel binding, no primary_chat_id configured"
+                            );
+                            continue;
+                        };
+                        (chat_id, None)
+                    }
                 };
 
                 let (_display, args_summary_raw) = tool_display_info(&req.tool_name, &req.tool_args);
@@ -2510,14 +2599,33 @@ async fn approval_listener(
                     InlineKeyboardButton::callback("❌ Deny", format!("guard:deny:{}", req.id)),
                 ]]);
 
-                let result = bot
-                    .send_message(ChatId(chat_id), &display_text)
-                    .parse_mode(ParseMode::Html)
-                    .reply_markup(keyboard)
-                    .await;
+                let send_req = with_thread_id!(
+                    bot.send_message(ChatId(chat_id), &display_text)
+                        .parse_mode(ParseMode::Html)
+                        .reply_markup(keyboard),
+                    thread_id
+                );
+                let result = send_req.await;
 
                 match result {
                     Ok(sent_msg) => {
+                        // Install identity-gate state so `handle_guard_callback`
+                        // can reject approve/deny presses from anyone but the
+                        // user who triggered the turn. Recorded BEFORE the
+                        // expiry task is spawned so a fast user press cannot
+                        // race the insert.
+                        PENDING_GUARD_APPROVALS.insert(
+                            req.id,
+                            PendingGuardApproval {
+                                request_id:                req.id,
+                                expected_platform_user_id: req
+                                    .origin_platform_user_id
+                                    .clone(),
+                                prompt_chat_id:            chat_id,
+                                prompt_msg_id:             sent_msg.id,
+                            },
+                        );
+
                         // Spawn a delayed task to auto-expire the message when
                         // the approval timeout elapses. The abort handle is
                         // stored so `handle_guard_callback` can cancel it if
@@ -2530,8 +2638,12 @@ async fn approval_listener(
                         let handle = tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
 
-                            // Remove our own entry from the map.
+                            // Remove our own entry from the maps. Both
+                            // GUARD_EXPIRY_HANDLES and PENDING_GUARD_APPROVALS
+                            // are cleaned up here so timed-out requests do
+                            // not leak identity-gate state.
                             GUARD_EXPIRY_HANDLES.remove(&request_id);
+                            PENDING_GUARD_APPROVALS.remove(&request_id);
 
                             // Collapse to compact one-liner on expiry.
                             let expired_text = "🛡 <b>Guard</b> ⏰ timed out".to_string();

@@ -267,6 +267,16 @@ impl SyscallDispatcher {
             } => {
                 let approval = Arc::clone(security.approval());
                 let policy = approval.policy();
+                // The Session carries `origin_endpoint` set by the most
+                // recent platform message; use it so channel adapters can
+                // route the approval prompt back to the originating chat
+                // surface (e.g. the same Telegram forum topic). Returns
+                // `None` for synthetic/background turns with no inbound
+                // endpoint, in which case adapters fall back to the
+                // session's channel binding or `primary_chat_id`.
+                let origin_endpoint = process_table
+                    .with(&syscall_sender, |p| p.origin_endpoint.clone())
+                    .flatten();
                 let req = crate::security::ApprovalRequest {
                     id: uuid::Uuid::new_v4(),
                     session_key: syscall_sender,
@@ -277,6 +287,13 @@ impl SyscallDispatcher {
                     requested_at: Timestamp::now(),
                     timeout_secs: policy.timeout_secs,
                     context: None,
+                    origin_endpoint,
+                    // Syscall-driven approval requests are not bound to a
+                    // single platform user — `KernelHandle::request_approval`
+                    // does not carry the inbound message identity. Setting
+                    // `None` falls back to chat-level authorization, which
+                    // is the pre-existing behavior.
+                    origin_platform_user_id: None,
                 };
 
                 // Spawn a task so the event loop is not blocked while waiting
