@@ -3854,9 +3854,33 @@ fn spawn_stream_forwarder(
         let (proj_name, proj_branch) = resolve_project_info().await;
         pinned.set_project_info(proj_name, proj_branch);
         let pinned_settings_key = format!("telegram.pinned_message.{chat_id}");
+        let pinned_session_key = format!("telegram.pinned_session.{chat_id}");
         if let Some(raw) = settings.get(&pinned_settings_key).await {
             if let Ok(id) = raw.parse::<i32>() {
                 pinned.message_id = Some(MessageId(id));
+            }
+        }
+
+        // Detect session switch — if the persisted session differs from the
+        // current one, unpin the old message and start fresh so users never
+        // see stale data from a previous session.
+        {
+            use teloxide::payloads::UnpinChatMessageSetters;
+            let previous_session = settings.get(&pinned_session_key).await;
+            let current_session = session_id.to_string();
+            let is_session_switch = previous_session.is_some()
+                && previous_session.as_deref() != Some(current_session.as_str());
+            if is_session_switch {
+                if let Some(mid) = pinned.message_id {
+                    // Ignore errors — the old message may already be gone.
+                    let _ = bot
+                        .unpin_chat_message(ChatId(chat_id))
+                        .message_id(mid)
+                        .await;
+                }
+                pinned.message_id = None;
+                // Clear the persisted message ID so a stale one is not restored later.
+                let _ = settings.delete(&pinned_settings_key).await;
             }
         }
 
@@ -4370,7 +4394,7 @@ fn spawn_stream_forwarder(
 
                             // ── Pinned status bar: final flush ──
                             pinned.on_stream_close();
-                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key).await;
+                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key).await;
 
                             // ── Finalize: always create trace + compact summary ──
                             // Every agent turn (including pure text replies) gets a
@@ -4536,7 +4560,7 @@ fn spawn_stream_forwarder(
 
                     // ── Pinned session card: flush on state change only ──
                     if pinned.needs_flush() {
-                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key).await;
+                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key).await;
                     }
                 }
                 _ = typing_interval.tick() => {
@@ -4701,6 +4725,7 @@ async fn flush_pinned_status(
     pinned: &mut super::pinned_status::PinnedSessionCard,
     settings: &Arc<dyn SettingsProvider>,
     settings_key: &str,
+    session_settings_key: &str,
 ) {
     use teloxide::payloads::PinChatMessageSetters;
 
@@ -4726,6 +4751,7 @@ async fn flush_pinned_status(
                 .disable_notification(true)
                 .await;
             let _ = settings.set(settings_key, &msg.id.0.to_string()).await;
+            let _ = settings.set(session_settings_key, &pinned.session_id).await;
         }
     }
     pinned.mark_flushed();
