@@ -2492,13 +2492,30 @@ async fn question_listener(
                     }
                 };
 
-                let chat_id = {
-                    let cfg = config.read().unwrap_or_else(|e| e.into_inner());
-                    cfg.primary_chat_id
-                };
-                let Some(chat_id) = chat_id else {
-                    warn!("telegram question listener: no primary_chat_id configured");
-                    continue;
+                // Route the question back to the originating Telegram surface
+                // when possible (e.g. the forum topic the user was chatting
+                // in). Fall back to `primary_chat_id` when the question
+                // originated off-Telegram (web/cli) or carries no endpoint.
+                let (chat_id, thread_id) = match &question.endpoint {
+                    Some(Endpoint {
+                        address: EndpointAddress::Telegram { chat_id, thread_id },
+                        ..
+                    }) => (*chat_id, *thread_id),
+                    _ => {
+                        let fallback = {
+                            let cfg = config.read().unwrap_or_else(|e| e.into_inner());
+                            cfg.primary_chat_id
+                        };
+                        let Some(fallback_chat) = fallback else {
+                            warn!(
+                                question_id = %question.id,
+                                "telegram question listener: no primary_chat_id \
+                                 configured and question carries no Telegram endpoint",
+                            );
+                            continue;
+                        };
+                        (fallback_chat, None)
+                    }
                 };
 
                 let text = format!(
@@ -2506,11 +2523,12 @@ async fn question_listener(
                     guard_html_escape(&question.question),
                 );
 
-                match bot
-                    .send_message(ChatId(chat_id), &text)
-                    .parse_mode(ParseMode::Html)
-                    .await
-                {
+                let req = with_thread_id!(
+                    bot.send_message(ChatId(chat_id), &text)
+                        .parse_mode(ParseMode::Html),
+                    thread_id
+                );
+                match req.await {
                     Ok(sent_msg) => {
                         let key = (chat_id, sent_msg.id.0);
                         PENDING_USER_QUESTIONS.insert(
