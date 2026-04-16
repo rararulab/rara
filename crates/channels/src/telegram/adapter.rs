@@ -3478,11 +3478,87 @@ async fn handle_update(
                 return;
             }
             if super::reply_keyboard::is_new_session_button(text) {
-                let req = with_thread_id!(
-                    bot.send_message(ChatId(chat_id), "\u{1f195} Starting a new session\u{2026}",),
-                    tg_thread_id
-                );
-                let _ = req.await;
+                // Route the button press through the same `/new` command
+                // handler that `/new` typed in chat uses, so both paths
+                // share session-creation semantics.
+                let matched_handler = command_handlers
+                    .iter()
+                    .find(|h| h.commands().iter().any(|def| def.name == "new"));
+
+                match matched_handler {
+                    Some(handler) => {
+                        let info = CommandInfo {
+                            name: "new".to_owned(),
+                            args: String::new(),
+                            raw:  "/new".to_owned(),
+                        };
+
+                        let user_id = msg
+                            .from
+                            .as_ref()
+                            .map(|u| u.id.0.to_string())
+                            .unwrap_or_default();
+                        let display_name = msg.from.as_ref().and_then(|u| {
+                            u.username.clone().or_else(|| Some(u.first_name.clone()))
+                        });
+
+                        let mut metadata = HashMap::new();
+                        metadata.insert(
+                            "telegram_chat_id".to_owned(),
+                            serde_json::Value::Number(chat_id.into()),
+                        );
+                        if let Some(tid) = tg_thread_id {
+                            metadata.insert(
+                                "telegram_thread_id".to_owned(),
+                                serde_json::Value::Number(tid.into()),
+                            );
+                        }
+
+                        let ctx = CommandContext {
+                            channel_type: ChannelType::Telegram,
+                            session_key: String::new(),
+                            user: ChannelUser {
+                                platform_id: user_id,
+                                display_name,
+                            },
+                            metadata,
+                        };
+
+                        match handler.handle(&info, &ctx).await {
+                            Ok(result) => {
+                                dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
+                            }
+                            Err(e) => {
+                                error!(
+                                    command = "new",
+                                    error = %e,
+                                    "telegram adapter: New Session button handler failed"
+                                );
+                                let req = with_thread_id!(
+                                    bot.send_message(
+                                        ChatId(chat_id),
+                                        format!("Failed to start new session: {e}")
+                                    ),
+                                    tg_thread_id
+                                );
+                                let _ = req.await;
+                            }
+                        }
+                    }
+                    None => {
+                        // Fallback for stripped/test configurations where no
+                        // `"new"` command handler is registered: preserve the
+                        // original acknowledgment so the button is not silent.
+                        let req = with_thread_id!(
+                            bot.send_message(
+                                ChatId(chat_id),
+                                "\u{1f195} Starting a new session\u{2026}",
+                            ),
+                            tg_thread_id
+                        );
+                        let _ = req.await;
+                    }
+                }
                 return;
             }
         }
