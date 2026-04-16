@@ -60,16 +60,38 @@ pub enum ApprovalDecision {
 /// An approval request submitted by an agent before executing a tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {
-    pub id:           Uuid,
-    pub session_key:  SessionKey,
-    pub tool_name:    String,
-    pub tool_args:    serde_json::Value,
-    pub summary:      String,
-    pub risk_level:   RiskLevel,
+    pub id: Uuid,
+    pub session_key: SessionKey,
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub summary: String,
+    pub risk_level: RiskLevel,
     pub requested_at: Timestamp,
     pub timeout_secs: u64,
     /// Optional context explaining why the agent wants to call this tool.
-    pub context:      Option<String>,
+    pub context: Option<String>,
+    /// Originating endpoint of the agent turn that raised this approval
+    /// request.
+    ///
+    /// Channel adapters route the rendered approval prompt back to this
+    /// endpoint (e.g. the same Telegram forum topic the user was chatting
+    /// in) so the user does not have to leave the topic to approve. `None`
+    /// when the originating turn has no platform endpoint (synthetic
+    /// re-entry, background jobs) or the source channel cannot be inferred,
+    /// in which case adapters fall back to the session's channel binding or
+    /// `primary_chat_id`.
+    #[serde(default)]
+    pub origin_endpoint: Option<crate::io::Endpoint>,
+    /// Platform-native user identifier of the user who triggered the turn
+    /// that raised this approval request (e.g. Telegram `msg.from.id` as a
+    /// string).
+    ///
+    /// Channel adapters MUST compare incoming approve/deny presses against
+    /// this value when set, so other members of a shared chat cannot
+    /// resolve a guard prompt meant for the original asker. `None` when the
+    /// origin has no platform-level identity (CLI, background jobs).
+    #[serde(default)]
+    pub origin_platform_user_id: Option<String>,
 }
 
 /// Response after an approval request is resolved.

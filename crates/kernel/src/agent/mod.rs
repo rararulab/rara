@@ -2287,16 +2287,26 @@ pub(crate) async fn run_agent_loop(
                         );
 
                         let risk_level = crate::security::ApprovalManager::classify_risk(blocked_tool.as_str());
+                        // Carry the originating endpoint and platform user
+                        // identity through the approval request so the
+                        // channel adapter can route the prompt back to the
+                        // exact chat surface the user was in (e.g. the same
+                        // Telegram forum topic) and reject approve/deny
+                        // presses from anyone but the original asker. Both
+                        // already live on `ToolContext`, populated at
+                        // turn-start from the inbound message.
                         let approval_req = crate::security::ApprovalRequest {
-                            id:           uuid::Uuid::new_v4(),
-                            session_key:  session_key_for_guard,
-                            tool_name:    blocked_tool.to_string(),
-                            tool_args:    args.clone(),
-                            summary:      format!("Guard blocked ({layer}): {reason}"),
+                            id:                      uuid::Uuid::new_v4(),
+                            session_key:             session_key_for_guard,
+                            tool_name:               blocked_tool.to_string(),
+                            tool_args:               args.clone(),
+                            summary:                 format!("Guard blocked ({layer}): {reason}"),
                             risk_level,
-                            requested_at: jiff::Timestamp::now(),
-                            timeout_secs: 120,
-                            context:      None,
+                            requested_at:            jiff::Timestamp::now(),
+                            timeout_secs:            120,
+                            context:                 None,
+                            origin_endpoint:         tc.origin_endpoint.clone(),
+                            origin_platform_user_id: tc.origin_platform_user_id.clone(),
                         };
 
                         let decision = approval_manager.request_approval(approval_req).await;
