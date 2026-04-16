@@ -1017,6 +1017,18 @@ impl StreamHandle {
 // StreamHub
 // ---------------------------------------------------------------------------
 
+/// Per-stream [`broadcast`] channel capacity used by the production
+/// [`IOSubsystem`].
+///
+/// Sized to absorb bursty LLM token streams while a single subscriber
+/// (e.g. the Telegram forwarder) is blocked in a synchronous HTTP flush.
+/// `gpt-5.x` can emit 200–500 text deltas per second; a 4096-event buffer
+/// tolerates a ~10 s stall without dropping events via `RecvError::Lagged`.
+/// Production logs showed 565 deltas dropped in a single turn at the old
+/// `256` value (see #1473). Tests intentionally use smaller values to
+/// exercise lag behaviour and should not reference this constant.
+pub const STREAM_HUB_BROADCAST_CAPACITY: usize = 4096;
+
 /// Central registry for active ephemeral streams.
 ///
 /// Manages the lifecycle of per-execution streams and provides
@@ -1496,7 +1508,7 @@ impl IOSubsystem {
         Self {
             identity_resolver,
             session_index,
-            stream_hub: Arc::new(StreamHub::new(256)),
+            stream_hub: Arc::new(StreamHub::new(STREAM_HUB_BROADCAST_CAPACITY)),
             adapters: HashMap::new(),
             endpoint_registry: Arc::new(EndpointRegistry::new()),
             notification_channel_id,
