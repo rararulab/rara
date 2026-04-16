@@ -751,8 +751,8 @@ pub async fn start_with_options(
     // Build command handlers shared across all channels.
     let command_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CommandHandler>> = {
         use rara_channels::telegram::commands::{
-            BasicCommandHandler, DebugCommandHandler, McpCommandHandler, SessionCommandHandler,
-            StatusCommandHandler, StopCommandHandler, TapeCommandHandler,
+            BasicCommandHandler, DebugCommandHandler, McpCommandHandler, RenameCommandHandler,
+            SessionCommandHandler, StatusCommandHandler, StopCommandHandler, TapeCommandHandler,
         };
         let tg_bot = telegram_adapter.as_ref().map(|a| a.bot());
         let session_handler =
@@ -765,6 +765,7 @@ pub async fn start_with_options(
             bot_client.clone(),
             kernel_handle.clone(),
         ));
+        let rename_handler = std::sync::Arc::new(RenameCommandHandler::new(bot_client.clone()));
         let tape_handler = std::sync::Arc::new(TapeCommandHandler::new(bot_client.clone()));
         let debug_handler =
             std::sync::Arc::new(DebugCommandHandler::new(rara.tape_service.clone()));
@@ -774,6 +775,7 @@ pub async fn start_with_options(
             session_handler.commands(),
             stop_handler.commands(),
             status_handler.commands(),
+            rename_handler.commands(),
             tape_handler.commands(),
             debug_handler.commands(),
         ]
@@ -787,6 +789,7 @@ pub async fn start_with_options(
             session_handler,
             stop_handler,
             status_handler,
+            rename_handler,
             tape_handler,
             debug_handler,
             mcp_handler,

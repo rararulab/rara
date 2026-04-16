@@ -123,9 +123,9 @@ use rara_kernel::{
 };
 use teloxide::{
     payloads::{
-        AnswerCallbackQuerySetters, EditMessageTextSetters, GetUpdatesSetters,
-        SendChatActionSetters, SendDocumentSetters, SendMessageSetters, SendPhotoSetters,
-        SendVoiceSetters,
+        AnswerCallbackQuerySetters, EditForumTopicSetters, EditMessageTextSetters,
+        GetUpdatesSetters, SendChatActionSetters, SendDocumentSetters, SendMessageSetters,
+        SendPhotoSetters, SendVoiceSetters,
     },
     requests::{Request, Requester},
     types::{
@@ -148,6 +148,48 @@ fn to_thread_id(thread_id: Option<i64>) -> Option<teloxide::types::ThreadId> {
         #[allow(clippy::cast_possible_truncation)]
         teloxide::types::ThreadId(MessageId(tid as i32))
     })
+}
+
+/// Build a public `t.me/c/…` deep-link for a forum topic.
+///
+/// Private supergroups use chat IDs below `-1_000_000_000_000`; Telegram's
+/// web client links use the "short" chat ID form which strips the `-100`
+/// prefix. The returned URL opens the client directly in the given topic.
+fn forum_topic_link(chat_id: i64, thread_id: i64) -> String {
+    // Telegram supergroup IDs are always negative; make them positive and
+    // strip the `100` prefix (1_000_000_000_000) to get the short form.
+    let short = (-chat_id) - 1_000_000_000_000;
+    format!("https://t.me/c/{short}/{thread_id}")
+}
+
+/// Derive a forum topic name from the user's first message text.
+///
+/// Strips noise that would make a bad topic label: the bot `@mention` and a
+/// leading `/command` token. Truncates the result to 30 characters. Falls
+/// back to `"New chat"` when the message has no usable text.
+fn derive_initial_topic_name(text: Option<&str>, bot_username: Option<&str>) -> String {
+    let Some(raw) = text.map(str::trim).filter(|s| !s.is_empty()) else {
+        return "New chat".to_owned();
+    };
+
+    let without_mention = strip_group_mention(raw, bot_username);
+
+    // Drop the leading `/command` token if present (e.g. `/new hello`
+    // → `hello`). Only strip when the whole first whitespace-delimited
+    // token starts with `/` so plain messages containing a mid-sentence
+    // slash are preserved.
+    let stripped = match without_mention.split_once(char::is_whitespace) {
+        Some((head, rest)) if head.starts_with('/') => rest.trim_start().to_owned(),
+        _ if without_mention.starts_with('/') => String::new(),
+        _ => without_mention,
+    };
+
+    let trimmed = stripped.trim();
+    if trimmed.is_empty() {
+        return "New chat".to_owned();
+    }
+
+    trimmed.chars().take(30).collect()
 }
 
 /// Apply forum topic `thread_id` to a teloxide request builder if present.
@@ -1595,6 +1637,37 @@ impl ChannelAdapter for TelegramAdapter {
             })?;
         Ok(())
     }
+
+    async fn rename_session_label(
+        &self,
+        binding: &rara_kernel::session::ChannelBinding,
+        title: &str,
+    ) -> Result<(), KernelError> {
+        let Some(thread_id_str) = binding.thread_id.as_deref() else {
+            // No thread — nothing to rename at the Telegram topic level.
+            return Ok(());
+        };
+        let Ok(chat_id) = binding.chat_id.parse::<i64>() else {
+            tracing::warn!(chat_id = %binding.chat_id, "rename: invalid chat_id");
+            return Ok(());
+        };
+        let Ok(tid) = thread_id_str.parse::<i32>() else {
+            tracing::warn!(thread_id = %thread_id_str, "rename: invalid thread_id");
+            return Ok(());
+        };
+        let thread_id = teloxide::types::ThreadId(teloxide::types::MessageId(tid));
+        // Telegram caps topic name at 128 chars.
+        let name: String = title.chars().take(128).collect();
+        if let Err(e) = self
+            .bot
+            .edit_forum_topic(teloxide::types::ChatId(chat_id), thread_id)
+            .name(name)
+            .await
+        {
+            tracing::warn!(error = %e, chat_id, tid, "edit_forum_topic failed");
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2737,6 +2810,9 @@ async fn handle_update(
     // Capture message text before the teloxide `msg` is shadowed by
     // `handle.resolve()` — used as the forum topic name.
     let topic_text: Option<String> = msg.text().map(|t| t.to_owned());
+    // Capture the user's original message id before the teloxide `msg`
+    // is shadowed — used to reply-link the General notification below.
+    let original_msg_id = msg.id;
 
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
@@ -3077,16 +3153,30 @@ async fn handle_update(
     // and then the post-ingest binding rewrite silently pointed the new
     // topic at General's session — leaking context across conversations.
     let raw = if is_forum_chat && tg_thread_id.is_none() {
-        let topic_name = topic_text
-            .as_deref()
-            .filter(|t| !t.is_empty())
-            .map(|t| t.chars().take(30).collect::<String>())
-            .unwrap_or_else(|| "New chat".to_owned());
+        // Acquire bot username once so we can sanitize the initial topic
+        // name (strip @mentions and /command prefixes).
+        let bot_username_snapshot = bot_username.read().await.clone();
+        let topic_name =
+            derive_initial_topic_name(topic_text.as_deref(), bot_username_snapshot.as_deref());
 
         match bot.create_forum_topic(ChatId(chat_id), &topic_name).await {
             Ok(topic) => {
                 let new_tid = i64::from(topic.thread_id.0.0);
                 tg_thread_id = Some(new_tid);
+
+                // Notify the user in General with a clickable deep-link to
+                // the newly created topic. Replying to the original message
+                // keeps the notification threaded to their request.
+                let link = forum_topic_link(chat_id, new_tid);
+                let notice = format!(
+                    "\u{1f4ac} New topic: <a href=\"{link}\">{name}</a>",
+                    name = guard_html_escape(&topic_name),
+                );
+                let _ = bot
+                    .send_message(ChatId(chat_id), notice)
+                    .parse_mode(ParseMode::Html)
+                    .reply_parameters(ReplyParameters::new(original_msg_id))
+                    .await;
 
                 // Send a brief intro in the new topic so the user sees
                 // activity there (the original message stays in General —
@@ -4730,5 +4820,52 @@ mod stream_suffix_tests {
     fn slice_after_char_prefix_handles_multibyte_chars() {
         let content = "你好世界abc";
         assert_eq!(slice_after_char_prefix(content, 4), "abc");
+    }
+}
+
+#[cfg(test)]
+mod forum_topic_tests {
+    use super::{derive_initial_topic_name, forum_topic_link};
+
+    #[test]
+    fn forum_topic_link_strips_100_prefix_from_supergroup_chat_id() {
+        let link = forum_topic_link(-1001234567890, 5);
+        assert_eq!(link, "https://t.me/c/1234567890/5");
+    }
+
+    #[test]
+    fn derive_initial_topic_name_falls_back_when_text_missing() {
+        assert_eq!(derive_initial_topic_name(None, None), "New chat");
+    }
+
+    #[test]
+    fn derive_initial_topic_name_falls_back_on_empty_text() {
+        assert_eq!(derive_initial_topic_name(Some(""), None), "New chat");
+    }
+
+    #[test]
+    fn derive_initial_topic_name_keeps_plain_text_verbatim() {
+        assert_eq!(derive_initial_topic_name(Some("hello"), None), "hello");
+    }
+
+    #[test]
+    fn derive_initial_topic_name_strips_bot_mention() {
+        assert_eq!(
+            derive_initial_topic_name(Some("@rarabot hello world"), Some("rarabot")),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn derive_initial_topic_name_strips_leading_slash_command() {
+        assert_eq!(
+            derive_initial_topic_name(Some("/new my task"), None),
+            "my task"
+        );
+    }
+
+    #[test]
+    fn derive_initial_topic_name_falls_back_when_only_command() {
+        assert_eq!(derive_initial_topic_name(Some("/new"), None), "New chat");
     }
 }

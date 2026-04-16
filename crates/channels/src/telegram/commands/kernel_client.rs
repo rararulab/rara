@@ -230,6 +230,38 @@ impl BotServiceClient for KernelBotServiceClient {
         Ok(entry_to_detail(&updated))
     }
 
+    async fn rename_session(
+        &self,
+        key: &str,
+        title: &str,
+    ) -> Result<SessionDetail, BotServiceError> {
+        let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
+            message: format!("invalid session key: {e}"),
+        })?;
+        let mut entry = self
+            .sessions
+            .get_session(&sk)
+            .await
+            .context(SessionSnafu)?
+            .ok_or_else(|| BotServiceError::Service {
+                message: format!("session not found: {key}"),
+            })?;
+        entry.title = Some(title.to_owned());
+        entry.updated_at = Utc::now();
+        let updated = self
+            .sessions
+            .update_session(&entry)
+            .await
+            .context(SessionSnafu)?;
+        // Propagate the new title to the channel layer (e.g. rename the
+        // Telegram forum topic). Silent no-op when no KernelHandle is
+        // wired in (e.g. unit tests).
+        if let Some(ref handle) = self.handle {
+            handle.io().rename_session_label(&sk, title).await;
+        }
+        Ok(entry_to_detail(&updated))
+    }
+
     async fn anchor_tree(
         &self,
         session_key: &str,

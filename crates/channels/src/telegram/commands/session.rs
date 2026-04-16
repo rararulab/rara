@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Session management commands: `/new`, `/clear`, `/sessions`, `/usage`,
-//! `/model`.
+//! `/model`, `/rename`.
 
 use std::{fmt::Write, sync::Arc};
 
@@ -438,6 +438,83 @@ impl CommandHandler for StopCommandHandler {
                 Ok(CommandResult::Text("已中断当前操作。".to_owned()))
             }
             Err(_) => Ok(CommandResult::Text("当前没有活跃的会话。".to_owned())),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RenameCommandHandler
+// ---------------------------------------------------------------------------
+
+/// Maximum length (in Unicode scalar values) for a renamed session title.
+///
+/// Matches Telegram's `editForumTopic` 128-character topic name cap so the
+/// two layers stay consistent.
+const RENAME_TITLE_MAX_CHARS: usize = 128;
+
+/// Handles the `/rename <name>` command — sets the session title and
+/// propagates the new label to the channel layer (e.g. renames the
+/// Telegram forum topic).
+pub struct RenameCommandHandler {
+    client: Arc<dyn BotServiceClient>,
+}
+
+impl RenameCommandHandler {
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
+}
+
+#[async_trait]
+impl CommandHandler for RenameCommandHandler {
+    fn commands(&self) -> Vec<CommandDefinition> {
+        vec![CommandDefinition {
+            name:        "rename".to_owned(),
+            description: "Rename the current session (and its forum topic)".to_owned(),
+            usage:       Some("/rename <name>".to_owned()),
+        }]
+    }
+
+    async fn handle(
+        &self,
+        command: &CommandInfo,
+        context: &CommandContext,
+    ) -> Result<CommandResult, KernelError> {
+        let title = command.args.trim();
+        if title.is_empty() {
+            return Ok(CommandResult::Text(
+                "Usage: /rename <name>\nExample: /rename Project planning".to_owned(),
+            ));
+        }
+
+        // Clip to the Telegram topic-name cap — both layers agree on the
+        // same limit so the DB title matches the rendered topic name.
+        let title: String = title.chars().take(RENAME_TITLE_MAX_CHARS).collect();
+
+        let (channel_type, chat_id, thread_id) = extract_channel_info(context);
+
+        let session_key = match self
+            .client
+            .get_channel_session(channel_type, &chat_id, thread_id.as_deref())
+            .await
+        {
+            Ok(Some(binding)) => binding.session_key,
+            Ok(None) => {
+                return Ok(CommandResult::Text(
+                    "No active session. Send a message to create one.".to_owned(),
+                ));
+            }
+            Err(e) => {
+                return Ok(CommandResult::Text(format!(
+                    "Failed to resolve session: {e}"
+                )));
+            }
+        };
+
+        match self.client.rename_session(&session_key, &title).await {
+            Ok(_) => Ok(CommandResult::Html(format!(
+                "\u{2705} Session renamed to \"{}\"",
+                html_escape(&title),
+            ))),
+            Err(e) => Ok(CommandResult::Text(format!("Failed to rename: {e}"))),
         }
     }
 }

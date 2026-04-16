@@ -23,7 +23,8 @@
 //!
 //! - [`client`]: Backend service client trait and response types.
 //! - [`basic`]: `/start` and `/help` commands.
-//! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
+//! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model`, `/rename`
+//!   commands.
 //! - [`kernel_client`]: `/search` and `/jd` commands.
 //! - [`mcp`]: `/mcp` command.
 //! - [`status`]: `/status` command.
@@ -50,7 +51,7 @@ pub use client::BotServiceClient;
 pub use debug::DebugCommandHandler;
 pub use kernel_client::KernelBotServiceClient;
 pub use mcp::McpCommandHandler;
-pub use session::{SessionCommandHandler, StopCommandHandler};
+pub use session::{RenameCommandHandler, SessionCommandHandler, StopCommandHandler};
 pub use status::{StatusCommandHandler, StatusJobsCallbackHandler};
 pub use tape::TapeCommandHandler;
 
