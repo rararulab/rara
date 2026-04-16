@@ -82,4 +82,16 @@ pub enum SkillError {
 
     #[snafu(display("database error: {source}"))]
     Sqlx { source: sqlx::Error },
+
+    #[snafu(display("base64 decode failed: {source}"))]
+    Base64 { source: base64::DecodeError },
+
+    #[snafu(display("invalid UTF-8 bytes: {source}"))]
+    InvalidUtf8 { source: std::string::FromUtf8Error },
+
+    #[snafu(display("invalid URL: {source}"))]
+    InvalidUrl { source: url::ParseError },
+
+    #[snafu(display("zip archive error: {source}"))]
+    Zip { source: zip::result::ZipError },
 }

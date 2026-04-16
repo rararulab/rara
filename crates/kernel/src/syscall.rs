@@ -29,7 +29,7 @@ use tracing::{debug_span, info, warn};
 
 use crate::{
     agent::{AgentManifest, AgentRegistryRef},
-    error::KernelError,
+    error::{KernelError, KvSnafu},
     event::{Syscall, SyscallEnvelope},
     handle::KernelHandle,
     identity::Principal,
@@ -595,7 +595,7 @@ impl SyscallDispatcher {
         self.shared_kv
             .set(&namespaced, value)
             .await
-            .whatever_context::<_, KernelError>("KV store error")?;
+            .context(KvSnafu)?;
 
         Ok(())
     }
@@ -654,10 +654,7 @@ impl SyscallDispatcher {
     ) -> crate::error::Result<()> {
         Self::check_scope_permission(session_key, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        self.shared_kv
-            .set(&scoped, value)
-            .await
-            .whatever_context::<_, KernelError>("KV store error")?;
+        self.shared_kv.set(&scoped, value).await.context(KvSnafu)?;
         Ok(())
     }
 

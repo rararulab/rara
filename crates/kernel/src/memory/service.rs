@@ -22,13 +22,14 @@ use std::future::Future;
 
 use rapidfuzz::fuzz::RatioBatchComparator;
 use serde_json::{Map, Value, json};
+use snafu::ResultExt;
 use unicode_normalization::UnicodeNormalization;
 
 use super::{
     AnchorNode, AnchorSummary, AnchorTree, FileTapeStore, ForkEdge, HandoffState, SessionBranch,
     TapEntry, TapEntryKind, TapResult, get_fork_metadata,
 };
-use crate::session::{SessionError, SessionIndex, SessionKey};
+use crate::session::{SessionIndex, SessionKey};
 
 thread_local! {
     /// Per-thread current tape context used while executing fork closures.
@@ -916,7 +917,7 @@ impl TapeService {
         let all_sessions = sessions
             .list_sessions(10_000, 0)
             .await
-            .map_err(map_session_error)?;
+            .context(super::error::SessionSnafu)?;
 
         let mut sessions_by_key = std::collections::HashMap::new();
         let mut fork_index: std::collections::HashMap<String, Vec<(String, String)>> =
@@ -984,7 +985,7 @@ impl TapeService {
             let Some(entry) = sessions
                 .get_session(&key)
                 .await
-                .map_err(map_session_error)?
+                .context(super::error::SessionSnafu)?
             else {
                 break;
             };
@@ -1078,13 +1079,6 @@ fn build_session_branch(
         anchors: anchors_by_key.get(session_key).cloned().unwrap_or_default(),
         forks,
     })
-}
-
-fn map_session_error(error: SessionError) -> super::TapError {
-    // Keep a tape-local error surface for callers in memory subsystem.
-    super::TapError::State {
-        message: error.to_string(),
-    }
 }
 
 /// Apply an optional kind filter to one entry.

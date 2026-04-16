@@ -85,6 +85,38 @@ pub enum KernelError {
     #[snafu(display("context error: {message}"))]
     Context { message: SharedString },
 
+    /// Wraps a `serde_json` (de)serialization failure with typed source.
+    #[snafu(display("json error: {source}"))]
+    Json {
+        source:   serde_json::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    /// Wraps a `serde_yaml` (de)serialization failure with typed source.
+    #[snafu(display("yaml error: {source}"))]
+    Yaml {
+        source:   serde_yaml::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    /// Wraps a tape-subsystem error so plan/agent code keeps a typed source.
+    #[snafu(display("tape error: {source}"))]
+    Tape {
+        source:   Box<crate::memory::TapError>,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    /// Wraps a shared KV store error.
+    #[snafu(display("kv store error: {source}"))]
+    Kv {
+        source:   crate::kv::KvError,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
     #[snafu(display("{message}"))]
     Other { message: SharedString },
 

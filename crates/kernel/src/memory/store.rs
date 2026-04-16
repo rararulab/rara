@@ -257,7 +257,7 @@ impl TapeFile {
                 continue;
             }
             let entry = serde_json::from_slice::<TapEntry>(trimmed)
-                .map_err(|source| TapError::JsonDecode { source })?;
+                .context(super::error::JsonDecodeSnafu)?;
             self.push_entry(entry);
         }
 
@@ -334,8 +334,7 @@ impl TapeFile {
 
         for mut entry in entries {
             entry.id = next_id;
-            let mut encoded =
-                serde_json::to_vec(&entry).map_err(|source| TapError::JsonEncode { source })?;
+            let mut encoded = serde_json::to_vec(&entry).context(super::error::JsonEncodeSnafu)?;
             encoded.push(b'\n');
             encoded_batch.extend_from_slice(&encoded);
             stored.push(entry);
@@ -497,7 +496,7 @@ impl WorkerState {
                 continue;
             }
             let decoded = decode(encoded)
-                .map_err(|source| TapError::UrlDecode { source })?
+                .context(super::error::UrlDecodeSnafu)?
                 .into_owned();
             tapes.push(decoded);
         }

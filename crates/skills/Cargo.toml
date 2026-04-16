@@ -37,6 +37,7 @@ strum_macros.workspace = true
 tar = "0.4"
 tokio.workspace = true
 tracing.workspace = true
+url.workspace = true
 zip = "8.2.0"
 
 [dev-dependencies]

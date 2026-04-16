@@ -37,6 +37,7 @@ use axum::{
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::json;
+use snafu::ResultExt;
 use tracing::{debug, warn};
 
 use crate::{
@@ -226,14 +227,19 @@ async fn find_anchor_snapshot(
 async fn ensure_dock_kernel_session(
     kernel: &rara_kernel::handle::KernelHandle,
     dock_session_id: &str,
-) -> Result<rara_kernel::session::SessionKey, anyhow::Error> {
+) -> Result<rara_kernel::session::SessionKey, crate::DockError> {
     use rara_kernel::session::{ChannelBinding, SessionEntry, SessionKey};
 
     let session_key = SessionKey::deterministic(dock_session_id);
 
     let index = kernel.session_index();
 
-    if index.get_session(&session_key).await?.is_some() {
+    if index
+        .get_session(&session_key)
+        .await
+        .context(crate::error::KernelSessionSnafu)?
+        .is_some()
+    {
         return Ok(session_key);
     }
 
@@ -249,7 +255,10 @@ async fn ensure_dock_kernel_session(
         created_at:    now,
         updated_at:    now,
     };
-    index.create_session(&entry).await?;
+    index
+        .create_session(&entry)
+        .await
+        .context(crate::error::KernelSessionSnafu)?;
 
     let binding = ChannelBinding {
         channel_type: rara_kernel::channel::types::ChannelType::Web,
@@ -259,7 +268,10 @@ async fn ensure_dock_kernel_session(
         created_at: now,
         updated_at: now,
     };
-    index.bind_channel(&binding).await?;
+    index
+        .bind_channel(&binding)
+        .await
+        .context(crate::error::KernelSessionSnafu)?;
 
     Ok(session_key)
 }
@@ -430,11 +442,7 @@ async fn turn_handler(
     };
 
     // Ensure kernel session + channel binding for this dock session.
-    let session_key = ensure_dock_kernel_session(kernel, &body.session_id)
-        .await
-        .map_err(|e| crate::DockError::Kernel {
-            message: format!("session setup: {e}"),
-        })?;
+    let session_key = ensure_dock_kernel_session(kernel, &body.session_id).await?;
 
     // Build and ingest the message into the kernel agent loop.
     let combined_content = format!("{system_prompt}\n\n{user_prompt}");
@@ -455,9 +463,7 @@ async fn turn_handler(
     kernel
         .ingest(raw)
         .await
-        .map_err(|e| crate::DockError::Kernel {
-            message: format!("ingest: {e}"),
-        })?;
+        .context(crate::error::KernelIngestSnafu)?;
 
     debug!(
         session_id = %body.session_id,

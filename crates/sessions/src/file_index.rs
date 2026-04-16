@@ -24,8 +24,12 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use rara_kernel::{
     channel::types::ChannelType,
-    session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey},
+    session::{
+        ChannelBinding, FileIoSnafu, JsonSnafu, SessionEntry, SessionError, SessionIndex,
+        SessionKey,
+    },
 };
+use snafu::ResultExt;
 use tokio::fs;
 
 /// File-based implementation of [`SessionIndex`].
@@ -45,12 +49,10 @@ impl FileSessionIndex {
     /// exist.
     pub async fn new(index_dir: impl Into<PathBuf>) -> Result<Self, SessionError> {
         let index_dir = index_dir.into();
-        fs::create_dir_all(&index_dir)
-            .await
-            .map_err(|source| SessionError::FileIo { source })?;
+        fs::create_dir_all(&index_dir).await.context(FileIoSnafu)?;
         fs::create_dir_all(index_dir.join("bindings"))
             .await
-            .map_err(|source| SessionError::FileIo { source })?;
+            .context(FileIoSnafu)?;
         Ok(Self { index_dir })
     }
 
@@ -92,12 +94,8 @@ impl FileSessionIndex {
 
     /// Atomically write JSON to a file (write .tmp then rename).
     async fn atomic_write(&self, path: &Path, tmp: &Path, data: &[u8]) -> Result<(), SessionError> {
-        fs::write(tmp, data)
-            .await
-            .map_err(|source| SessionError::FileIo { source })?;
-        fs::rename(tmp, path)
-            .await
-            .map_err(|source| SessionError::FileIo { source })?;
+        fs::write(tmp, data).await.context(FileIoSnafu)?;
+        fs::rename(tmp, path).await.context(FileIoSnafu)?;
         Ok(())
     }
 
@@ -108,8 +106,7 @@ impl FileSessionIndex {
     ) -> Result<Option<T>, SessionError> {
         match fs::read(path).await {
             Ok(data) => {
-                let value = serde_json::from_slice(&data)
-                    .map_err(|source| SessionError::Json { source })?;
+                let value = serde_json::from_slice(&data).context(JsonSnafu)?;
                 Ok(Some(value))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -128,8 +125,7 @@ impl SessionIndex for FileSessionIndex {
             });
         }
 
-        let data =
-            serde_json::to_vec_pretty(entry).map_err(|source| SessionError::Json { source })?;
+        let data = serde_json::to_vec_pretty(entry).context(JsonSnafu)?;
         let tmp = self.tmp_path(&entry.key);
         self.atomic_write(&path, &tmp, &data).await?;
         Ok(entry.clone())
@@ -146,15 +142,9 @@ impl SessionIndex for FileSessionIndex {
         offset: i64,
     ) -> Result<Vec<SessionEntry>, SessionError> {
         let mut entries = Vec::new();
-        let mut dir = fs::read_dir(&self.index_dir)
-            .await
-            .map_err(|source| SessionError::FileIo { source })?;
+        let mut dir = fs::read_dir(&self.index_dir).await.context(FileIoSnafu)?;
 
-        while let Some(entry) = dir
-            .next_entry()
-            .await
-            .map_err(|source| SessionError::FileIo { source })?
-        {
+        while let Some(entry) = dir.next_entry().await.context(FileIoSnafu)? {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
@@ -188,8 +178,7 @@ impl SessionIndex for FileSessionIndex {
             });
         }
 
-        let data =
-            serde_json::to_vec_pretty(entry).map_err(|source| SessionError::Json { source })?;
+        let data = serde_json::to_vec_pretty(entry).context(JsonSnafu)?;
         let tmp = self.tmp_path(&entry.key);
         self.atomic_write(&path, &tmp, &data).await?;
         Ok(entry.clone())
@@ -213,8 +202,7 @@ impl SessionIndex for FileSessionIndex {
         // the same sanitize logic in binding_path().
         let tmp = path.with_extension("json.tmp");
 
-        let data =
-            serde_json::to_vec_pretty(binding).map_err(|source| SessionError::Json { source })?;
+        let data = serde_json::to_vec_pretty(binding).context(JsonSnafu)?;
         self.atomic_write(&path, &tmp, &data).await?;
         Ok(binding.clone())
     }
@@ -234,15 +222,9 @@ impl SessionIndex for FileSessionIndex {
         key: &SessionKey,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         let bindings_dir = self.index_dir.join("bindings");
-        let mut dir = fs::read_dir(&bindings_dir)
-            .await
-            .map_err(|source| SessionError::FileIo { source })?;
+        let mut dir = fs::read_dir(&bindings_dir).await.context(FileIoSnafu)?;
 
-        while let Some(entry) = dir
-            .next_entry()
-            .await
-            .map_err(|source| SessionError::FileIo { source })?
-        {
+        while let Some(entry) = dir.next_entry().await.context(FileIoSnafu)? {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
@@ -286,24 +268,16 @@ impl SessionIndex for FileSessionIndex {
 
     async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
         let bindings_dir = self.index_dir.join("bindings");
-        let mut dir = fs::read_dir(&bindings_dir)
-            .await
-            .map_err(|source| SessionError::FileIo { source })?;
+        let mut dir = fs::read_dir(&bindings_dir).await.context(FileIoSnafu)?;
 
-        while let Some(entry) = dir
-            .next_entry()
-            .await
-            .map_err(|source| SessionError::FileIo { source })?
-        {
+        while let Some(entry) = dir.next_entry().await.context(FileIoSnafu)? {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
             if let Some(binding) = self.read_json::<ChannelBinding>(&path).await? {
                 if binding.session_key == *key {
-                    fs::remove_file(&path)
-                        .await
-                        .map_err(|source| SessionError::FileIo { source })?;
+                    fs::remove_file(&path).await.context(FileIoSnafu)?;
                 }
             }
         }

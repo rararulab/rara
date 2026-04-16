@@ -26,7 +26,7 @@ use snafu::prelude::*;
 /// cache/state issues do not get flattened into the broader memory crate error
 /// taxonomy.
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub(super)))]
+#[snafu(visibility(pub))]
 pub enum TapError {
     /// Filesystem or OS-level failure while reading, writing, renaming, or
     /// syncing tape files.
@@ -45,6 +45,13 @@ pub enum TapError {
     /// Failure while decoding the URL-encoded tape name stored in a filename.
     #[snafu(display("tape URL decode error: {source}"))]
     UrlDecode { source: std::string::FromUtf8Error },
+
+    /// Wraps a session-store error encountered while resolving anchor trees
+    /// or recovering session lineage.
+    #[snafu(display("tape session error: {source}"))]
+    Session {
+        source: crate::session::SessionError,
+    },
 
     /// Internal invariant failure in cache or worker lifecycle management.
     #[snafu(display("tape state error: {message}"))]
