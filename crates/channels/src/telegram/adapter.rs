@@ -3846,6 +3846,8 @@ fn spawn_stream_forwarder(
             session_label.clone(),
             session_label,
         );
+        let (proj_name, proj_branch) = resolve_project_info().await;
+        pinned.set_project_info(proj_name, proj_branch);
         let pinned_settings_key = format!("telegram.pinned_message.{chat_id}");
         if let Some(raw) = settings.get(&pinned_settings_key).await {
             if let Ok(id) = raw.parse::<i32>() {
@@ -4616,6 +4618,27 @@ enum FlushResult {
 /// 2. **`message_id` is `Some` but edit fails** — the persisted message was
 ///    deleted by the user or expired. We fall through to scenario 3.
 ///
+/// Resolve project name (from CWD basename) and git branch (from `.git/HEAD`).
+///
+/// Best-effort: returns empty strings on failure.
+async fn resolve_project_info() -> (String, String) {
+    let project_name = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+
+    let branch = match tokio::fs::read_to_string(".git/HEAD").await {
+        Ok(head) => head
+            .trim()
+            .strip_prefix("ref: refs/heads/")
+            .unwrap_or("")
+            .to_owned(),
+        Err(_) => String::new(),
+    };
+
+    (project_name, branch)
+}
+
 /// 3. **`message_id` is `None`** (first flush of this turn, or fallback from
 ///    scenario 2) — send a new message, pin it silently, and persist the new ID
 ///    so subsequent turns reuse it instead of accumulating orphan messages.

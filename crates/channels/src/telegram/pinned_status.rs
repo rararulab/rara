@@ -158,6 +158,8 @@ pub(super) struct PinnedSessionCard {
     tool_calls:       u32,
     background_tasks: Vec<BackgroundTaskEntry>,
     changed_files:    Vec<FileChange>,
+    project_name:     String,
+    project_branch:   String,
     dirty:            bool,
     /// Last rendered HTML — skip-unchanged optimization.
     last_rendered:    String,
@@ -181,6 +183,8 @@ impl PinnedSessionCard {
             tool_calls: 0,
             background_tasks: Vec::new(),
             changed_files: Vec::new(),
+            project_name: String::new(),
+            project_branch: String::new(),
             dirty: true,
             last_rendered: String::new(),
         }
@@ -204,6 +208,16 @@ impl PinnedSessionCard {
             State::Idle => "\u{26aa}",     // ⚪
         };
         lines.push(format!("{status_emoji} <b>{}</b>", self.session_title));
+
+        // Project: name: branch (shown when available).
+        if !self.project_name.is_empty() {
+            let project_line = if self.project_branch.is_empty() {
+                format!("Project: {}", self.project_name)
+            } else {
+                format!("Project: {}: {}", self.project_name, self.project_branch)
+            };
+            lines.push(project_line);
+        }
 
         let model_info = if self.model.is_empty() {
             None
@@ -286,6 +300,13 @@ impl PinnedSessionCard {
         }
 
         lines.join("\n")
+    }
+
+    /// Set project name and git branch for the card header.
+    pub fn set_project_info(&mut self, name: String, branch: String) {
+        self.project_name = name;
+        self.project_branch = branch;
+        self.dirty = true;
     }
 
     // ── Event callbacks ──
@@ -509,6 +530,23 @@ mod tests {
         assert!(text.contains("\u{2026} and 5 more"));
         assert!(text.contains("file_9.rs"));
         assert!(!text.contains("file_10.rs"));
+    }
+
+    #[test]
+    fn render_project_and_branch() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.set_project_info("rara".into(), "main".into());
+        let text = card.render();
+        assert!(text.contains("Project: rara: main"));
+    }
+
+    #[test]
+    fn render_project_no_branch() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.set_project_info("rara".into(), String::new());
+        let text = card.render();
+        assert!(text.contains("Project: rara"));
+        assert!(!text.contains("Project: rara:"));
     }
 
     #[test]
