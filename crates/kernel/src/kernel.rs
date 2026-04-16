@@ -716,6 +716,7 @@ impl Kernel {
                         None,
                         desired_session_key,
                         None,
+                        None, // source_channel: internal spawn
                         child_result_tx,
                     )
                     .await;
@@ -812,6 +813,9 @@ impl Kernel {
         // The originating channel endpoint, stored in the session so that
         // reply routing works even for synthetic re-entry messages.
         origin_endpoint: Option<crate::io::Endpoint>,
+        // The channel type of the original user-facing message, stored so
+        // that the synthetic re-entry retains correct delivery routing.
+        source_channel: Option<ChannelType>,
         // Pre-created channel for streaming AgentEvents back to the spawner.
         // Set at creation time to avoid the race where a fast-completing child
         // turn checks result_tx before the spawner has a chance to set it.
@@ -887,6 +891,7 @@ impl Kernel {
             process_cancel,
             paused: false,
             origin_endpoint,
+            source_channel,
             pause_buffer: Vec::new(),
             interrupted: Arc::new(AtomicBool::new(false)),
             interrupt_notify: Arc::new(tokio::sync::Notify::new()),
@@ -1494,6 +1499,7 @@ impl Kernel {
                 resume_session_id,
                 Some(session_id.clone()),
                 origin_endpoint.clone(),
+                Some(msg.source.channel_type),
                 None, // no child_result_tx for user-initiated sessions
             )
             .await;
@@ -1554,6 +1560,7 @@ impl Kernel {
                 None, // no resume
                 None, // independent session, don't pollute the original tape
                 None, // no origin endpoint
+                None, // source_channel: scheduled task
                 None, // no child_result_tx for scheduled tasks
             )
             .await
@@ -1802,6 +1809,7 @@ impl Kernel {
                     None,
                     Some(session_key),
                     None,
+                    None, // source_channel: Mita bootstrap
                     None, // no child_result_tx for Mita
                 )
                 .await
@@ -2092,7 +2100,18 @@ impl Kernel {
                 .flatten()
         });
 
-        let source_channel = msg.source.channel_type;
+        // Synthetic re-entry messages (from handle_spawn_agent) carry
+        // Internal channel type. Fall back to the session's recorded
+        // source channel so the first turn inherits delivery routing
+        // from the original user-facing channel.
+        let source_channel = match msg.source.channel_type {
+            ChannelType::Internal => self
+                .process_table
+                .with(&session_key, |p| p.source_channel)
+                .flatten()
+                .unwrap_or(ChannelType::Internal),
+            other => other,
+        };
 
         // Web/CLI/API channels don't have an origin_endpoint (no platform
         // chat ID to route back to), but they are still user-facing and

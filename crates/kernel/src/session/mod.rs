@@ -402,6 +402,10 @@ pub struct Session {
     /// Telegram chat). Used as a fallback for reply routing when the
     /// triggering message is synthetic (no platform origin).
     pub origin_endpoint: Option<Endpoint>,
+    /// The channel type that originally created this session (e.g. Web,
+    /// Telegram). Used as a fallback for delivery routing when the
+    /// triggering message is synthetic (`Internal`).
+    pub source_channel: Option<crate::channel::types::ChannelType>,
     /// Deferred tools activated via `discover-tools` during this session.
     /// Persists across turns so the LLM does not need to re-discover tools
     /// after each user message.
@@ -987,6 +991,7 @@ impl Session {
             background_tasks: Vec::new(),
             pending_tool_call_limit: None,
             origin_endpoint: None,
+            source_channel: None,
             activated_deferred: std::collections::HashSet::new(),
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             _parent_child_permit: None,
@@ -1066,6 +1071,7 @@ mod state_transition_tests {
             background_tasks: vec![],
             pending_tool_call_limit: None,
             origin_endpoint: None,
+            source_channel: None,
             activated_deferred: Default::default(),
             child_semaphore: Arc::new(Semaphore::new(1)),
             _parent_child_permit: None,
