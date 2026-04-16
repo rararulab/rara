@@ -34,9 +34,23 @@ use crate::io::Endpoint;
 #[derive(Debug, Clone, Serialize)]
 pub struct UserQuestion {
     /// Unique identifier for this question.
-    pub id:       Uuid,
+    pub id: Uuid,
     /// The question text to present to the user.
     pub question: String,
+    /// Whether the question is sensitive (e.g. asks for API keys, passwords,
+    /// tokens).
+    ///
+    /// Channel adapters MUST route sensitive prompts to a private surface
+    /// (e.g. Telegram DM via `primary_chat_id`) and avoid leaking the text
+    /// into shared chats, even when the endpoint points at a group/topic.
+    pub sensitive: bool,
+    /// Optional pre-defined answer choices.
+    ///
+    /// When `Some`, adapters SHOULD render structured controls (e.g. Telegram
+    /// inline keyboard) so the user can pick without typing, and the answer
+    /// returned to the agent is the exact selected option string. When
+    /// `None`, adapters fall back to free-form reply-to-message input.
+    pub options: Option<Vec<String>>,
     /// Originating endpoint of the agent turn that raised this question.
     ///
     /// Channel adapters route the rendered prompt back to this endpoint (e.g.
@@ -45,6 +59,14 @@ pub struct UserQuestion {
     /// legacy callers), in which case adapters fall back to a default
     /// destination such as Telegram's `primary_chat_id`.
     pub endpoint: Option<Endpoint>,
+    /// Platform-native user identifier of the user who triggered this
+    /// question (e.g. Telegram `msg.from.id` as a string).
+    ///
+    /// Channel adapters MUST compare incoming answers (reply text or
+    /// callback press) against this value and reject mismatches, so that
+    /// other members of a shared chat cannot answer on behalf of the asker.
+    /// `None` when the origin has no platform-level identity.
+    pub expected_platform_user_id: Option<String>,
 }
 
 /// Error from user question operations.
@@ -113,12 +135,29 @@ impl UserQuestionManager {
     /// question back to the same conversation surface (e.g. a Telegram forum
     /// topic) rather than a default destination.
     ///
+    /// `expected_platform_user_id` identifies the user who triggered the
+    /// turn (typically `ToolContext::origin_platform_user_id`). Adapters
+    /// MUST validate incoming answers against it to prevent hijacking in
+    /// shared chats.
+    ///
+    /// When `sensitive` is `true`, adapters MUST route the prompt to a
+    /// private surface (e.g. the user's DM) rather than to `endpoint` if it
+    /// is a shared chat, so secret material never surfaces publicly.
+    ///
+    /// `options` optionally supplies pre-defined answer choices; adapters
+    /// that support structured input (e.g. inline keyboards) render them
+    /// instead of a free-text reply prompt.
+    ///
     /// Fails immediately with [`NoSubscribersSnafu`] if no channel adapter is
     /// listening, avoiding a silent 5-minute hang.
+    #[allow(clippy::too_many_arguments)]
     pub async fn ask(
         &self,
         question: String,
         endpoint: Option<Endpoint>,
+        expected_platform_user_id: Option<String>,
+        sensitive: bool,
+        options: Option<Vec<String>>,
         timeout: std::time::Duration,
     ) -> std::result::Result<String, UserQuestionError> {
         let id = Uuid::new_v4();
@@ -126,7 +165,10 @@ impl UserQuestionManager {
         let uq = UserQuestion {
             id,
             question: question.clone(),
+            sensitive,
+            options,
             endpoint,
+            expected_platform_user_id,
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -212,6 +254,9 @@ mod tests {
                 .ask(
                     "What is your API key?".into(),
                     None,
+                    None,
+                    false,
+                    None,
                     std::time::Duration::from_secs(5),
                 )
                 .await
@@ -239,6 +284,9 @@ mod tests {
             .ask(
                 "question".into(),
                 None,
+                None,
+                false,
+                None,
                 std::time::Duration::from_millis(10),
             )
             .await;
@@ -251,7 +299,14 @@ mod tests {
         let mgr = UserQuestionManager::new();
         // No subscriber — should fail immediately.
         let result = mgr
-            .ask("question".into(), None, std::time::Duration::from_secs(5))
+            .ask(
+                "question".into(),
+                None,
+                None,
+                false,
+                None,
+                std::time::Duration::from_secs(5),
+            )
             .await;
         assert!(matches!(result, Err(UserQuestionError::NoSubscribers)));
     }
