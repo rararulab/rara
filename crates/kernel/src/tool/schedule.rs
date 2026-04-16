@@ -366,15 +366,16 @@ mod tests {
 
     fn build_context() -> ToolContext {
         ToolContext {
-            user_id:               "test-user".into(),
-            session_key:           SessionKey::new(),
-            origin_endpoint:       None,
-            event_queue:           build_queue(),
-            rara_message_id:       MessageId::new(),
-            context_window_tokens: 0,
-            tool_registry:         None,
-            stream_handle:         None,
-            tool_call_id:          None,
+            user_id:                 "test-user".into(),
+            session_key:             SessionKey::new(),
+            origin_endpoint:         None,
+            origin_platform_user_id: None,
+            event_queue:             build_queue(),
+            rara_message_id:         MessageId::new(),
+            context_window_tokens:   0,
+            tool_registry:           None,
+            stream_handle:           None,
+            tool_call_id:            None,
         }
     }
 
