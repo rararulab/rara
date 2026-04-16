@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useState, Fragment } from "react";
+import { Fragment, useCallback, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { api } from "@/api/client";
 import { useSessionTimeline } from "@/hooks/use-session-timeline";
+import { TimelineBar } from "@/components/kernel/TimelineBar";
+import { TimelineRow } from "@/components/kernel/TimelineRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -146,6 +148,15 @@ const AUTO_REFRESH_INTERVAL = 5_000;
 export default function KernelTop() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [selectedItemIdx, setSelectedItemIdx] = useState<number | null>(null);
+  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  const handleSegmentClick = useCallback((idx: number) => {
+    setSelectedItemIdx(idx);
+    rowRefs.current
+      .get(idx)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
 
   const statsQuery = useQuery({
     queryKey: ["kernel-stats"],
@@ -411,6 +422,14 @@ export default function KernelTop() {
                             <div className="flex items-center gap-2 text-sm font-medium">
                               <Zap className="h-3.5 w-3.5" />
                               Cascade Viewer
+                              {timeline.isStreaming && (
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[10px]"
+                                >
+                                  streaming
+                                </Badge>
+                              )}
                             </div>
                             {timeline.isLoading ? (
                               <div className="space-y-2">
@@ -421,72 +440,49 @@ export default function KernelTop() {
                               <div className="text-sm italic text-muted-foreground">
                                 Failed to load turn traces
                               </div>
+                            ) : timeline.items.length === 0 ? (
+                              <div className="text-sm italic text-muted-foreground">
+                                No events recorded
+                              </div>
                             ) : (
-                              <div className="space-y-2">
-                                {timeline.isStreaming &&
-                                  timeline.liveItems.length > 0 && (
-                                    <div className="rounded border border-border bg-muted/30 p-3">
-                                      <div className="mb-1 text-xs font-medium text-muted-foreground">
-                                        Live stream
-                                      </div>
-                                      {timeline.liveItems.map((item) => (
-                                        <div
-                                          key={`l-${item.seq}`}
-                                          className="truncate font-mono text-xs"
-                                        >
-                                          <Badge
-                                            variant="outline"
-                                            className="mr-1.5 text-[10px]"
-                                          >
-                                            {item.kind}
-                                          </Badge>
-                                          {item.content ??
-                                            item.tool ??
-                                            item.output ??
-                                            "..."}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                {timeline.turns.map((t, i) => (
-                                  <div
-                                    key={i}
-                                    className="rounded border border-border p-3 text-xs"
-                                  >
-                                    <div className="flex items-center gap-2">
-                                      <Badge
-                                        variant={
-                                          t.success
-                                            ? "secondary"
-                                            : "destructive"
-                                        }
-                                        className="text-[10px]"
-                                      >
-                                        {t.success ? "OK" : "ERR"}
-                                      </Badge>
-                                      <span className="font-mono text-muted-foreground">
-                                        {t.model}
-                                      </span>
-                                      <span className="text-muted-foreground">
-                                        {t.duration_ms}ms
-                                      </span>
-                                      <span className="text-muted-foreground">
-                                        {t.total_tool_calls} tool calls
-                                      </span>
-                                    </div>
-                                    {t.error && (
-                                      <div className="mt-1 text-destructive">
-                                        {t.error}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                                {timeline.turns.length === 0 &&
-                                  !timeline.isStreaming && (
-                                    <div className="text-sm italic text-muted-foreground">
-                                      No turns recorded
-                                    </div>
-                                  )}
+                              <div className="space-y-3">
+                                <TimelineBar
+                                  items={timeline.items}
+                                  selectedIdx={selectedItemIdx}
+                                  onSegmentClick={handleSegmentClick}
+                                />
+                                <div className="divide-y rounded border bg-background">
+                                  {timeline.items.map((item, idx) => {
+                                    const prev = timeline.items[idx - 1];
+                                    const turnChanged =
+                                      idx > 0 &&
+                                      (!prev || prev.turn !== item.turn);
+                                    const isLive = idx >= timeline.historicalItems.length;
+                                    const rowKey = `${isLive ? "l" : "h"}-${item.turn}-${item.seq}-${idx}`;
+                                    return (
+                                      <Fragment key={rowKey}>
+                                        {turnChanged && (
+                                          <div className="bg-muted/40 px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                                            Turn #{item.turn + 1}
+                                          </div>
+                                        )}
+                                        <TimelineRow
+                                          ref={(el) => {
+                                            if (el) rowRefs.current.set(idx, el);
+                                            else rowRefs.current.delete(idx);
+                                          }}
+                                          item={item}
+                                          isSelected={selectedItemIdx === idx}
+                                          onClick={() =>
+                                            setSelectedItemIdx((prev) =>
+                                              prev === idx ? null : idx,
+                                            )
+                                          }
+                                        />
+                                      </Fragment>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             )}
                           </div>
