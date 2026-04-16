@@ -157,8 +157,8 @@ impl ClawhubClient {
             &format!("{}/search", self.base_url),
             &[("q", query), ("limit", &limit.min(50).to_string())],
         )
-        .map_err(|e| crate::error::SkillError::InvalidInput {
-            message: format!("invalid ClawHub search URL: {e}"),
+        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+            format!("invalid ClawHub search URL: {e}")
         })?;
         let resp = self.get_with_retry(url.as_str(), "ClawHub search").await?;
         resp.json::<ClawhubSearchResponse>()
@@ -181,8 +181,8 @@ impl ClawhubClient {
                 ("sort", sort.as_str().to_string()),
             ],
         )
-        .map_err(|e| crate::error::SkillError::InvalidInput {
-            message: format!("invalid ClawHub browse URL: {e}"),
+        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+            format!("invalid ClawHub browse URL: {e}")
         })?;
         let resp = self.get_with_retry(url.as_str(), "ClawHub browse").await?;
         resp.json::<ClawhubBrowseResponse>()
@@ -245,8 +245,8 @@ impl ClawhubClient {
             &format!("{}/download", self.base_url),
             &[("slug", slug)],
         )
-        .map_err(|e| crate::error::SkillError::InvalidInput {
-            message: format!("invalid ClawHub download URL: {e}"),
+        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+            format!("invalid ClawHub download URL: {e}")
         })?;
         info!(slug, "downloading skill from ClawHub");
 
@@ -341,9 +341,9 @@ impl ClawhubClient {
 fn extract_zip(bytes: &[u8], dest_dir: &Path) -> crate::error::Result<()> {
     let canonical_dest = std::fs::canonicalize(dest_dir).context(IoSnafu)?;
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|e| crate::error::SkillError::Archive {
-            message: format!("failed to read zip: {e}"),
+    let mut archive = zip::ZipArchive::new(cursor)
+        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+            format!("failed to read zip: {e}")
         })?;
 
     for i in 0..archive.len() {

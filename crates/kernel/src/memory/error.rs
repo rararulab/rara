@@ -49,6 +49,15 @@ pub enum TapError {
     /// Internal invariant failure in cache or worker lifecycle management.
     #[snafu(display("tape state error: {message}"))]
     State { message: String },
+
+    /// Catch-all: wraps any error with a descriptive message (via
+    /// [`snafu::ResultExt::whatever_context`]).
+    #[snafu(whatever, display("{message}"))]
+    Whatever {
+        message: String,
+        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
+        source:  Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 }
 
 /// Convenience result alias used by all tape modules.

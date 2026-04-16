@@ -203,14 +203,13 @@ impl MarketplaceService {
                     .collect();
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
-                    .map_err(|e| crate::error::SkillError::InvalidInput {
-                        message: format!("base64 decode failed: {e}"),
-                    })?;
-                let json_str = String::from_utf8(bytes).map_err(|e| {
-                    crate::error::SkillError::InvalidInput {
-                        message: format!("plugin.json is not valid UTF-8: {e}"),
-                    }
+                    .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+                    format!("base64 decode failed: {e}")
                 })?;
+                let json_str = String::from_utf8(bytes)
+                    .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+                        format!("plugin.json is not valid UTF-8: {e}")
+                    })?;
 
                 let index = synthetic_index_from_plugin_json(repo, &json_str)?;
                 self.cache
@@ -232,9 +231,9 @@ impl MarketplaceService {
             .collect();
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&cleaned)
-            .map_err(|e| crate::error::SkillError::InvalidInput {
-                message: format!("base64 decode failed: {e}"),
-            })?;
+            .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
+            format!("base64 decode failed: {e}")
+        })?;
 
         let index: MarketplaceIndex =
             serde_json::from_slice(&bytes).context(crate::error::SerdeJsonSnafu)?;

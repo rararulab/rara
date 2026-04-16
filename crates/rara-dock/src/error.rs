@@ -56,4 +56,13 @@ pub enum DockError {
 
     #[snafu(display("Kernel error: {message}"))]
     Kernel { message: String },
+
+    /// Catch-all: wraps any error with a descriptive message (via
+    /// [`snafu::ResultExt::whatever_context`]).
+    #[snafu(whatever, display("{message}"))]
+    Whatever {
+        message: String,
+        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
+        source:  Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 }

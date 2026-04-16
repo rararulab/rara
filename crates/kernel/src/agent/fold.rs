@@ -21,6 +21,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use snafu::ResultExt;
 
 use crate::{
     error::{KernelError, Result},
@@ -213,9 +214,9 @@ pub(crate) fn parse_fold_response(text: &str) -> Result<FoldSummary> {
         trimmed
     };
 
-    let parsed: FoldResponse =
-        serde_json::from_str(json_str).map_err(|e| KernelError::AgentExecution {
-            message: format!("failed to parse fold response as JSON: {e}\nraw: {text}"),
+    let parsed: FoldResponse = serde_json::from_str(json_str)
+        .with_whatever_context::<_, _, KernelError>(|e| {
+            format!("failed to parse fold response as JSON: {e}\nraw: {text}")
         })?;
 
     Ok(FoldSummary {

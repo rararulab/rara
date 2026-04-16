@@ -23,10 +23,11 @@ use std::path::PathBuf;
 use notify_debouncer_full::{
     DebounceEventResult, Debouncer, RecommendedCache, new_debouncer, notify::RecursiveMode,
 };
+use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::error::{Result, SkillError};
+use crate::error::{Result, WatcherSnafu};
 
 /// Events emitted by the skill watcher.
 #[derive(Debug, Clone)]
@@ -87,7 +88,7 @@ impl SkillWatcher {
                 }
             },
         )
-        .map_err(|e| SkillError::Watcher { source: e })?;
+        .context(WatcherSnafu)?;
 
         let mut watcher = Self {
             _debouncer: debouncer,
@@ -98,7 +99,7 @@ impl SkillWatcher {
                 watcher
                     ._debouncer
                     .watch(dir, RecursiveMode::Recursive)
-                    .map_err(|e| SkillError::Watcher { source: e })?;
+                    .context(WatcherSnafu)?;
                 info!(dir = %dir.display(), "skill watcher: watching directory");
             }
         }

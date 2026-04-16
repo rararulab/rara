@@ -865,17 +865,14 @@ pub(crate) async fn run_agent_loop(
     interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
-    let manifest =
-        handle
-            .session_manifest(session_key)
-            .map_err(|e| KernelError::AgentExecution {
-                message: format!("failed to get manifest: {e}"),
-            })?;
+    let manifest = handle
+        .session_manifest(session_key)
+        .with_whatever_context::<_, _, KernelError>(|e| format!("failed to get manifest: {e}"))?;
     let full_tools = handle
         .session_tool_registry(session_key)
         .await
-        .map_err(|e| KernelError::AgentExecution {
-            message: format!("failed to get tool registry: {e}"),
+        .with_whatever_context::<_, _, KernelError>(|e| {
+            format!("failed to get tool registry: {e}")
         })?;
 
     // Filter tools by manifest allowlist, then remove excluded tools.
@@ -928,12 +925,11 @@ pub(crate) async fn run_agent_loop(
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) =
-        handle
-            .session_resolve_driver(session_key)
-            .map_err(|e| KernelError::AgentExecution {
-                message: format!("failed to resolve LLM driver: {e}"),
-            })?;
+    let (driver, model) = handle
+        .session_resolve_driver(session_key)
+        .with_whatever_context::<_, _, KernelError>(|e| {
+            format!("failed to resolve LLM driver: {e}")
+        })?;
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -1228,8 +1224,8 @@ pub(crate) async fn run_agent_loop(
         let mut messages = tape
             .rebuild_messages_for_llm(tape_name, user_id, &effective_prompt)
             .await
-            .map_err(|e| KernelError::AgentExecution {
-                message: format!("failed to rebuild messages from tape: {e}"),
+            .with_whatever_context::<_, _, KernelError>(|e| {
+                format!("failed to rebuild messages from tape: {e}")
             })?;
 
         // Conditional injections (tape search reminder only on first iteration)

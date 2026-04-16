@@ -37,6 +37,7 @@ use axum::{
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::json;
+use snafu::ResultExt;
 use tracing::{debug, warn};
 
 use crate::{
@@ -432,9 +433,7 @@ async fn turn_handler(
     // Ensure kernel session + channel binding for this dock session.
     let session_key = ensure_dock_kernel_session(kernel, &body.session_id)
         .await
-        .map_err(|e| crate::DockError::Kernel {
-            message: format!("session setup: {e}"),
-        })?;
+        .with_whatever_context::<_, _, crate::DockError>(|e| format!("session setup: {e}"))?;
 
     // Build and ingest the message into the kernel agent loop.
     let combined_content = format!("{system_prompt}\n\n{user_prompt}");
@@ -455,9 +454,7 @@ async fn turn_handler(
     kernel
         .ingest(raw)
         .await
-        .map_err(|e| crate::DockError::Kernel {
-            message: format!("ingest: {e}"),
-        })?;
+        .with_whatever_context::<_, _, crate::DockError>(|e| format!("ingest: {e}"))?;
 
     debug!(
         session_id = %body.session_id,
