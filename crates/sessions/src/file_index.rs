@@ -256,6 +256,34 @@ impl SessionIndex for FileSessionIndex {
         Ok(None)
     }
 
+    async fn list_channel_bindings_by_session(
+        &self,
+        key: &SessionKey,
+    ) -> Result<Vec<ChannelBinding>, SessionError> {
+        let bindings_dir = self.index_dir.join("bindings");
+        let mut dir = fs::read_dir(&bindings_dir)
+            .await
+            .map_err(|source| SessionError::FileIo { source })?;
+
+        let mut results = Vec::new();
+        while let Some(entry) = dir
+            .next_entry()
+            .await
+            .map_err(|source| SessionError::FileIo { source })?
+        {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(binding) = self.read_json::<ChannelBinding>(&path).await? {
+                if binding.session_key == *key {
+                    results.push(binding);
+                }
+            }
+        }
+        Ok(results)
+    }
+
     async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError> {
         let bindings_dir = self.index_dir.join("bindings");
         let mut dir = fs::read_dir(&bindings_dir)

@@ -1724,29 +1724,46 @@ impl IOSubsystem {
     /// Propagate a session title change to the channel layer (e.g.
     /// rename the Telegram forum topic). Silent no-op if the session
     /// has no channel binding or the adapter does not implement rename.
+    ///
+    /// Fans out to **every** binding pointing at the session: a single
+    /// session can be reachable from multiple forum topics (e.g. when a
+    /// topic has been re-targeted via `/sessions`), and propagating to
+    /// only the first one returned by the index leaves stale topic names
+    /// in place. Per-binding errors are logged but never propagated so
+    /// one bad topic does not block the others.
     #[tracing::instrument(skip(self), fields(%session_key, title))]
     pub async fn rename_session_label(
         &self,
         session_key: &crate::session::SessionKey,
         title: &str,
     ) {
-        let binding = match self
+        let bindings = match self
             .session_index
-            .get_channel_binding_by_session(session_key)
+            .list_channel_bindings_by_session(session_key)
             .await
         {
-            Ok(Some(b)) => b,
-            Ok(None) => return,
+            Ok(bs) => bs,
             Err(e) => {
                 tracing::warn!(%e, "rename_session_label: binding lookup failed");
                 return;
             }
         };
-        let Some(adapter) = self.adapters.get(&binding.channel_type).cloned() else {
+        if bindings.is_empty() {
             return;
-        };
-        if let Err(e) = adapter.rename_session_label(&binding, title).await {
-            tracing::warn!(%e, "rename_session_label: adapter returned error");
+        }
+        for binding in &bindings {
+            let Some(adapter) = self.adapters.get(&binding.channel_type).cloned() else {
+                continue;
+            };
+            if let Err(e) = adapter.rename_session_label(binding, title).await {
+                tracing::warn!(
+                    %e,
+                    channel_type = %binding.channel_type,
+                    chat_id = %binding.chat_id,
+                    thread_id = ?binding.thread_id,
+                    "rename_session_label: adapter returned error"
+                );
+            }
         }
     }
 

@@ -3134,6 +3134,21 @@ async fn generate_session_title(
 
     match session_index.get_session(session_key).await {
         Ok(Some(mut entry)) => {
+            // Re-check the title under the current read: a concurrent
+            // `/rename` or another auto-title task may have landed while
+            // the LLM call was in flight, and overwriting a manual title
+            // with a stale generated one is user-visible damage. The
+            // up-front `entry.title.is_none()` gate at the call site is
+            // advisory — this is the authoritative compare-and-persist.
+            if entry.title.is_some() {
+                tracing::info!(
+                    session_key = %session_key,
+                    existing_title = ?entry.title,
+                    generated_title = %title,
+                    "title gen: title already set (concurrent update), skipping"
+                );
+                return Ok(());
+            }
             entry.title = Some(title.clone());
             entry.updated_at = chrono::Utc::now();
             if let Err(e) = session_index.update_session(&entry).await {
