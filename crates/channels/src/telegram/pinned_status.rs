@@ -74,6 +74,14 @@ fn lookup_model_info(model: &str) -> Option<ModelInfo> {
     None
 }
 
+/// Look up the context window size (in tokens) for a known model.
+///
+/// Thin wrapper around [`lookup_model_info`] exposed to sibling modules
+/// so that [`super::reply_keyboard`] can compute the context usage gauge.
+pub(super) fn context_window_for_model(model: &str) -> Option<u32> {
+    lookup_model_info(model).map(|info| info.context_window)
+}
+
 // ---------------------------------------------------------------------------
 // Session card
 // ---------------------------------------------------------------------------

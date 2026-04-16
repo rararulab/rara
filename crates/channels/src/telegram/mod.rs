@@ -21,6 +21,7 @@ pub mod latex;
 pub mod loading_hints;
 pub mod markdown;
 pub mod pinned_status;
+pub mod reply_keyboard;
 pub mod spinner_verbs;
 
 pub use adapter::{TelegramAdapter, TelegramConfig, build_bot, telegram_to_raw_platform_message};

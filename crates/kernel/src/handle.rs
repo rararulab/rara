@@ -29,8 +29,8 @@ use crate::{
     event::{KernelEventEnvelope, Syscall},
     identity::Principal,
     io::{
-        AgentHandle, EndpointRegistryRef, IOError, IOSubsystem, InboundMessage, PipeReader,
-        PipeWriter, RawPlatformMessage, StreamHubRef,
+        AgentHandle, Endpoint, EndpointRegistryRef, IOError, IOSubsystem, InboundMessage,
+        PipeReader, PipeWriter, RawPlatformMessage, StreamHubRef,
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
@@ -333,6 +333,24 @@ impl KernelHandle {
             .map_err(|_| KernelError::Other {
                 message: "event queue full for shutdown".into(),
             })
+    }
+
+    /// Update the session's stored originating endpoint used as the reply
+    /// target fallback for synthetic re-entry messages (background tasks,
+    /// Mita directives, etc.).
+    ///
+    /// Channel adapters call this after learning a more specific endpoint for
+    /// an existing session. The Telegram adapter, for example, auto-creates
+    /// a forum topic when the first user message lands in the General chat;
+    /// it then calls this method so that subsequent replies route to the new
+    /// topic instead of General.
+    ///
+    /// Returns `true` when the session was found and updated, `false` when no
+    /// session with that key exists.
+    pub fn update_session_origin_endpoint(&self, key: &SessionKey, endpoint: Endpoint) -> bool {
+        self.process_table
+            .with_mut(key, |p| p.origin_endpoint = Some(endpoint))
+            .is_some()
     }
 
     // -- Read-only accessors ------------------------------------------------

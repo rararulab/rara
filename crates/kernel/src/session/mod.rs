@@ -1111,4 +1111,54 @@ mod state_transition_tests {
         assert_eq!(err.from, SessionState::Active);
         assert_eq!(err.to, SessionState::Suspended);
     }
+
+    #[test]
+    fn session_table_updates_origin_endpoint_via_with_mut() {
+        use crate::{
+            channel::types::ChannelType,
+            io::{Endpoint, EndpointAddress},
+        };
+
+        let table = SessionTable::new();
+        let session = make_session(SessionState::Ready);
+        let key = session.session_key;
+        table.insert(session);
+
+        // Simulate the Telegram adapter auto-creating a forum topic and then
+        // updating the session's stored origin endpoint. This mirrors the call
+        // made by `KernelHandle::update_session_origin_endpoint`, which
+        // delegates to `SessionTable::with_mut`.
+        let updated = Endpoint {
+            channel_type: ChannelType::Telegram,
+            address:      EndpointAddress::Telegram {
+                chat_id:   42,
+                thread_id: Some(99),
+            },
+        };
+        let applied = table
+            .with_mut(&key, |p| p.origin_endpoint = Some(updated.clone()))
+            .is_some();
+        assert!(applied, "session must exist for update to succeed");
+
+        let stored = table
+            .with(&key, |p| p.origin_endpoint.clone())
+            .flatten()
+            .expect("origin endpoint must be stored");
+        match stored.address {
+            EndpointAddress::Telegram { chat_id, thread_id } => {
+                assert_eq!(chat_id, 42);
+                assert_eq!(thread_id, Some(99));
+            }
+            other => panic!("unexpected endpoint variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_table_update_origin_endpoint_missing_session() {
+        let table = SessionTable::new();
+        let missing = SessionKey::new();
+        // No session inserted → with_mut returns None, mirroring the handle
+        // method returning `false` for a not-found session.
+        assert!(table.with_mut(&missing, |_| ()).is_none());
+    }
 }

@@ -2951,6 +2951,96 @@ async fn handle_update(
         }
     }
 
+    // ── Reply Keyboard button interception ──
+    // When the user taps a Reply Keyboard button, Telegram sends the
+    // button label as a plain text message. Intercept these before they
+    // reach the kernel so they don't get ingested as conversation turns.
+    if let Some(text) = msg.text() {
+        // "🆕 New Session" — delegate to the registered `/new` command
+        // handler so this path stays aligned with `/new`: same session
+        // defaults, same guard/kernel hooks, same error surface. Avoids
+        // having two divergent session-creation code paths.
+        if super::reply_keyboard::is_new_session_button(text) {
+            let matched = command_handlers
+                .iter()
+                .find(|h| h.commands().iter().any(|def| def.name == "new"));
+            if let Some(handler) = matched {
+                let user_id = msg
+                    .from
+                    .as_ref()
+                    .map(|u| u.id.0.to_string())
+                    .unwrap_or_default();
+                let display_name = msg
+                    .from
+                    .as_ref()
+                    .and_then(|u| u.username.clone().or_else(|| Some(u.first_name.clone())));
+                let mut metadata = HashMap::new();
+                metadata.insert(
+                    "telegram_chat_id".to_owned(),
+                    serde_json::Value::Number(chat_id.into()),
+                );
+                if let Some(tid) = tg_thread_id {
+                    metadata.insert(
+                        "telegram_thread_id".to_owned(),
+                        serde_json::Value::Number(tid.into()),
+                    );
+                }
+                let info = CommandInfo {
+                    name: "new".to_owned(),
+                    args: String::new(),
+                    raw:  "/new".to_owned(),
+                };
+                let ctx = CommandContext {
+                    channel_type: ChannelType::Telegram,
+                    session_key: String::new(),
+                    user: ChannelUser {
+                        platform_id: user_id,
+                        display_name,
+                    },
+                    metadata,
+                };
+                match handler.handle(&info, &ctx).await {
+                    Ok(result) => {
+                        dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "reply keyboard: `/new` handler failed");
+                        let req = with_thread_id!(
+                            bot.send_message(
+                                ChatId(chat_id),
+                                format!("Failed to create session: {e}"),
+                            ),
+                            tg_thread_id
+                        );
+                        let _ = req.await;
+                    }
+                }
+            } else {
+                warn!("reply keyboard: no `/new` handler registered");
+            }
+            return;
+        }
+        // Context / model buttons are informational. Echo the current
+        // value so the tap feels responsive instead of being silently
+        // swallowed (which can look like the bot hung).
+        if super::reply_keyboard::is_context_button(text) {
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), format!("Context usage: {text}")),
+                tg_thread_id
+            );
+            let _ = req.await;
+            return;
+        }
+        if super::reply_keyboard::is_model_button(text) {
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), format!("Active model: {text}")),
+                tg_thread_id
+            );
+            let _ = req.await;
+            return;
+        }
+    }
+
     // Convert to RawPlatformMessage.
     let username_guard = bot_username.read().await;
     let username_ref = username_guard.as_deref().unwrap_or("");
@@ -3139,6 +3229,27 @@ async fn handle_update(
                             };
                             if let Err(e) = handle.session_index().bind_channel(&binding).await {
                                 warn!(error = %e, "failed to update channel binding for new forum topic");
+                            }
+
+                            // Also refresh the session's stored origin endpoint
+                            // so that reply routing for synthetic re-entry
+                            // messages (background task completions, Mita
+                            // directives) targets the new topic instead of
+                            // General — the first user message was ingested
+                            // before the topic existed, so the endpoint stored
+                            // at session creation has `thread_id = None`.
+                            let topic_endpoint = rara_kernel::io::Endpoint {
+                                channel_type: ChannelType::Telegram,
+                                address:      rara_kernel::io::EndpointAddress::Telegram {
+                                    chat_id,
+                                    thread_id: Some(new_tid),
+                                },
+                            };
+                            if !handle.update_session_origin_endpoint(sid, topic_endpoint) {
+                                warn!(
+                                    session_key = %sid,
+                                    "auto-create topic: session not found in process table when updating origin endpoint"
+                                );
                             }
                         }
 
@@ -3867,9 +3978,20 @@ fn spawn_stream_forwarder(
                                 let mid = if let Some(mid) = progress.message_id {
                                     mid
                                 } else {
+                                    // Attach Reply Keyboard with updated session
+                                    // status (tokens, model). The keyboard is
+                                    // persistent — Telegram keeps it visible until
+                                    // a new ReplyMarkup replaces it.
+                                    let ctx_limit = super::pinned_status::context_window_for_model(&trace.model);
+                                    let reply_kb = super::reply_keyboard::build_main_keyboard(
+                                        trace.input_tokens,
+                                        ctx_limit,
+                                        &trace.model,
+                                    );
                                     let req = with_thread_id!(bot
                                         .send_message(ChatId(chat_id), &compact)
-                                        .parse_mode(ParseMode::Html), thread_id);
+                                        .parse_mode(ParseMode::Html)
+                                        .reply_markup(reply_kb), thread_id);
                                     match req.await
                                     {
                                         Ok(msg) => msg.id,
