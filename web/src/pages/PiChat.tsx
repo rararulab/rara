@@ -28,7 +28,14 @@ import {
 } from "@mariozechner/pi-web-ui";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { UserMessage, AssistantMessage, TextContent } from "@mariozechner/pi-ai";
+import type {
+  UserMessage,
+  AssistantMessage,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  ToolResultMessage,
+} from "@mariozechner/pi-ai";
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
@@ -36,8 +43,8 @@ import type { ChatSession, ChatMessageData } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 
-/** Strip `<think>...</think>` blocks from assistant text. */
-function stripThinkTags(text: string): string {
+/** Strip `<think>...</think>` blocks — used only for UI preview/title text. */
+function stripForPreview(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
 }
 
@@ -46,13 +53,52 @@ function mimeToFilename(mimeType: string, index: number): string {
   return `session-image-${index + 1}.${ext}`;
 }
 
+/** Zeroed usage — rara tracks usage server-side. */
+const EMPTY_USAGE = {
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+/**
+ * Parse assistant text into ThinkingContent + TextContent blocks.
+ * `<think>reasoning</think>answer` → [{type:"thinking",...}, {type:"text",...}]
+ */
+function parseAssistantContent(
+  raw: string,
+): (TextContent | ThinkingContent)[] {
+  const blocks: (TextContent | ThinkingContent)[] = [];
+  const re = /<think>([\s\S]*?)<\/think>/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(raw)) !== null) {
+    // Text before this <think> block
+    const before = raw.slice(cursor, match.index).trim();
+    if (before) blocks.push({ type: "text", text: before });
+    // Thinking content
+    const thinking = match[1].trim();
+    if (thinking) blocks.push({ type: "thinking", thinking });
+    cursor = match.index + match[0].length;
+  }
+
+  // Remaining text after the last </think>
+  const tail = raw.slice(cursor).trim();
+  if (tail) blocks.push({ type: "text", text: tail });
+
+  return blocks;
+}
+
 /** Convert rara ChatMessageData to pi-agent-core AgentMessage for display. */
 function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
   const result: AgentMessage[] = [];
+  // Track the last assistant message so "tool" role messages can attach ToolCall items.
+  let lastAssistant: AssistantMessage | null = null;
+
   for (const m of msgs) {
     const ts = new Date(m.created_at).getTime();
 
     if (m.role === "user") {
+      lastAssistant = null;
       if (typeof m.content === "string") {
         result.push({ role: "user", content: m.content, timestamp: ts } as UserMessage);
       } else {
@@ -92,18 +138,54 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
               .filter((b): b is { type: "text"; text: string } => b.type === "text")
               .map((b) => b.text)
               .join("\n");
-      const text = stripThinkTags(raw);
-      const content: TextContent[] = text ? [{ type: "text", text }] : [];
-      result.push({
+      const content = parseAssistantContent(raw);
+      const assistant: AssistantMessage = {
         role: "assistant",
         content,
         api: "messages",
         provider: "anthropic",
         model: "unknown",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        usage: EMPTY_USAGE,
         stopReason: "stop",
         timestamp: ts,
-      } as AssistantMessage);
+      };
+      lastAssistant = assistant;
+      result.push(assistant);
+    } else if (m.role === "tool") {
+      // Tool call from the assistant — attach as ToolCall to the last AssistantMessage.
+      if (lastAssistant && m.tool_call_id && m.tool_name) {
+        let args: Record<string, unknown> = {};
+        try {
+          const raw = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+          args = JSON.parse(raw);
+        } catch { /* use empty args */ }
+        const toolCall: ToolCall = {
+          type: "toolCall",
+          id: m.tool_call_id,
+          name: m.tool_name,
+          arguments: args,
+        };
+        (lastAssistant.content as (TextContent | ThinkingContent | ToolCall)[]).push(toolCall);
+      }
+    } else if (m.role === "tool_result") {
+      // Tool result — emit as a separate ToolResultMessage.
+      if (m.tool_call_id && m.tool_name) {
+        const text = typeof m.content === "string"
+          ? m.content
+          : m.content
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text)
+              .join("\n");
+        const toolResult: ToolResultMessage = {
+          role: "toolResult",
+          toolCallId: m.tool_call_id,
+          toolName: m.tool_name,
+          content: text ? [{ type: "text", text }] : [],
+          isError: false,
+          timestamp: ts,
+        };
+        result.push(toolResult as AgentMessage);
+      }
     }
   }
   return result;
@@ -207,11 +289,11 @@ function SessionListPanel({
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-foreground">
-                    {stripThinkTags(s.title || s.preview || "New conversation")}
+                    {stripForPreview(s.title || s.preview || "New conversation")}
                   </div>
                   {s.title && s.preview && (
                     <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {stripThinkTags(s.preview)}
+                      {stripForPreview(s.preview)}
                     </div>
                   )}
                   <div className="mt-1 text-[11px] text-muted-foreground/70">
@@ -381,11 +463,9 @@ export default function PiChat() {
         onApiKeyRequired: async () => true,
       });
 
-      // 8. Hide model/thinking selectors — rara manages these server-side
-      if (chatPanel.agentInterface) {
-        chatPanel.agentInterface.enableModelSelector = false;
-        chatPanel.agentInterface.enableThinkingSelector = false;
-      }
+      // Model and thinking selectors are enabled by default in ChatPanel.setAgent().
+      // Rara delegates model/thinking selection to the user via pi-chat-panel's
+      // built-in UI — the chosen model is passed to the backend at stream time.
       } finally {
         // Clear the loading overlay even if init fails (network/CORS/etc.)
         // so the user sees the empty chat panel rather than a spinner forever.
