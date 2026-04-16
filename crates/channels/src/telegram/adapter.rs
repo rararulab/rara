@@ -2951,96 +2951,6 @@ async fn handle_update(
         }
     }
 
-    // ── Reply Keyboard button interception ──
-    // When the user taps a Reply Keyboard button, Telegram sends the
-    // button label as a plain text message. Intercept these before they
-    // reach the kernel so they don't get ingested as conversation turns.
-    if let Some(text) = msg.text() {
-        // "🆕 New Session" — delegate to the registered `/new` command
-        // handler so this path stays aligned with `/new`: same session
-        // defaults, same guard/kernel hooks, same error surface. Avoids
-        // having two divergent session-creation code paths.
-        if super::reply_keyboard::is_new_session_button(text) {
-            let matched = command_handlers
-                .iter()
-                .find(|h| h.commands().iter().any(|def| def.name == "new"));
-            if let Some(handler) = matched {
-                let user_id = msg
-                    .from
-                    .as_ref()
-                    .map(|u| u.id.0.to_string())
-                    .unwrap_or_default();
-                let display_name = msg
-                    .from
-                    .as_ref()
-                    .and_then(|u| u.username.clone().or_else(|| Some(u.first_name.clone())));
-                let mut metadata = HashMap::new();
-                metadata.insert(
-                    "telegram_chat_id".to_owned(),
-                    serde_json::Value::Number(chat_id.into()),
-                );
-                if let Some(tid) = tg_thread_id {
-                    metadata.insert(
-                        "telegram_thread_id".to_owned(),
-                        serde_json::Value::Number(tid.into()),
-                    );
-                }
-                let info = CommandInfo {
-                    name: "new".to_owned(),
-                    args: String::new(),
-                    raw:  "/new".to_owned(),
-                };
-                let ctx = CommandContext {
-                    channel_type: ChannelType::Telegram,
-                    session_key: String::new(),
-                    user: ChannelUser {
-                        platform_id: user_id,
-                        display_name,
-                    },
-                    metadata,
-                };
-                match handler.handle(&info, &ctx).await {
-                    Ok(result) => {
-                        dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "reply keyboard: `/new` handler failed");
-                        let req = with_thread_id!(
-                            bot.send_message(
-                                ChatId(chat_id),
-                                format!("Failed to create session: {e}"),
-                            ),
-                            tg_thread_id
-                        );
-                        let _ = req.await;
-                    }
-                }
-            } else {
-                warn!("reply keyboard: no `/new` handler registered");
-            }
-            return;
-        }
-        // Context / model buttons are informational. Echo the current
-        // value so the tap feels responsive instead of being silently
-        // swallowed (which can look like the bot hung).
-        if super::reply_keyboard::is_context_button(text) {
-            let req = with_thread_id!(
-                bot.send_message(ChatId(chat_id), format!("Context usage: {text}")),
-                tg_thread_id
-            );
-            let _ = req.await;
-            return;
-        }
-        if super::reply_keyboard::is_model_button(text) {
-            let req = with_thread_id!(
-                bot.send_message(ChatId(chat_id), format!("Active model: {text}")),
-                tg_thread_id
-            );
-            let _ = req.await;
-            return;
-        }
-    }
-
     // Convert to RawPlatformMessage.
     let username_guard = bot_username.read().await;
     let username_ref = username_guard.as_deref().unwrap_or("");
@@ -3152,6 +3062,57 @@ async fn handle_update(
         raw
     };
 
+    // --- Auto-create forum topic BEFORE resolving session ---
+    //
+    // In forum-enabled supergroups, a message with no `thread_id` lands in
+    // the "General" topic — treat this as "start a new conversation" and
+    // create a dedicated topic so that `(chat_id, new_thread_id)` is an
+    // unbound channel. `handle.resolve()` will then fall through to
+    // `resolve_or_create` and mint a fresh session for the new topic,
+    // giving each topic an independent session (ChatGPT-style UX).
+    //
+    // Creating the topic before `resolve()` (rather than after, as the
+    // previous implementation did) is load-bearing: doing it after meant
+    // `resolve()` saw `thread_id=None`, reused or created General's session,
+    // and then the post-ingest binding rewrite silently pointed the new
+    // topic at General's session — leaking context across conversations.
+    let raw = if is_forum_chat && tg_thread_id.is_none() {
+        let topic_name = topic_text
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .map(|t| t.chars().take(30).collect::<String>())
+            .unwrap_or_else(|| "New chat".to_owned());
+
+        match bot.create_forum_topic(ChatId(chat_id), &topic_name).await {
+            Ok(topic) => {
+                let new_tid = i64::from(topic.thread_id.0.0);
+                tg_thread_id = Some(new_tid);
+
+                // Send a brief intro in the new topic so the user sees
+                // activity there (the original message stays in General —
+                // Telegram does not allow moving messages between topics).
+                let intro = format!("\u{1f4ac} {topic_name}");
+                let _ =
+                    with_thread_id!(bot.send_message(ChatId(chat_id), &intro), tg_thread_id).await;
+
+                // Override `thread_id` in the raw message so session
+                // resolution keys on `(chat_id, new_tid)` — unbound, so a
+                // new session is created.
+                let mut updated = raw;
+                if let Some(ref mut ctx) = updated.reply_context {
+                    ctx.thread_id = Some(new_tid.to_string());
+                }
+                updated
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to create forum topic, replying in General");
+                raw
+            }
+        }
+    } else {
+        raw
+    };
+
     let msg = match handle.resolve(raw).await {
         Ok(msg) => msg,
         Err(IOError::SystemBusy) => {
@@ -3200,75 +3161,6 @@ async fn handle_update(
 
     match submit_result {
         Ok(()) => {
-            // --- Auto-create forum topic when message lands in General ---
-            // In forum-enabled supergroups, messages without a thread_id are
-            // in the "General" topic.  We create a dedicated topic so the
-            // reply appears in its own thread, keeping the forum tidy.
-            if is_forum_chat && tg_thread_id.is_none() {
-                let topic_name = topic_text
-                    .as_deref()
-                    .filter(|t| !t.is_empty())
-                    .map(|t| t.chars().take(30).collect::<String>())
-                    .unwrap_or_else(|| "New chat".to_owned());
-
-                match bot.create_forum_topic(ChatId(chat_id), &topic_name).await {
-                    Ok(topic) => {
-                        let new_tid = i64::from(topic.thread_id.0.0);
-                        tg_thread_id = Some(new_tid);
-
-                        // Update the channel binding so future messages in
-                        // this topic resolve to the same session.
-                        if let Some(sid) = &session_id {
-                            let binding = rara_kernel::session::ChannelBinding {
-                                channel_type: ChannelType::Telegram,
-                                chat_id:      chat_id.to_string(),
-                                thread_id:    Some(new_tid.to_string()),
-                                session_key:  *sid,
-                                created_at:   chrono::Utc::now(),
-                                updated_at:   chrono::Utc::now(),
-                            };
-                            if let Err(e) = handle.session_index().bind_channel(&binding).await {
-                                warn!(error = %e, "failed to update channel binding for new forum topic");
-                            }
-
-                            // Also refresh the session's stored origin endpoint
-                            // so that reply routing for synthetic re-entry
-                            // messages (background task completions, Mita
-                            // directives) targets the new topic instead of
-                            // General — the first user message was ingested
-                            // before the topic existed, so the endpoint stored
-                            // at session creation has `thread_id = None`.
-                            let topic_endpoint = rara_kernel::io::Endpoint {
-                                channel_type: ChannelType::Telegram,
-                                address:      rara_kernel::io::EndpointAddress::Telegram {
-                                    chat_id,
-                                    thread_id: Some(new_tid),
-                                },
-                            };
-                            if !handle.update_session_origin_endpoint(sid, topic_endpoint) {
-                                warn!(
-                                    session_key = %sid,
-                                    "auto-create topic: session not found in process table when updating origin endpoint"
-                                );
-                            }
-                        }
-
-                        // Send a brief intro into the new topic so the user
-                        // sees activity there (the original message stays in
-                        // General).
-                        let intro = format!("\u{1f4ac} {topic_name}");
-                        let _ = with_thread_id!(
-                            bot.send_message(ChatId(chat_id), &intro),
-                            tg_thread_id
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to create forum topic, replying in General");
-                    }
-                }
-            }
-
             // Spawn stream forwarder for progressive editMessageText.
             // (Only needed for direct messages — group proactive messages
             // may not produce a reply, but the forwarder is harmless if idle.)
@@ -3978,20 +3870,9 @@ fn spawn_stream_forwarder(
                                 let mid = if let Some(mid) = progress.message_id {
                                     mid
                                 } else {
-                                    // Attach Reply Keyboard with updated session
-                                    // status (tokens, model). The keyboard is
-                                    // persistent — Telegram keeps it visible until
-                                    // a new ReplyMarkup replaces it.
-                                    let ctx_limit = super::pinned_status::context_window_for_model(&trace.model);
-                                    let reply_kb = super::reply_keyboard::build_main_keyboard(
-                                        trace.input_tokens,
-                                        ctx_limit,
-                                        &trace.model,
-                                    );
                                     let req = with_thread_id!(bot
                                         .send_message(ChatId(chat_id), &compact)
-                                        .parse_mode(ParseMode::Html)
-                                        .reply_markup(reply_kb), thread_id);
+                                        .parse_mode(ParseMode::Html), thread_id);
                                     match req.await
                                     {
                                         Ok(msg) => msg.id,
