@@ -408,7 +408,8 @@ pub async fn start_with_options(
 
     let web_adapter = Arc::new(
         rara_channels::web::WebAdapter::new(config.owner_token.clone())
-            .with_stt_service(stt_service.clone()),
+            .with_stt_service(stt_service.clone())
+            .with_tts_service(tts_service.clone()),
     );
     let web_router = web_adapter.router();
 

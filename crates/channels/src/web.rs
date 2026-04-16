@@ -50,7 +50,7 @@ use axum::{
     },
     routing::{get, post},
 };
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use futures::{SinkExt, StreamExt, stream::Stream};
 use rara_kernel::{
     channel::{
@@ -162,6 +162,10 @@ pub enum WebEvent {
     },
     /// Stream completed (no more deltas).
     Done,
+    /// Base64-encoded audio chunk from TTS synthesis.
+    AudioDelta { data: String, format: String },
+    /// All audio chunks have been sent.
+    AudioDone,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +315,11 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
 /// Parsed inbound WebSocket text frame.
 #[derive(Debug, Deserialize)]
 struct InboundPayload {
-    content: MessageContent,
+    content:     MessageContent,
+    /// When `true`, the client requests voice (TTS) replies for this
+    /// session.
+    #[serde(default)]
+    voice_reply: bool,
 }
 
 fn parse_inbound_text_frame(text: &str) -> InboundPayload {
@@ -320,7 +328,8 @@ fn parse_inbound_text_frame(text: &str) -> InboundPayload {
             tracing::debug!(error = %err, "WebSocket frame looks like JSON but failed to parse; treating as plain text");
         }
         InboundPayload {
-            content: MessageContent::Text(text.to_owned()),
+            content:     MessageContent::Text(text.to_owned()),
+            voice_reply: false,
         }
     })
 }
@@ -355,21 +364,26 @@ pub struct SendMessageResponse {
 /// ```
 pub struct WebAdapter {
     /// Active sessions: session_key -> broadcast sender for outbound events.
-    sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
+    sessions:           Arc<DashMap<String, broadcast::Sender<String>>>,
     /// KernelHandle for dispatching inbound messages (set during `start`).
-    sink:              Arc<RwLock<Option<KernelHandle>>>,
+    sink:               Arc<RwLock<Option<KernelHandle>>>,
     /// StreamHub for subscribing to real-time token deltas.
-    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
+    stream_hub:         Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
     /// EndpointRegistry for tracking connected users (set during startup).
-    endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    endpoint_registry:  Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     /// Owner token for verifying WebSocket auth tokens.
-    owner_token:       Option<String>,
+    owner_token:        Option<String>,
     /// Shutdown signal sender.
-    shutdown_tx:       watch::Sender<bool>,
+    shutdown_tx:        watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
-    shutdown_rx:       watch::Receiver<bool>,
+    shutdown_rx:        watch::Receiver<bool>,
     /// Optional STT service for transcribing voice messages to text.
-    stt_service:       Option<rara_stt::SttService>,
+    stt_service:        Option<rara_stt::SttService>,
+    /// Optional TTS service for synthesizing voice replies.
+    tts_service:        Option<rara_tts::TtsService>,
+    /// Session keys whose most recent inbound message requested voice
+    /// reply. Checked at egress to decide whether to synthesize audio.
+    voice_session_keys: Arc<DashSet<String>>,
 }
 
 impl WebAdapter {
@@ -385,6 +399,8 @@ impl WebAdapter {
             shutdown_tx,
             shutdown_rx,
             stt_service: None,
+            tts_service: None,
+            voice_session_keys: Arc::new(DashSet::new()),
         }
     }
 
@@ -392,6 +408,13 @@ impl WebAdapter {
     #[must_use]
     pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
         self.stt_service = stt;
+        self
+    }
+
+    /// Attach a TTS service for synthesizing voice replies.
+    #[must_use]
+    pub fn with_tts_service(mut self, tts: Option<rara_tts::TtsService>) -> Self {
+        self.tts_service = tts;
         self
     }
 
@@ -403,13 +426,15 @@ impl WebAdapter {
     /// ```
     pub fn router(&self) -> Router {
         let state = WebAdapterState {
-            sessions:          Arc::clone(&self.sessions),
-            sink:              Arc::clone(&self.sink),
-            stream_hub:        Arc::clone(&self.stream_hub),
-            endpoint_registry: Arc::clone(&self.endpoint_registry),
-            owner_token:       self.owner_token.clone(),
-            shutdown_rx:       self.shutdown_rx.clone(),
-            stt_service:       self.stt_service.clone(),
+            sessions:           Arc::clone(&self.sessions),
+            sink:               Arc::clone(&self.sink),
+            stream_hub:         Arc::clone(&self.stream_hub),
+            endpoint_registry:  Arc::clone(&self.endpoint_registry),
+            owner_token:        self.owner_token.clone(),
+            shutdown_rx:        self.shutdown_rx.clone(),
+            stt_service:        self.stt_service.clone(),
+            tts_service:        self.tts_service.clone(),
+            voice_session_keys: Arc::clone(&self.voice_session_keys),
         };
 
         Router::new()
@@ -498,13 +523,15 @@ impl WebAdapter {
 /// Shared state passed to axum route handlers.
 #[derive(Clone)]
 struct WebAdapterState {
-    sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
-    sink:              Arc<RwLock<Option<KernelHandle>>>,
-    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
-    endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    owner_token:       Option<String>,
-    shutdown_rx:       watch::Receiver<bool>,
-    stt_service:       Option<rara_stt::SttService>,
+    sessions:           Arc<DashMap<String, broadcast::Sender<String>>>,
+    sink:               Arc<RwLock<Option<KernelHandle>>>,
+    stream_hub:         Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
+    endpoint_registry:  Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    owner_token:        Option<String>,
+    shutdown_rx:        watch::Receiver<bool>,
+    stt_service:        Option<rara_stt::SttService>,
+    tts_service:        Option<rara_tts::TtsService>,
+    voice_session_keys: Arc<DashSet<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +778,8 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         let session_key = session_key.clone();
         let user_id = params.user_id.clone();
         let stt_service = state.stt_service.clone();
+        let state_voice_keys = Arc::clone(&state.voice_session_keys);
+        let state_tts = state.tts_service.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 let text = match msg {
@@ -767,6 +796,10 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                 }
 
                 let payload = parse_inbound_text_frame(&text);
+                // Track voice-reply preference for this session.
+                if payload.voice_reply {
+                    state_voice_keys.insert(session_key.clone());
+                }
                 // Transcribe any audio blocks before submitting to the kernel.
                 let content = transcribe_audio_blocks(payload.content, &stt_service).await;
                 let raw = build_raw_platform_message(&session_key, &user_id, content);
@@ -812,6 +845,8 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                                     Arc::clone(&stream_hub),
                                     Arc::clone(&sessions),
                                     resolved_key,
+                                    state_tts.clone(),
+                                    Arc::clone(&state_voice_keys),
                                 );
                             }
                         }
@@ -865,6 +900,8 @@ fn spawn_stream_forwarder(
     stream_hub: Arc<RwLock<Option<Arc<rara_kernel::io::StreamHub>>>>,
     sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
     session_key: String,
+    tts_service: Option<rara_tts::TtsService>,
+    voice_session_keys: Arc<DashSet<String>>,
 ) {
     tokio::spawn(async move {
         let hub = {
@@ -899,21 +936,107 @@ fn spawn_stream_forwarder(
             return;
         }
 
+        // Check once whether this session wants voice replies.
+        let wants_voice = voice_session_keys.remove(&session_key).is_some();
+
         for (_stream_id, mut rx) in subs {
             let sessions = Arc::clone(&sessions);
             let session_key = session_key.clone();
+            let tts = tts_service.clone();
             tokio::spawn(async move {
+                let mut voice_buf = String::new();
                 while let Ok(event) = rx.recv().await {
+                    // Buffer text deltas for TTS when voice mode is active.
+                    if wants_voice && tts.is_some() {
+                        if let StreamEvent::TextDelta { ref text } = event {
+                            voice_buf.push_str(text);
+                            // Flush on sentence boundary.
+                            if is_sentence_boundary(&voice_buf) {
+                                let chunk = std::mem::take(&mut voice_buf);
+                                synthesize_and_broadcast(&tts, &sessions, &session_key, &chunk)
+                                    .await;
+                            }
+                        }
+                    }
+
                     let Some(web_event) = stream_event_to_web_event(event) else {
                         continue;
                     };
                     WebAdapter::broadcast_event(&sessions, &session_key, &web_event);
                 }
+
+                // Flush any remaining buffered text.
+                if wants_voice && !voice_buf.is_empty() {
+                    synthesize_and_broadcast(&tts, &sessions, &session_key, &voice_buf).await;
+                }
+
+                // Signal audio stream end before the text Done event.
+                if wants_voice && tts.is_some() {
+                    WebAdapter::broadcast_event(&sessions, &session_key, &WebEvent::AudioDone);
+                }
+
                 // Stream closed — send Done event.
                 WebAdapter::broadcast_event(&sessions, &session_key, &WebEvent::Done);
             });
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// TTS helpers
+// ---------------------------------------------------------------------------
+
+/// Check whether the buffer ends at a sentence boundary suitable for TTS
+/// chunking. We split on common sentence-ending punctuation so the user hears
+/// complete sentences without excessive latency.
+fn is_sentence_boundary(buf: &str) -> bool {
+    let trimmed = buf.trim_end();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Match Chinese/English sentence-ending punctuation or newline.
+    matches!(
+        trimmed.as_bytes().last(),
+        Some(b'.' | b'!' | b'?' | b'\n')
+    ) || trimmed.ends_with('\u{3002}')  // Chinese full stop
+        || trimmed.ends_with('\u{ff01}')  // fullwidth !
+        || trimmed.ends_with('\u{ff1f}') // fullwidth ?
+}
+
+/// Synthesize `text` via TTS and broadcast the audio as a base64-encoded
+/// `AudioDelta` event. Failures are logged and silently ignored — the client
+/// still receives the text stream.
+async fn synthesize_and_broadcast(
+    tts: &Option<rara_tts::TtsService>,
+    sessions: &DashMap<String, broadcast::Sender<String>>,
+    session_key: &str,
+    text: &str,
+) {
+    use base64::Engine;
+
+    let Some(ref tts) = *tts else { return };
+
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+
+    match tts.synthesize(text).await {
+        Ok(audio) => {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&audio.data);
+            // Derive a short format tag from the MIME type (e.g. "audio/mpeg" -> "mp3").
+            let format = audio
+                .mime_type
+                .strip_prefix("audio/")
+                .unwrap_or("opus")
+                .to_owned();
+            let event = WebEvent::AudioDelta { data: b64, format };
+            WebAdapter::broadcast_event(sessions, session_key, &event);
+        }
+        Err(e) => {
+            warn!(error = %e, "TTS synthesis failed, skipping audio chunk");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,6 +1171,8 @@ async fn send_message_handler(
                         Arc::clone(&state.stream_hub),
                         Arc::clone(&state.sessions),
                         session_key.clone(),
+                        state.tts_service.clone(),
+                        Arc::clone(&state.voice_session_keys),
                     );
                     axum::Json(SendMessageResponse { accepted: true }).into_response()
                 }
