@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useState, useEffect, Fragment } from "react";
+import { useState, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -27,6 +27,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "@/api/client";
+import { useSessionTimeline } from "@/hooks/use-session-timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,52 +51,6 @@ import {
 // ---------------------------------------------------------------------------
 // Types (matching Rust backend)
 // ---------------------------------------------------------------------------
-
-/** A single node streamed via WebSocket during live session observation. */
-interface StreamingNode {
-  type: "thought" | "action" | "observation";
-  key: string;
-  text?: string;
-  toolName?: string;
-  toolId?: string;
-  arguments?: Record<string, unknown>;
-  resultPreview?: string;
-  success?: boolean;
-  error?: string | null;
-  durationMs?: number;
-  streaming?: boolean;
-}
-
-interface ToolCallTrace {
-  name: string;
-  id: string;
-  duration_ms: number;
-  success: boolean;
-  arguments: Record<string, unknown>;
-  result_preview: string;
-  error: string | null;
-}
-
-interface IterationTrace {
-  index: number;
-  first_token_ms: number | null;
-  stream_ms: number;
-  text_preview: string;
-  reasoning_text: string | null;
-  tool_calls: ToolCallTrace[];
-}
-
-/** Trace data for a single agent turn (returned by the turns API). */
-interface TurnTrace {
-  duration_ms: number;
-  model: string;
-  input_text: string | null;
-  iterations: IterationTrace[];
-  final_text_len: number;
-  total_tool_calls: number;
-  success: boolean;
-  error: string | null;
-}
 
 interface SystemStats {
   active_sessions: number;
@@ -158,142 +113,28 @@ function formatRelativeTime(iso: string | null): string {
   return `${diffHr}h ago`;
 }
 
-function stateColor(state: string): "default" | "secondary" | "destructive" | "outline" {
+/**
+ * Map a kernel `SessionState` to a Badge variant.
+ *
+ * Kernel states are `Active`, `Ready`, `Suspended`, `Paused` — sessions
+ * are never terminal (see `crates/kernel/src/session/mod.rs:258`).
+ * Branches for `completed` / `failed` / `cancelled` are intentionally
+ * absent — kernel never produces them.
+ */
+function stateColor(
+  state: string,
+): "default" | "secondary" | "destructive" | "outline" {
   switch (state.toLowerCase()) {
-    case "running":
+    case "active":
       return "default";
-    case "idle":
-    case "paused":
+    case "ready":
       return "secondary";
-    case "waiting":
-      return "outline";
-    case "failed":
-    case "error":
-      return "destructive";
-    case "completed":
-    case "cancelled":
+    case "suspended":
+    case "paused":
       return "outline";
     default:
       return "outline";
   }
-}
-
-// ---------------------------------------------------------------------------
-// useSessionStream hook
-// ---------------------------------------------------------------------------
-
-function useSessionStream(agentId: string | null, sessionState: string | null) {
-  const [nodes, setNodes] = useState<StreamingNode[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-
-  useEffect(() => {
-    if (!agentId || !sessionState) return;
-    if (sessionState !== "Running" && sessionState !== "Idle") return;
-
-    const host = window.location.host;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = localStorage.getItem("access_token") ?? "";
-    const ws = new WebSocket(
-      `${protocol}//${host}/api/v1/kernel/sessions/${agentId}/stream?token=${token}`
-    );
-
-    let currentThought = "";
-    let thoughtKey = `live-thought-${Date.now()}`;
-
-    ws.onopen = () => {
-      setIsStreaming(true);
-      setNodes([]);
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const event = JSON.parse(ev.data);
-        switch (event.type) {
-          case "text_delta":
-            currentThought += event.text ?? "";
-            setNodes((prev) => {
-              const existing = prev.find((n) => n.key === thoughtKey);
-              if (existing) {
-                return prev.map((n) =>
-                  n.key === thoughtKey ? { ...n, text: currentThought } : n
-                );
-              }
-              return [
-                ...prev,
-                {
-                  type: "thought" as const,
-                  key: thoughtKey,
-                  text: currentThought,
-                  streaming: true,
-                },
-              ];
-            });
-            break;
-
-          case "tool_call_start":
-            if (currentThought) {
-              setNodes((prev) =>
-                prev.map((n) =>
-                  n.key === thoughtKey ? { ...n, streaming: false } : n
-                )
-              );
-            }
-            setNodes((prev) => [
-              ...prev,
-              {
-                type: "action" as const,
-                key: `live-action-${event.id}`,
-                toolName: event.name,
-                toolId: event.id,
-                arguments: event.arguments,
-                streaming: true,
-              },
-            ]);
-            break;
-
-          case "tool_call_end":
-            setNodes((prev) => [
-              ...prev.map((n) =>
-                n.key === `live-action-${event.id}`
-                  ? { ...n, streaming: false, success: event.success }
-                  : n
-              ),
-              {
-                type: "observation" as const,
-                key: `live-obs-${event.id}`,
-                resultPreview: event.result_preview,
-                success: event.success,
-                error: event.error,
-              },
-            ]);
-            break;
-
-          case "turn_metrics":
-            currentThought = "";
-            thoughtKey = `live-thought-${Date.now()}`;
-            break;
-
-          case "done":
-            setIsStreaming(false);
-            setNodes([]);
-            break;
-        }
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    ws.onclose = () => setIsStreaming(false);
-    ws.onerror = () => setIsStreaming(false);
-
-    return () => {
-      ws.close();
-      setIsStreaming(false);
-      setNodes([]);
-    };
-  }, [agentId, sessionState]);
-
-  return { streamingNodes: nodes, isStreaming };
 }
 
 // ---------------------------------------------------------------------------
@@ -318,32 +159,18 @@ export default function KernelTop() {
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
-  const turnsQuery = useQuery({
-    queryKey: ["session-turns", selectedSession],
-    queryFn: () =>
-      api.get<TurnTrace[]>(
-        `/api/v1/kernel/sessions/${selectedSession}/turns`,
-      ),
-    enabled: !!selectedSession,
-    refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
-  });
-
   const stats = statsQuery.data;
   const sessions = sessionsQuery.data ?? [];
 
-  const selectedSessionState = sessions.find(
-    (p) => p.agent_id === selectedSession
-  )?.state ?? null;
+  const selectedSessionState =
+    sessions.find((p) => p.agent_id === selectedSession)?.state ?? null;
 
-  const { streamingNodes, isStreaming } = useSessionStream(
-    selectedSession,
-    selectedSessionState
-  );
+  const timeline = useSessionTimeline(selectedSession, selectedSessionState);
 
   const handleRefresh = () => {
     statsQuery.refetch();
     sessionsQuery.refetch();
-    if (selectedSession) turnsQuery.refetch();
+    if (selectedSession) timeline.refetch();
   };
 
   const handleRowClick = (agentId: string) => {
@@ -367,7 +194,10 @@ export default function KernelTop() {
               checked={autoRefresh}
               onCheckedChange={setAutoRefresh}
             />
-            <Label htmlFor="auto-refresh" className="text-sm text-muted-foreground">
+            <Label
+              htmlFor="auto-refresh"
+              className="text-sm text-muted-foreground"
+            >
               Auto-refresh
             </Label>
           </div>
@@ -440,9 +270,7 @@ export default function KernelTop() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">
-              Total Tokens
-            </CardTitle>
+            <CardTitle className="text-sm font-medium">Total Tokens</CardTitle>
             <Hash className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -522,7 +350,9 @@ export default function KernelTop() {
                   <Fragment key={p.agent_id}>
                     <TableRow
                       className="cursor-pointer transition-colors hover:bg-muted/50"
-                      data-state={selectedSession === p.agent_id ? "selected" : undefined}
+                      data-state={
+                        selectedSession === p.agent_id ? "selected" : undefined
+                      }
                       onClick={() => handleRowClick(p.agent_id)}
                     >
                       <TableCell className="w-6 px-2">
@@ -534,9 +364,7 @@ export default function KernelTop() {
                       </TableCell>
                       <TableCell>
                         <div>
-                          <span className="font-medium">
-                            {p.manifest_name}
-                          </span>
+                          <span className="font-medium">{p.manifest_name}</span>
                           {p.parent_id && (
                             <span className="ml-1.5 text-xs text-muted-foreground">
                               (child)
@@ -584,44 +412,81 @@ export default function KernelTop() {
                               <Zap className="h-3.5 w-3.5" />
                               Cascade Viewer
                             </div>
-                            {turnsQuery.isLoading ? (
+                            {timeline.isLoading ? (
                               <div className="space-y-2">
                                 <Skeleton className="h-16 w-full" />
                                 <Skeleton className="h-16 w-full" />
                               </div>
-                            ) : turnsQuery.isError ? (
-                              <div className="text-sm text-muted-foreground italic">
+                            ) : timeline.isError ? (
+                              <div className="text-sm italic text-muted-foreground">
                                 Failed to load turn traces
                               </div>
                             ) : (
                               <div className="space-y-2">
-                                {isStreaming && streamingNodes.length > 0 && (
-                                  <div className="rounded border border-border bg-muted/30 p-3">
-                                    <div className="mb-1 text-xs font-medium text-muted-foreground">Live stream</div>
-                                    {streamingNodes.map((n) => (
-                                      <div key={n.key} className="text-xs font-mono truncate">
-                                        <Badge variant="outline" className="mr-1.5 text-[10px]">{n.type}</Badge>
-                                        {n.text ?? n.toolName ?? n.resultPreview ?? "..."}
+                                {timeline.isStreaming &&
+                                  timeline.liveItems.length > 0 && (
+                                    <div className="rounded border border-border bg-muted/30 p-3">
+                                      <div className="mb-1 text-xs font-medium text-muted-foreground">
+                                        Live stream
                                       </div>
-                                    ))}
-                                  </div>
-                                )}
-                                {(turnsQuery.data ?? []).map((t, i) => (
-                                  <div key={i} className="rounded border border-border p-3 text-xs">
+                                      {timeline.liveItems.map((item) => (
+                                        <div
+                                          key={`l-${item.seq}`}
+                                          className="truncate font-mono text-xs"
+                                        >
+                                          <Badge
+                                            variant="outline"
+                                            className="mr-1.5 text-[10px]"
+                                          >
+                                            {item.kind}
+                                          </Badge>
+                                          {item.content ??
+                                            item.tool ??
+                                            item.output ??
+                                            "..."}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                {timeline.turns.map((t, i) => (
+                                  <div
+                                    key={i}
+                                    className="rounded border border-border p-3 text-xs"
+                                  >
                                     <div className="flex items-center gap-2">
-                                      <Badge variant={t.success ? "secondary" : "destructive"} className="text-[10px]">
+                                      <Badge
+                                        variant={
+                                          t.success
+                                            ? "secondary"
+                                            : "destructive"
+                                        }
+                                        className="text-[10px]"
+                                      >
                                         {t.success ? "OK" : "ERR"}
                                       </Badge>
-                                      <span className="font-mono text-muted-foreground">{t.model}</span>
-                                      <span className="text-muted-foreground">{t.duration_ms}ms</span>
-                                      <span className="text-muted-foreground">{t.total_tool_calls} tool calls</span>
+                                      <span className="font-mono text-muted-foreground">
+                                        {t.model}
+                                      </span>
+                                      <span className="text-muted-foreground">
+                                        {t.duration_ms}ms
+                                      </span>
+                                      <span className="text-muted-foreground">
+                                        {t.total_tool_calls} tool calls
+                                      </span>
                                     </div>
-                                    {t.error && <div className="mt-1 text-destructive">{t.error}</div>}
+                                    {t.error && (
+                                      <div className="mt-1 text-destructive">
+                                        {t.error}
+                                      </div>
+                                    )}
                                   </div>
                                 ))}
-                                {(turnsQuery.data ?? []).length === 0 && !isStreaming && (
-                                  <div className="text-sm text-muted-foreground italic">No turns recorded</div>
-                                )}
+                                {timeline.turns.length === 0 &&
+                                  !timeline.isStreaming && (
+                                    <div className="text-sm italic text-muted-foreground">
+                                      No turns recorded
+                                    </div>
+                                  )}
                               </div>
                             )}
                           </div>
