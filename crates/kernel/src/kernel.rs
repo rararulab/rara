@@ -514,6 +514,12 @@ impl Kernel {
         let mita_interval = self.config.mita_heartbeat_interval;
         let mut next_mita = mita_interval.map(|d| tokio::time::Instant::now() + d);
 
+        // Periodic session-table reap. Decoupled from `list_processes()` so
+        // readers never mutate the table; runs at a steady cadence regardless
+        // of whether anyone is polling.
+        let reap_interval = std::time::Duration::from_secs(30);
+        let mut next_reap = tokio::time::Instant::now() + reap_interval;
+
         loop {
             // Compute next wake time for the unified scheduler (processor 0 only).
             let scheduler_sleep = if id == 0 {
@@ -528,8 +534,9 @@ impl Kernel {
                     tokio::time::Instant::now() + clamped
                 });
 
-                // Find the earliest deadline among: mita heartbeat, next scheduled job.
-                let earliest = [next_mita, next_job_instant]
+                // Find the earliest deadline among: mita heartbeat, reap tick, next scheduled
+                // job.
+                let earliest = [next_mita, Some(next_reap), next_job_instant]
                     .into_iter()
                     .flatten()
                     .min()
@@ -577,6 +584,14 @@ impl Kernel {
                             }
                             next_mita = mita_interval.map(|d| now + d);
                         }
+                    }
+
+                    // Check if periodic session-table reap is due.
+                    if now >= next_reap {
+                        if let Err(e) = self.event_queue.try_push(KernelEventEnvelope::idle_check()) {
+                            error!(%e, "failed to push IdleCheck");
+                        }
+                        next_reap = now + reap_interval;
                     }
 
                     // Evict expired rate-limiter entries.
@@ -775,9 +790,7 @@ impl Kernel {
                 self.handle_mita_heartbeat().await;
             }
             KernelEvent::IdleCheck => {
-                // Periodic idle check — handled by session table reaping.
-                self.process_table
-                    .reap_terminal(std::time::Duration::from_secs(300));
+                self.process_table.reap_terminal(SessionTable::TERMINAL_TTL);
             }
             KernelEvent::Shutdown => {
                 info!("shutdown event received");
