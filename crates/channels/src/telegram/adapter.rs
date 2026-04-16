@@ -955,8 +955,20 @@ fn trace_html_escape(s: &str) -> String {
 
 use crate::tool_display::{tool_activity_label, tool_display_info};
 
+/// Monotonic counter used to tag each [`StreamingMessage`] with a unique epoch.
+///
+/// The stale-state cleanup task compares its captured epoch against the current
+/// entry's epoch to avoid evicting a successor turn that reused the same
+/// `chat_id` within the 120s cleanup window. Starts at 1 so 0 can act as a
+/// sentinel if ever needed.
+static STREAM_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// Per-chat streaming state for progressive `editMessageText` updates.
 struct StreamingMessage {
+    /// Monotonic tag identifying which turn owns this entry. Used by the
+    /// delayed cleanup task to distinguish its own state from a successor
+    /// turn's fresh state.
+    epoch:                 u64,
     /// All message IDs sent for this stream (multiple when splitting long
     /// content).
     message_ids:           Vec<MessageId>,
@@ -973,6 +985,7 @@ struct StreamingMessage {
 impl StreamingMessage {
     fn new() -> Self {
         Self {
+            epoch:                 STREAM_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             message_ids:           Vec::new(),
             accumulated:           String::new(),
             streamed_prefix_chars: 0,
@@ -3800,8 +3813,15 @@ fn spawn_stream_forwarder(
 
         tracing::info!(session_id = %session_id, attempts, stream_count = subs.len(), "tg stream forwarder: subscribed");
 
-        // Initialize streaming state.
-        active_streams.insert(chat_id, StreamingMessage::new());
+        // Initialize streaming state and capture its epoch so the delayed
+        // cleanup task below can distinguish this turn's state from a
+        // successor turn that may re-insert under the same chat_id.
+        let my_epoch = {
+            let fresh = StreamingMessage::new();
+            let epoch = fresh.epoch;
+            active_streams.insert(chat_id, fresh);
+            epoch
+        };
 
         // Handle the first stream (one agent turn per ingest).
         let (_stream_id, mut rx) = match subs.into_iter().next() {
@@ -4496,15 +4516,26 @@ fn spawn_stream_forwarder(
             }
         }
 
-        // Auto-cleanup after 120s if Reply never arrives.
+        // Auto-cleanup after 120s if Reply never arrives. Scope the removal
+        // to our own epoch so a successor turn that re-inserted under the
+        // same chat_id within the window is not evicted.
         let streams = active_streams.clone();
         let cid = chat_id;
+        let epoch = my_epoch;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-            if streams.remove(&cid).is_some() {
+            let removed = streams.remove_if(&cid, |_, state| state.epoch == epoch);
+            if removed.is_some() {
                 warn!(
                     chat_id = cid,
-                    "telegram stream forwarder: stale state cleaned up after 120s"
+                    epoch, "telegram stream forwarder: stale state cleaned up after 120s"
+                );
+            } else if streams.contains_key(&cid) {
+                info!(
+                    chat_id = cid,
+                    epoch,
+                    "telegram stream forwarder: stale state cleanup skipped — entry belongs to a \
+                     newer turn"
                 );
             }
         });
