@@ -43,6 +43,17 @@ pub struct CatalogEntry {
     pub supports_vision: bool,
 }
 
+/// Pre-computed normalized forms for a single catalog entry.
+struct NormalizedEntry {
+    /// Light normalization: lowercase + strip provider prefix + strip suffixes.
+    /// Preserves version numbers (e.g. `kimi-k2.5`).
+    light:      String,
+    /// Aggressive normalization: also strip `.N` minor versions
+    /// (e.g. `kimi-k2.5` → `kimi-k2`).
+    aggressive: String,
+    entry:      CatalogEntry,
+}
+
 /// Lazy, process-lifetime cache of OpenRouter model capabilities.
 ///
 /// The catalog fetches from OpenRouter on first `lookup` call and caches the
@@ -50,8 +61,7 @@ pub struct CatalogEntry {
 /// logged and silently degrade to "no data" (empty catalog).
 pub struct OpenRouterCatalog {
     client:  reqwest::Client,
-    /// `(normalized_id, entry)` pairs, populated on first access.
-    entries: OnceCell<Vec<(String, CatalogEntry)>>,
+    entries: OnceCell<Vec<NormalizedEntry>>,
 }
 
 impl OpenRouterCatalog {
@@ -78,8 +88,8 @@ impl OpenRouterCatalog {
     ///
     /// On any error the function warns and returns an empty vec so that the
     /// `OnceCell` is initialized (no retries — a process restart resets it).
-    async fn fetch(&self) -> Vec<(String, CatalogEntry)> {
-        let result: Result<Vec<(String, CatalogEntry)>, reqwest::Error> = async {
+    async fn fetch(&self) -> Vec<NormalizedEntry> {
+        let result: Result<Vec<NormalizedEntry>, reqwest::Error> = async {
             let resp: WireModelsResponse = self
                 .client
                 .get(OPENROUTER_MODELS_URL)
@@ -97,13 +107,18 @@ impl OpenRouterCatalog {
                         .architecture
                         .as_ref()
                         .map_or(false, |a| a.input_modalities.iter().any(|m| m == "image"));
-                    let norm = normalize(&w.id);
+                    let light = normalize_light(&w.id);
+                    let aggressive = strip_minor_versions(&light);
                     let entry = CatalogEntry {
                         id: w.id,
                         context_length: w.context_length,
                         supports_vision,
                     };
-                    (norm, entry)
+                    NormalizedEntry {
+                        light,
+                        aggressive,
+                        entry,
+                    }
                 })
                 .collect();
 
@@ -149,38 +164,32 @@ struct WireModelArchitecture {
 }
 
 // ---------------------------------------------------------------------------
-// Normalization
+// Normalization (two levels)
 // ---------------------------------------------------------------------------
 
-/// Normalize a model identifier for fuzzy comparison.
+/// Light normalization: lowercase + strip provider prefix + strip suffixes.
 ///
-/// Steps:
-/// 1. ASCII lowercase
-/// 2. Strip provider prefix (`openai/gpt-5` -> `gpt-5`)
-/// 3. Strip known suffixes: `-preview`, `-latest`, `-exp`
-/// 4. Strip minor versions: segment `k2.6` -> `k2`, `3.5` -> `3`
-/// 5. Rejoin segments with `-`
-fn normalize(s: &str) -> String {
+/// Preserves version numbers so that `kimi-k2.5` and `kimi-k2` remain
+/// distinguishable.
+fn normalize_light(s: &str) -> String {
     let lower = s.to_ascii_lowercase();
-
-    // Strip provider prefix (everything before the last `/`).
     let base = lower.rsplit('/').next().unwrap_or(&lower);
-
-    // Strip known suffixes.
-    let trimmed = base
-        .trim_end_matches("-preview")
+    base.trim_end_matches("-preview")
         .trim_end_matches("-latest")
-        .trim_end_matches("-exp");
+        .trim_end_matches("-exp")
+        .to_owned()
+}
 
-    // Split on `-`, strip minor versions from each segment, rejoin.
-    trimmed
+/// Aggressive normalization: strip `.N` minor-version suffixes from each
+/// `-`-delimited segment.  `k2.6` → `k2`, `gpt-5.4` → `gpt-5`.
+fn strip_minor_versions(light: &str) -> String {
+    light
         .split('-')
         .map(|seg| {
-            // If a segment contains a `.`, strip `.N` where N is all digits.
-            if let Some(dot_pos) = seg.find('.') {
-                let suffix = &seg[dot_pos + 1..];
+            if let Some(dot) = seg.find('.') {
+                let suffix = &seg[dot + 1..];
                 if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) {
-                    return &seg[..dot_pos];
+                    return &seg[..dot];
                 }
             }
             seg
@@ -190,33 +199,51 @@ fn normalize(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Fuzzy matching
+// Fuzzy matching — two-pass
 // ---------------------------------------------------------------------------
 
 /// Find the best-matching catalog entry for a user-supplied model name.
 ///
-/// Strategy:
-/// 1. **Exact match** on the normalized name.
-/// 2. **Bidirectional substring**: either the catalog entry contains the needle
-///    or the needle contains the catalog entry.  Among all hits the entry with
-///    the **shortest** normalized ID wins (closest semantic match).
+/// Two passes, each with exact → substring fallback:
+///
+/// 1. **Light pass** (version-preserving): `K2.5` → `k2.5`, matches `kimi-k2.5`
+///    but *not* `kimi-k2`.  This prevents `kimi-k2.5` (vision) and `kimi-k2`
+///    (no vision) from colliding.
+/// 2. **Aggressive pass** (version-stripped): `K2.6-code-preview` → `k2-code`,
+///    broadens the net for models whose OpenRouter ID omits the minor version.
+///
+/// Within each substring pass the **shortest** matching ID wins (least
+/// extraneous content = closest semantic match).
 fn fuzzy_find_in_entries<'a>(
-    entries: &'a [(String, CatalogEntry)],
+    entries: &'a [NormalizedEntry],
     model_name: &str,
 ) -> Option<&'a CatalogEntry> {
-    let needle = normalize(model_name);
+    let needle_light = normalize_light(model_name);
+    let needle_agg = strip_minor_versions(&needle_light);
 
-    // Step 1: exact match.
-    if let Some((_norm, entry)) = entries.iter().find(|(norm, _)| *norm == needle) {
-        return Some(entry);
+    // Pass 1a: exact on light.
+    if let Some(ne) = entries.iter().find(|ne| ne.light == needle_light) {
+        return Some(&ne.entry);
+    }
+    // Pass 1b: substring on light — shortest wins.
+    let hit = entries
+        .iter()
+        .filter(|ne| ne.light.contains(&*needle_light) || needle_light.contains(&*ne.light))
+        .min_by_key(|ne| ne.light.len());
+    if let Some(ne) = hit {
+        return Some(&ne.entry);
     }
 
-    // Step 2: bidirectional substring — pick shortest normalized ID.
+    // Pass 2a: exact on aggressive.
+    if let Some(ne) = entries.iter().find(|ne| ne.aggressive == needle_agg) {
+        return Some(&ne.entry);
+    }
+    // Pass 2b: substring on aggressive — shortest wins.
     entries
         .iter()
-        .filter(|(norm, _)| norm.contains(&*needle) || needle.contains(&**norm))
-        .min_by_key(|(norm, _)| norm.len())
-        .map(|(_, entry)| entry)
+        .filter(|ne| ne.aggressive.contains(&*needle_agg) || needle_agg.contains(&*ne.aggressive))
+        .min_by_key(|ne| ne.aggressive.len())
+        .map(|ne| &ne.entry)
 }
 
 // ---------------------------------------------------------------------------
@@ -227,66 +254,93 @@ fn fuzzy_find_in_entries<'a>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn normalize_strips_provider_prefix() {
-        assert_eq!(normalize("moonshotai/kimi-k2-code"), "kimi-k2-code");
-        assert_eq!(normalize("openai/gpt-5"), "gpt-5");
-        assert_eq!(normalize("gpt-4o"), "gpt-4o");
+    fn make_entry(id: &str, vision: bool) -> NormalizedEntry {
+        let light = normalize_light(id);
+        let aggressive = strip_minor_versions(&light);
+        NormalizedEntry {
+            light,
+            aggressive,
+            entry: CatalogEntry {
+                id:              id.into(),
+                context_length:  Some(128_000),
+                supports_vision: vision,
+            },
+        }
     }
 
     #[test]
-    fn normalize_strips_suffixes_and_minor_version() {
-        assert_eq!(normalize("K2.6-code-preview"), "k2-code");
-        assert_eq!(normalize("gpt-5.4"), "gpt-5");
-        assert_eq!(normalize("claude-3.5-sonnet-latest"), "claude-3-sonnet");
+    fn light_normalization_preserves_versions() {
+        assert_eq!(normalize_light("moonshotai/kimi-k2-code"), "kimi-k2-code");
+        assert_eq!(normalize_light("openai/gpt-5"), "gpt-5");
+        assert_eq!(normalize_light("gpt-4o"), "gpt-4o");
+        // Versions preserved at this level.
+        assert_eq!(normalize_light("K2.6-code-preview"), "k2.6-code");
+        assert_eq!(
+            normalize_light("claude-3.5-sonnet-latest"),
+            "claude-3.5-sonnet"
+        );
     }
 
     #[test]
-    fn fuzzy_match_bidirectional_substring() {
+    fn aggressive_normalization_strips_minor_versions() {
+        assert_eq!(strip_minor_versions("k2.6-code"), "k2-code");
+        assert_eq!(strip_minor_versions("gpt-5.4"), "gpt-5");
+        assert_eq!(strip_minor_versions("claude-3.5-sonnet"), "claude-3-sonnet");
+        // No minor version to strip.
+        assert_eq!(strip_minor_versions("gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn two_pass_fuzzy_match() {
         let entries = vec![
-            (
-                "kimi-k2-code".into(),
-                CatalogEntry {
-                    id:              "moonshotai/kimi-k2-code".into(),
-                    context_length:  Some(128_000),
-                    supports_vision: false,
-                },
-            ),
-            (
-                "kimi-k2".into(),
-                CatalogEntry {
-                    id:              "moonshotai/kimi-k2.5".into(),
-                    context_length:  Some(128_000),
-                    supports_vision: true,
-                },
-            ),
-            (
-                "gpt-5".into(),
-                CatalogEntry {
-                    id:              "openai/gpt-5".into(),
-                    context_length:  Some(200_000),
-                    supports_vision: true,
-                },
-            ),
+            make_entry("moonshotai/kimi-k2-code", false),
+            make_entry("moonshotai/kimi-k2.5", true),
+            make_entry("openai/gpt-5", true),
         ];
 
-        // "K2.6-code-preview" -> "k2-code", "kimi-k2-code" contains "k2-code"
+        // "K2.6-code-preview" → light "k2.6-code" (no light match)
+        // → aggressive "k2-code", substring of "kimi-k2-code" ✓ → vision=false
         let hit = fuzzy_find_in_entries(&entries, "K2.6-code-preview");
         assert!(hit.is_some());
         assert!(!hit.unwrap().supports_vision);
 
-        // "gpt-5.4" -> "gpt-5" exact match
+        // "gpt-5.4" → light "gpt-5.4", substring contains "gpt-5" ✓
         let hit = fuzzy_find_in_entries(&entries, "gpt-5.4");
         assert!(hit.is_some());
         assert!(hit.unwrap().supports_vision);
 
-        // "K2.5" -> "k2": both "kimi-k2" and "kimi-k2-code" contain "k2"
-        // Shortest wins -> "kimi-k2" (len 7) -> kimi-k2.5 (vision=true)
+        // "K2.5" → light "k2.5", substring of "kimi-k2.5" ✓ → vision=true
+        // Does NOT collide with kimi-k2-code (light pass finds k2.5 first).
         let hit = fuzzy_find_in_entries(&entries, "K2.5");
         assert!(hit.is_some());
         assert!(hit.unwrap().supports_vision);
 
-        // Unknown -> None
+        // Unknown → None
         assert!(fuzzy_find_in_entries(&entries, "totally-unknown").is_none());
+    }
+
+    /// Smoke test: hit the real OpenRouter endpoint and verify we get parseable
+    /// data.
+    #[tokio::test]
+    #[ignore = "requires network access"]
+    async fn catalog_fetches_real_models() {
+        let catalog = OpenRouterCatalog::new();
+        let hit = catalog.lookup("gpt-4o").await;
+        assert!(hit.is_some(), "gpt-4o should be in the OpenRouter catalog");
+        assert!(hit.unwrap().supports_vision, "gpt-4o should support vision");
+
+        // Verify kimi models are correctly differentiated.
+        let kimi = catalog.lookup("kimi-k2.5").await;
+        if let Some(entry) = kimi {
+            assert!(entry.supports_vision, "kimi-k2.5 should support vision");
+        }
+
+        let kimi_code = catalog.lookup("K2.6-code-preview").await;
+        if let Some(entry) = kimi_code {
+            assert!(
+                !entry.supports_vision,
+                "K2.6-code-preview should NOT support vision"
+            );
+        }
     }
 }
