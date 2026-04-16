@@ -2900,6 +2900,19 @@ impl Kernel {
                     info!(session_key = %session_key, "turn interrupted by user");
                 }
 
+                // Persist the error so `cleanup_process` can propagate it
+                // to the parent. Without this, `rt.result` stays `None`
+                // and the parent receives the uninformative fallback
+                // `"process ended"` instead of the actual error message.
+                self.process_table.with_mut(&session_key, |rt| {
+                    rt.result = Some(AgentRunLoopResult {
+                        output:     format!("error: {err_msg}"),
+                        iterations: 0,
+                        tool_calls: 0,
+                        success:    false,
+                    });
+                });
+
                 // Deliver error — use egress session for routing.
                 // Skip for user-initiated interrupts (the /stop handler
                 // already sent a confirmation message) and when
