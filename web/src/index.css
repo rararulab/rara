@@ -51,6 +51,23 @@
   --motion-fast: 150ms;
   --motion-normal: 250ms;
   --motion-slow: 500ms;
+
+  /* Typography — Geist with CJK system fallback */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/*
+ * Override mini-lit's plain :root --font-sans / --font-mono (imported via
+ * pi-web-ui). Must be unlayered + after the import so it wins the cascade.
+ */
+:root {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 /*
@@ -131,13 +148,16 @@
   * {
     @apply border-border;
   }
-  :root {
-    --font-sans: "LXGW WenKai Screen", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  }
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans);
     min-height: 100vh;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
   }
   /* Rara admin gradient background — only on admin pages */
   .rara-admin {
