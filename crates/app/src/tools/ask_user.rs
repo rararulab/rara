@@ -67,9 +67,13 @@ impl ToolExecute for AskUserTool {
     type Params = AskUserParams;
 
     #[tracing::instrument(skip_all)]
-    async fn run(&self, params: AskUserParams, _context: &ToolContext) -> anyhow::Result<Value> {
+    async fn run(&self, params: AskUserParams, context: &ToolContext) -> anyhow::Result<Value> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        let answer = self.manager.ask(params.question, timeout).await?;
+        // Propagate the originating endpoint so channel adapters can route the
+        // question back to the same conversation surface (e.g. a Telegram
+        // forum topic) instead of a default fallback like `primary_chat_id`.
+        let endpoint = context.origin_endpoint.clone();
+        let answer = self.manager.ask(params.question, endpoint, timeout).await?;
         Ok(serde_json::json!({ "answer": answer }))
     }
 }

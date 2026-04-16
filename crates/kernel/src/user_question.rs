@@ -28,6 +28,8 @@ use snafu::Snafu;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::io::Endpoint;
+
 /// A question submitted by the agent to the user.
 #[derive(Debug, Clone, Serialize)]
 pub struct UserQuestion {
@@ -35,6 +37,14 @@ pub struct UserQuestion {
     pub id:       Uuid,
     /// The question text to present to the user.
     pub question: String,
+    /// Originating endpoint of the agent turn that raised this question.
+    ///
+    /// Channel adapters route the rendered prompt back to this endpoint (e.g.
+    /// the same Telegram `(chat_id, thread_id)` the user was chatting in).
+    /// `None` for origins that do not carry an endpoint (background tasks,
+    /// legacy callers), in which case adapters fall back to a default
+    /// destination such as Telegram's `primary_chat_id`.
+    pub endpoint: Option<Endpoint>,
 }
 
 /// Error from user question operations.
@@ -98,11 +108,17 @@ impl UserQuestionManager {
     /// Submit a question and block until the user responds or the timeout
     /// expires.
     ///
+    /// `endpoint` is the originating endpoint of the current turn (typically
+    /// `ToolContext::origin_endpoint`). Channel adapters use it to route the
+    /// question back to the same conversation surface (e.g. a Telegram forum
+    /// topic) rather than a default destination.
+    ///
     /// Fails immediately with [`NoSubscribersSnafu`] if no channel adapter is
     /// listening, avoiding a silent 5-minute hang.
     pub async fn ask(
         &self,
         question: String,
+        endpoint: Option<Endpoint>,
         timeout: std::time::Duration,
     ) -> std::result::Result<String, UserQuestionError> {
         let id = Uuid::new_v4();
@@ -110,6 +126,7 @@ impl UserQuestionManager {
         let uq = UserQuestion {
             id,
             question: question.clone(),
+            endpoint,
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -194,6 +211,7 @@ mod tests {
             mgr_clone
                 .ask(
                     "What is your API key?".into(),
+                    None,
                     std::time::Duration::from_secs(5),
                 )
                 .await
@@ -218,7 +236,11 @@ mod tests {
         // Need a subscriber so ask() doesn't fail with NoSubscribers.
         let _rx = mgr.subscribe();
         let result = mgr
-            .ask("question".into(), std::time::Duration::from_millis(10))
+            .ask(
+                "question".into(),
+                None,
+                std::time::Duration::from_millis(10),
+            )
             .await;
         assert!(matches!(result, Err(UserQuestionError::TimedOut { .. })));
         assert_eq!(mgr.pending_count(), 0);
@@ -229,7 +251,7 @@ mod tests {
         let mgr = UserQuestionManager::new();
         // No subscriber — should fail immediately.
         let result = mgr
-            .ask("question".into(), std::time::Duration::from_secs(5))
+            .ask("question".into(), None, std::time::Duration::from_secs(5))
             .await;
         assert!(matches!(result, Err(UserQuestionError::NoSubscribers)));
     }
