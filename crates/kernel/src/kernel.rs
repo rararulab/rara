@@ -2981,6 +2981,7 @@ impl Kernel {
             if needs_title {
                 let tape_service = self.tape_service.clone();
                 let driver_registry = Arc::clone(self.syscall.driver_registry());
+                let io = Arc::clone(&self.io);
                 let sk = session_key;
                 let tape_name = sk.to_string();
                 tokio::spawn(async move {
@@ -2989,6 +2990,7 @@ impl Kernel {
                         &tape_name,
                         &driver_registry,
                         session_index.as_ref(),
+                        &io,
                         &sk,
                     )
                     .await
@@ -3040,6 +3042,7 @@ async fn generate_session_title(
     tape_name: &str,
     driver_registry: &crate::llm::DriverRegistry,
     session_index: &dyn crate::session::SessionIndex,
+    io: &Arc<crate::io::IOSubsystem>,
     session_key: &SessionKey,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::memory::TapEntryKind;
@@ -3131,12 +3134,30 @@ async fn generate_session_title(
 
     match session_index.get_session(session_key).await {
         Ok(Some(mut entry)) => {
+            // Re-check the title under the current read: a concurrent
+            // `/rename` or another auto-title task may have landed while
+            // the LLM call was in flight, and overwriting a manual title
+            // with a stale generated one is user-visible damage. The
+            // up-front `entry.title.is_none()` gate at the call site is
+            // advisory — this is the authoritative compare-and-persist.
+            if entry.title.is_some() {
+                tracing::info!(
+                    session_key = %session_key,
+                    existing_title = ?entry.title,
+                    generated_title = %title,
+                    "title gen: title already set (concurrent update), skipping"
+                );
+                return Ok(());
+            }
             entry.title = Some(title.clone());
             entry.updated_at = chrono::Utc::now();
             if let Err(e) = session_index.update_session(&entry).await {
                 tracing::warn!(%e, session_key = %session_key, "title gen: failed to persist title");
             } else {
                 tracing::info!(session_key = %session_key, title = %title, "session title generated");
+                // Propagate the new title to the channel layer so the
+                // forum topic (if any) gets renamed to match.
+                io.rename_session_label(session_key, &title).await;
             }
         }
         Ok(None) => {

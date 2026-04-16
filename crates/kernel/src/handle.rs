@@ -383,6 +383,12 @@ impl KernelHandle {
     /// Access the session index for session and channel binding lookups.
     pub fn session_index(&self) -> &Arc<dyn SessionIndex> { self.io.session_index() }
 
+    /// Access the bundled I/O subsystem.
+    ///
+    /// Exposed so channel command handlers can invoke cross-cutting hooks
+    /// like [`IOSubsystem::rename_session_label`].
+    pub fn io(&self) -> &Arc<IOSubsystem> { &self.io }
+
     /// Access the agent registry for looking up named manifests.
     pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }
 

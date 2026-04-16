@@ -213,6 +213,26 @@ pub trait SessionIndex: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Enumerate every channel binding that points to the given session.
+    ///
+    /// A session can accumulate multiple bindings when a topic has been
+    /// re-targeted (e.g. via `/sessions`) or when the same session is
+    /// reachable from several chats. Callers that need to propagate state
+    /// across every bound channel (e.g. renaming all forum topics that
+    /// reflect this session) should use this instead of
+    /// [`get_channel_binding_by_session`](Self::get_channel_binding_by_session),
+    /// whose single-result contract is stable but arbitrary when multiple
+    /// bindings exist.
+    ///
+    /// Returns an empty `Vec` when no bindings exist or the implementation
+    /// does not support reverse lookups.
+    async fn list_channel_bindings_by_session(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Vec<ChannelBinding>, SessionError> {
+        Ok(Vec::new())
+    }
+
     /// Remove all channel bindings that point to the given session.
     async fn unbind_session(&self, key: &SessionKey) -> Result<(), SessionError>;
 }

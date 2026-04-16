@@ -183,6 +183,14 @@ pub trait BotServiceClient: Send + Sync {
         model: Option<&str>,
     ) -> Result<SessionDetail, BotServiceError>;
 
+    /// Rename a session — updates `SessionEntry.title` and propagates the
+    /// change to the channel layer (e.g. renames the Telegram forum topic).
+    async fn rename_session(
+        &self,
+        key: &str,
+        title: &str,
+    ) -> Result<SessionDetail, BotServiceError>;
+
     // -- Tape / anchor tree -------------------------------------------------
 
     /// Build the full anchor tree for the given session.
