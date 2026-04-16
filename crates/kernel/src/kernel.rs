@@ -58,11 +58,14 @@ use crate::{
     agent::{
         AgentEnv, AgentManifest, AgentRegistryRef, AgentTurnResult, ExecutionMode, run_agent_loop,
     },
-    channel::types::MessageContent,
+    channel::types::{ChannelType, MessageContent},
     event::{KernelEvent, KernelEventEnvelope},
     hooks::{HookRunner, HookRunnerRef, HooksConfig},
     identity::Principal,
-    io::{IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, PipeRegistry, StreamId},
+    io::{
+        IOSubsystem, InboundMessage, MessageId, OutboundEnvelope, OutboundRouting, PipeRegistry,
+        StreamId,
+    },
     kv::SharedKv,
     llm::DriverRegistryRef,
     memory::TapeService,
@@ -726,6 +729,7 @@ impl Kernel {
                 in_reply_to,
                 user,
                 origin_endpoint,
+                source_channel,
                 interrupted,
             } => {
                 self.handle_turn_completed(
@@ -734,6 +738,7 @@ impl Kernel {
                     in_reply_to,
                     user,
                     origin_endpoint,
+                    source_channel,
                     interrupted,
                 )
                 .await;
@@ -1943,6 +1948,7 @@ impl Kernel {
             msg_id:          MessageId,
             user:            crate::identity::UserId,
             origin_endpoint: Option<crate::io::Endpoint>,
+            source_channel:  Option<ChannelType>,
             completed:       bool,
         }
 
@@ -1964,6 +1970,7 @@ impl Kernel {
                         self.msg_id.clone(),
                         self.user.clone(),
                         self.origin_endpoint.clone(),
+                        self.source_channel,
                         false,
                     );
                     if let Err(e) = self.event_queue.try_push(event) {
@@ -2085,6 +2092,28 @@ impl Kernel {
                 .flatten()
         });
 
+        let source_channel = msg.source.channel_type;
+
+        // Web/CLI/API channels don't have an origin_endpoint (no platform
+        // chat ID to route back to), but they are still user-facing and
+        // should receive outbound delivery via the endpoint registry.
+        let should_deliver = origin_endpoint.is_some()
+            || !matches!(
+                source_channel,
+                ChannelType::Internal | ChannelType::Proactive
+            );
+
+        // When there is no origin_endpoint but we still need delivery
+        // (e.g. Web channel), route via BroadcastExcept to avoid
+        // double-delivery through the existing StreamHub path.
+        let cross_channel_routing = if origin_endpoint.is_none() && should_deliver {
+            Some(OutboundRouting::BroadcastExcept {
+                exclude: source_channel,
+            })
+        } else {
+            None
+        };
+
         // Update the session's stored origin endpoint when a real platform
         // message provides one, so that subsequent synthetic messages can
         // inherit the correct routing target.
@@ -2108,20 +2137,24 @@ impl Kernel {
         // received and the agent is working. On Telegram this shows the
         // "typing..." bubble.
         let egress_session_key = session_key;
-        // Only send typing indicator when there's an origin endpoint to
-        // deliver to. Headless agents (scheduled tasks, subagents) have no
-        // user-facing channel.
-        if origin_endpoint.is_some() {
-            let _ = &self.event_queue.try_push(KernelEventEnvelope::deliver(
-                OutboundEnvelope::progress(
-                    msg_id.clone(),
-                    user.clone(),
-                    egress_session_key.clone(),
-                    crate::io::stages::THINKING,
-                    None,
-                )
-                .with_origin(origin_endpoint.clone()),
-            ));
+        // Only send typing indicator to user-facing channels. Headless
+        // agents (scheduled tasks, subagents) have no user-facing channel.
+        if should_deliver {
+            let envelope = OutboundEnvelope::progress(
+                msg_id.clone(),
+                user.clone(),
+                egress_session_key.clone(),
+                crate::io::stages::THINKING,
+                None,
+            )
+            .with_origin(origin_endpoint.clone());
+            let envelope = match cross_channel_routing {
+                Some(ref routing) => envelope.with_routing(routing.clone()),
+                None => envelope,
+            };
+            let _ = &self
+                .event_queue
+                .try_push(KernelEventEnvelope::deliver(envelope));
         }
 
         if let Some(metrics) = self.process_table.get_metrics(&session_key) {
@@ -2430,6 +2463,7 @@ impl Kernel {
                 msg_id:          msg_id.clone(),
                 user:            user.clone(),
                 origin_endpoint: origin_endpoint.clone(),
+                source_channel:  Some(source_channel),
                 completed:       false,
             };
 
@@ -2605,6 +2639,7 @@ impl Kernel {
                     msg_id,
                     user,
                     origin_endpoint,
+                    Some(source_channel),
                     interrupted,
                 );
                 if let Err(e) = event_queue.try_push(event) {
@@ -2647,6 +2682,7 @@ impl Kernel {
                         turn_guard.msg_id.clone(),
                         turn_guard.user.clone(),
                         turn_guard.origin_endpoint.clone(),
+                        turn_guard.source_channel,
                         false,
                     );
                     if let Err(e) = turn_guard.event_queue.try_push(event) {
@@ -2673,6 +2709,7 @@ impl Kernel {
         in_reply_to: MessageId,
         user: crate::identity::UserId,
         origin_endpoint: Option<crate::io::Endpoint>,
+        source_channel: Option<ChannelType>,
         interrupted: bool,
     ) {
         let span = tracing::Span::current();
@@ -2689,6 +2726,21 @@ impl Kernel {
             self.cleanup_process(session_key).await;
             return;
         }
+
+        // Determine whether outbound delivery is needed. Messages from
+        // user-facing channels (Web, Telegram, CLI, etc.) should always
+        // be delivered, even when origin_endpoint is None (e.g. Web has
+        // no platform chat ID). Headless channels skip delivery.
+        let should_deliver = origin_endpoint.is_some()
+            || source_channel
+                .is_some_and(|ch| !matches!(ch, ChannelType::Internal | ChannelType::Proactive));
+
+        let cross_channel_routing = match (origin_endpoint.is_none(), should_deliver) {
+            (true, true) => {
+                source_channel.map(|ch| OutboundRouting::BroadcastExcept { exclude: ch })
+            }
+            _ => None,
+        };
 
         // Egress uses session_key directly. Subagents without external
         // delivery have their results flow back to the parent via
@@ -2808,11 +2860,10 @@ impl Kernel {
                     .push_turn_trace(session_key, turn.trace.clone());
 
                 // Push Deliver event for the reply — use egress session for routing.
-                // When origin_endpoint is None (e.g. scheduled tasks, subagents),
-                // skip delivery to avoid broadcasting to all user endpoints.
-                // These agents communicate results via other channels
-                // (PublishEvent/SendNotification or result_tx).
-                if origin_endpoint.is_some() {
+                // Headless agents (scheduled tasks, subagents) communicate
+                // results via other channels (PublishEvent/SendNotification
+                // or result_tx), so skip delivery for those.
+                if should_deliver {
                     let envelope = OutboundEnvelope::reply(
                         in_reply_to,
                         user.clone(),
@@ -2821,6 +2872,10 @@ impl Kernel {
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
+                    let envelope = match cross_channel_routing {
+                        Some(ref routing) => envelope.with_routing(routing.clone()),
+                        None => envelope,
+                    };
 
                     if let Err(e) = &self
                         .event_queue
@@ -2860,7 +2915,7 @@ impl Kernel {
                 }
 
                 // Send fallback message so the user is not left without a reply.
-                if origin_endpoint.is_some() {
+                if should_deliver {
                     let fallback_text = "I wasn't able to generate a response. Please try again.";
                     let envelope = OutboundEnvelope::reply(
                         in_reply_to,
@@ -2870,6 +2925,10 @@ impl Kernel {
                         vec![],
                     )
                     .with_origin(origin_endpoint.clone());
+                    let envelope = match cross_channel_routing {
+                        Some(ref routing) => envelope.with_routing(routing.clone()),
+                        None => envelope,
+                    };
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))
@@ -2889,10 +2948,9 @@ impl Kernel {
 
                 // Deliver error — use egress session for routing.
                 // Skip for user-initiated interrupts (the /stop handler
-                // already sent a confirmation message) and when
-                // origin_endpoint is None (same rationale as reply delivery
-                // above).
-                if _turn_failed && origin_endpoint.is_some() {
+                // already sent a confirmation message) and for headless
+                // agents that have no user-facing channel.
+                if _turn_failed && should_deliver {
                     let envelope = OutboundEnvelope::error(
                         in_reply_to,
                         user.clone(),
@@ -2901,6 +2959,10 @@ impl Kernel {
                         err_msg.clone(),
                     )
                     .with_origin(origin_endpoint.clone());
+                    let envelope = match cross_channel_routing {
+                        Some(ref routing) => envelope.with_routing(routing.clone()),
+                        None => envelope,
+                    };
                     if let Err(e) = &self
                         .event_queue
                         .try_push(KernelEventEnvelope::deliver(envelope))

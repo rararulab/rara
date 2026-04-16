@@ -428,6 +428,13 @@ impl OutboundEnvelope {
         self
     }
 
+    /// Override the default routing strategy.
+    #[must_use]
+    pub fn with_routing(mut self, routing: OutboundRouting) -> Self {
+        self.routing = routing;
+        self
+    }
+
     /// Format this envelope as a [`PlatformOutbound`] for delivery.
     pub fn to_platform_outbound(&self) -> PlatformOutbound {
         match &self.payload {

@@ -322,6 +322,9 @@ pub enum KernelEvent {
         user:            UserId,
         /// Origin endpoint from the inbound message for session-scoped routing.
         origin_endpoint: Option<crate::io::Endpoint>,
+        /// Channel type of the inbound message that triggered this turn.
+        /// `None` for abnormal exits where source info is unavailable.
+        source_channel:  Option<crate::channel::types::ChannelType>,
         /// Whether this turn was interrupted by a user /stop command.
         interrupted:     bool,
     },
@@ -522,6 +525,7 @@ impl KernelEventEnvelope {
         in_reply_to: MessageId,
         user: UserId,
         origin_endpoint: Option<crate::io::Endpoint>,
+        source_channel: Option<crate::channel::types::ChannelType>,
         interrupted: bool,
     ) -> Self {
         Self {
@@ -531,6 +535,7 @@ impl KernelEventEnvelope {
                 in_reply_to,
                 user,
                 origin_endpoint,
+                source_channel,
                 interrupted,
             },
         }
