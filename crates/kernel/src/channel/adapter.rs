@@ -43,9 +43,10 @@ use crate::{
 /// # Optional hooks
 ///
 /// [`start`](Self::start), [`stop`](Self::stop),
-/// [`typing_indicator`](Self::typing_indicator), and
-/// [`set_phase`](Self::set_phase) have default no-op implementations.
-/// Egress-only adapters (e.g. CLI) only need to implement
+/// [`typing_indicator`](Self::typing_indicator),
+/// [`set_phase`](Self::set_phase), and
+/// [`rename_session_label`](Self::rename_session_label) have default no-op
+/// implementations. Egress-only adapters (e.g. CLI) only need to implement
 /// [`channel_type`](Self::channel_type) and [`send`](Self::send).
 #[async_trait]
 pub trait ChannelAdapter: Send + Sync + 'static {
@@ -75,6 +76,23 @@ pub trait ChannelAdapter: Send + Sync + 'static {
     ///
     /// No-op by default; override for platforms that support reactions.
     async fn set_phase(&self, _session_key: &str, _phase: AgentPhase) -> Result<(), KernelError> {
+        Ok(())
+    }
+
+    /// Update the channel-level label for this session (e.g. rename a
+    /// Telegram forum topic). Called after session title is generated
+    /// or manually updated.
+    ///
+    /// Receives the [`ChannelBinding`](crate::session::ChannelBinding) so
+    /// platform adapters can extract their own identifiers (chat_id,
+    /// thread_id, etc).
+    ///
+    /// No-op by default; override for platforms that support it.
+    async fn rename_session_label(
+        &self,
+        _binding: &crate::session::ChannelBinding,
+        _title: &str,
+    ) -> Result<(), KernelError> {
         Ok(())
     }
 }

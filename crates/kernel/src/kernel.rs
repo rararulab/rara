@@ -2981,6 +2981,7 @@ impl Kernel {
             if needs_title {
                 let tape_service = self.tape_service.clone();
                 let driver_registry = Arc::clone(self.syscall.driver_registry());
+                let io = Arc::clone(&self.io);
                 let sk = session_key;
                 let tape_name = sk.to_string();
                 tokio::spawn(async move {
@@ -2989,6 +2990,7 @@ impl Kernel {
                         &tape_name,
                         &driver_registry,
                         session_index.as_ref(),
+                        &io,
                         &sk,
                     )
                     .await
@@ -3040,6 +3042,7 @@ async fn generate_session_title(
     tape_name: &str,
     driver_registry: &crate::llm::DriverRegistry,
     session_index: &dyn crate::session::SessionIndex,
+    io: &Arc<crate::io::IOSubsystem>,
     session_key: &SessionKey,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::memory::TapEntryKind;
@@ -3137,6 +3140,9 @@ async fn generate_session_title(
                 tracing::warn!(%e, session_key = %session_key, "title gen: failed to persist title");
             } else {
                 tracing::info!(session_key = %session_key, title = %title, "session title generated");
+                // Propagate the new title to the channel layer so the
+                // forum topic (if any) gets renamed to match.
+                io.rename_session_label(session_key, &title).await;
             }
         }
         Ok(None) => {

@@ -1721,6 +1721,35 @@ impl IOSubsystem {
         self.endpoint_registry.register(&msg.user, endpoint);
     }
 
+    /// Propagate a session title change to the channel layer (e.g.
+    /// rename the Telegram forum topic). Silent no-op if the session
+    /// has no channel binding or the adapter does not implement rename.
+    #[tracing::instrument(skip(self), fields(%session_key, title))]
+    pub async fn rename_session_label(
+        &self,
+        session_key: &crate::session::SessionKey,
+        title: &str,
+    ) {
+        let binding = match self
+            .session_index
+            .get_channel_binding_by_session(session_key)
+            .await
+        {
+            Ok(Some(b)) => b,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(%e, "rename_session_label: binding lookup failed");
+                return;
+            }
+        };
+        let Some(adapter) = self.adapters.get(&binding.channel_type).cloned() else {
+            return;
+        };
+        if let Err(e) = adapter.rename_session_label(&binding, title).await {
+            tracing::warn!(%e, "rename_session_label: adapter returned error");
+        }
+    }
+
     // -- Accessors (external consumers) ---------------------------------------
 
     /// Access the session index.
