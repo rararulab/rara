@@ -4424,11 +4424,31 @@ fn spawn_stream_forwarder(
                                         }
                                         let keyboard = InlineKeyboardMarkup::new(vec![buttons]);
 
-                                        let _ = bot
+                                        // Retry once on 429 — forum topics
+                                        // exhaust the edit quota with progress
+                                        // updates, so the final edit often hits
+                                        // a rate-limit window.
+                                        let edit_res = bot
                                             .edit_message_text(ChatId(chat_id), mid, &compact)
                                             .parse_mode(ParseMode::Html)
-                                            .reply_markup(keyboard)
+                                            .reply_markup(keyboard.clone())
                                             .await;
+                                        if let Err(ref e) = edit_res {
+                                            if let Some(secs) = parse_retry_after(&e.to_string()) {
+                                                info!(chat_id, retry_after = secs, "compact summary edit rate-limited, retrying");
+                                                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                                if let Err(ref re) = bot
+                                                    .edit_message_text(ChatId(chat_id), mid, &compact)
+                                                    .parse_mode(ParseMode::Html)
+                                                    .reply_markup(keyboard)
+                                                    .await
+                                                {
+                                                    warn!(chat_id, error = %re, "compact summary edit retry failed — buttons lost");
+                                                }
+                                            } else if !e.to_string().contains("message is not modified") {
+                                                warn!(chat_id, error = %e, "compact summary edit failed — buttons lost");
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(error = %e, "failed to persist execution trace");
@@ -4436,10 +4456,19 @@ fn spawn_stream_forwarder(
                                         // without buttons. For newly sent messages the
                                         // compact text is already visible.
                                         if progress.message_id.is_some() {
-                                            let _ = bot
+                                            let edit_res = bot
                                                 .edit_message_text(ChatId(chat_id), mid, &compact)
                                                 .parse_mode(ParseMode::Html)
                                                 .await;
+                                            if let Err(ref e) = edit_res {
+                                                if let Some(secs) = parse_retry_after(&e.to_string()) {
+                                                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                                    let _ = bot
+                                                        .edit_message_text(ChatId(chat_id), mid, &compact)
+                                                        .parse_mode(ParseMode::Html)
+                                                        .await;
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -4657,6 +4686,16 @@ async fn flush_pinned_status(
 }
 
 /// Flush accumulated text to Telegram via `sendMessage` (first time) or
+/// Extract the `retry_after` seconds from a Telegram "Too Many Requests"
+/// error string. Returns `None` if the error is not a rate-limit response.
+fn parse_retry_after(err: &str) -> Option<u64> {
+    // Telegram format: "... retry after N" (case-insensitive).
+    let lower = err.to_lowercase();
+    let idx = lower.find("retry after ")?;
+    let after = &err[idx + "retry after ".len()..];
+    after.split_whitespace().next()?.parse::<u64>().ok()
+}
+
 /// `editMessageText` (subsequent).
 ///
 /// This function does NOT hold any DashMap guard — the caller must extract
