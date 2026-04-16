@@ -34,7 +34,7 @@ import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
 import type { ChatSession, ChatMessageData } from "@/api/types";
 import { useNavigate } from "react-router";
-import { VoiceRecorder } from "@/components/VoiceRecorder";
+import { LiveVoiceSession } from "@/components/LiveVoiceSession";
 
 /** Strip `<think>...</think>` blocks from assistant text. */
 function stripThinkTags(text: string): string {
@@ -259,6 +259,7 @@ export default function PiChat() {
   const agentRef = useRef<Agent | null>(null);
   const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
   const navigate = useNavigate();
 
   /** Switch the agent to a different session, loading its history. */
@@ -405,15 +406,41 @@ export default function PiChat() {
           <path d="M3 12h18M3 6h18M3 18h18" />
         </svg>
       </button>
-      {/* Voice recorder button — fixed top-right */}
+      {/* Voice toggle — fixed top-right */}
       <div className="absolute right-2 top-2 z-50">
-        <VoiceRecorder
-          getSessionKey={() => agentRef.current?.sessionId}
-          onComplete={reloadMessages}
-        />
+        {liveMode ? (
+          <button
+            onClick={() => setLiveMode(false)}
+            className="flex cursor-pointer items-center gap-1.5 rounded-full bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 transition-all hover:bg-red-500/20"
+            title="End live voice chat"
+          >
+            <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+            LIVE
+          </button>
+        ) : (
+          <button
+            onClick={() => setLiveMode(true)}
+            className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-md backdrop-blur transition-all hover:bg-secondary hover:text-foreground"
+            title="Start live voice chat"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10a7 7 0 0 0 14 0" />
+              <line x1="12" y1="19" x2="12" y2="22" />
+            </svg>
+          </button>
+        )}
       </div>
       {/* Chat panel container */}
       <div ref={containerRef} className="h-full w-full" />
+      {/* Live voice panel — bottom overlay */}
+      {liveMode && (
+        <LiveVoiceSession
+          getSessionKey={() => agentRef.current?.sessionId}
+          onTurnComplete={reloadMessages}
+          onClose={() => setLiveMode(false)}
+        />
+      )}
       {/* Session list slide-over */}
       {showSessionList && (
         <SessionListPanel
