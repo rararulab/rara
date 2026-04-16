@@ -2956,64 +2956,87 @@ async fn handle_update(
     // button label as a plain text message. Intercept these before they
     // reach the kernel so they don't get ingested as conversation turns.
     if let Some(text) = msg.text() {
+        // "🆕 New Session" — delegate to the registered `/new` command
+        // handler so this path stays aligned with `/new`: same session
+        // defaults, same guard/kernel hooks, same error surface. Avoids
+        // having two divergent session-creation code paths.
         if super::reply_keyboard::is_new_session_button(text) {
-            // Create a fresh session and bind this chat to it, mirroring
-            // the `/new` command logic.
-            let now = chrono::Utc::now();
-            let new_key = rara_kernel::session::SessionKey::new();
-            let entry = rara_kernel::session::SessionEntry {
-                key:           new_key,
-                title:         None,
-                model:         None,
-                system_prompt: None,
-                message_count: 0,
-                preview:       None,
-                metadata:      None,
-                created_at:    now,
-                updated_at:    now,
-            };
-            let session_index = handle.session_index();
-            match session_index.create_session(&entry).await {
-                Ok(_) => {
-                    let thread_str = tg_thread_id.map(|t| t.to_string());
-                    let binding = rara_kernel::session::ChannelBinding {
-                        channel_type: ChannelType::Telegram,
-                        chat_id:      chat_id.to_string(),
-                        thread_id:    thread_str,
-                        session_key:  new_key,
-                        created_at:   now,
-                        updated_at:   now,
-                    };
-                    let _ = session_index.bind_channel(&binding).await;
-                    // Send confirmation with a fresh Reply Keyboard (reset
-                    // token counters to zero for the new session).
-                    let kb = super::reply_keyboard::build_main_keyboard(0, None, "");
-                    let req = with_thread_id!(
-                        bot.send_message(ChatId(chat_id), "\u{1f195} New session started.")
-                            .reply_markup(kb),
-                        tg_thread_id
+            let matched = command_handlers
+                .iter()
+                .find(|h| h.commands().iter().any(|def| def.name == "new"));
+            if let Some(handler) = matched {
+                let user_id = msg
+                    .from
+                    .as_ref()
+                    .map(|u| u.id.0.to_string())
+                    .unwrap_or_default();
+                let display_name = msg
+                    .from
+                    .as_ref()
+                    .and_then(|u| u.username.clone().or_else(|| Some(u.first_name.clone())));
+                let mut metadata = HashMap::new();
+                metadata.insert(
+                    "telegram_chat_id".to_owned(),
+                    serde_json::Value::Number(chat_id.into()),
+                );
+                if let Some(tid) = tg_thread_id {
+                    metadata.insert(
+                        "telegram_thread_id".to_owned(),
+                        serde_json::Value::Number(tid.into()),
                     );
-                    let _ = req.await;
                 }
-                Err(e) => {
-                    warn!(error = %e, "reply keyboard: failed to create new session");
-                    let req = with_thread_id!(
-                        bot.send_message(
-                            ChatId(chat_id),
-                            format!("Failed to create session: {e}"),
-                        ),
-                        tg_thread_id
-                    );
-                    let _ = req.await;
+                let info = CommandInfo {
+                    name: "new".to_owned(),
+                    args: String::new(),
+                    raw:  "/new".to_owned(),
+                };
+                let ctx = CommandContext {
+                    channel_type: ChannelType::Telegram,
+                    session_key: String::new(),
+                    user: ChannelUser {
+                        platform_id: user_id,
+                        display_name,
+                    },
+                    metadata,
+                };
+                match handler.handle(&info, &ctx).await {
+                    Ok(result) => {
+                        dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "reply keyboard: `/new` handler failed");
+                        let req = with_thread_id!(
+                            bot.send_message(
+                                ChatId(chat_id),
+                                format!("Failed to create session: {e}"),
+                            ),
+                            tg_thread_id
+                        );
+                        let _ = req.await;
+                    }
                 }
+            } else {
+                warn!("reply keyboard: no `/new` handler registered");
             }
             return;
         }
-        // Context and model buttons are informational — tapping them
-        // sends their label text but there is nothing to act on.
-        if super::reply_keyboard::is_context_button(text)
-            || super::reply_keyboard::is_model_button(text)
-        {
+        // Context / model buttons are informational. Echo the current
+        // value so the tap feels responsive instead of being silently
+        // swallowed (which can look like the bot hung).
+        if super::reply_keyboard::is_context_button(text) {
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), format!("Context usage: {text}")),
+                tg_thread_id
+            );
+            let _ = req.await;
+            return;
+        }
+        if super::reply_keyboard::is_model_button(text) {
+            let req = with_thread_id!(
+                bot.send_message(ChatId(chat_id), format!("Active model: {text}")),
+                tg_thread_id
+            );
+            let _ = req.await;
             return;
         }
     }
@@ -3206,6 +3229,27 @@ async fn handle_update(
                             };
                             if let Err(e) = handle.session_index().bind_channel(&binding).await {
                                 warn!(error = %e, "failed to update channel binding for new forum topic");
+                            }
+
+                            // Also refresh the session's stored origin endpoint
+                            // so that reply routing for synthetic re-entry
+                            // messages (background task completions, Mita
+                            // directives) targets the new topic instead of
+                            // General — the first user message was ingested
+                            // before the topic existed, so the endpoint stored
+                            // at session creation has `thread_id = None`.
+                            let topic_endpoint = rara_kernel::io::Endpoint {
+                                channel_type: ChannelType::Telegram,
+                                address:      rara_kernel::io::EndpointAddress::Telegram {
+                                    chat_id,
+                                    thread_id: Some(new_tid),
+                                },
+                            };
+                            if !handle.update_session_origin_endpoint(sid, topic_endpoint) {
+                                warn!(
+                                    session_key = %sid,
+                                    "auto-create topic: session not found in process table when updating origin endpoint"
+                                );
                             }
                         }
 

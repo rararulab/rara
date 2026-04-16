@@ -25,6 +25,18 @@
 
 use teloxide::types::{KeyboardButton, KeyboardMarkup};
 
+use super::adapter::format_token_count;
+
+/// Label emitted by the "New Session" Reply Keyboard button.
+///
+/// Exposed so the adapter can send it as-is and so detection logic can use
+/// exact-match comparison instead of substring search.
+pub const NEW_SESSION_BUTTON: &str = "\u{1f195} New Session";
+
+const CONTEXT_BUTTON_PREFIX: &str = "\u{1f4ca} ";
+const MODEL_BUTTON_PREFIX: &str = "\u{1f916} ";
+const MODEL_NAME_MAX_CHARS: usize = 25;
+
 /// Build the main Reply Keyboard with session status buttons.
 ///
 /// Layout:
@@ -45,7 +57,7 @@ pub fn build_main_keyboard(
             KeyboardButton::new(context_text),
             KeyboardButton::new(model_text),
         ],
-        vec![KeyboardButton::new("\u{1f195} New Session")],
+        vec![KeyboardButton::new(NEW_SESSION_BUTTON)],
     ])
     .resize_keyboard()
     .persistent()
@@ -58,50 +70,45 @@ fn format_context_button(input_tokens: u32, context_limit: Option<u32>) -> Strin
     match context_limit {
         Some(limit) => {
             let limit_str = format_token_count(limit);
+            // Clamp to 0..=100 so over-quota turns do not surface odd values
+            // like "(142%)" in the button label.
             let pct = if limit > 0 {
-                (f64::from(input_tokens) / f64::from(limit) * 100.0) as u32
+                ((f64::from(input_tokens) / f64::from(limit) * 100.0).round() as u32).min(100)
             } else {
                 0
             };
-            format!("\u{1f4ca} {used}/{limit_str} ({pct}%)")
+            format!("{CONTEXT_BUTTON_PREFIX}{used}/{limit_str} ({pct}%)")
         }
-        None => format!("\u{1f4ca} {used}"),
+        None => format!("{CONTEXT_BUTTON_PREFIX}{used}"),
     }
 }
 
+/// Truncate to [`MODEL_NAME_MAX_CHARS`] code points. Model identifiers in
+/// practice are ASCII (e.g. `claude-sonnet-4`, `openai/gpt-5-codex`), so
+/// `chars().take(...)` is safe — no grapheme-cluster concerns.
 fn format_model_button(model: &str) -> String {
-    let display: String = model.chars().take(25).collect();
+    let display: String = model.chars().take(MODEL_NAME_MAX_CHARS).collect();
     if display.is_empty() {
-        "\u{1f916} (no model)".to_string()
+        format!("{MODEL_BUTTON_PREFIX}(no model)")
     } else {
-        format!("\u{1f916} {display}")
-    }
-}
-
-/// Format a token count as a compact human-readable string.
-///
-/// Duplicated from `adapter::format_token_count` because that function is
-/// `pub(super)` and cannot be called from a sibling module.
-fn format_token_count(tokens: u32) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}M", f64::from(tokens) / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.1}k", f64::from(tokens) / 1_000.0)
-    } else {
-        format!("{tokens}")
+        format!("{MODEL_BUTTON_PREFIX}{display}")
     }
 }
 
 // ── Button press detection ──────────────────────────────────────────────
 
 /// Returns `true` if the message text matches a context-usage button press.
-pub fn is_context_button(text: &str) -> bool { text.starts_with("\u{1f4ca} ") }
+pub fn is_context_button(text: &str) -> bool { text.starts_with(CONTEXT_BUTTON_PREFIX) }
 
 /// Returns `true` if the message text matches a model-name button press.
-pub fn is_model_button(text: &str) -> bool { text.starts_with("\u{1f916} ") }
+pub fn is_model_button(text: &str) -> bool { text.starts_with(MODEL_BUTTON_PREFIX) }
 
-/// Returns `true` if the message text matches the "New Session" button press.
-pub fn is_new_session_button(text: &str) -> bool { text.contains("New Session") }
+/// Returns `true` if the message text is exactly the "New Session" button.
+///
+/// Uses exact match (not `contains`) so free-form user messages that happen
+/// to contain the phrase "New Session" do not get intercepted as button
+/// presses and silently swallowed.
+pub fn is_new_session_button(text: &str) -> bool { text == NEW_SESSION_BUTTON }
 
 #[cfg(test)]
 mod tests {
@@ -125,6 +132,13 @@ mod tests {
     }
 
     #[test]
+    fn context_percent_clamped_to_100() {
+        // Over-quota should not produce (142%) or similar.
+        let kb = build_main_keyboard(300_000, Some(200_000), "m");
+        assert!(kb.keyboard[0][0].text.ends_with("(100%)"));
+    }
+
+    #[test]
     fn model_button_formatting() {
         let kb = build_main_keyboard(0, None, "claude-sonnet-4");
         assert_eq!(kb.keyboard[0][1].text, "\u{1f916} claude-sonnet-4");
@@ -134,8 +148,9 @@ mod tests {
     fn model_button_truncation() {
         let long_model = "a]".repeat(20);
         let kb = build_main_keyboard(0, None, &long_model);
-        // 25 chars max + emoji prefix
-        assert!(kb.keyboard[0][1].text.chars().count() <= 25 + 3);
+        // Content chars capped at MODEL_NAME_MAX_CHARS; the emoji + space
+        // prefix is 2 chars.
+        assert!(kb.keyboard[0][1].text.chars().count() <= MODEL_NAME_MAX_CHARS + 2);
     }
 
     #[test]
@@ -148,11 +163,23 @@ mod tests {
     fn button_detection() {
         assert!(is_context_button("\u{1f4ca} 0/200.0k (0%)"));
         assert!(is_model_button("\u{1f916} claude-sonnet-4"));
-        assert!(is_new_session_button("\u{1f195} New Session"));
+        assert!(is_new_session_button(NEW_SESSION_BUTTON));
         // Negative cases
         assert!(!is_context_button("hello"));
         assert!(!is_model_button("hello"));
         assert!(!is_new_session_button("hello"));
+    }
+
+    #[test]
+    fn new_session_button_is_exact_match() {
+        // Regression: free-form user text containing the phrase must not
+        // be misclassified as a button press.
+        assert!(!is_new_session_button(
+            "Can we start a New Session about X?"
+        ));
+        assert!(!is_new_session_button("New Session"));
+        assert!(!is_new_session_button("\u{1f195} New Session please"));
+        assert!(is_new_session_button(NEW_SESSION_BUTTON));
     }
 
     #[test]
