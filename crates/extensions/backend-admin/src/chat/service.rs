@@ -123,6 +123,7 @@ impl SessionService {
         &self,
         title: Option<String>,
         model: Option<String>,
+        thinking_level: Option<String>,
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
         let now = Utc::now();
@@ -130,6 +131,7 @@ impl SessionService {
             key: SessionKey::new(),
             title,
             model,
+            thinking_level,
             system_prompt,
             message_count: 0,
             preview: None,
@@ -178,6 +180,7 @@ impl SessionService {
         key: &SessionKey,
         title: Option<String>,
         model: Option<String>,
+        thinking_level: Option<String>,
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
         let mut session = self.get_session(key).await?;
@@ -186,6 +189,9 @@ impl SessionService {
         }
         if let Some(m) = model {
             session.model = Some(m);
+        }
+        if let Some(tl) = thinking_level {
+            session.thinking_level = Some(tl);
         }
         if let Some(sp) = system_prompt {
             session.system_prompt = Some(sp);
@@ -222,15 +228,16 @@ impl SessionService {
             None => {
                 let now = Utc::now();
                 let entry = SessionEntry {
-                    key:           *key,
-                    title:         title.map(ToOwned::to_owned),
-                    model:         model.map(ToOwned::to_owned),
-                    system_prompt: system_prompt.map(ToOwned::to_owned),
-                    message_count: 0,
-                    preview:       None,
-                    metadata:      None,
-                    created_at:    now,
-                    updated_at:    now,
+                    key:            *key,
+                    title:          title.map(ToOwned::to_owned),
+                    model:          model.map(ToOwned::to_owned),
+                    thinking_level: None,
+                    system_prompt:  system_prompt.map(ToOwned::to_owned),
+                    message_count:  0,
+                    preview:        None,
+                    metadata:       None,
+                    created_at:     now,
+                    updated_at:     now,
                 };
                 Ok(self.session_index.create_session(&entry).await?)
             }

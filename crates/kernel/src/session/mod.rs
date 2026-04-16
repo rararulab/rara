@@ -101,27 +101,32 @@ base::define_id!(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     /// Unique session key (serves as primary key in the database).
-    pub key:           SessionKey,
+    pub key:            SessionKey,
     /// Human-readable title / label shown in session lists.
-    pub title:         Option<String>,
+    pub title:          Option<String>,
     /// LLM model name used for this session (e.g. `"gpt-4o"`,
     /// `"claude-sonnet-4-5-20250929"`).
-    pub model:         Option<String>,
+    pub model:          Option<String>,
+    /// Optional reasoning/thinking level override (`"off"`, `"low"`,
+    /// `"medium"`, `"high"`). When `None`, the agent manifest's default
+    /// thinking configuration is used.
+    #[serde(default)]
+    pub thinking_level: Option<String>,
     /// Optional system prompt override. When `None`, the service-level
     /// default system prompt is used.
-    pub system_prompt: Option<String>,
+    pub system_prompt:  Option<String>,
     /// Running total of messages in this session.
-    pub message_count: i64,
+    pub message_count:  i64,
     /// Short preview text (typically the first user message, truncated)
     /// for display in session listings.
-    pub preview:       Option<String>,
+    pub preview:        Option<String>,
     /// Arbitrary JSON metadata for client-specific extensions.
-    pub metadata:      Option<serde_json::Value>,
+    pub metadata:       Option<serde_json::Value>,
     /// When the session was first created.
-    pub created_at:    DateTime<Utc>,
+    pub created_at:     DateTime<Utc>,
     /// When the session was last modified (message appended, metadata
     /// changed, etc.).
-    pub updated_at:    DateTime<Utc>,
+    pub updated_at:     DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------

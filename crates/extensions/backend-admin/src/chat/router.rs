@@ -71,11 +71,14 @@ fn parse_channel_type(raw: &str) -> Result<ChannelType, ChatError> {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     /// Optional human-readable title.
-    pub title:         Option<String>,
+    pub title:          Option<String>,
     /// Optional LLM model override (e.g. `"gpt-4o"`).
-    pub model:         Option<String>,
+    pub model:          Option<String>,
+    /// Optional thinking-level override (`"off"`, `"low"`, `"medium"`,
+    /// `"high"`).
+    pub thinking_level: Option<String>,
     /// Optional system prompt override.
-    pub system_prompt: Option<String>,
+    pub system_prompt:  Option<String>,
 }
 
 /// Query parameters for `GET /sessions`.
@@ -91,11 +94,13 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     /// New human-readable title.
-    pub title:         Option<String>,
+    pub title:          Option<String>,
     /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
-    pub model:         Option<String>,
+    pub model:          Option<String>,
+    /// New thinking-level override (`"off"`, `"low"`, `"medium"`, `"high"`).
+    pub thinking_level: Option<String>,
     /// New system prompt override.
-    pub system_prompt: Option<String>,
+    pub system_prompt:  Option<String>,
 }
 
 /// Request body for `PUT /models/favorites`.
@@ -217,7 +222,7 @@ async fn create_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
     let session = service
-        .create_session(req.title, req.model, req.system_prompt)
+        .create_session(req.title, req.model, req.thinking_level, req.system_prompt)
         .await?;
     Ok((StatusCode::CREATED, Json(session)))
 }
@@ -286,6 +291,7 @@ async fn update_session(
             &parse_session_key(&key)?,
             req.title,
             req.model,
+            req.thinking_level,
             req.system_prompt,
         )
         .await?;

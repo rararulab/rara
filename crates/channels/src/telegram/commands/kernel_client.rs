@@ -154,15 +154,16 @@ impl BotServiceClient for KernelBotServiceClient {
     async fn create_session(&self, title: Option<&str>) -> Result<String, BotServiceError> {
         let now = Utc::now();
         let entry = ks::SessionEntry {
-            key:           SessionKey::new(),
-            title:         title.map(String::from),
-            model:         None,
-            system_prompt: None,
-            message_count: 0,
-            preview:       None,
-            metadata:      None,
-            created_at:    now,
-            updated_at:    now,
+            key:            SessionKey::new(),
+            title:          title.map(String::from),
+            model:          None,
+            thinking_level: None,
+            system_prompt:  None,
+            message_count:  0,
+            preview:        None,
+            metadata:       None,
+            created_at:     now,
+            updated_at:     now,
         };
         let created = self
             .sessions
@@ -289,6 +290,7 @@ impl BotServiceClient for KernelBotServiceClient {
             key: new_key.clone(),
             title: Some(format!("Fork from {anchor_name}")),
             model: None,
+            thinking_level: None,
             system_prompt: None,
             message_count: 0,
             preview: None,
@@ -669,15 +671,16 @@ mod tests {
         let now = Utc::now();
         index
             .create_session(&SessionEntry {
-                key:           key.clone(),
-                title:         None,
-                model:         None,
-                system_prompt: None,
-                message_count: 0,
-                preview:       None,
-                metadata:      None,
-                created_at:    now,
-                updated_at:    now,
+                key:            key.clone(),
+                title:          None,
+                model:          None,
+                thinking_level: None,
+                system_prompt:  None,
+                message_count:  0,
+                preview:        None,
+                metadata:       None,
+                created_at:     now,
+                updated_at:     now,
             })
             .await
             .unwrap();
