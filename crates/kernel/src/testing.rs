@@ -312,7 +312,10 @@ impl TestKernelBuilder {
         } else {
             Arc::new(ScriptedLlmDriver::new(self.responses))
         };
-        let driver_registry = Arc::new(DriverRegistry::new("scripted"));
+        let driver_registry = Arc::new(DriverRegistry::new(
+            "scripted",
+            Arc::new(crate::llm::OpenRouterCatalog::new()),
+        ));
         driver_registry.register_driver("scripted", driver);
         driver_registry.set_provider_model("scripted", "scripted-model", vec![]);
 

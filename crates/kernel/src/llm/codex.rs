@@ -74,8 +74,6 @@ impl LlmDriver for CodexDriver {
         // Codex models typically support 192k+ context.
         Some(192_000)
     }
-
-    async fn model_supports_vision(&self, _model: &str) -> Option<bool> { Some(false) }
 }
 
 // ---------------------------------------------------------------------------

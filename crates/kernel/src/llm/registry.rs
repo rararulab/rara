@@ -31,7 +31,7 @@ use std::{
 
 use snafu::OptionExt;
 
-use super::driver::LlmDriverRef;
+use super::{catalog::OpenRouterCatalog, driver::LlmDriverRef};
 use crate::error;
 
 /// Shared reference to the [`DriverRegistry`].
@@ -68,12 +68,14 @@ pub struct AgentDriverConfig {
 
 /// Named driver map with default selection and per-agent overrides.
 pub struct DriverRegistry {
-    state: RwLock<DriverRegistryState>,
+    state:   RwLock<DriverRegistryState>,
+    catalog: Arc<OpenRouterCatalog>,
 }
 
 impl DriverRegistry {
-    /// Create an empty registry with the given default driver name.
-    pub fn new(default_driver: impl Into<String>) -> Self {
+    /// Create an empty registry with the given default driver name and
+    /// a shared [`OpenRouterCatalog`] for model capability lookups.
+    pub fn new(default_driver: impl Into<String>, catalog: Arc<OpenRouterCatalog>) -> Self {
         Self {
             state: RwLock::new(DriverRegistryState {
                 drivers:         HashMap::new(),
@@ -81,8 +83,12 @@ impl DriverRegistry {
                 provider_models: HashMap::new(),
                 agent_overrides: HashMap::new(),
             }),
+            catalog,
         }
     }
+
+    /// Access the shared model capability catalog.
+    pub fn catalog(&self) -> &OpenRouterCatalog { &self.catalog }
 
     /// Register or replace a named driver instance.
     pub fn register_driver(&self, name: impl Into<String>, driver: LlmDriverRef) {

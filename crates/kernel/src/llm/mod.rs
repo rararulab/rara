@@ -21,6 +21,7 @@
 //! - [`Message`] — conversation message type
 //! - [`OpenAiDriver`] — reqwest-based OpenAI-compatible driver with SSE parsing
 
+pub mod catalog;
 pub mod codex;
 pub mod driver;
 pub mod image;
@@ -33,6 +34,7 @@ mod think_tag;
 mod tool_xml;
 pub mod types;
 
+pub use catalog::OpenRouterCatalog;
 pub use driver::{
     LlmCredential, LlmCredentialResolver, LlmCredentialResolverRef, LlmDriver, LlmDriverRef,
     LlmEmbedder, LlmEmbedderRef, LlmModelLister, LlmModelListerRef,

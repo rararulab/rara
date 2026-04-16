@@ -962,14 +962,30 @@ pub(crate) async fn run_agent_loop(
 
     let mut capabilities = ModelCapabilities::detect(provider_hint, &model);
 
-    // Context window priority: manifest override > provider API > default.
+    // Context window priority: manifest override > driver API > catalog > default.
     if let Some(t) = manifest.max_context_tokens {
         capabilities = capabilities.with_context_window(t);
     } else if let Some(api_len) = driver.model_context_length(&model).await {
         capabilities = capabilities.with_context_window(api_len);
     }
+
+    // Vision priority: driver (if it genuinely knows) > OpenRouter catalog > static
+    // markers.
     if let Some(has_vision) = driver.model_supports_vision(&model).await {
         capabilities = capabilities.with_vision(has_vision);
+    } else if let Some(entry) = handle.driver_registry().catalog().lookup(&model).await {
+        tracing::debug!(
+            model = %model,
+            catalog_id = %entry.id,
+            vision = entry.supports_vision,
+            "resolved model capabilities via openrouter catalog"
+        );
+        capabilities = capabilities.with_vision(entry.supports_vision);
+        if manifest.max_context_tokens.is_none() {
+            if let Some(ctx) = entry.context_length {
+                capabilities = capabilities.with_context_window(ctx);
+            }
+        }
     }
     tool_context.context_window_tokens = capabilities.context_window_tokens;
     // Provide the live registry (with dynamic MCP tools) so discover-tools
