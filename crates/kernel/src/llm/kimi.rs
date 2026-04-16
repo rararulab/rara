@@ -47,11 +47,13 @@ impl KimiCodeDriver {
 /// Sanitize a request for Kimi API compatibility:
 /// - Remove empty assistant messages (400 on Kimi)
 /// - Clear frequency_penalty (only 0 allowed on code models)
+/// - Enable reasoning_content round-trip (required by Kimi thinking mode)
 fn sanitize_request(mut request: CompletionRequest) -> CompletionRequest {
     request.messages.retain(|m| {
         !(m.role == Role::Assistant && m.tool_calls.is_empty() && m.content.as_text().is_empty())
     });
     request.frequency_penalty = None;
+    request.emit_reasoning = true;
     request
 }
 

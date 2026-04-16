@@ -194,6 +194,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let r1 = driver.complete(request.clone()).await.unwrap();
@@ -220,6 +221,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
         let result = driver.complete(request).await;
         assert!(result.is_err(), "should return error when exhausted");
@@ -241,6 +243,7 @@ mod tests {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let response = driver.stream(request, tx).await.unwrap();

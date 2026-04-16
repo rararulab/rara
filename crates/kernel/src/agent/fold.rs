@@ -110,6 +110,7 @@ impl ContextFolder {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let response = self.driver.complete(request).await?;
@@ -142,6 +143,7 @@ impl ContextFolder {
             parallel_tool_calls: false,
             frequency_penalty:   None,
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         let response = self.driver.complete(request).await?;

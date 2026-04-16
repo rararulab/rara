@@ -1364,6 +1364,7 @@ pub(crate) async fn run_agent_loop(
             // degrading output quality. See #317.
             frequency_penalty:   Some(0.3),
             top_p:               None,
+            emit_reasoning:      false,
         };
 
         // Start streaming via LlmDriver
