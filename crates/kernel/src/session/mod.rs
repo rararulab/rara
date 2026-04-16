@@ -627,8 +627,11 @@ pub struct SessionTable {
 impl SessionTable {
     /// Maximum number of turn traces retained per process.
     const MAX_TURN_TRACES: usize = 50;
-    /// How long terminal processes remain visible before being reaped.
-    const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+    /// How long suspended sessions remain visible before the periodic
+    /// `IdleCheck` evicts them from the table. Chosen to give the kernel UI
+    /// enough time to surface recently-finished runs in the Dormant group
+    /// while still bounding memory growth for long-running processes.
+    pub const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
     /// Create an empty process table.
     pub fn new() -> Self {
@@ -802,9 +805,10 @@ impl SessionTable {
 
     /// Build [`SessionStats`] for all sessions currently in the table.
     ///
-    /// Also performs lazy reaping of suspended sessions older than the TTL.
+    /// Pure read — does not evict anything. Reaping runs on its own schedule
+    /// via the `IdleCheck` event (see `kernel.rs`), so observers never see the
+    /// process table mutate just because they requested a snapshot.
     pub fn all_process_stats(&self) -> Vec<SessionStats> {
-        self.reap_terminal(Self::TERMINAL_TTL);
         let ids: Vec<SessionKey> = self.runtimes.iter().map(|p| p.session_key).collect();
         ids.iter().filter_map(|id| self.stats(*id)).collect()
     }
