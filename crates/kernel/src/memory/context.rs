@@ -145,9 +145,16 @@ fn append_tool_result_entry(
 
     for (index, result) in results.iter().enumerate() {
         let content = render_tool_result(result)?;
-        let call_id = pending_calls
-            .get(index)
-            .map(|c| c.id.as_str())
+        // Successful tool results are persisted from raw tool output in
+        // agent/mod.rs, so a top-level `tool_call_id` may be user-visible tool
+        // payload rather than our correlation id. Trust it only when it matches
+        // one of the assistant's pending calls; otherwise keep the legacy
+        // positional fallback.
+        let call_id = result
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .filter(|id| pending_calls.iter().any(|call| call.id == *id))
+            .or_else(|| pending_calls.get(index).map(|c| c.id.as_str()))
             .unwrap_or("");
         messages.push(Message::tool_result(call_id, content));
     }
@@ -557,6 +564,86 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, Role::User);
         assert_eq!(messages[1].role, Role::Assistant);
+    }
+
+    #[test]
+    fn default_tape_context_uses_matching_tool_call_id_from_result_payload() {
+        let entries = vec![
+            TapEntry {
+                id:        1,
+                kind:      TapEntryKind::ToolCall,
+                payload:   json!({
+                    "calls": [
+                        {
+                            "id": "call_first",
+                            "function": {"name": "first_tool", "arguments": "{}"}
+                        },
+                        {
+                            "id": "call_second",
+                            "function": {"name": "second_tool", "arguments": "{}"}
+                        }
+                    ]
+                }),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        2,
+                kind:      TapEntryKind::ToolResult,
+                payload:   json!({
+                    "results": [
+                        {
+                            "tool_call_id": "call_second",
+                            "ok": true
+                        }
+                    ]
+                }),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+        ];
+
+        let messages = default_tape_context(&entries).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, Role::Tool);
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_second"));
+    }
+
+    #[test]
+    fn default_tape_context_ignores_non_matching_tool_call_id_from_result_payload() {
+        let entries = vec![
+            TapEntry {
+                id:        1,
+                kind:      TapEntryKind::ToolCall,
+                payload:   json!({
+                    "calls": [{
+                        "id": "call_first",
+                        "function": {"name": "first_tool", "arguments": "{}"}
+                    }]
+                }),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        2,
+                kind:      TapEntryKind::ToolResult,
+                payload:   json!({
+                    "results": [{
+                        "tool_call_id": "payload_owned_by_tool",
+                        "ok": true
+                    }]
+                }),
+                timestamp: Timestamp::now(),
+                metadata:  None,
+            },
+        ];
+
+        let messages = default_tape_context(&entries).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, Role::Tool);
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_first"));
     }
 
     // -----------------------------------------------------------------------
