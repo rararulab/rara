@@ -30,8 +30,15 @@
 //! | ` ```lang\ncode``` `  | `<pre>code</pre>`                   |
 //! | `[text](url)`         | `<a href="url">text</a>`            |
 //!
-//! HTML special characters (`&`, `<`, `>`) are escaped before any Markdown
-//! processing to prevent injection.
+//! # Table Rendering
+//!
+//! Telegram has no native table support. Narrow tables (≤ 60 display columns)
+//! are rendered as aligned ASCII inside `<pre>` blocks. Wide tables
+//! automatically fall back to a vertical card layout where each data row
+//! becomes a titled block with labelled fields — much more readable on mobile.
+//!
+//! CJK characters are measured with [`unicode_width`] so columns align
+//! correctly in monospace fonts.
 //!
 //! # Message Chunking
 //!
@@ -41,8 +48,15 @@
 //!
 //! [tg-html]: https://core.telegram.org/bots/api#html-style
 
+use unicode_width::UnicodeWidthStr;
+
 /// Telegram maximum message length in characters.
 pub const TELEGRAM_MAX_MESSAGE_LEN: usize = 4096;
+
+/// Maximum display width for a table rendered as aligned `<pre>`.
+/// Tables wider than this threshold automatically fall back to a vertical card
+/// layout that reads well on mobile screens.
+const TABLE_PRE_MAX_WIDTH: usize = 60;
 
 /// Convert Markdown text to Telegram-supported HTML subset.
 ///
@@ -313,10 +327,16 @@ fn preprocess_blocks(md: &str) -> String {
                 idx += 1;
             }
 
-            let rendered_rows = render_table_rows(&table_rows);
-            lines.push("```".to_owned());
-            lines.extend(rendered_rows);
-            lines.push("```".to_owned());
+            if table_pre_width(&table_rows) <= TABLE_PRE_MAX_WIDTH {
+                // Narrow table: aligned ASCII inside a <pre> block.
+                let rendered_rows = render_table_rows(&table_rows);
+                lines.push("```".to_owned());
+                lines.extend(rendered_rows);
+                lines.push("```".to_owned());
+            } else {
+                // Wide table: vertical card layout (processed by inline parser).
+                lines.extend(render_table_cards(&table_rows));
+            }
             continue;
         }
 
@@ -385,10 +405,41 @@ fn is_markdown_table_row(line: &str) -> bool {
     cells.len() >= 2 && !is_markdown_table_separator(line)
 }
 
+/// Strip inline markdown bold/underline delimiters (`**`, `__`) from text so
+/// they don't appear literally inside `<pre>` blocks.
+fn strip_inline_markdown(s: &str) -> String { s.replace("**", "").replace("__", "") }
+
+/// Estimate the total display width a table would occupy in a `<pre>` block.
+///
+/// Accounts for CJK double-width characters and the `| cell |` framing.
+fn table_pre_width(rows: &[Vec<String>]) -> usize {
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return 0;
+    }
+
+    let col_widths: usize = (0..column_count)
+        .map(|col| {
+            rows.iter()
+                .map(|row| {
+                    row.get(col).map_or(0, |cell| {
+                        UnicodeWidthStr::width(strip_inline_markdown(cell).as_str())
+                    })
+                })
+                .max()
+                .unwrap_or(0)
+        })
+        .sum();
+
+    // | {space}cell{space} | … | — each column adds 3 padding chars, plus 1
+    // leading pipe.
+    col_widths + column_count * 3 + 1
+}
+
 /// Render parsed table rows into aligned monospace lines.
 ///
-/// The first row is treated as header. Output format stays ASCII-only so it
-/// renders consistently in Telegram `<pre>` blocks.
+/// The first row is treated as header. Inline markdown delimiters are stripped
+/// and column widths use [`UnicodeWidthStr`] for correct CJK alignment.
 fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
     if rows.is_empty() {
         return Vec::new();
@@ -399,13 +450,12 @@ fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
         return Vec::new();
     }
 
+    // Normalize column count and strip markdown delimiters for <pre>.
     let mut normalized: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
-            let mut r = row.clone();
-            while r.len() < column_count {
-                r.push(String::new());
-            }
+            let mut r: Vec<String> = row.iter().map(|c| strip_inline_markdown(c)).collect();
+            r.resize(column_count, String::new());
             r
         })
         .collect();
@@ -414,7 +464,7 @@ fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
         .map(|column| {
             normalized
                 .iter()
-                .map(|row| row[column].chars().count())
+                .map(|row| UnicodeWidthStr::width(row[column].as_str()))
                 .max()
                 .unwrap_or(0)
         })
@@ -425,7 +475,7 @@ fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
         line.push('|');
         for (idx, width) in widths.iter().enumerate() {
             let cell = row.get(idx).map_or("", String::as_str);
-            let pad = width.saturating_sub(cell.chars().count());
+            let pad = width.saturating_sub(UnicodeWidthStr::width(cell));
             line.push(' ');
             line.push_str(cell);
             line.push_str(&" ".repeat(pad));
@@ -451,6 +501,41 @@ fn render_table_rows(rows: &[Vec<String>]) -> Vec<String> {
     }
 
     out
+}
+
+/// Render a wide table as vertical cards.
+///
+/// Each data row becomes a block: the first column is a bold title, remaining
+/// columns are labelled with their header name. The output is plain markdown
+/// that the inline parser will convert to HTML.
+fn render_table_cards(rows: &[Vec<String>]) -> Vec<String> {
+    if rows.len() < 2 {
+        return Vec::new();
+    }
+
+    let headers: Vec<String> = rows[0].iter().map(|h| strip_inline_markdown(h)).collect();
+    let mut lines = Vec::new();
+
+    for (row_idx, row) in rows[1..].iter().enumerate() {
+        if row_idx > 0 {
+            lines.push(String::new());
+        }
+
+        // First column → bold title.
+        let title = strip_inline_markdown(row.first().map_or("", String::as_str));
+        lines.push(format!("**{title}**"));
+
+        // Remaining columns → labelled values.
+        for (col_idx, cell) in row.iter().enumerate().skip(1) {
+            let label = headers.get(col_idx).map_or("", String::as_str);
+            let value = strip_inline_markdown(cell);
+            if !value.is_empty() {
+                lines.push(format!("• {label}: {value}"));
+            }
+        }
+    }
+
+    lines
 }
 
 /// Strip a Markdown heading prefix (`# ` through `###### `), returning the
@@ -688,14 +773,62 @@ mod tests {
     }
 
     #[test]
-    fn markdown_table_is_rendered_as_pre_block() {
+    fn narrow_table_is_rendered_as_pre_block() {
         let input = "| 作品 | 评分 |\n|---|---|\n| Witch Hat Atelier | 8.80 |";
         let html = markdown_to_telegram_html(input);
         assert!(html.contains("<pre>"));
-        assert!(html.contains("| 作品"));
         assert!(html.contains("Witch Hat Atelier"));
         assert!(!html.contains("|---|---|"));
-        assert!(html.contains("|-------------------"));
+    }
+
+    #[test]
+    fn narrow_table_cjk_alignment() {
+        // CJK characters are double-width, so padding must account for that.
+        let input = "| 名前 | Score |\n|---|---|\n| テスト | 9.5 |";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("<pre>"));
+        // Both header and data rows should be the same byte length when
+        // display-width is calculated correctly.
+        let pre_start = html.find("<pre>").unwrap() + 5;
+        let pre_end = html.find("</pre>").unwrap();
+        let pre_content = &html[pre_start..pre_end];
+        let rows: Vec<&str> = pre_content.lines().collect();
+        // Header, separator, and data row should all have equal display width.
+        assert_eq!(rows.len(), 3);
+        let header_w = unicode_width::UnicodeWidthStr::width(rows[0]);
+        let sep_w = unicode_width::UnicodeWidthStr::width(rows[1]);
+        let data_w = unicode_width::UnicodeWidthStr::width(rows[2]);
+        assert_eq!(header_w, sep_w);
+        assert_eq!(header_w, data_w);
+    }
+
+    #[test]
+    fn narrow_table_strips_bold_markers() {
+        let input = "| Key | Val |\n|---|---|\n| **bold** | data |";
+        let html = markdown_to_telegram_html(input);
+        assert!(html.contains("<pre>"));
+        // Bold markers should not appear inside <pre>.
+        assert!(!html.contains("**"));
+        assert!(html.contains("bold"));
+    }
+
+    #[test]
+    fn wide_table_renders_as_cards() {
+        let input = "\
+| 工作负载 | 访问模式 | 对存储的要求 |
+|---|---|---|
+| **Replay** | 读单个 episode，按 frame index 同步拉取 video + depth + pose | 低延迟打开 \
+                     episode，支持 video 的 frame-seek |
+| **Training** | 扫描大量 episodes，批量读取 | 高吞吐顺序读，shard locality |";
+        let html = markdown_to_telegram_html(input);
+        // Should NOT be in a <pre> block.
+        assert!(!html.contains("<pre>"));
+        // Each row becomes a bold title.
+        assert!(html.contains("<b>Replay</b>"));
+        assert!(html.contains("<b>Training</b>"));
+        // Column headers become labels.
+        assert!(html.contains("访问模式:"));
+        assert!(html.contains("对存储的要求:"));
     }
 
     #[test]
