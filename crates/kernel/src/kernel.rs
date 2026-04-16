@@ -2460,6 +2460,10 @@ impl Kernel {
                     user_id: user.0.clone(),
                     session_key: session_key.clone(),
                     origin_endpoint: origin_endpoint.clone(),
+                    // Carry the platform-native user id (e.g. Telegram
+                    // `msg.from.id`) so interactive tools can bind pending
+                    // prompts to the actual responder in shared chats.
+                    origin_platform_user_id: Some(msg.source.platform_user_id.clone()),
                     event_queue: event_queue.clone(),
                     rara_message_id: msg_id.clone(),
                     context_window_tokens: 0,

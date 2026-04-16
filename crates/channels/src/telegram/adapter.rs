@@ -55,19 +55,35 @@ static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::ne
 
 /// Pending user-question entry stored in [`PENDING_USER_QUESTIONS`].
 struct PendingUserQuestion {
-    question_id:   Uuid,
-    question_text: String,
-    manager:       UserQuestionManagerRef,
+    question_id:               Uuid,
+    question_text:             String,
+    manager:                   UserQuestionManagerRef,
+    /// Platform-native id of the user who asked — incoming answers are
+    /// rejected unless `msg.from.id`/`callback.from.id` matches this value.
+    /// `None` when the origin had no platform identity (web/cli).
+    expected_platform_user_id: Option<String>,
+    /// Pre-defined answer options. When `Some`, the prompt was rendered as
+    /// an inline keyboard; callback resolution maps the pressed index into
+    /// this list.
+    options:                   Option<Vec<String>>,
+    /// The `(chat_id, prompt_message_id)` where the prompt was rendered.
+    /// Kept so the timeout cleanup task can remove both index entries.
+    prompt_location:           (i64, i32),
 }
 
-/// Maps `(chat_id, message_id)` of sent user-question prompts to their
-/// pending state, so reply-to-question messages can resolve them.
+/// Primary pending-question index keyed by the kernel-generated question
+/// UUID, so both reply-to and inline-keyboard callbacks can find the entry
+/// by a single stable identifier.
 ///
-/// Entries are inserted by [`question_listener`] and removed either by
-/// `handle_update` (user replies) or by the timeout cleanup task spawned
-/// alongside each question.
-static PENDING_USER_QUESTIONS: LazyLock<DashMap<(i64, i32), PendingUserQuestion>> =
+/// Entries are inserted by [`question_listener`] and removed by
+/// `handle_update` (on resolve) or by the per-question timeout cleanup task.
+static PENDING_USER_QUESTIONS: LazyLock<DashMap<Uuid, PendingUserQuestion>> =
     LazyLock::new(DashMap::new);
+
+/// Secondary index: `(chat_id, prompt_message_id) → question_id`, used to
+/// locate a pending question from a user's reply-to-message. Kept in sync
+/// with [`PENDING_USER_QUESTIONS`].
+static PROMPT_MSG_TO_QID: LazyLock<DashMap<(i64, i32), Uuid>> = LazyLock::new(DashMap::new);
 
 /// Matches complete tool-call XML blocks (open + close, possibly mismatched
 /// names).
@@ -2492,74 +2508,285 @@ async fn question_listener(
                     }
                 };
 
-                // Route the question back to the originating Telegram surface
-                // when possible (e.g. the forum topic the user was chatting
-                // in). Fall back to `primary_chat_id` when the question
-                // originated off-Telegram (web/cli) or carries no endpoint.
-                let (chat_id, thread_id) = match &question.endpoint {
-                    Some(Endpoint {
-                        address: EndpointAddress::Telegram { chat_id, thread_id },
-                        ..
-                    }) => (*chat_id, *thread_id),
-                    _ => {
-                        let fallback = {
-                            let cfg = config.read().unwrap_or_else(|e| e.into_inner());
-                            cfg.primary_chat_id
-                        };
-                        let Some(fallback_chat) = fallback else {
-                            warn!(
-                                question_id = %question.id,
-                                "telegram question listener: no primary_chat_id \
-                                 configured and question carries no Telegram endpoint",
-                            );
-                            continue;
-                        };
-                        (fallback_chat, None)
-                    }
-                };
-
-                let text = format!(
-                    "<b>❓ Agent Question</b>\n\n{}\n\n<i>Reply to this message to answer.</i>",
-                    guard_html_escape(&question.question),
-                );
-
-                let req = with_thread_id!(
-                    bot.send_message(ChatId(chat_id), &text)
-                        .parse_mode(ParseMode::Html),
-                    thread_id
-                );
-                match req.await {
-                    Ok(sent_msg) => {
-                        let key = (chat_id, sent_msg.id.0);
-                        PENDING_USER_QUESTIONS.insert(
-                            key,
-                            PendingUserQuestion {
-                                question_id:   question.id,
-                                question_text: question.question.clone(),
-                                manager:       Arc::clone(&mgr),
-                            },
-                        );
-                        info!(
-                            question_id = %question.id,
-                            message_id = sent_msg.id.0,
-                            "telegram question listener: sent question to chat"
-                        );
-
-                        // Spawn a cleanup task that removes the entry after
-                        // the ask-user timeout (5 min) plus a small grace
-                        // period, preventing unbounded map growth when
-                        // questions time out and the user never replies.
-                        let cleanup_key = key;
-                        tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(330)).await;
-                            PENDING_USER_QUESTIONS.remove(&cleanup_key);
-                        });
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "telegram question listener: failed to send question");
-                    }
+                if let Err(e) = dispatch_user_question(&bot, &config, &mgr, question).await {
+                    warn!(error = %e, "telegram question listener: dispatch failed");
                 }
             }
+        }
+    }
+}
+
+/// Render and route a single [`UserQuestion`] to Telegram, applying
+/// sensitivity-based routing, optional inline-keyboard rendering, and
+/// installing the pending-question bookkeeping that later resolution paths
+/// (reply-to or callback press) depend on.
+///
+/// Returns `Err` only for unrecoverable dispatch failures (e.g. no target
+/// chat available, send_message rejected by Telegram). Identity validation
+/// happens at *resolve* time, not dispatch time.
+async fn dispatch_user_question(
+    bot: &teloxide::Bot,
+    config: &Arc<StdRwLock<TelegramConfig>>,
+    mgr: &UserQuestionManagerRef,
+    question: UserQuestion,
+) -> anyhow::Result<()> {
+    let primary_chat_id = {
+        let cfg = config.read().unwrap_or_else(|e| e.into_inner());
+        cfg.primary_chat_id
+    };
+
+    // Extract the originating Telegram coordinates (if any). Questions
+    // raised from web/cli turns carry a non-Telegram endpoint or none at
+    // all — those always route to `primary_chat_id`.
+    let origin_tg = match &question.endpoint {
+        Some(Endpoint {
+            address: EndpointAddress::Telegram { chat_id, thread_id },
+            ..
+        }) => Some((*chat_id, *thread_id)),
+        _ => None,
+    };
+
+    // Resolve the destination (route_chat_id, route_thread_id).
+    //
+    // Sensitive prompts ALWAYS go to `primary_chat_id` (assumed to be the
+    // user's DM) and never leak into a shared group/topic. If the prompt
+    // originated in a different chat, we post a breadcrumb there so the
+    // user knows to check their DM.
+    let (route_chat_id, route_thread_id) = if question.sensitive {
+        let Some(pm) = primary_chat_id else {
+            anyhow::bail!(
+                "sensitive question {} dropped — no primary_chat_id configured",
+                question.id
+            );
+        };
+        if let Some((origin_chat, origin_thread)) = origin_tg {
+            if origin_chat != pm {
+                let notice =
+                    "🔒 I sent a private question to your DM. Please check there to answer.";
+                let breadcrumb =
+                    with_thread_id!(bot.send_message(ChatId(origin_chat), notice), origin_thread);
+                if let Err(e) = breadcrumb.await {
+                    // Breadcrumb failure is non-fatal — the real question still
+                    // reaches the user via DM.
+                    warn!(
+                        error = %e,
+                        question_id = %question.id,
+                        "telegram: failed to post sensitive-question breadcrumb",
+                    );
+                }
+            }
+        }
+        (pm, None)
+    } else {
+        match origin_tg {
+            Some(loc) => loc,
+            None => {
+                let Some(pm) = primary_chat_id else {
+                    anyhow::bail!(
+                        "question {} dropped — non-Telegram endpoint and no primary_chat_id",
+                        question.id
+                    );
+                };
+                (pm, None)
+            }
+        }
+    };
+
+    // Compose the visible prompt. When options are present we will render
+    // an inline keyboard below, so the "reply to this message" hint would
+    // be misleading — suppress it.
+    let body = guard_html_escape(&question.question);
+    let text = if question.options.is_some() {
+        format!("<b>❓ Agent Question</b>\n\n{body}")
+    } else {
+        format!("<b>❓ Agent Question</b>\n\n{body}\n\n<i>Reply to this message to answer.</i>",)
+    };
+
+    let send_result = if let Some(ref options) = question.options {
+        // Inline keyboard: one button per option. `callback_data` encodes
+        // the question UUID plus the option index; identity is re-checked
+        // on the callback path using `callback.from.id`.
+        let keyboard: Vec<Vec<InlineKeyboardButton>> = options
+            .iter()
+            .enumerate()
+            .map(|(idx, label)| {
+                vec![InlineKeyboardButton::callback(
+                    label.clone(),
+                    format!("au:{}:{}", question.id, idx),
+                )]
+            })
+            .collect();
+        let markup = InlineKeyboardMarkup::new(keyboard);
+        let req = with_thread_id!(
+            bot.send_message(ChatId(route_chat_id), &text)
+                .parse_mode(ParseMode::Html)
+                .reply_markup(markup),
+            route_thread_id
+        );
+        req.await
+    } else {
+        let req = with_thread_id!(
+            bot.send_message(ChatId(route_chat_id), &text)
+                .parse_mode(ParseMode::Html),
+            route_thread_id
+        );
+        req.await
+    };
+
+    let sent_msg = send_result.map_err(|e| anyhow::anyhow!("send_message failed: {e}"))?;
+    let prompt_location = (route_chat_id, sent_msg.id.0);
+
+    PENDING_USER_QUESTIONS.insert(
+        question.id,
+        PendingUserQuestion {
+            question_id: question.id,
+            question_text: question.question.clone(),
+            manager: Arc::clone(mgr),
+            expected_platform_user_id: question.expected_platform_user_id.clone(),
+            options: question.options.clone(),
+            prompt_location,
+        },
+    );
+    PROMPT_MSG_TO_QID.insert(prompt_location, question.id);
+
+    info!(
+        question_id = %question.id,
+        chat_id = route_chat_id,
+        message_id = sent_msg.id.0,
+        sensitive = question.sensitive,
+        has_options = question.options.is_some(),
+        "telegram question listener: sent question",
+    );
+
+    // Timeout cleanup (5 min ask-user timeout + grace period) prevents the
+    // pending-question maps from growing unbounded when the user never
+    // answers.
+    let cleanup_qid = question.id;
+    let cleanup_loc = prompt_location;
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(330)).await;
+        PENDING_USER_QUESTIONS.remove(&cleanup_qid);
+        PROMPT_MSG_TO_QID.remove(&cleanup_loc);
+    });
+
+    Ok(())
+}
+
+/// Handle `au:<question_id>:<option_index>` inline-keyboard callbacks
+/// emitted by [`dispatch_user_question`] when a question has options.
+///
+/// Validates `callback.from.id` against the pending question's expected
+/// platform user id and rejects mismatches, preventing other group members
+/// from pressing answer buttons on behalf of the original asker.
+async fn handle_ask_user_callback(
+    bot: &teloxide::Bot,
+    callback: &teloxide::types::CallbackQuery,
+    data: &str,
+) {
+    // `au:<uuid>:<idx>`
+    let rest = match data.strip_prefix("au:") {
+        Some(r) => r,
+        None => return,
+    };
+    let Some((qid_str, idx_str)) = rest.split_once(':') else {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Malformed callback data")
+            .await;
+        return;
+    };
+    let Ok(qid) = Uuid::parse_str(qid_str) else {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Invalid question id")
+            .await;
+        return;
+    };
+    let Ok(idx) = idx_str.parse::<usize>() else {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Invalid option index")
+            .await;
+        return;
+    };
+
+    // Identity check against the asker recorded at dispatch time. We use
+    // `callback.from.id` which Telegram guarantees to be the user who
+    // pressed the button (platform-level attestation — cannot be spoofed
+    // by another group member).
+    let caller_pid = callback.from.id.0.to_string();
+    {
+        let Some(entry) = PENDING_USER_QUESTIONS.get(&qid) else {
+            let _ = bot
+                .answer_callback_query(callback.id.clone())
+                .text("This question is no longer pending.")
+                .await;
+            return;
+        };
+        if let Some(ref expected) = entry.expected_platform_user_id {
+            if expected != &caller_pid {
+                let _ = bot
+                    .answer_callback_query(callback.id.clone())
+                    .text("Only the original asker can answer this question.")
+                    .show_alert(true)
+                    .await;
+                return;
+            }
+        }
+    }
+
+    // Remove and resolve.
+    let Some((_, pending)) = PENDING_USER_QUESTIONS.remove(&qid) else {
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("This question was already answered.")
+            .await;
+        return;
+    };
+    PROMPT_MSG_TO_QID.remove(&pending.prompt_location);
+
+    let Some(options) = pending.options.as_ref() else {
+        warn!(question_id = %qid, "ask-user callback without options on pending entry");
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("No options recorded for this question.")
+            .await;
+        return;
+    };
+    let Some(answer) = options.get(idx).cloned() else {
+        // Put it back so the user can retry with a valid button.
+        PENDING_USER_QUESTIONS.insert(qid, pending);
+        let _ = bot
+            .answer_callback_query(callback.id.clone())
+            .text("Option index out of range.")
+            .await;
+        return;
+    };
+
+    match pending.manager.resolve(qid, answer.clone()) {
+        Ok(()) => {
+            info!(question_id = %qid, "telegram: resolved user question via inline callback");
+            let (chat_id, msg_id) = pending.prompt_location;
+            let answered_text = format!(
+                "<b>✅ Answered</b>\n\n<s>{}</s>\n\n<i>→ {}</i>",
+                guard_html_escape(&pending.question_text),
+                guard_html_escape(&answer),
+            );
+            // Edit the prompt to strike through and append the selected
+            // answer; also strips the inline keyboard by not re-attaching
+            // a reply_markup.
+            let _ = bot
+                .edit_message_text(ChatId(chat_id), MessageId(msg_id), answered_text)
+                .parse_mode(ParseMode::Html)
+                .await;
+            let _ = bot.answer_callback_query(callback.id.clone()).await;
+        }
+        Err(e) => {
+            warn!(error = %e, question_id = %qid, "telegram: failed to resolve ask-user callback");
+            let _ = bot
+                .answer_callback_query(callback.id.clone())
+                .text("Failed to record answer.")
+                .await;
         }
     }
 }
@@ -2586,9 +2813,11 @@ async fn handle_update(
     };
 
     // Handle callback queries by prefix routing:
-    //   "guard:*"  → guard approval (approve/deny)
-    //   "trace:*"  → execution trace toggle (show/hide detail view)
-    //   other      → TODO: convert to RawPlatformMessage for kernel processing
+    //   "guard:*"   → guard approval (approve/deny)
+    //   "limit:*"   → tool-call limit continue/stop
+    //   "au:*"      → ask-user inline option press
+    //   "trace:*"   → execution trace toggle (show/hide detail view)
+    //   other       → TODO: convert to RawPlatformMessage for kernel processing
     if let UpdateKind::CallbackQuery(callback) = &update.kind {
         if let Some(data) = &callback.data {
             // guard: callbacks do their own user-level auth internally,
@@ -2601,6 +2830,15 @@ async fn handle_update(
             if data.starts_with("limit:") {
                 handle_tool_call_limit_callback(handle, bot, callback, data, allowed_chat_ids)
                     .await;
+                return;
+            }
+            // au: (ask-user option press) enforces per-question identity
+            // (expected_platform_user_id) on its own, which is strictly
+            // narrower than the shared chat-level auth below. Route it
+            // before the chat gate so a legitimate asker in a shared but
+            // unlisted chat can still answer their own prompt.
+            if data.starts_with("au:") {
+                handle_ask_user_callback(bot, callback, data).await;
                 return;
             }
 
@@ -2770,12 +3008,39 @@ async fn handle_update(
     // normal message processing so the reply text isn't ingested as a new
     // conversation turn.
     if let Some(reply) = msg.reply_to_message() {
-        let key = (chat_id, reply.id.0);
-        if let Some((_, pending)) = PENDING_USER_QUESTIONS.remove(&key) {
+        let lookup_key = (chat_id, reply.id.0);
+        if let Some((_, qid)) = PROMPT_MSG_TO_QID.remove(&lookup_key) {
+            let Some((_, pending)) = PENDING_USER_QUESTIONS.remove(&qid) else {
+                // Primary entry gone (timed out or already answered); drop
+                // the reply and fall through to normal processing.
+                return;
+            };
+
+            // Identity gate: only the asker may answer. Other members of a
+            // shared group/topic see the prompt but must not be able to
+            // unblock the agent by replying with, say, a fabricated API
+            // key. Re-insert the pending state on rejection so the real
+            // asker can still answer later.
+            let actual_pid = msg.from.as_ref().map(|u| u.id.0.to_string());
+            if let Some(ref expected) = pending.expected_platform_user_id {
+                if actual_pid.as_deref() != Some(expected.as_str()) {
+                    PENDING_USER_QUESTIONS.insert(qid, pending);
+                    PROMPT_MSG_TO_QID.insert(lookup_key, qid);
+                    let _ = bot
+                        .send_message(
+                            ChatId(chat_id),
+                            "⚠️ Only the original asker can answer this question.",
+                        )
+                        .reply_parameters(ReplyParameters::new(msg.id))
+                        .await;
+                    return;
+                }
+            }
+
             // Reject non-text replies — prompt user to reply with text.
             let Some(answer_text) = msg.text() else {
-                // Re-insert so the user can try again with a text reply.
-                PENDING_USER_QUESTIONS.insert(key, pending);
+                PENDING_USER_QUESTIONS.insert(qid, pending);
+                PROMPT_MSG_TO_QID.insert(lookup_key, qid);
                 let _ = bot
                     .send_message(ChatId(chat_id), "⚠️ Please reply with a text message.")
                     .reply_parameters(ReplyParameters::new(msg.id))
@@ -2784,11 +3049,10 @@ async fn handle_update(
             };
 
             let answer = answer_text.to_string();
-            let question_id = pending.question_id;
-            match pending.manager.resolve(question_id, answer) {
+            match pending.manager.resolve(qid, answer) {
                 Ok(()) => {
                     info!(
-                        question_id = %question_id,
+                        question_id = %qid,
                         "telegram: resolved user question via reply"
                     );
                     // Edit the original question message to show it was answered.
@@ -2802,7 +3066,7 @@ async fn handle_update(
                         .await;
                 }
                 Err(e) => {
-                    warn!(error = %e, question_id = %question_id, "telegram: failed to resolve question");
+                    warn!(error = %e, question_id = %qid, "telegram: failed to resolve question");
                 }
             }
             return;
