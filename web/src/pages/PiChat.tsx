@@ -259,6 +259,7 @@ export default function PiChat() {
   const agentRef = useRef<Agent | null>(null);
   const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   const navigate = useNavigate();
 
   /** Switch the agent to a different session, loading its history. */
@@ -322,6 +323,7 @@ export default function PiChat() {
     const container = containerRef.current;
 
     (async () => {
+      try {
       // 1. Create and initialize the rara storage backend
       const backend = new RaraStorageBackend();
       await backend.init();
@@ -384,7 +386,11 @@ export default function PiChat() {
         chatPanel.agentInterface.enableModelSelector = false;
         chatPanel.agentInterface.enableThinkingSelector = false;
       }
-
+      } finally {
+        // Clear the loading overlay even if init fails (network/CORS/etc.)
+        // so the user sees the empty chat panel rather than a spinner forever.
+        setIsInitializing(false);
+      }
     })();
 
     return () => {
@@ -414,6 +420,13 @@ export default function PiChat() {
       </div>
       {/* Chat panel container */}
       <div ref={containerRef} className="h-full w-full" />
+      {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
+      {isInitializing && (
+        <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+          <div className="text-sm text-muted-foreground">Loading sessions…</div>
+        </div>
+      )}
       {/* Session list slide-over */}
       {showSessionList && (
         <SessionListPanel
