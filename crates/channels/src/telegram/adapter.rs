@@ -995,6 +995,16 @@ impl StreamingMessage {
     }
 }
 
+/// Last-known token/model snapshot for the reply keyboard, one entry per
+/// chat. Updated by the streaming forwarder on every `UsageUpdate` /
+/// `TurnMetrics` event; read by [`TelegramAdapter::send`] when attaching
+/// the persistent reply keyboard to outbound messages.
+#[derive(Clone, Debug, Default)]
+struct KeyboardMeta {
+    input_tokens: u32,
+    model:        String,
+}
+
 /// Runtime configuration for the Telegram adapter.
 ///
 /// Can be updated at runtime via [`TelegramAdapter::config_handle`] to change
@@ -1075,6 +1085,10 @@ pub struct TelegramAdapter {
     voice_chat_ids:        Arc<DashSet<i64>>,
     /// Settings provider for persisting pinned message IDs across restarts.
     settings:              Arc<dyn SettingsProvider>,
+    /// Per-chat last-known `(input_tokens, model)` for building the reply
+    /// keyboard attached to outbound messages. Populated by the streaming
+    /// forwarder and read by [`Self::send`].
+    keyboard_state:        Arc<DashMap<i64, KeyboardMeta>>,
 }
 
 impl TelegramAdapter {
@@ -1108,6 +1122,7 @@ impl TelegramAdapter {
             tts_service: None,
             voice_chat_ids: Arc::new(DashSet::new()),
             settings,
+            keyboard_state: Arc::new(DashMap::new()),
         }
     }
 
@@ -1492,6 +1507,7 @@ impl ChannelAdapter for TelegramAdapter {
                 if !content.is_empty() {
                     let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
                     let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+                    let last_idx = chunks.len().saturating_sub(1);
                     for (i, chunk) in chunks.iter().enumerate() {
                         let mut req = with_thread_id!(
                             self.bot
@@ -1507,6 +1523,20 @@ impl ChannelAdapter for TelegramAdapter {
                                         req = req.reply_parameters(ReplyParameters::new(msg_id));
                                     }
                                 }
+                            }
+                        }
+
+                        // Attach the persistent reply keyboard to the last chunk so the
+                        // user sees current context usage + model after the turn settles.
+                        if i == last_idx {
+                            if let Some(meta) = self.keyboard_state.get(&chat_id) {
+                                let ctx_limit =
+                                    super::pinned_status::context_window_for_model(&meta.model);
+                                req = req.reply_markup(super::reply_keyboard::build_main_keyboard(
+                                    meta.input_tokens,
+                                    ctx_limit,
+                                    &meta.model,
+                                ));
                             }
                         }
 
@@ -1585,6 +1615,7 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
+        let keyboard_state = Arc::clone(&self.keyboard_state);
         let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
             .command_handlers
             .read()
@@ -1672,6 +1703,7 @@ impl ChannelAdapter for TelegramAdapter {
                 config,
                 stream_hub,
                 active_streams,
+                keyboard_state,
                 command_handlers,
                 callback_handlers,
                 stt_service,
@@ -1758,6 +1790,7 @@ async fn polling_loop(
     config: Arc<StdRwLock<TelegramConfig>>,
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    keyboard_state: Arc<DashMap<i64, KeyboardMeta>>,
     command_handlers: Arc<[Arc<dyn CommandHandler>]>,
     callback_handlers: Arc<[Arc<dyn CallbackHandler>]>,
     stt_service: Option<rara_stt::SttService>,
@@ -1817,6 +1850,7 @@ async fn polling_loop(
                     let config = Arc::clone(&config);
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
+                    let kb_state = Arc::clone(&keyboard_state);
                     let command_handlers = Arc::clone(&command_handlers);
                     let callback_handlers = Arc::clone(&callback_handlers);
                     let stt = stt_service.clone();
@@ -1832,6 +1866,7 @@ async fn polling_loop(
                             &config,
                             &stream_hub,
                             &active_streams,
+                            &kb_state,
                             &command_handlers,
                             &callback_handlers,
                             &stt,
@@ -2998,6 +3033,7 @@ async fn handle_update(
     config: &Arc<StdRwLock<TelegramConfig>>,
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
+    keyboard_state: &Arc<DashMap<i64, KeyboardMeta>>,
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
     stt_service: &Option<rara_stt::SttService>,
@@ -3431,6 +3467,24 @@ async fn handle_update(
                     // processing.
                 }
             }
+
+            // --- Reply keyboard button interception ---
+            // Reply-keyboard presses surface as plain text; swallow the
+            // informational buttons and handle "New Session" before the
+            // kernel sees them as user input.
+            if super::reply_keyboard::is_context_button(text)
+                || super::reply_keyboard::is_model_button(text)
+            {
+                return;
+            }
+            if super::reply_keyboard::is_new_session_button(text) {
+                let req = with_thread_id!(
+                    bot.send_message(ChatId(chat_id), "\u{1f195} Starting a new session\u{2026}",),
+                    tg_thread_id
+                );
+                let _ = req.await;
+                return;
+            }
         }
     }
 
@@ -3665,6 +3719,7 @@ async fn handle_update(
                 spawn_stream_forwarder(
                     Arc::clone(stream_hub),
                     Arc::clone(active_streams),
+                    Arc::clone(keyboard_state),
                     bot.clone(),
                     chat_id,
                     tg_thread_id,
@@ -3776,6 +3831,7 @@ fn strip_tool_call_xml(text: &str) -> String {
 fn spawn_stream_forwarder(
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    keyboard_state: Arc<DashMap<i64, KeyboardMeta>>,
     bot: teloxide::Bot,
     chat_id: i64,
     thread_id: Option<i64>,
@@ -4172,6 +4228,13 @@ fn spawn_stream_forwarder(
                             progress.output_tokens = output_tokens;
                             progress.thinking_ms = thinking_ms;
                             pinned.on_usage_update(input_tokens, output_tokens, thinking_ms);
+                            keyboard_state
+                                .entry(chat_id)
+                                .and_modify(|m| m.input_tokens = input_tokens)
+                                .or_insert(KeyboardMeta {
+                                    input_tokens,
+                                    model: String::new(),
+                                });
                             // Trigger a progress re-render if we have a message
                             if progress.message_id.is_some() || !progress.tools.is_empty() {
                                 let text = progress.render_text();
@@ -4238,6 +4301,13 @@ fn spawn_stream_forwarder(
                             progress.model = model;
                             pinned.on_turn_metrics(progress.model.clone());
                             progress.iterations = iterations;
+                            keyboard_state
+                                .entry(chat_id)
+                                .and_modify(|m| m.model = progress.model.clone())
+                                .or_insert(KeyboardMeta {
+                                    input_tokens: progress.input_tokens,
+                                    model:        progress.model.clone(),
+                                });
                         }
                         // Tool call limit: send inline keyboard with continue/stop
                         // buttons. The callback data encodes session_key and
