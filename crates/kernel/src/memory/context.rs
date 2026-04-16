@@ -145,9 +145,17 @@ fn append_tool_result_entry(
 
     for (index, result) in results.iter().enumerate() {
         let content = render_tool_result(result)?;
-        let call_id = pending_calls
-            .get(index)
-            .map(|c| c.id.as_str())
+        // Prefer the `tool_call_id` persisted inside each result payload
+        // (written by the agent loop at persist time). Fall back to
+        // positional indexing into `pending_calls` for legacy tape
+        // entries that lack the field. The positional approach breaks
+        // after an interrupt (partial results) or parallel execution
+        // (unordered results), producing empty IDs that Kimi rejects
+        // with HTTP 400 "toolcallid is not found".
+        let call_id = result
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .or_else(|| pending_calls.get(index).map(|c| c.id.as_str()))
             .unwrap_or("");
         messages.push(Message::tool_result(call_id, content));
     }
