@@ -34,6 +34,8 @@ interface SessionStats {
 
 export interface SessionDetailProps {
   session: SessionStats;
+  /** When false, disables the 5s turns polling (respects Auto-refresh). */
+  autoRefresh?: boolean;
 }
 
 /**
@@ -42,8 +44,8 @@ export interface SessionDetailProps {
  * Consumes `useSessionTimeline` and renders the full execution trace.
  * Wrapped by `KernelTop` — selected session is passed from the list.
  */
-export function SessionDetail({ session }: SessionDetailProps) {
-  const timeline = useSessionTimeline(session.agent_id, session.state);
+export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
+  const timeline = useSessionTimeline(session.agent_id, session.state, autoRefresh);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 

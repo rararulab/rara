@@ -57,13 +57,15 @@ export interface SessionTimelineState {
 export function useSessionTimeline(
   sessionKey: string | null,
   sessionState: string | null,
+  /** When false, disables the 5s turns polling (respects Auto-refresh). */
+  autoRefresh = true,
 ): SessionTimelineState {
   const turnsQuery = useQuery({
     queryKey: ["session-turns", sessionKey],
     queryFn: () =>
       api.get<TurnTrace[]>(`/api/v1/kernel/sessions/${sessionKey}/turns`),
     enabled: !!sessionKey,
-    refetchInterval: TURNS_REFETCH_MS,
+    refetchInterval: autoRefresh ? TURNS_REFETCH_MS : false,
   });
 
   const turns = useMemo(() => turnsQuery.data ?? [], [turnsQuery.data]);
@@ -72,11 +74,13 @@ export function useSessionTimeline(
   const [liveItems, setLiveItems] = useState<TimelineItem[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
 
-  // Read through a ref so the WS effect does not re-subscribe every time
-  // the 5s turns refetch mutates turn count. The value is sampled when the
-  // WS opens and captured into `liveTurnIdx` below.
+  // Read through refs so the WS effect does not re-subscribe every time
+  // the 5s turns refetch mutates turn count or query identity.
   const turnsLenRef = useRef(0);
   turnsLenRef.current = turns.length;
+
+  const refetchTurnsRef = useRef(turnsQuery.refetch);
+  refetchTurnsRef.current = turnsQuery.refetch;
 
   // Depending only on (sessionKey, sessionState) prevents the WS from
   // reconnecting whenever the 5s turns refetch mutates historical data.
@@ -181,6 +185,19 @@ export function useSessionTimeline(
           break;
         }
 
+        case "text_clear": {
+          // Kernel emits text_clear before tool_call_start to discard
+          // intermediate narration. Remove the in-flight agent row.
+          if (currentTextSeq !== null) {
+            const target = currentTextSeq;
+            setLiveItems((prev) =>
+              prev.filter((it) => !(it.seq === target && it.kind === "agent")),
+            );
+            currentTextSeq = null;
+          }
+          break;
+        }
+
         case "tool_call_start": {
           const e = event as {
             name: string;
@@ -281,7 +298,10 @@ export function useSessionTimeline(
 
         case "done":
           setIsStreaming(false);
-          setLiveItems([]);
+          // Trigger an immediate refetch so the just-completed turn
+          // appears as historical items before we clear live rows.
+          // This avoids a 5s blank/stale window after every turn.
+          refetchTurnsRef.current().then(() => setLiveItems([]));
           break;
 
         default:

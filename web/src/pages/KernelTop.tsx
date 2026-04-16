@@ -160,7 +160,7 @@ export default function KernelTop() {
         {/* Right: session detail or empty state */}
         <div className="flex flex-1 flex-col min-w-0">
           {selectedStats ? (
-            <SessionDetail session={selectedStats} />
+            <SessionDetail session={selectedStats} autoRefresh={autoRefresh} />
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
               <Zap className="h-10 w-10 opacity-10" />
