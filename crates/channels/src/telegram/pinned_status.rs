@@ -33,6 +33,21 @@ struct ModelInfo {
     context_window: u32,
 }
 
+/// Shorten an absolute path to at most the last 3 segments.
+fn short_path(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    let mut slash_count = 0;
+    for i in (0..bytes.len()).rev() {
+        if bytes[i] == b'/' {
+            slash_count += 1;
+            if slash_count == 3 {
+                return &path[i + 1..];
+            }
+        }
+    }
+    path
+}
+
 /// Best-effort lookup of model metadata by name substring.
 ///
 /// Matches the most specific substring first. Returns `None` for unknown
@@ -110,6 +125,14 @@ pub(super) struct BackgroundTaskEntry {
     pub finished:   bool,
 }
 
+/// A file modified during this session, tracked for pinned card display.
+#[derive(Debug, Clone)]
+pub(super) struct FileChange {
+    pub path:      String,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
 /// Pinned session summary card.
 ///
 /// The first line is an **identity bar** — shown in Telegram's floating pin
@@ -134,6 +157,9 @@ pub(super) struct PinnedSessionCard {
     thinking_ms:      u64,
     tool_calls:       u32,
     background_tasks: Vec<BackgroundTaskEntry>,
+    changed_files:    Vec<FileChange>,
+    project_name:     String,
+    project_branch:   String,
     dirty:            bool,
     /// Last rendered HTML — skip-unchanged optimization.
     last_rendered:    String,
@@ -156,6 +182,9 @@ impl PinnedSessionCard {
             thinking_ms: 0,
             tool_calls: 0,
             background_tasks: Vec::new(),
+            changed_files: Vec::new(),
+            project_name: String::new(),
+            project_branch: String::new(),
             dirty: true,
             last_rendered: String::new(),
         }
@@ -179,6 +208,16 @@ impl PinnedSessionCard {
             State::Idle => "\u{26aa}",     // ⚪
         };
         lines.push(format!("{status_emoji} <b>{}</b>", self.session_title));
+
+        // Project: name: branch (shown when available).
+        if !self.project_name.is_empty() {
+            let project_line = if self.project_branch.is_empty() {
+                format!("Project: {}", self.project_name)
+            } else {
+                format!("Project: {}: {}", self.project_name, self.project_branch)
+            };
+            lines.push(project_line);
+        }
 
         let model_info = if self.model.is_empty() {
             None
@@ -233,7 +272,41 @@ impl PinnedSessionCard {
             }
         }
 
+        // Changed files (shown when any file-mutating tool completed).
+        if !self.changed_files.is_empty() {
+            let total = self.changed_files.len();
+            lines.push(String::new());
+            lines.push(format!("\u{1f4c1} <b>Files ({total})</b>"));
+            let max_display = 10;
+            for f in self.changed_files.iter().take(max_display) {
+                let rel = short_path(&f.path);
+                let mut parts = Vec::new();
+                if f.additions > 0 {
+                    parts.push(format!("+{}", f.additions));
+                }
+                if f.deletions > 0 {
+                    parts.push(format!("-{}", f.deletions));
+                }
+                let diff_str = if parts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", parts.join(" "))
+                };
+                lines.push(format!("  {rel}{diff_str}"));
+            }
+            if total > max_display {
+                lines.push(format!("  \u{2026} and {} more", total - max_display));
+            }
+        }
+
         lines.join("\n")
+    }
+
+    /// Set project name and git branch for the card header.
+    pub fn set_project_info(&mut self, name: String, branch: String) {
+        self.project_name = name;
+        self.project_branch = branch;
+        self.dirty = true;
     }
 
     // ── Event callbacks ──
@@ -260,6 +333,23 @@ impl PinnedSessionCard {
     /// Called when turn metrics arrive (resolves the model name).
     pub fn on_turn_metrics(&mut self, model: String) {
         self.model = model;
+        self.dirty = true;
+    }
+
+    /// Record a file mutation (write/edit) with diff stats.
+    ///
+    /// If the file was already tracked, accumulates the +/- counts.
+    pub fn on_file_changed(&mut self, path: String, additions: u64, deletions: u64) {
+        if let Some(existing) = self.changed_files.iter_mut().find(|f| f.path == path) {
+            existing.additions += additions;
+            existing.deletions += deletions;
+        } else {
+            self.changed_files.push(FileChange {
+                path,
+                additions,
+                deletions,
+            });
+        }
         self.dirty = true;
     }
 
@@ -406,6 +496,66 @@ mod tests {
         card.on_background_task_done("task-1");
         let text = card.render();
         assert!(!text.contains("Background"));
+    }
+
+    #[test]
+    fn render_changed_files() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.on_file_changed("src/main.rs".into(), 12, 5);
+        card.on_file_changed("tests/unit.rs".into(), 8, 0);
+        let text = card.render();
+        assert!(text.contains("<b>Files (2)</b>"));
+        assert!(text.contains("src/main.rs (+12 -5)"));
+        assert!(text.contains("tests/unit.rs (+8)"));
+    }
+
+    #[test]
+    fn file_change_accumulates() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.on_file_changed("src/main.rs".into(), 5, 2);
+        card.on_file_changed("src/main.rs".into(), 3, 1);
+        assert_eq!(card.changed_files.len(), 1);
+        assert_eq!(card.changed_files[0].additions, 8);
+        assert_eq!(card.changed_files[0].deletions, 3);
+    }
+
+    #[test]
+    fn changed_files_truncated_at_10() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        for i in 0..15 {
+            card.on_file_changed(format!("file_{i}.rs"), 1, 0);
+        }
+        let text = card.render();
+        assert!(text.contains("Files (15)"));
+        assert!(text.contains("\u{2026} and 5 more"));
+        assert!(text.contains("file_9.rs"));
+        assert!(!text.contains("file_10.rs"));
+    }
+
+    #[test]
+    fn render_project_and_branch() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.set_project_info("rara".into(), "main".into());
+        let text = card.render();
+        assert!(text.contains("Project: rara: main"));
+    }
+
+    #[test]
+    fn render_project_no_branch() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.set_project_info("rara".into(), String::new());
+        let text = card.render();
+        assert!(text.contains("Project: rara"));
+        assert!(!text.contains("Project: rara:"));
+    }
+
+    #[test]
+    fn short_path_trims_prefix() {
+        assert_eq!(
+            short_path("/Users/ryan/code/rara/src/main.rs"),
+            "rara/src/main.rs"
+        );
+        assert_eq!(short_path("src/main.rs"), "src/main.rs");
     }
 
     #[test]

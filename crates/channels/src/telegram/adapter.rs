@@ -3838,6 +3838,11 @@ fn spawn_stream_forwarder(
         let mut progress = ProgressMessage::new(rara_message_id);
         let mut progress_dirty = false;
 
+        // Map tool-call ID → file path for file-mutating tools, so we can
+        // pair file path with diff stats when the tool completes.
+        let mut file_tool_paths: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
         // Pinned session card — a stable summary pinned to the chat top.
         // Restore persisted message ID so we can continue editing after restart.
         let session_label = session_id.to_string();
@@ -3846,10 +3851,36 @@ fn spawn_stream_forwarder(
             session_label.clone(),
             session_label,
         );
+        let (proj_name, proj_branch) = resolve_project_info().await;
+        pinned.set_project_info(proj_name, proj_branch);
         let pinned_settings_key = format!("telegram.pinned_message.{chat_id}");
+        let pinned_session_key = format!("telegram.pinned_session.{chat_id}");
         if let Some(raw) = settings.get(&pinned_settings_key).await {
             if let Ok(id) = raw.parse::<i32>() {
                 pinned.message_id = Some(MessageId(id));
+            }
+        }
+
+        // Detect session switch — if the persisted session differs from the
+        // current one, unpin the old message and start fresh so users never
+        // see stale data from a previous session.
+        {
+            use teloxide::payloads::UnpinChatMessageSetters;
+            let previous_session = settings.get(&pinned_session_key).await;
+            let current_session = session_id.to_string();
+            let is_session_switch = previous_session.is_some()
+                && previous_session.as_deref() != Some(current_session.as_str());
+            if is_session_switch {
+                if let Some(mid) = pinned.message_id {
+                    // Ignore errors — the old message may already be gone.
+                    let _ = bot
+                        .unpin_chat_message(ChatId(chat_id))
+                        .message_id(mid)
+                        .await;
+                }
+                pinned.message_id = None;
+                // Clear the persisted message ID so a stale one is not restored later.
+                let _ = settings.delete(&pinned_settings_key).await;
             }
         }
 
@@ -3909,6 +3940,18 @@ fn spawn_stream_forwarder(
                             progress.thinking = false;
                             pinned.on_tool_start();
 
+                            // Track file path for file-mutating tools before `id` and
+                            // `name` are moved into the ToolProgress entry below.
+                            if matches!(name.as_str(), "write-file" | "edit-file" | "multi-edit") {
+                                if let Some(path) = arguments
+                                    .get("file_path")
+                                    .or_else(|| arguments.get("path"))
+                                    .and_then(|v| v.as_str())
+                                {
+                                    file_tool_paths.insert(id.clone(), path.to_owned());
+                                }
+                            }
+
                             let (display, summary) = tool_display_info(&name, &arguments);
                             let activity = tool_activity_label(&name).to_owned();
                             progress.tools.push(ToolProgress {
@@ -3956,6 +3999,7 @@ fn spawn_stream_forwarder(
                             }
                         }
                         Ok(StreamEvent::ToolCallEnd { id, result_preview, success, error }) => {
+                            let mut raw_name_for_diff = String::new();
                             if let Some(tp) = progress.tools.iter_mut().find(|t| t.id == id) {
                                 tp.finished = true;
                                 tp.success = success;
@@ -3963,8 +4007,19 @@ fn spawn_stream_forwarder(
                                 tp.error = error;
                                 tp.result_hint =
                                     crate::tool_display::tool_result_hint(&tp.raw_name, &result_preview);
+                                raw_name_for_diff.clone_from(&tp.raw_name);
                             }
                             pinned.on_tool_end();
+
+                            // Feed successful file-mutating tools into the pinned
+                            // session card so the summary reflects per-file diff stats.
+                            if success {
+                                if let Some(file_path) = file_tool_paths.remove(&id) {
+                                    let (additions, deletions) =
+                                        parse_file_diff_stats(&raw_name_for_diff, &result_preview);
+                                    pinned.on_file_changed(file_path, additions, deletions);
+                                }
+                            }
 
                             let text = progress.render_text();
                             if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
@@ -4339,7 +4394,7 @@ fn spawn_stream_forwarder(
 
                             // ── Pinned status bar: final flush ──
                             pinned.on_stream_close();
-                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key).await;
+                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key).await;
 
                             // ── Finalize: always create trace + compact summary ──
                             // Every agent turn (including pure text replies) gets a
@@ -4534,7 +4589,7 @@ fn spawn_stream_forwarder(
 
                     // ── Pinned session card: flush on state change only ──
                     if pinned.needs_flush() {
-                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key).await;
+                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key).await;
                     }
                 }
                 _ = typing_interval.tick() => {
@@ -4645,6 +4700,50 @@ enum FlushResult {
 /// 2. **`message_id` is `Some` but edit fails** — the persisted message was
 ///    deleted by the user or expired. We fall through to scenario 3.
 ///
+/// Resolve project name (from CWD basename) and git branch (from `.git/HEAD`).
+///
+/// Best-effort: returns empty strings on failure.
+async fn resolve_project_info() -> (String, String) {
+    let project_name = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+
+    let branch = match tokio::fs::read_to_string(".git/HEAD").await {
+        Ok(head) => head
+            .trim()
+            .strip_prefix("ref: refs/heads/")
+            .unwrap_or("")
+            .to_owned(),
+        Err(_) => String::new(),
+    };
+
+    (project_name, branch)
+}
+
+/// Extract line-level diff stats from a tool's `result_preview` JSON.
+///
+/// Returns `(additions, deletions)`. Falls back to `(0, 0)` for unparseable
+/// payloads or tools that do not produce line-change metadata.
+fn parse_file_diff_stats(tool_name: &str, result_preview: &str) -> (u64, u64) {
+    let v: serde_json::Value = match serde_json::from_str(result_preview) {
+        Ok(v) => v,
+        Err(_) => return (0, 0),
+    };
+    match tool_name {
+        "edit-file" | "multi-edit" => {
+            let added = v.get("lines_added").and_then(|n| n.as_u64()).unwrap_or(0);
+            let removed = v.get("lines_removed").and_then(|n| n.as_u64()).unwrap_or(0);
+            (added, removed)
+        }
+        "write-file" => {
+            let lines = v.get("lines_written").and_then(|n| n.as_u64()).unwrap_or(0);
+            (lines, 0)
+        }
+        _ => (0, 0),
+    }
+}
+
 /// 3. **`message_id` is `None`** (first flush of this turn, or fallback from
 ///    scenario 2) — send a new message, pin it silently, and persist the new ID
 ///    so subsequent turns reuse it instead of accumulating orphan messages.
@@ -4655,6 +4754,7 @@ async fn flush_pinned_status(
     pinned: &mut super::pinned_status::PinnedSessionCard,
     settings: &Arc<dyn SettingsProvider>,
     settings_key: &str,
+    session_settings_key: &str,
 ) {
     use teloxide::payloads::PinChatMessageSetters;
 
@@ -4680,6 +4780,7 @@ async fn flush_pinned_status(
                 .disable_notification(true)
                 .await;
             let _ = settings.set(settings_key, &msg.id.0.to_string()).await;
+            let _ = settings.set(session_settings_key, &pinned.session_id).await;
         }
     }
     pinned.mark_flushed();
