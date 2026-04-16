@@ -24,7 +24,7 @@ use serde::Deserialize;
 use snafu::ResultExt;
 
 use crate::{
-    error::{KernelError, Result},
+    error::{JsonSnafu, Result},
     llm::{
         driver::LlmDriver,
         types::{CompletionRequest, Message, ToolChoice},
@@ -215,9 +215,12 @@ pub(crate) fn parse_fold_response(text: &str) -> Result<FoldSummary> {
     };
 
     let parsed: FoldResponse = serde_json::from_str(json_str)
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to parse fold response as JSON: {e}\nraw: {text}")
-        })?;
+        .inspect_err(|e| {
+            // Raw text is preserved in logs only; the structured error keeps
+            // the typed `serde_json::Error` for callers that introspect it.
+            tracing::warn!(error = %e, raw = %text, "failed to parse fold response as JSON");
+        })
+        .context(JsonSnafu)?;
 
     Ok(FoldSummary {
         summary:    parsed.summary,

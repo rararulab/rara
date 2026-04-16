@@ -917,7 +917,7 @@ impl TapeService {
         let all_sessions = sessions
             .list_sessions(10_000, 0)
             .await
-            .with_whatever_context::<_, _, super::TapError>(|e| format!("session error: {e}"))?;
+            .context(super::error::SessionSnafu)?;
 
         let mut sessions_by_key = std::collections::HashMap::new();
         let mut fork_index: std::collections::HashMap<String, Vec<(String, String)>> =
@@ -979,16 +979,13 @@ impl TapeService {
                 });
             }
 
-            let key = SessionKey::try_from_raw(&current)
-                .with_whatever_context::<_, _, super::TapError>(|e| {
-                    format!("invalid session key while resolving root: {current} ({e})")
-                })?;
+            let key = SessionKey::try_from_raw(&current).map_err(|e| super::TapError::State {
+                message: format!("invalid session key while resolving root: {current} ({e})"),
+            })?;
             let Some(entry) = sessions
                 .get_session(&key)
                 .await
-                .with_whatever_context::<_, _, super::TapError>(|e| {
-                    format!("session error: {e}")
-                })?
+                .context(super::error::SessionSnafu)?
             else {
                 break;
             };

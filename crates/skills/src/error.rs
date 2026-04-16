@@ -83,12 +83,15 @@ pub enum SkillError {
     #[snafu(display("database error: {source}"))]
     Sqlx { source: sqlx::Error },
 
-    /// Catch-all: wraps any error with a descriptive message (via
-    /// [`snafu::ResultExt::whatever_context`]).
-    #[snafu(whatever, display("{message}"))]
-    Whatever {
-        message: String,
-        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
-        source:  Option<Box<dyn std::error::Error + Send + Sync>>,
-    },
+    #[snafu(display("base64 decode failed: {source}"))]
+    Base64 { source: base64::DecodeError },
+
+    #[snafu(display("invalid UTF-8 bytes: {source}"))]
+    InvalidUtf8 { source: std::string::FromUtf8Error },
+
+    #[snafu(display("invalid URL: {source}"))]
+    InvalidUrl { source: url::ParseError },
+
+    #[snafu(display("zip archive error: {source}"))]
+    Zip { source: zip::result::ZipError },
 }

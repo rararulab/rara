@@ -22,7 +22,7 @@ use std::{collections::HashMap, path::PathBuf, sync::RwLock};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
-use crate::error::{IoSnafu, Result, SerdeJsonSnafu};
+use crate::error::{Base64Snafu, InvalidUtf8Snafu, IoSnafu, Result, SerdeJsonSnafu};
 
 /// A registered marketplace source, persisted to `marketplaces.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,13 +203,8 @@ impl MarketplaceService {
                     .collect();
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
-                    .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-                    format!("base64 decode failed: {e}")
-                })?;
-                let json_str = String::from_utf8(bytes)
-                    .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-                        format!("plugin.json is not valid UTF-8: {e}")
-                    })?;
+                    .context(Base64Snafu)?;
+                let json_str = String::from_utf8(bytes).context(InvalidUtf8Snafu)?;
 
                 let index = synthetic_index_from_plugin_json(repo, &json_str)?;
                 self.cache
@@ -231,9 +226,7 @@ impl MarketplaceService {
             .collect();
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&cleaned)
-            .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-            format!("base64 decode failed: {e}")
-        })?;
+            .context(Base64Snafu)?;
 
         let index: MarketplaceIndex =
             serde_json::from_slice(&bytes).context(crate::error::SerdeJsonSnafu)?;

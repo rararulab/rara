@@ -88,13 +88,4 @@ pub enum AcpError {
     /// The registry path was not configured.
     #[snafu(display("ACP registry path not configured"))]
     RegistryPathNotSet,
-
-    /// Catch-all: wraps any error with a descriptive message (via
-    /// [`snafu::ResultExt::whatever_context`]).
-    #[snafu(whatever, display("{message}"))]
-    Whatever {
-        message: String,
-        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
-        source:  Option<Box<dyn std::error::Error + Send + Sync>>,
-    },
 }

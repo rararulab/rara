@@ -57,12 +57,17 @@ pub enum DockError {
     #[snafu(display("Kernel error: {message}"))]
     Kernel { message: String },
 
-    /// Catch-all: wraps any error with a descriptive message (via
-    /// [`snafu::ResultExt::whatever_context`]).
-    #[snafu(whatever, display("{message}"))]
-    Whatever {
-        message: String,
-        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
-        source:  Option<Box<dyn std::error::Error + Send + Sync>>,
+    /// Wraps a kernel error returned by KernelHandle operations.
+    #[snafu(display("kernel op error: {source}"))]
+    KernelOp { source: rara_kernel::KernelError },
+
+    /// Wraps a kernel I/O error returned by ingest paths.
+    #[snafu(display("kernel ingest error: {source}"))]
+    KernelIngest { source: rara_kernel::io::IOError },
+
+    /// Wraps a kernel session-store error.
+    #[snafu(display("kernel session error: {source}"))]
+    KernelSession {
+        source: rara_kernel::session::SessionError,
     },
 }

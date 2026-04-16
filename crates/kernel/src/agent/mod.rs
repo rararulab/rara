@@ -55,7 +55,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, warn};
 
 use crate::{
-    error::{IoSnafu, KernelError, Result},
+    error::{IoSnafu, KernelError, Result, TapeSnafu, YamlSnafu},
     guard::pipeline::{GuardLayer, GuardPipeline, GuardVerdict},
     handle::KernelHandle,
     identity::Role,
@@ -365,8 +365,7 @@ impl AgentRegistry {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let yaml = serde_yaml::to_string(&manifest)
-            .whatever_context::<_, KernelError>("failed to serialize manifest")?;
+        let yaml = serde_yaml::to_string(&manifest).context(YamlSnafu)?;
         std::fs::write(&path, yaml).context(IoSnafu)?;
         self.role_defaults
             .entry(role)
@@ -865,15 +864,8 @@ pub(crate) async fn run_agent_loop(
     interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
-    let manifest = handle
-        .session_manifest(session_key)
-        .with_whatever_context::<_, _, KernelError>(|e| format!("failed to get manifest: {e}"))?;
-    let full_tools = handle
-        .session_tool_registry(session_key)
-        .await
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to get tool registry: {e}")
-        })?;
+    let manifest = handle.session_manifest(session_key)?;
+    let full_tools = handle.session_tool_registry(session_key).await?;
 
     // Filter tools by manifest allowlist, then remove excluded tools.
     let manifest_filtered = full_tools.filtered_for_manifest(&manifest.tools);
@@ -925,11 +917,7 @@ pub(crate) async fn run_agent_loop(
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) = handle
-        .session_resolve_driver(session_key)
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to resolve LLM driver: {e}")
-        })?;
+    let (driver, model) = handle.session_resolve_driver(session_key)?;
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -1224,9 +1212,8 @@ pub(crate) async fn run_agent_loop(
         let mut messages = tape
             .rebuild_messages_for_llm(tape_name, user_id, &effective_prompt)
             .await
-            .with_whatever_context::<_, _, KernelError>(|e| {
-                format!("failed to rebuild messages from tape: {e}")
-            })?;
+            .map_err(Box::new)
+            .context(TapeSnafu)?;
 
         // Conditional injections (tape search reminder only on first iteration)
         if iteration == 0 && should_remind_tape_search(&input_text) {

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use tracing::{debug, info, warn};
 
-use crate::error::{ArchiveSnafu, InstallSnafu, IoSnafu, RequestSnafu};
+use crate::error::{ArchiveSnafu, InstallSnafu, InvalidUrlSnafu, IoSnafu, RequestSnafu, ZipSnafu};
 
 /// Maximum retry attempts for API calls (including the first try).
 const MAX_RETRIES: u32 = 3;
@@ -157,9 +157,7 @@ impl ClawhubClient {
             &format!("{}/search", self.base_url),
             &[("q", query), ("limit", &limit.min(50).to_string())],
         )
-        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-            format!("invalid ClawHub search URL: {e}")
-        })?;
+        .context(InvalidUrlSnafu)?;
         let resp = self.get_with_retry(url.as_str(), "ClawHub search").await?;
         resp.json::<ClawhubSearchResponse>()
             .await
@@ -181,9 +179,7 @@ impl ClawhubClient {
                 ("sort", sort.as_str().to_string()),
             ],
         )
-        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-            format!("invalid ClawHub browse URL: {e}")
-        })?;
+        .context(InvalidUrlSnafu)?;
         let resp = self.get_with_retry(url.as_str(), "ClawHub browse").await?;
         resp.json::<ClawhubBrowseResponse>()
             .await
@@ -245,9 +241,7 @@ impl ClawhubClient {
             &format!("{}/download", self.base_url),
             &[("slug", slug)],
         )
-        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-            format!("invalid ClawHub download URL: {e}")
-        })?;
+        .context(InvalidUrlSnafu)?;
         info!(slug, "downloading skill from ClawHub");
 
         let resp = self
@@ -341,10 +335,7 @@ impl ClawhubClient {
 fn extract_zip(bytes: &[u8], dest_dir: &Path) -> crate::error::Result<()> {
     let canonical_dest = std::fs::canonicalize(dest_dir).context(IoSnafu)?;
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .with_whatever_context::<_, _, crate::error::SkillError>(|e| {
-            format!("failed to read zip: {e}")
-        })?;
+    let mut archive = zip::ZipArchive::new(cursor).context(ZipSnafu)?;
 
     for i in 0..archive.len() {
         let mut file = match archive.by_index(i) {

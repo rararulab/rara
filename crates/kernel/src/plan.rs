@@ -38,7 +38,7 @@ use tracing::{info, warn};
 
 use crate::{
     agent::{AgentManifest, AgentRole, AgentTurnResult},
-    error::{KernelError, Result},
+    error::{JsonSnafu, KernelError, Result, TapeSnafu},
     guard::pipeline::GuardPipeline,
     handle::KernelHandle,
     io::{PlanStepStatus, StreamEvent, StreamHandle},
@@ -267,17 +267,8 @@ pub(crate) async fn run_plan_loop(
     // -- Phase 1: Plan creation -----------------------------------------------
 
     // Build agent context for the planner (same identity as reactive loop).
-    let manifest = handle
-        .session_manifest(session_key)
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to get manifest for planning: {e}")
-        })?;
-    let full_tools = handle
-        .session_tool_registry(session_key)
-        .await
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to get tool registry for planning: {e}")
-        })?;
+    let manifest = handle.session_manifest(session_key)?;
+    let full_tools = handle.session_tool_registry(session_key).await?;
     let tools_for_plan = full_tools.filtered_for_manifest(&manifest.tools);
     let (agent_prompt, _) = crate::agent::build_agent_system_prompt(&manifest, &tools_for_plan);
 
@@ -292,15 +283,13 @@ pub(crate) async fn run_plan_loop(
     .await?;
 
     // Persist plan to tape as a Plan entry.
-    let plan_json = serde_json::to_value(&plan)
-        .with_whatever_context::<_, _, KernelError>(|e| format!("failed to serialize plan: {e}"))?;
+    let plan_json = serde_json::to_value(&plan).context(JsonSnafu)?;
 
     tape.store()
         .append(tape_name, TapEntryKind::Plan, plan_json, None)
         .await
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to persist plan to tape: {e}")
-        })?;
+        .map_err(Box::new)
+        .context(TapeSnafu)?;
 
     // Generate a compact natural-language summary from the steps.
     let compact_summary = plan
@@ -735,11 +724,7 @@ async fn create_plan_via_llm(
     agent_system_prompt: &str,
     tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
-    let (driver, model) = handle
-        .session_resolve_driver(session_key)
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to resolve LLM driver for planning: {e}")
-        })?;
+    let (driver, model) = handle.session_resolve_driver(session_key)?;
 
     let create_plan_tool = CreatePlanTool;
     let tool_def = llm::ToolDefinition {
@@ -780,12 +765,7 @@ async fn create_plan_via_llm(
 
     info!(session_key = %session_key, "plan executor: calling LLM for plan creation");
 
-    let response = driver
-        .complete(request)
-        .await
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("LLM plan creation call failed: {e}")
-        })?;
+    let response = driver.complete(request).await?;
 
     // Try to extract the create_plan tool call from the response.
     if let Some(tool_call) = response
@@ -793,10 +773,8 @@ async fn create_plan_via_llm(
         .iter()
         .find(|tc| tc.name == crate::tool::create_plan::CreatePlanTool::TOOL_NAME)
     {
-        let params: serde_json::Value = serde_json::from_str(&tool_call.arguments)
-            .with_whatever_context::<_, _, KernelError>(|e| {
-                format!("failed to parse create_plan arguments: {e}")
-            })?;
+        let params: serde_json::Value =
+            serde_json::from_str(&tool_call.arguments).context(JsonSnafu)?;
 
         let tool_output = create_plan_tool
             .execute(params, tool_context)
@@ -805,10 +783,7 @@ async fn create_plan_via_llm(
                 format!("create_plan tool execution failed: {e}")
             })?;
 
-        let plan: Plan = serde_json::from_value(tool_output.json)
-            .with_whatever_context::<_, _, KernelError>(|e| {
-                format!("failed to deserialize plan from tool output: {e}")
-            })?;
+        let plan: Plan = serde_json::from_value(tool_output.json).context(JsonSnafu)?;
 
         info!(
             session_key = %session_key,
@@ -841,11 +816,7 @@ async fn replan_via_llm(
     agent_system_prompt: &str,
     tools: &crate::tool::ToolRegistry,
 ) -> Result<Plan> {
-    let (driver, model) = handle
-        .session_resolve_driver(session_key)
-        .with_whatever_context::<_, _, KernelError>(|e| {
-            format!("failed to resolve LLM driver for replan: {e}")
-        })?;
+    let (driver, model) = handle.session_resolve_driver(session_key)?;
 
     let create_plan_tool = CreatePlanTool;
     let tool_def = llm::ToolDefinition {
@@ -921,10 +892,7 @@ async fn replan_via_llm(
 
     info!(session_key = %session_key, "plan executor: calling LLM for replan");
 
-    let response = driver
-        .complete(request)
-        .await
-        .with_whatever_context::<_, _, KernelError>(|e| format!("LLM replan call failed: {e}"))?;
+    let response = driver.complete(request).await?;
 
     // Extract the create_plan tool call.
     if let Some(tool_call) = response
@@ -932,22 +900,17 @@ async fn replan_via_llm(
         .iter()
         .find(|tc| tc.name == crate::tool::create_plan::CreatePlanTool::TOOL_NAME)
     {
-        let params: serde_json::Value = serde_json::from_str(&tool_call.arguments)
-            .with_whatever_context::<_, _, KernelError>(|e| {
-                format!("failed to parse replan create_plan arguments: {e}")
-            })?;
+        let params: serde_json::Value =
+            serde_json::from_str(&tool_call.arguments).context(JsonSnafu)?;
 
         let tool_output = create_plan_tool
             .execute(params, tool_context)
             .await
             .with_whatever_context::<_, _, KernelError>(|e| {
-                format!("replan create_plan tool execution failed: {e}")
+                format!("create_plan tool execution failed: {e}")
             })?;
 
-        let plan: Plan = serde_json::from_value(tool_output.json)
-            .with_whatever_context::<_, _, KernelError>(|e| {
-                format!("failed to deserialize replan from tool output: {e}")
-            })?;
+        let plan: Plan = serde_json::from_value(tool_output.json).context(JsonSnafu)?;
 
         info!(
             session_key = %session_key,
