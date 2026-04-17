@@ -52,8 +52,8 @@ import type {
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
-import { api } from "@/api/client";
-import type { ChatSession, ChatMessageData, ChatModel, ThinkingLevel } from "@/api/types";
+import { api, settingsApi } from "@/api/client";
+import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 
@@ -102,6 +102,24 @@ function isToolFailure(text: string): boolean {
     return false;
   }
 }
+
+/**
+ * Map rara's LLM provider ids (as they appear in `/api/v1/settings`
+ * under `llm.providers.<id>.enabled`) to the provider ids pi-mono's
+ * `ModelSelector` filters by (`model.provider` on each pi-ai `Model`).
+ *
+ * Entries with an empty array (e.g. `ollama`) are known but not yet
+ * exposed through pi-mono's built-in catalog — they need a
+ * `CustomProvidersStore` injection to appear in the selector. Leaving
+ * them empty keeps them out of the allowlist so the UI does not imply
+ * support that is not wired up.
+ */
+const RARA_TO_PIMONO_PROVIDERS: Record<string, readonly string[]> = {
+  openrouter: ["openrouter"],
+  codex: ["openai-codex"],
+  "kimi-code": ["kimi-coding"],
+  ollama: [],
+};
 
 function mimeToFilename(mimeType: string, index: number): string {
   const ext = mimeType.split("/")[1] || "bin";
@@ -593,24 +611,35 @@ export default function PiChat() {
       container.appendChild(chatPanel);
 
       // 7. Derive the provider allowlist for pi-mono's ModelSelector from
-      //    rara's curated model catalog. `/api/v1/chat/models` already
-      //    reflects which providers the backend can route through (OpenRouter
-      //    gateway, Ollama, Kimi-Code, etc.), encoded as OpenRouter-style
-      //    `"<provider>/<model>"` ids. Splitting on "/" gives pi-mono's
-      //    provider name for each selectable family. Best-effort: if the
-      //    fetch fails, leave the allowlist undefined so pi-mono falls back
-      //    to its default (show everything).
+      //    the set of rara LLM providers currently enabled in settings.
+      //    Rara's provider ids (`openrouter`, `codex`, `kimi-code`, ...) do
+      //    not match pi-mono's provider ids 1:1, so the mapping is explicit.
+      //    `/api/v1/chat/models` cannot be used here: its ids are
+      //    OpenRouter-style `"<family>/<model>"`, and the family prefix is
+      //    NOT pi-mono's provider name — pi-mono's `ModelSelector` filters
+      //    by `model.provider`, which for OpenRouter models is the literal
+      //    string `"openrouter"`, not `openai`/`anthropic`/etc. (verified
+      //    against `vendor/pi-mono/packages/ai/src/models.generated.ts`).
+      //
+      //    Best-effort: if the fetch fails or yields no enabled providers,
+      //    leave the allowlist undefined so pi-mono falls back to showing
+      //    everything rather than locking the user out.
       let allowedProviders: string[] | undefined;
       try {
-        const models = await api.get<ChatModel[]>("/api/v1/chat/models");
-        const providers = new Set(
-          models
-            .map((m) => m.id.split("/")[0])
-            .filter((p): p is string => Boolean(p)),
-        );
+        const rawSettings = await settingsApi.list();
+        const providers = new Set<string>();
+        for (const [key, value] of Object.entries(rawSettings)) {
+          // rara stores booleans as the literal string "true".
+          if (value !== "true") continue;
+          const match = /^llm\.providers\.([^.]+)\.enabled$/.exec(key);
+          if (!match) continue;
+          for (const piProvider of RARA_TO_PIMONO_PROVIDERS[match[1]] ?? []) {
+            providers.add(piProvider);
+          }
+        }
         if (providers.size > 0) allowedProviders = [...providers];
       } catch (e) {
-        console.warn("Failed to load model catalog for selector filter:", e);
+        console.warn("Failed to load settings for selector filter:", e);
       }
 
       // 8. Wire agent into the panel — skip API key prompt since rara manages
