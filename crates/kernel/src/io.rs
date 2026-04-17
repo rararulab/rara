@@ -1270,6 +1270,43 @@ pub enum EndpointAddress {
     },
 }
 
+/// Derive an [`Endpoint`] from inbound routing data, when the channel's
+/// address is fully determined by `(chat_id, thread_id)`.
+///
+/// Used by [`IOSubsystem::resolve`] to auto-register the originating endpoint
+/// for channels that have no explicit connection lifecycle (Telegram, WeChat,
+/// CLI). Returns `None` for channels whose endpoint address cannot be
+/// recovered from a raw platform message — notably [`ChannelType::Web`],
+/// whose `connection_id` is only known to the adapter at WS/SSE open time.
+fn derive_endpoint(
+    channel_type: ChannelType,
+    platform_chat_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Option<Endpoint> {
+    let chat_id = platform_chat_id?;
+    let address = match channel_type {
+        ChannelType::Telegram => EndpointAddress::Telegram {
+            chat_id:   chat_id.parse().ok()?,
+            thread_id: thread_id.and_then(|t| t.parse().ok()),
+        },
+        ChannelType::Cli => EndpointAddress::Cli {
+            session_id: chat_id.to_owned(),
+        },
+        ChannelType::Wechat => EndpointAddress::Wechat {
+            user_id: chat_id.to_owned(),
+        },
+        // Web needs a `connection_id` the raw message doesn't carry; the
+        // adapter registers itself on WS/SSE connect.
+        ChannelType::Web | ChannelType::Api | ChannelType::Proactive | ChannelType::Internal => {
+            return None;
+        }
+    };
+    Some(Endpoint {
+        channel_type,
+        address,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // EndpointRegistry
 // ---------------------------------------------------------------------------
@@ -1599,7 +1636,21 @@ impl IOSubsystem {
             None => None,
         };
 
-        // 4. Build InboundMessage with optional session_key
+        // 4. Auto-register the originating endpoint.
+        //
+        // Why: only the Web adapter has an explicit connection lifecycle
+        // (WS/SSE open/close) and registers itself there. Telegram, WeChat,
+        // and CLI have no equivalent signal — without this, outbound fan-out
+        // via `deliver_to_endpoints()` cannot find them and cross-channel
+        // delivery (e.g. web → tg) silently drops. `HashSet` insert is
+        // idempotent, so re-registering on every message is safe.
+        if let Some(endpoint) =
+            derive_endpoint(raw.channel_type, raw.platform_chat_id.as_deref(), thread_id)
+        {
+            self.endpoint_registry.register(&user_id, endpoint);
+        }
+
+        // 5. Build InboundMessage with optional session_key
         let msg = InboundMessage::unresolved(
             MessageId::new(),
             ChannelSource {
