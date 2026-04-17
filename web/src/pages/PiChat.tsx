@@ -42,25 +42,19 @@ function stripThinkTags(text: string): string {
 }
 
 /**
- * Map pi-mono's thinking level (which has six buckets) down to rara's
- * four-bucket backend enum. `"minimal"` collapses into `"low"` and
- * `"xhigh"` collapses into `"high"` since the kernel has no tighter
- * budgets for those extremes.
+ * The rara backend accepts the same six buckets pi-mono exposes
+ * (`off | minimal | low | medium | high | xhigh`), so the chat-panel
+ * selector round-trips verbatim. This guard just narrows the type.
  */
-function mapThinkingLevelToBackend(
-  level: string | undefined,
-): ThinkingLevel | null {
+function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
   switch (level) {
     case "off":
-      return "off";
     case "minimal":
     case "low":
-      return "low";
     case "medium":
-      return "medium";
     case "high":
     case "xhigh":
-      return "high";
+      return level;
     default:
       return null;
   }
@@ -294,11 +288,24 @@ export default function PiChat() {
     agent.clearMessages();
     agent.sessionId = session.key;
 
-    // Restore the session's persisted thinking-level so pi-chat-panel's
-    // selector reflects the last setting used for this conversation.
-    // Model restoration is deferred: reconstructing a full `Model<any>`
-    // from just the stored id requires provider knowledge we don't
-    // persist yet, so the global selector state wins for now.
+    // Restore the session's persisted model + thinking-level so
+    // pi-chat-panel's selectors reflect the last settings used for this
+    // conversation. `getModel(provider, id)` rebuilds a fully typed
+    // `Model<any>` when both fields are available; otherwise the global
+    // selector state remains in place.
+    if (session.model && session.model_provider) {
+      try {
+        const { getModel } = await import("@mariozechner/pi-ai");
+        // getModel is loosely typed at runtime; cast is safe because
+        // the ids originally came from the same catalog.
+        agent.state.model = getModel(
+          session.model_provider as never,
+          session.model as never,
+        );
+      } catch (e) {
+        console.warn("Failed to restore model for session:", e);
+      }
+    }
     if (session.thinking_level) {
       agent.state.thinkingLevel = session.thinking_level;
     }
@@ -421,14 +428,14 @@ export default function PiChat() {
           const key = agent.sessionId;
           if (!key) return;
           const model = agent.state.model?.id ?? null;
-          const thinking_level = mapThinkingLevelToBackend(
-            agent.state.thinkingLevel,
-          );
+          const model_provider = agent.state.model?.provider ?? null;
+          const thinking_level = asThinkingLevel(agent.state.thinkingLevel);
           // Skip the PATCH when nothing would change.
           if (!model && !thinking_level) return;
           try {
             await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
               model,
+              model_provider,
               thinking_level,
             });
           } catch (e) {

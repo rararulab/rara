@@ -50,14 +50,22 @@ export interface ChatModel {
 
 // Chat Sessions
 
-/** LLM thinking-level override persisted per session. Matches the backend
- *  `ThinkingLevel` enum (kernel::session::ThinkingLevel). */
-export type ThinkingLevel = "off" | "low" | "medium" | "high";
+/** LLM thinking-level override persisted per session. Mirrors pi-mono's
+ *  six-bucket scale so the chat-panel selector round-trips without any
+ *  lossy mapping. */
+export type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 
 export interface ChatSession {
   key: string;
   title: string | null;
   model: string | null;
+  model_provider: string | null;
   thinking_level: ThinkingLevel | null;
   system_prompt: string | null;
   message_count: number;
