@@ -81,7 +81,7 @@ const BROADCAST_CAPACITY: usize = 256;
 // ---------------------------------------------------------------------------
 
 /// An event sent over SSE / WebSocket to the client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, strum::IntoStaticStr)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebEvent {
     /// Agent response message (final reply).
@@ -485,8 +485,34 @@ impl WebAdapter {
                     return;
                 }
             };
-            // Ignore send errors — they mean no active receivers.
-            let _ = tx.send(json);
+            let receiver_count = tx.receiver_count();
+            let event_kind: &'static str = event.into();
+            tracing::debug!(
+                session_key,
+                receiver_count,
+                event_kind,
+                "web broadcast_event"
+            );
+            match tx.send(json) {
+                Ok(delivered) => {
+                    if delivered != receiver_count {
+                        tracing::warn!(
+                            session_key,
+                            event_kind,
+                            delivered,
+                            receiver_count,
+                            "web broadcast: delivered count != receiver_count"
+                        );
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        session_key,
+                        event_kind,
+                        "web broadcast: no active receivers (tx.send returned Err)"
+                    );
+                }
+            }
         }
     }
 }
@@ -898,6 +924,17 @@ fn spawn_stream_forwarder(
             debug!(session_key, "no streams found after polling");
             return;
         }
+
+        let ws_receiver_count = sessions
+            .get(&session_key)
+            .map(|tx| tx.receiver_count())
+            .unwrap_or(0);
+        tracing::info!(
+            session_key,
+            stream_subs = subs.len(),
+            ws_receiver_count,
+            "stream_forwarder: subscribed"
+        );
 
         for (_stream_id, mut rx) in subs {
             let sessions = Arc::clone(&sessions);
