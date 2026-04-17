@@ -272,9 +272,26 @@ const INITIAL_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(
 /// Maximum retry delay for exponential backoff.
 const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Minimum interval between Telegram `edit_message_text` calls (1.5 seconds)
-/// to avoid hitting Telegram API rate limits.
-const MIN_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Edit interval for private (1:1) chats. Telegram allows ~60 msg/min per
+/// private chat.
+const MIN_EDIT_INTERVAL_PRIVATE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Edit interval for group / supergroup / forum-topic chats. Telegram caps
+/// edits at 20 msg/min per group (edit shares sendMessage quota —
+/// tdlib/td#3034), so we must stay above 3000 ms per chat to avoid 429
+/// FloodWait. Use 3500 ms for safety buffer.
+const MIN_EDIT_INTERVAL_GROUP: std::time::Duration = std::time::Duration::from_millis(3500);
+
+/// Resolve the edit interval for a given chat_id. Telegram negative chat_ids
+/// are groups/supergroups/channels; positive ids are private 1:1 chats.
+#[inline]
+fn min_edit_interval(chat_id: i64) -> std::time::Duration {
+    if chat_id < 0 {
+        MIN_EDIT_INTERVAL_GROUP
+    } else {
+        MIN_EDIT_INTERVAL_PRIVATE
+    }
+}
 
 /// Maximum characters per Telegram message before splitting to a new message.
 /// Set below 4096 to leave buffer for HTML tag expansion from markdown→html.
@@ -407,8 +424,9 @@ impl ProgressMessage {
         Self {
             message_id: None,
             tools: Vec::new(),
+            // TODO(#1510): thread chat_id through so we can use the group interval here.
             last_edit: Instant::now()
-                .checked_sub(MIN_EDIT_INTERVAL)
+                .checked_sub(MIN_EDIT_INTERVAL_PRIVATE)
                 .unwrap_or_else(Instant::now),
             turn_started: Instant::now(),
             input_tokens: 0,
@@ -3961,7 +3979,7 @@ fn spawn_stream_forwarder(
             None => return,
         };
 
-        let mut throttle = tokio::time::interval(MIN_EDIT_INTERVAL);
+        let mut throttle = tokio::time::interval(min_edit_interval(chat_id));
         throttle.tick().await; // skip immediate first tick
 
         let mut typing_interval = tokio::time::interval(std::time::Duration::from_secs(4));
@@ -4108,7 +4126,7 @@ fn spawn_stream_forwarder(
                             }
 
                             let text = progress.render_text();
-                            if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                            if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
                                 match progress.message_id {
                                     Some(mid) => {
                                         let _ = bot
@@ -4154,7 +4172,7 @@ fn spawn_stream_forwarder(
                             }
 
                             let text = progress.render_text();
-                            if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                            if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
                                 match progress.message_id {
                                     Some(mid) => {
                                         let _ = bot
@@ -4280,7 +4298,7 @@ fn spawn_stream_forwarder(
 
                                 // Render and edit with throttle + dirty flag.
                                 let text = progress.render_text();
-                                if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
                                     if let Some(mid) = progress.message_id {
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                     }
@@ -4369,7 +4387,7 @@ fn spawn_stream_forwarder(
                             // Trigger a progress re-render if we have a message
                             if progress.message_id.is_some() || !progress.tools.is_empty() {
                                 let text = progress.render_text();
-                                if progress.last_edit.elapsed() >= MIN_EDIT_INTERVAL {
+                                if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
                                     if let Some(mid) = progress.message_id {
                                         let _ = bot
                                             .edit_message_text(ChatId(chat_id), mid, &text)
@@ -4641,13 +4659,34 @@ fn spawn_stream_forwarder(
                                                 if let Err(ref re) = bot
                                                     .edit_message_text(ChatId(chat_id), mid, &compact)
                                                     .parse_mode(ParseMode::Html)
-                                                    .reply_markup(keyboard)
+                                                    .reply_markup(keyboard.clone())
                                                     .await
                                                 {
-                                                    warn!(chat_id, error = %re, "compact summary edit retry failed — buttons lost");
+                                                    warn!(chat_id, error = %re, "compact summary edit retry failed — falling back to fresh send");
+                                                    // Rate-limit window still closed for edits. A fresh send uses
+                                                    // 1 msg from the 20/min group quota and is often available when
+                                                    // edits are blocked — better than silently dropping the buttons.
+                                                    let fresh = with_thread_id!(
+                                                        bot.send_message(ChatId(chat_id), &compact)
+                                                            .parse_mode(ParseMode::Html)
+                                                            .reply_markup(keyboard.clone()),
+                                                        thread_id
+                                                    );
+                                                    if let Err(ref send_err) = fresh.await {
+                                                        warn!(chat_id, error = %send_err, "compact summary fallback send also failed — buttons truly lost");
+                                                    }
                                                 }
                                             } else if !e.to_string().contains("message is not modified") {
-                                                warn!(chat_id, error = %e, "compact summary edit failed — buttons lost");
+                                                warn!(chat_id, error = %e, "compact summary edit failed — falling back to fresh send");
+                                                let fresh = with_thread_id!(
+                                                    bot.send_message(ChatId(chat_id), &compact)
+                                                        .parse_mode(ParseMode::Html)
+                                                        .reply_markup(keyboard.clone()),
+                                                    thread_id
+                                                );
+                                                if let Err(ref send_err) = fresh.await {
+                                                    warn!(chat_id, error = %send_err, "compact summary fallback send also failed — buttons truly lost");
+                                                }
                                             }
                                         }
                                     }
