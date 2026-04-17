@@ -164,6 +164,31 @@ pub enum WebEvent {
     Done,
 }
 
+/// Static variant label for `WebEvent`, used in diagnostic logging.
+fn web_event_kind(event: &WebEvent) -> &'static str {
+    match event {
+        WebEvent::Message { .. } => "Message",
+        WebEvent::Typing => "Typing",
+        WebEvent::Phase { .. } => "Phase",
+        WebEvent::Error { .. } => "Error",
+        WebEvent::TextDelta { .. } => "TextDelta",
+        WebEvent::ReasoningDelta { .. } => "ReasoningDelta",
+        WebEvent::ToolCallStart { .. } => "ToolCallStart",
+        WebEvent::ToolCallEnd { .. } => "ToolCallEnd",
+        WebEvent::TurnRationale { .. } => "TurnRationale",
+        WebEvent::Progress { .. } => "Progress",
+        WebEvent::TurnMetrics { .. } => "TurnMetrics",
+        WebEvent::PlanCreated { .. } => "PlanCreated",
+        WebEvent::PlanProgress { .. } => "PlanProgress",
+        WebEvent::PlanReplan { .. } => "PlanReplan",
+        WebEvent::PlanCompleted { .. } => "PlanCompleted",
+        WebEvent::BackgroundTaskStarted { .. } => "BackgroundTaskStarted",
+        WebEvent::BackgroundTaskDone { .. } => "BackgroundTaskDone",
+        WebEvent::DockTurnComplete { .. } => "DockTurnComplete",
+        WebEvent::Done => "Done",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Request / response types
 // ---------------------------------------------------------------------------
@@ -485,8 +510,34 @@ impl WebAdapter {
                     return;
                 }
             };
-            // Ignore send errors — they mean no active receivers.
-            let _ = tx.send(json);
+            let receiver_count = tx.receiver_count();
+            let event_kind = web_event_kind(event);
+            tracing::debug!(
+                session_key,
+                receiver_count,
+                event_kind,
+                "web broadcast_event"
+            );
+            match tx.send(json) {
+                Ok(delivered) => {
+                    if delivered != receiver_count {
+                        tracing::warn!(
+                            session_key,
+                            event_kind,
+                            delivered,
+                            receiver_count,
+                            "web broadcast: delivered count != receiver_count"
+                        );
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        session_key,
+                        event_kind,
+                        "web broadcast: no active receivers (tx.send returned Err)"
+                    );
+                }
+            }
         }
     }
 }
@@ -898,6 +949,17 @@ fn spawn_stream_forwarder(
             debug!(session_key, "no streams found after polling");
             return;
         }
+
+        let ws_receiver_count = sessions
+            .get(&session_key)
+            .map(|tx| tx.receiver_count())
+            .unwrap_or(0);
+        tracing::info!(
+            session_key,
+            stream_subs = subs.len(),
+            ws_receiver_count,
+            "stream_forwarder: subscribed"
+        );
 
         for (_stream_id, mut rx) in subs {
             let sessions = Arc::clone(&sessions);
