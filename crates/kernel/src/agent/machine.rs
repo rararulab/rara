@@ -121,6 +121,22 @@ impl AgentMachine {
         }
     }
 
+    /// Construct a machine with a custom [`LoopBreakerConfig`].
+    ///
+    /// Callers use this to pass a `flooding_exempt` set (e.g. the current
+    /// turn's read-only tools) so the breaker does not disable them on long
+    /// investigations with many distinct arguments — mirroring the
+    /// `t.is_read_only(...)` exemption the legacy `run_agent_loop` builds.
+    pub(crate) fn with_loop_breaker_config(
+        max_iterations: usize,
+        loop_breaker: LoopBreakerConfig,
+    ) -> Self {
+        Self {
+            loop_breaker: ToolCallLoopBreaker::new(loop_breaker),
+            ..Self::new(max_iterations)
+        }
+    }
+
     /// Current high-level phase.
     pub fn phase(&self) -> Phase { self.phase }
 
@@ -879,6 +895,46 @@ mod tests {
                 disabled,
                 vec![ToolName::new("repeat")],
                 "disabled set should persist at iteration {i}",
+            );
+        }
+    }
+
+    /// Mirrors the legacy `run_agent_loop` exemption for read-only tools:
+    /// callers pass a `flooding_exempt` set so tools like `search` / `read`
+    /// are not disabled after 25 varied-argument invocations. Without this
+    /// the machine would regress long read-only investigations once the
+    /// runner replaces the legacy loop in production.
+    #[test]
+    fn loop_breaker_flooding_exempt_is_honoured() {
+        use std::collections::HashSet;
+
+        let cfg = LoopBreakerConfig::builder()
+            .flooding_exempt(HashSet::from(["search".to_owned()]))
+            .build();
+        let mut m = AgentMachine::with_loop_breaker_config(200, cfg);
+        let _ = m.step(Event::TurnStarted);
+
+        // 30 varied-arg calls — would trip `disable_after = 25` without the
+        // exemption.
+        for i in 0..30 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "tick".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "search")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(
+                    &format!("c{i}"),
+                    "search",
+                    &format!(r#"{{"q":"{i}"}}"#),
+                    true,
+                )],
+            });
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::LoopBreakerTriggered { .. })),
+                "exempt tool should not flood at wave {i}",
             );
         }
     }
