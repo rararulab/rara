@@ -134,6 +134,20 @@ pub enum Effect {
         /// Total tool calls the turn had accumulated when the trip fired.
         tool_calls_made: usize,
     },
+    /// Pause the turn and wait for the user to decide whether to keep
+    /// going. Emitted when the cumulative tool-call count crosses the
+    /// configured limit interval. The runner is responsible for surfacing
+    /// the pause to the user (inline buttons, CLI prompt, …), awaiting the
+    /// decision with a hard timeout, and feeding the outcome back as
+    /// [`crate::agent::machine::Event::LimitResolved`].
+    PauseForLimit {
+        /// Monotonically-increasing id identifying this specific pause.
+        /// The runner uses it as the oneshot key so a stale decision
+        /// delivered after timeout cannot resume a later pause.
+        limit_id:        u64,
+        /// Cumulative tool calls executed before the pause.
+        tool_calls_made: usize,
+    },
     /// Terminate the loop with a failure.
     Fail {
         /// Free-form failure description.
@@ -152,6 +166,16 @@ pub enum TapeAppendKind {
     ToolCalls,
     /// One or more tool results returned to the LLM.
     ToolResults,
+}
+
+/// User decision when the tool-call-limit circuit breaker pauses the turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitDecision {
+    /// User chose to continue; advance the next pause threshold.
+    Continue,
+    /// User chose to stop, decision timed out, or channel was dropped —
+    /// all three map to a graceful turn stop.
+    Stop,
 }
 
 /// Why the machine terminated.
