@@ -60,6 +60,22 @@ import { RaraModelDialog } from "@/components/RaraModelDialog";
 import type { ProviderInfo } from "@/api/types";
 import { isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
+/**
+ * True when the given provider id is still present in rara's routable
+ * catalog (from `/api/v1/chat/providers`). Fails open when the catalog
+ * has not been loaded yet so session restore isn't blocked waiting on
+ * an unrelated fetch — a stale provider caught later on send is still
+ * cheaper than blocking the whole chat init.
+ */
+function isRoutableProvider(
+  catalog: Set<string> | null,
+  provider: string | null | undefined,
+): boolean {
+  if (!provider) return false;
+  if (!catalog) return true;
+  return catalog.has(provider);
+}
+
 /** Strip `<think>...</think>` blocks — used only for UI preview/title text. */
 function stripForPreview(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
@@ -427,6 +443,12 @@ export default function PiChat() {
   // Tracks the last successfully-persisted (model, provider, thinking)
   // triple so onBeforeSend can skip no-op PATCHes on every send.
   const lastPersistedRef = useRef<{ model: string | null; provider: string | null; thinking: string | null } | null>(null);
+  // Snapshot of rara-side provider ids currently routable by the kernel.
+  // Used to reject stale `model_provider` values persisted before the
+  // provider catalog shrank (e.g. leftover pi-mono `google` selections
+  // from the pre-#1554 selector). `null` = not yet loaded; we fail-open
+  // in that window so the restore isn't blocked on an unrelated fetch.
+  const validProvidersRef = useRef<Set<string> | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
@@ -444,7 +466,16 @@ export default function PiChat() {
     // this conversation. We build a synthetic pi-ai Model rather than
     // looking the pair up in pi-ai's catalog — rara's provider ids
     // (`kimi`, `openrouter`, `scnet`, ...) do not exist there.
-    if (session.model && session.model_provider) {
+    //
+    // Guard: reject restored providers that are no longer in the rara
+    // routable catalog. Stale records from older builds (e.g. pi-mono's
+    // `google`/`anthropic`) would otherwise paint a ghost selection
+    // into the composer pill.
+    if (
+      session.model &&
+      session.model_provider &&
+      isRoutableProvider(validProvidersRef.current, session.model_provider)
+    ) {
       agent.state.model = syntheticModel(session.model_provider, session.model);
     }
     if (session.thinking_level) {
@@ -557,11 +588,28 @@ export default function PiChat() {
       );
       setAppStorage(storage);
 
-      // 4. Resolve the active session key before creating the agent.
-      //    Use the most recent existing session or create a new one.
+      // 4a. Pull the routable provider catalog in parallel with the
+      //     session fetch. Used to reject stale `model_provider` values
+      //     persisted by older builds before we touch `agent.state.model`.
+      //     Non-fatal if it fails: downstream guards fail-open.
+      const providersPromise = api
+        .get<ProviderInfo[]>("/api/v1/chat/providers")
+        .then((list) => {
+          validProvidersRef.current = new Set(list.map((p) => p.id));
+        })
+        .catch((e: unknown) => {
+          console.warn("Failed to load provider catalog for restore guard:", e);
+        });
+
+      // 4b. Resolve the active session key before creating the agent.
+      //     Use the most recent existing session or create a new one.
       const existingSessions = await api.get<ChatSession[]>(
         "/api/v1/chat/sessions?limit=1&offset=0",
       );
+      // Block on provider catalog here so the pre-mount restore step has
+      // an authoritative allowlist. It's one cheap request; running it
+      // serially after the sessions fetch keeps the code simple.
+      await providersPromise;
       let initialSession: ChatSession;
       if (existingSessions.length > 0) {
         initialSession = existingSessions[0];
@@ -597,7 +645,11 @@ export default function PiChat() {
       // BEFORE mounting the chat panel, so the composer pill reflects
       // the real selection and `onBeforeSend` does not see pi-agent-core's
       // "unknown" default as the first thing to persist.
-      if (initialSession.model && initialSession.model_provider) {
+      if (
+        initialSession.model &&
+        initialSession.model_provider &&
+        isRoutableProvider(validProvidersRef.current, initialSession.model_provider)
+      ) {
         agent.state.model = syntheticModel(
           initialSession.model_provider,
           initialSession.model,
@@ -693,44 +745,49 @@ export default function PiChat() {
   }, []);
 
   return (
-    <div className="relative h-screen w-screen">
-      {/* Sessions button — fixed top-left */}
-      <button
-        onClick={() => setShowSessionList(true)}
-        className="absolute left-2 top-2 z-50 flex h-11 w-11 items-center justify-center rounded-md bg-background/80 text-muted-foreground shadow-sm backdrop-blur hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-        title="Sessions"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M3 12h18M3 6h18M3 18h18" />
-        </svg>
-      </button>
+    <div className="relative flex h-screen w-screen flex-col">
       {/*
-        Settings button — opens pi-mono's SettingsDialog (provider API keys,
-        custom providers, proxy). Rara's server-wide admin config (MCP servers,
-        agent manifests, kernel config) still lives at `/settings` — reachable
-        from the session-list footer.
+        Top utility bar — reserves its own row (not `absolute`) so the
+        chat panel's message list can never render underneath the
+        Sessions / Settings / Voice icon buttons.
       */}
-      <button
-        onClick={() =>
-          SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()])
-        }
-        className="absolute left-14 top-2 z-50 flex h-11 w-11 items-center justify-center rounded-md bg-background/80 text-muted-foreground shadow-sm backdrop-blur hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-        title="Settings"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      </button>
-      {/* Voice recorder button — fixed top-right */}
-      <div className="absolute right-2 top-2 z-50">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 bg-background px-2">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowSessionList(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+            title="Sessions"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
+          {/*
+            Opens pi-mono's SettingsDialog (provider API keys, custom
+            providers, proxy). Rara's server-wide admin config (MCP
+            servers, agent manifests, kernel config) still lives at
+            `/settings` — reachable from the session-list footer.
+          */}
+          <button
+            onClick={() =>
+              SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()])
+            }
+            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+            title="Settings"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+        </div>
         <VoiceRecorder
           getSessionKey={() => agentRef.current?.sessionId}
           onComplete={reloadMessages}
         />
       </div>
-      {/* Chat panel container */}
-      <div ref={containerRef} className="h-full w-full" />
+      {/* Chat panel container — takes remaining vertical space. */}
+      <div ref={containerRef} className="min-h-0 flex-1 w-full" />
       {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
       {isInitializing && (
         <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">
@@ -760,6 +817,11 @@ export default function PiChat() {
             agent.state.model = syntheticModel(entry.id, entry.default_model, {
               baseUrl: entry.base_url ?? undefined,
             });
+            // Force the next onBeforeSend to PATCH even if the new value
+            // coincidentally matches the last persisted snapshot (e.g.
+            // the user reselects the same provider after a page reload
+            // where the snapshot could have drifted from the server).
+            lastPersistedRef.current = null;
             chatPanelRef.current?.agentInterface?.requestUpdate();
           }
           setModelDialogOpen(false);

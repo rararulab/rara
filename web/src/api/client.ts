@@ -78,10 +78,34 @@ class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** Combine an internal timeout signal with a caller-provided signal so
+ *  aborting either cancels the underlying fetch. `AbortSignal.any` is
+ *  available in modern browsers; we fall back to a manual relay when the
+ *  runtime doesn't expose it. */
+function composeSignals(
+  internal: AbortSignal,
+  external?: AbortSignal | null,
+): AbortSignal {
+  if (!external) return internal;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const any = (AbortSignal as any).any as ((signals: AbortSignal[]) => AbortSignal) | undefined;
+  if (any) return any([internal, external]);
+  const relay = new AbortController();
+  const onAbort = () => relay.abort();
+  if (internal.aborted || external.aborted) {
+    relay.abort();
+  } else {
+    internal.addEventListener('abort', onAbort, { once: true });
+    external.addEventListener('abort', onAbort, { once: true });
+  }
+  return relay.signal;
+}
+
 async function request<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options ?? {};
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...fetchOptions } = options ?? {};
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+  const signal = composeSignals(timeoutController.signal, externalSignal);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -92,7 +116,7 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
     const res = await fetch(resolveUrl(path), {
       ...fetchOptions,
       headers,
-      signal: controller.signal,
+      signal,
     });
 
     if (!res.ok) {
@@ -103,6 +127,9 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
     return res.json();
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
+      // Distinguish caller cancellation from the internal timeout so
+      // callers can decide whether to log or swallow.
+      if (externalSignal?.aborted) throw err;
       throw new ApiError(0, `Request timeout after ${timeoutMs}ms`);
     }
     throw err;
