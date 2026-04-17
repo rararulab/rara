@@ -1197,7 +1197,7 @@ pub(crate) async fn run_agent_loop(
     // for downstream substring-match tables.
     stream_handle.emit(StreamEvent::TurnStarted {
         model:                 model.clone(),
-        context_window_tokens: Some(capabilities.context_window_tokens as u32),
+        context_window_tokens: u32::try_from(capabilities.context_window_tokens).ok(),
     });
 
     // +1 for potential budget grace call (only consumed if grace is injected).
@@ -2080,7 +2080,7 @@ pub(crate) async fn run_agent_loop(
                 model: model.clone(),
                 input_tokens: last_prompt_tokens,
                 output_tokens: cumulative_output_tokens,
-                context_window_tokens: Some(capabilities.context_window_tokens as u32),
+                context_window_tokens: u32::try_from(capabilities.context_window_tokens).ok(),
                 trace,
                 cascade,
             });
@@ -3102,7 +3102,7 @@ pub(crate) async fn run_agent_loop(
         model: model.clone(),
         input_tokens: last_prompt_tokens,
         output_tokens: cumulative_output_tokens,
-        context_window_tokens: Some(capabilities.context_window_tokens as u32),
+        context_window_tokens: u32::try_from(capabilities.context_window_tokens).ok(),
         trace,
         cascade,
     })

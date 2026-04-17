@@ -34,6 +34,16 @@ use super::adapter::format_token_count;
 // below is kept for graceful degradation when an older kernel / partial event
 // stream arrives without the new field.
 
+/// Escape the three HTML characters Telegram's HTML parse_mode treats as
+/// markup (`&`, `<`, `>`). Applied to every user-derived string interpolated
+/// into the rendered card so angle brackets in session titles, model names,
+/// project names, or branches cannot break the surrounding tags.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// Shorten an absolute path to at most the last 3 segments.
 fn short_path(path: &str) -> &str {
     let bytes = path.as_bytes();
@@ -211,9 +221,12 @@ impl PinnedSessionCard {
         // Line 1: model + context gauge (preferred) or session title (fallback
         // until the first TurnStarted event arrives after a bot restart).
         if self.model.is_empty() {
-            lines.push(format!("{status_emoji} <b>{}</b>", self.session_title));
+            lines.push(format!(
+                "{status_emoji} <b>{}</b>",
+                escape_html(&self.session_title)
+            ));
         } else {
-            let head = format!("{status_emoji} <code>{}</code>", self.model);
+            let head = format!("{status_emoji} <code>{}</code>", escape_html(&self.model));
             let gauge = match (self.input_tokens, window) {
                 (0, Some(limit)) => format!(" · 0/{} (0%)", format_token_count(limit)),
                 (used, Some(limit)) if limit > 0 => {
@@ -230,15 +243,19 @@ impl PinnedSessionCard {
             lines.push(format!("{head}{gauge}"));
             // Line 2: session subtitle — keeps "where am I?" info available
             // when the pin is expanded, just demoted from line 1.
-            lines.push(format!("<i>{}</i>", self.session_title));
+            lines.push(format!("<i>{}</i>", escape_html(&self.session_title)));
         }
 
         // Project: name: branch (shown when available).
         if !self.project_name.is_empty() {
             let project_line = if self.project_branch.is_empty() {
-                format!("Project: {}", self.project_name)
+                format!("Project: {}", escape_html(&self.project_name))
             } else {
-                format!("Project: {}: {}", self.project_name, self.project_branch)
+                format!(
+                    "Project: {}: {}",
+                    escape_html(&self.project_name),
+                    escape_html(&self.project_branch)
+                )
             };
             lines.push(project_line);
         }
@@ -266,7 +283,7 @@ impl PinnedSessionCard {
             lines.push(String::new());
             lines.push(format!("\u{1f504} <b>Background ({})</b>", active.len()));
             for task in &active {
-                lines.push(format!("\u{23f3} {}", task.agent_name));
+                lines.push(format!("\u{23f3} {}", escape_html(&task.agent_name)));
             }
         }
 
@@ -277,7 +294,7 @@ impl PinnedSessionCard {
             lines.push(format!("\u{1f4c1} <b>Files ({total})</b>"));
             let max_display = 10;
             for f in self.changed_files.iter().take(max_display) {
-                let rel = short_path(&f.path);
+                let rel = escape_html(short_path(&f.path));
                 let mut parts = Vec::new();
                 if f.additions > 0 {
                     parts.push(format!("+{}", f.additions));
@@ -331,17 +348,21 @@ impl PinnedSessionCard {
     /// Called when turn metrics arrive (resolves the model name and
     /// authoritative context window).
     pub fn on_turn_metrics(&mut self, model: String, context_window_tokens: Option<u32>) {
-        self.model = model;
-        if context_window_tokens.is_some() {
-            self.context_window_tokens = context_window_tokens;
-        }
-        self.dirty = true;
+        self.set_model_and_window(model, context_window_tokens);
     }
 
     /// Called when the kernel emits `TurnStarted` — lets the card surface
     /// model + context window in the pin preview before any LLM iteration
     /// completes (so the card is never "empty" during a turn).
     pub fn on_turn_started(&mut self, model: String, context_window_tokens: Option<u32>) {
+        self.set_model_and_window(model, context_window_tokens);
+    }
+
+    /// Update the model and (optionally) the context window, marking the
+    /// card dirty. A `None` window preserves any previously resolved value —
+    /// late `TurnMetrics` without a window must not clobber the authoritative
+    /// `TurnStarted` value.
+    fn set_model_and_window(&mut self, model: String, context_window_tokens: Option<u32>) {
         self.model = model;
         if context_window_tokens.is_some() {
             self.context_window_tokens = context_window_tokens;
@@ -494,6 +515,14 @@ mod tests {
         // Idle uses ⚪ emoji on line 1 (session title fallback since no model).
         assert!(text.contains("\u{26aa}"));
         assert!(text.contains("<b>mita</b>"));
+    }
+
+    #[test]
+    fn on_turn_metrics_none_preserves_existing_window() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.on_turn_started("claude-sonnet-4".into(), Some(200_000));
+        card.on_turn_metrics("claude-sonnet-4".into(), None);
+        assert_eq!(card.context_window_tokens, Some(200_000));
     }
 
     #[test]

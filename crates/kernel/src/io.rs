@@ -835,6 +835,11 @@ pub enum PlanStepStatus {
 }
 
 /// Incremental events emitted during agent execution.
+///
+/// In-process only: forwarded over a `tokio::sync::broadcast` channel to live
+/// subscribers (Telegram adapter, web SSE, CLI). Not persisted to disk — the
+/// `Serialize`/`Deserialize` derive exists solely for the web SSE transport
+/// that re-maps variants into `WebEvent` before sending to browsers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {

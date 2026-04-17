@@ -1017,8 +1017,8 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             text: format!("Loop detected ({pattern}): disabled {}", tools.join(", ")),
         },
         StreamEvent::ToolOutput { chunk, .. } => CliEvent::TextDelta { text: chunk },
-        StreamEvent::TurnStarted { .. } => CliEvent::Progress {
-            text: String::new(),
+        StreamEvent::TurnStarted { model, .. } => CliEvent::Progress {
+            text: format!("[{model}]"),
         },
     }
 }
