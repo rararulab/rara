@@ -183,6 +183,35 @@ pub enum Effect {
     /// empty-stream recovery branch when a zero-content response suggests
     /// the context window is full.
     ForceFoldNextIteration,
+    /// Rebuild the LLM message list from the persisted tape and sanitise
+    /// any malformed tool-call arguments. Emitted once per iteration
+    /// immediately before every [`Effect::CallLlm`] (and before the
+    /// matching resume-from-limit / continuation / recovery call). The
+    /// tape is the single source of truth for conversation history in the
+    /// legacy `run_agent_loop`; this effect preserves that invariant in
+    /// the sans-IO split.
+    ///
+    /// Ordering contract, matching legacy `run_agent_loop`:
+    ///
+    /// 1. [`Effect::ForceFoldNextIteration`] (when present) — runs first so the
+    ///    new anchor is materialised before the rebuild snapshots the tape.
+    /// 2. [`Effect::InjectUserMessage`] / [`Effect::InjectContinuationWake`] /
+    ///    [`Effect::ContextPressureWarning`] — runner writes these to the tape
+    ///    so the rebuild picks them up.
+    /// 3. [`Effect::RebuildTape`] — runner rebuilds the message list from the
+    ///    tape, sanitises tool-call arguments, stores the messages in its
+    ///    per-turn buffer for the upcoming LLM request.
+    /// 4. [`Effect::CallLlm`] — consumes the rebuilt buffer.
+    ///
+    /// Fire-and-continue: the runner does not feed an event back; a
+    /// rebuild failure is logged and bubbles out of the turn through the
+    /// next LLM call's error path.
+    RebuildTape {
+        /// Zero-based iteration counter of the upcoming LLM call. Purely
+        /// informational — mirrors [`Effect::CallLlm::iteration`] for
+        /// tracing / metrics parity.
+        iteration: usize,
+    },
     /// Refresh the set of LLM-visible tool definitions after the LLM
     /// invoked `discover-tools` in the just-completed wave. The runner
     /// already owns the raw tool-output JSON, so the machine only carries

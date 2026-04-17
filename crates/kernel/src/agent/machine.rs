@@ -272,6 +272,25 @@ impl AgentMachine {
         Vec::new()
     }
 
+    /// Emit the standard pre-LLM effect pair: a [`Effect::RebuildTape`]
+    /// immediately followed by a [`Effect::CallLlm`]. Every site that
+    /// reaches [`Phase::AwaitingLlm`] uses this so the runner always
+    /// regenerates messages from the tape before the call fires —
+    /// preserving the legacy `run_agent_loop`'s "tape is the single source
+    /// of truth" invariant.
+    fn rebuild_then_call(&self) -> [Effect; 2] {
+        [
+            Effect::RebuildTape {
+                iteration: self.iteration,
+            },
+            Effect::CallLlm {
+                iteration:      self.iteration,
+                tools_enabled:  self.tools_enabled,
+                disabled_tools: self.disabled_tools.clone(),
+            },
+        ]
+    }
+
     /// Translate an LLM-failure event into recovery effects.
     ///
     /// Preserves the legacy `run_agent_loop` branching verbatim:
@@ -299,6 +318,7 @@ impl AgentMachine {
             // The legacy code path does NOT increment the recovery counter.
             LlmFailureKind::RateLimited if self.tool_calls_made > 0 => {
                 self.tools_enabled = false;
+                let [rebuild, call] = self.rebuild_then_call();
                 vec![
                     Effect::InjectUserMessage {
                         text: "[System] You hit a rate limit. Do NOT call any more tools. \
@@ -307,11 +327,8 @@ impl AgentMachine {
                             .to_owned(),
                     },
                     Effect::ForceFoldNextIteration,
-                    Effect::CallLlm {
-                        iteration:      self.iteration,
-                        tools_enabled:  self.tools_enabled,
-                        disabled_tools: self.disabled_tools.clone(),
-                    },
+                    rebuild,
+                    call,
                 ]
             }
 
@@ -342,6 +359,7 @@ impl AgentMachine {
                 }
                 self.llm_recoveries += 1;
                 self.tools_enabled = false;
+                let [rebuild, call] = self.rebuild_then_call();
                 vec![
                     Effect::InjectUserMessage {
                         text: "[System] The previous request produced an empty response (possible \
@@ -350,11 +368,8 @@ impl AgentMachine {
                             .to_owned(),
                     },
                     Effect::ForceFoldNextIteration,
-                    Effect::CallLlm {
-                        iteration:      self.iteration,
-                        tools_enabled:  self.tools_enabled,
-                        disabled_tools: self.disabled_tools.clone(),
-                    },
+                    rebuild,
+                    call,
                 ]
             }
 
@@ -377,14 +392,8 @@ impl AgentMachine {
         }
         self.llm_recoveries += 1;
         self.tools_enabled = false;
-        vec![
-            Effect::InjectUserMessage { text: nudge },
-            Effect::CallLlm {
-                iteration:      self.iteration,
-                tools_enabled:  self.tools_enabled,
-                disabled_tools: self.disabled_tools.clone(),
-            },
-        ]
+        let [rebuild, call] = self.rebuild_then_call();
+        vec![Effect::InjectUserMessage { text: nudge }, rebuild, call]
     }
 
     /// Drive the machine with one event.  Returns the side effects the runner
@@ -397,11 +406,7 @@ impl AgentMachine {
             // ── Turn boot ────────────────────────────────────────────────
             (Phase::Idle, Event::TurnStarted) => {
                 self.phase = Phase::AwaitingLlm;
-                vec![Effect::CallLlm {
-                    iteration:      self.iteration,
-                    tools_enabled:  self.tools_enabled,
-                    disabled_tools: self.disabled_tools.clone(),
-                }]
+                self.rebuild_then_call().to_vec()
             }
 
             // ── LLM produced a terminal response ─────────────────────────
@@ -422,6 +427,7 @@ impl AgentMachine {
                     self.continuation_pending = false;
                     self.continuation_count += 1;
                     self.phase = Phase::AwaitingLlm;
+                    let [rebuild, call] = self.rebuild_then_call();
                     return vec![
                         Effect::AppendTape {
                             kind: TapeAppendKind::AssistantIntermediate,
@@ -430,11 +436,8 @@ impl AgentMachine {
                             turn: self.continuation_count,
                             max:  self.max_continuations,
                         },
-                        Effect::CallLlm {
-                            iteration:      self.iteration,
-                            tools_enabled:  self.tools_enabled,
-                            disabled_tools: self.disabled_tools.clone(),
-                        },
+                        rebuild,
+                        call,
                     ];
                 }
 
@@ -556,11 +559,9 @@ impl AgentMachine {
                         });
                     } else {
                         self.phase = Phase::AwaitingLlm;
-                        effects.push(Effect::CallLlm {
-                            iteration:      self.iteration,
-                            tools_enabled:  self.tools_enabled,
-                            disabled_tools: self.disabled_tools.clone(),
-                        });
+                        let [rebuild, call] = self.rebuild_then_call();
+                        effects.push(rebuild);
+                        effects.push(call);
                     }
                 }
                 effects
@@ -574,11 +575,7 @@ impl AgentMachine {
                     LimitDecision::Continue => {
                         self.next_limit_at = self.tool_calls_made + self.limit_interval;
                         self.phase = Phase::AwaitingLlm;
-                        vec![Effect::CallLlm {
-                            iteration:      self.iteration,
-                            tools_enabled:  self.tools_enabled,
-                            disabled_tools: self.disabled_tools.clone(),
-                        }]
+                        self.rebuild_then_call().to_vec()
                     }
                     LimitDecision::Stop => {
                         self.phase = Phase::Done;
@@ -741,7 +738,10 @@ mod tests {
     fn happy_path_text_only() {
         let mut m = AgentMachine::new(8);
         let effects = m.step(Event::TurnStarted);
-        assert!(matches!(effects.as_slice(), [Effect::CallLlm { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RebuildTape { .. }, Effect::CallLlm { .. }]
+        ));
         assert_eq!(m.phase(), Phase::AwaitingLlm);
 
         let effects = m.step(Event::LlmCompleted {
@@ -802,6 +802,7 @@ mod tests {
                 Effect::AppendTape {
                     kind: TapeAppendKind::ToolResults,
                 },
+                Effect::RebuildTape { iteration: 1 },
                 Effect::CallLlm { iteration: 1, .. },
             ]
         ));
@@ -830,6 +831,7 @@ mod tests {
         match &effects[..] {
             [
                 Effect::InjectUserMessage { text },
+                Effect::RebuildTape { .. },
                 Effect::CallLlm { tools_enabled, .. },
             ] => {
                 assert!(!tools_enabled);
@@ -897,6 +899,7 @@ mod tests {
             [
                 Effect::InjectUserMessage { text },
                 Effect::ForceFoldNextIteration,
+                Effect::RebuildTape { .. },
                 Effect::CallLlm { tools_enabled, .. },
             ] => {
                 assert!(!tools_enabled);
@@ -918,7 +921,11 @@ mod tests {
         // Retryable branch: inject + CallLlm, no ForceFold.
         assert!(matches!(
             effects.as_slice(),
-            [Effect::InjectUserMessage { .. }, Effect::CallLlm { .. }]
+            [
+                Effect::InjectUserMessage { .. },
+                Effect::RebuildTape { .. },
+                Effect::CallLlm { .. },
+            ]
         ));
     }
 
@@ -935,6 +942,7 @@ mod tests {
             [
                 Effect::InjectUserMessage { text },
                 Effect::ForceFoldNextIteration,
+                Effect::RebuildTape { .. },
                 Effect::CallLlm { tools_enabled, .. },
             ] => {
                 assert!(!tools_enabled);
@@ -1359,7 +1367,10 @@ mod tests {
             decision: LimitDecision::Continue,
         });
         assert_eq!(m.phase(), Phase::AwaitingLlm);
-        assert!(matches!(effects.as_slice(), [Effect::CallLlm { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RebuildTape { .. }, Effect::CallLlm { .. }]
+        ));
     }
 
     /// `Stop` is a graceful termination: `Finish` with `StoppedByLimit`.
@@ -1756,6 +1767,234 @@ mod tests {
                 .any(|e| matches!(e, Effect::RefreshDeferredTools { .. })),
             "refresh should be suppressed on terminal wave: {effects:?}"
         );
+    }
+
+    // ─── Per-iteration tape rebuild + sanitisation ──────────────────────
+
+    /// Helper: count `Effect::RebuildTape` occurrences in a slice.
+    fn count_rebuilds(effects: &[Effect]) -> usize {
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::RebuildTape { .. }))
+            .count()
+    }
+
+    /// Every `CallLlm` the machine emits must be immediately preceded by a
+    /// matching `RebuildTape`. The legacy `run_agent_loop` rebuilds the
+    /// message list from the tape at the top of every iteration; this
+    /// invariant is what makes the tape (not an in-memory buffer) the
+    /// single source of truth for conversation history.
+    #[test]
+    fn rebuild_tape_precedes_initial_call_llm() {
+        let mut m = AgentMachine::new(8);
+        let effects = m.step(Event::TurnStarted);
+        let call_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::CallLlm { .. }))
+            .expect("expected CallLlm on turn boot");
+        let rebuild_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::RebuildTape { .. }))
+            .expect("expected RebuildTape on turn boot");
+        assert!(
+            rebuild_idx + 1 == call_idx,
+            "rebuild must sit directly before CallLlm: {effects:?}"
+        );
+        match &effects[rebuild_idx] {
+            Effect::RebuildTape { iteration } => assert_eq!(*iteration, 0),
+            _ => unreachable!(),
+        }
+    }
+
+    /// After a tool wave, the next iteration's `CallLlm` carries the
+    /// bumped iteration number and the preceding `RebuildTape` shares it.
+    #[test]
+    fn rebuild_tape_precedes_post_tool_call_llm_with_matching_iteration() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           "thinking".into(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        let rebuild = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::RebuildTape { iteration } => Some(*iteration),
+                _ => None,
+            })
+            .expect("expected RebuildTape on next iteration");
+        assert_eq!(rebuild, 1);
+        // And it must still sit directly before the next CallLlm.
+        let rebuild_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::RebuildTape { .. }))
+            .unwrap();
+        let call_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::CallLlm { .. }))
+            .unwrap();
+        assert!(rebuild_idx + 1 == call_idx, "effects: {effects:?}");
+    }
+
+    /// The continuation-wake path issues an extra `CallLlm`; it MUST also
+    /// be preceded by a rebuild so the wake message (written to the tape)
+    /// is visible to the LLM.
+    #[test]
+    fn rebuild_tape_precedes_continuation_wake_call() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "continue-work")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "continue-work", "{}", true)],
+        });
+        let effects = m.step(Event::LlmCompleted {
+            text:           "still working".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        });
+
+        // Ordering within this batch: AppendTape(Intermediate),
+        // InjectContinuationWake, RebuildTape, CallLlm.
+        let wake_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::InjectContinuationWake { .. }))
+            .expect("expected wake");
+        let rebuild_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::RebuildTape { .. }))
+            .expect("expected rebuild");
+        let call_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::CallLlm { .. }))
+            .expect("expected call");
+        assert!(
+            wake_idx < rebuild_idx && rebuild_idx + 1 == call_idx,
+            "effects: {effects:?}"
+        );
+    }
+
+    /// The LimitResolved::Continue resume path re-enters `CallLlm`; the
+    /// rebuild must still prefix it so any nudges pushed during the pause
+    /// (pressure warnings, discover-tools refresh) land in the rebuilt
+    /// message list.
+    #[test]
+    fn rebuild_tape_precedes_resume_after_limit_pause() {
+        let mut m = AgentMachine::with_tool_call_limit(8, 1);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        let effects = m.step(Event::LimitResolved {
+            limit_id: 1,
+            decision: LimitDecision::Continue,
+        });
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RebuildTape { .. }, Effect::CallLlm { .. }]
+        ));
+    }
+
+    /// Every LLM recovery path (retryable / rate-limit-with-tools / empty
+    /// stream) retries via `CallLlm` and MUST rebuild first so the
+    /// injected nudge is part of the rebuilt messages.
+    #[test]
+    fn rebuild_tape_precedes_each_recovery_call() {
+        use LlmFailureKind::*;
+        // Retryable: [Inject, Rebuild, Call]
+        {
+            let mut m = AgentMachine::new(8);
+            let _ = m.step(Event::TurnStarted);
+            let effects = m.step(Event::LlmFailed {
+                kind: Retryable {
+                    message: "503".into(),
+                },
+            });
+            assert_eq!(count_rebuilds(&effects), 1, "{effects:?}");
+        }
+        // Empty stream: [Inject, ForceFold, Rebuild, Call]
+        {
+            let mut m = AgentMachine::new(8);
+            let _ = m.step(Event::TurnStarted);
+            let effects = m.step(Event::LlmFailed { kind: EmptyStream });
+            assert_eq!(count_rebuilds(&effects), 1, "{effects:?}");
+        }
+        // Rate-limit with tools: [Inject, ForceFold, Rebuild, Call]
+        {
+            let mut m = AgentMachine::new(8);
+            let _ = m.step(Event::TurnStarted);
+            let _ = m.step(Event::LlmCompleted {
+                text:           String::new(),
+                tool_calls:     vec![tool_call("c1", "search")],
+                has_tool_calls: true,
+            });
+            let _ = m.step(Event::ToolsCompleted {
+                results: vec![tool_result("c1", "search", "{}", true)],
+            });
+            let effects = m.step(Event::LlmFailed { kind: RateLimited });
+            assert_eq!(count_rebuilds(&effects), 1, "{effects:?}");
+        }
+    }
+
+    /// Terminal waves (Finish on max iterations, PauseForLimit, Stopped)
+    /// must NOT emit a rebuild: there is no upcoming CallLlm to consume
+    /// it. Emitting one would cause the runner to do unnecessary work and
+    /// risk overwriting a buffer that will never be read.
+    #[test]
+    fn rebuild_tape_absent_on_terminal_waves() {
+        // Max iterations → Finish
+        {
+            let mut m = AgentMachine::new(1);
+            let _ = m.step(Event::TurnStarted);
+            let _ = m.step(Event::LlmCompleted {
+                text:           "x".into(),
+                tool_calls:     vec![tool_call("c1", "t")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result("c1", "t", "{}", true)],
+            });
+            assert_eq!(m.phase(), Phase::Done);
+            assert_eq!(count_rebuilds(&effects), 0, "{effects:?}");
+        }
+        // Text-only Stopped → only AppendTape + Finish, no rebuild
+        {
+            let mut m = AgentMachine::new(8);
+            let _ = m.step(Event::TurnStarted);
+            let effects = m.step(Event::LlmCompleted {
+                text:           "done".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            });
+            assert_eq!(count_rebuilds(&effects), 0, "{effects:?}");
+        }
+        // Tool-call-limit pause → no rebuild yet (the resume will emit one)
+        {
+            let mut m = AgentMachine::with_tool_call_limit(8, 1);
+            let _ = m.step(Event::TurnStarted);
+            let _ = m.step(Event::LlmCompleted {
+                text:           String::new(),
+                tool_calls:     vec![tool_call("c1", "t")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result("c1", "t", "{}", true)],
+            });
+            assert_eq!(m.phase(), Phase::PausedForLimit);
+            assert_eq!(count_rebuilds(&effects), 0, "{effects:?}");
+        }
     }
 
     /// When a discover-tools wave also trips the tool-call limit, the refresh
