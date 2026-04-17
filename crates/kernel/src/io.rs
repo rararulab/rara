@@ -906,11 +906,27 @@ pub enum StreamEvent {
     },
     /// Turn metrics summary (emitted before stream close).
     TurnMetrics {
-        duration_ms:     u64,
-        iterations:      usize,
-        tool_calls:      usize,
-        model:           String,
-        rara_message_id: String,
+        duration_ms:           u64,
+        iterations:            usize,
+        tool_calls:            usize,
+        model:                 String,
+        rara_message_id:       String,
+        /// Authoritative context window size (in tokens) for the model used
+        /// this turn. Populated from
+        /// `ModelCapabilities::context_window_tokens`. `None` only if
+        /// the agent turn errored before capabilities were resolved —
+        /// kept optional for forward/backward compatibility.
+        #[serde(default)]
+        context_window_tokens: Option<u32>,
+    },
+    /// Emitted immediately when an agent turn starts, so channel adapters can
+    /// populate model-dependent UI (e.g. the Telegram pinned session card)
+    /// without waiting for the first LLM response.
+    TurnStarted {
+        model:                 String,
+        /// Authoritative context window size (in tokens) for the model used
+        /// this turn. `None` if the driver did not report a limit.
+        context_window_tokens: Option<u32>,
     },
     /// Final per-turn token usage (emitted once, after the agent loop
     /// finishes, before stream close). Distinct from `UsageUpdate` which is

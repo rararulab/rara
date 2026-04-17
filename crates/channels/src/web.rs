@@ -228,6 +228,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
             tool_calls,
             model,
             rara_message_id: _,
+            context_window_tokens: _,
         } => Some(WebEvent::TurnMetrics {
             duration_ms,
             iterations,
@@ -259,6 +260,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
         StreamEvent::UsageUpdate { .. } => None,
+        StreamEvent::TurnStarted { .. } => None,
         StreamEvent::TurnUsage {
             input_tokens,
             output_tokens,

@@ -4500,6 +4500,14 @@ fn spawn_stream_forwarder(
                             progress.output_tokens = output_tokens;
                             progress.thinking_ms = thinking_ms;
                             pinned.on_usage_update(input_tokens, output_tokens, thinking_ms);
+                            // Flush the pin as soon as we have real token
+                            // numbers — the subsequent throttle tick might
+                            // coincide with stream close and get skipped. The
+                            // rate limiter + needs_flush() skip-unchanged
+                            // guard keep this cheap.
+                            if pinned.needs_flush() {
+                                flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key, &rate_limiter).await;
+                            }
                             keyboard_state
                                 .entry(chat_id)
                                 .and_modify(|m| m.input_tokens = input_tokens)
@@ -4570,11 +4578,11 @@ fn spawn_stream_forwarder(
                             // progress message with the reasoning preview.
                             progress_dirty = true;
                         }
-                        Ok(StreamEvent::TurnMetrics { model, iterations, .. }) => {
+                        Ok(StreamEvent::TurnMetrics { model, iterations, context_window_tokens, .. }) => {
                             // TurnMetrics arrives just before stream close —
                             // stash for the ExecutionTrace built in RecvError::Closed.
                             progress.model = model;
-                            pinned.on_turn_metrics(progress.model.clone());
+                            pinned.on_turn_metrics(progress.model.clone(), context_window_tokens);
                             progress.iterations = iterations;
                             keyboard_state
                                 .entry(chat_id)
@@ -4583,6 +4591,32 @@ fn spawn_stream_forwarder(
                                     input_tokens: progress.input_tokens,
                                     model:        progress.model.clone(),
                                 });
+                            // Flush so the final pin reflects the model /
+                            // context window without waiting for the next
+                            // throttle tick (which might miss the close race).
+                            if pinned.needs_flush() {
+                                flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key, &rate_limiter).await;
+                            }
+                        }
+                        Ok(StreamEvent::TurnStarted { model, context_window_tokens }) => {
+                            // Populate the pinned card's model + context window
+                            // immediately so the first flush carries real data
+                            // instead of an empty shell. Also primes the reply
+                            // keyboard metadata for the context gauge.
+                            pinned.on_turn_started(model.clone(), context_window_tokens);
+                            if progress.model.is_empty() {
+                                progress.model = model.clone();
+                            }
+                            keyboard_state
+                                .entry(chat_id)
+                                .and_modify(|m| m.model = model.clone())
+                                .or_insert(KeyboardMeta {
+                                    input_tokens: progress.input_tokens,
+                                    model:        model.clone(),
+                                });
+                            if pinned.needs_flush() {
+                                flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key, &rate_limiter).await;
+                            }
                         }
                         // Tool call limit: send inline keyboard with continue/stop
                         // buttons. The callback data encodes session_key and

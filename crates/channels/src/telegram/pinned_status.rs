@@ -25,13 +25,14 @@ use teloxide::types::MessageId;
 use super::adapter::format_token_count;
 
 // ---------------------------------------------------------------------------
-// Model metadata — context window sizes and per-token pricing
+// Model metadata — context window sizes
 // ---------------------------------------------------------------------------
-
-/// Known model context window size.
-struct ModelInfo {
-    context_window: u32,
-}
+//
+// The authoritative context window size is carried by
+// `StreamEvent::TurnStarted` / `TurnMetrics` (populated by the kernel from
+// `ModelCapabilities::context_window_tokens`). The substring-matching fallback
+// below is kept for graceful degradation when an older kernel / partial event
+// stream arrives without the new field.
 
 /// Shorten an absolute path to at most the last 3 segments.
 fn short_path(path: &str) -> &str {
@@ -48,53 +49,35 @@ fn short_path(path: &str) -> &str {
     path
 }
 
-/// Best-effort lookup of model metadata by name substring.
-///
-/// Matches the most specific substring first. Returns `None` for unknown
-/// models — the card gracefully omits context % and cost when unavailable.
-fn lookup_model_info(model: &str) -> Option<ModelInfo> {
+/// Best-effort fallback context window lookup when the kernel did not supply
+/// a value on the stream (older builds, partial events).
+fn fallback_context_window(model: &str) -> Option<u32> {
     let m = model.to_lowercase();
-
-    // Claude family — 200K context
     if m.contains("opus") || m.contains("sonnet") || m.contains("haiku") {
-        return Some(ModelInfo {
-            context_window: 200_000,
-        });
+        return Some(200_000);
     }
-    // OpenAI o-series — 200K context
     if m.contains("o3") || m.contains("o4-mini") {
-        return Some(ModelInfo {
-            context_window: 200_000,
-        });
+        return Some(200_000);
     }
-    // GPT-4o family — 128K context
     if m.contains("gpt-4o") {
-        return Some(ModelInfo {
-            context_window: 128_000,
-        });
+        return Some(128_000);
     }
-    // Gemini — 1M context
     if m.contains("gemini-2") || m.contains("gemini-1.5") {
-        return Some(ModelInfo {
-            context_window: 1_000_000,
-        });
+        return Some(1_000_000);
     }
-    // DeepSeek — 128K context
     if m.contains("deepseek") {
-        return Some(ModelInfo {
-            context_window: 128_000,
-        });
+        return Some(128_000);
     }
-
     None
 }
 
 /// Look up the context window size (in tokens) for a known model.
 ///
-/// Thin wrapper around [`lookup_model_info`] exposed to sibling modules
-/// so that [`super::reply_keyboard`] can compute the context usage gauge.
+/// Exposed to sibling modules (e.g. [`super::reply_keyboard`]) for the
+/// context usage gauge. Prefer the authoritative value carried by
+/// `StreamEvent::TurnStarted` when available.
 pub(super) fn context_window_for_model(model: &str) -> Option<u32> {
-    lookup_model_info(model).map(|info| info.context_window)
+    fallback_context_window(model)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,25 +127,30 @@ pub(super) struct FileChange {
 #[derive(Debug)]
 pub(super) struct PinnedSessionCard {
     /// Telegram chat ID this card belongs to.
-    pub chat_id:      i64,
+    pub chat_id:           i64,
     /// Message ID of the pinned message, `None` until first send.
-    pub message_id:   Option<MessageId>,
+    pub message_id:        Option<MessageId>,
     /// Session identifier used for detecting session switches.
-    pub session_id:   String,
-    session_title:    String,
-    model:            String,
-    state:            State,
-    input_tokens:     u32,
-    output_tokens:    u32,
-    thinking_ms:      u64,
-    tool_calls:       u32,
-    background_tasks: Vec<BackgroundTaskEntry>,
-    changed_files:    Vec<FileChange>,
-    project_name:     String,
-    project_branch:   String,
-    dirty:            bool,
+    pub session_id:        String,
+    session_title:         String,
+    model:                 String,
+    /// Authoritative context window (tokens) from kernel `ModelCapabilities`.
+    /// `None` until the kernel emits `TurnStarted` / `TurnMetrics` for this
+    /// turn (first turn after restart), at which point we fill from the event
+    /// rather than a substring table.
+    context_window_tokens: Option<u32>,
+    state:                 State,
+    input_tokens:          u32,
+    output_tokens:         u32,
+    thinking_ms:           u64,
+    tool_calls:            u32,
+    background_tasks:      Vec<BackgroundTaskEntry>,
+    changed_files:         Vec<FileChange>,
+    project_name:          String,
+    project_branch:        String,
+    dirty:                 bool,
     /// Last rendered HTML — skip-unchanged optimization.
-    last_rendered:    String,
+    last_rendered:         String,
 }
 
 impl PinnedSessionCard {
@@ -176,6 +164,7 @@ impl PinnedSessionCard {
             session_id,
             session_title,
             model: String::new(),
+            context_window_tokens: None,
             state: State::Running,
             input_tokens: 0,
             output_tokens: 0,
@@ -193,21 +182,56 @@ impl PinnedSessionCard {
     /// Render the session summary card as HTML.
     ///
     /// **Line 1 — Identity bar** (visible in Telegram's floating pin preview):
-    /// `🟢 {session_title} · {agent_name}`
-    /// Answers "where am I?" — session context, not telemetry.
+    /// `🟢 <model> · {used}/{limit} ({pct}%)` — model + context gauge is the
+    /// single piece of telemetry most worth seeing at a glance. Falls back to
+    /// the session title when the model is not yet known (pre-first-turn).
+    ///
+    /// **Line 2 — Session subtitle**: the human-readable session label, so
+    /// users still know "where am I?" when they expand the pin.
     ///
     /// **Body — Metrics** (visible when user taps the pinned message):
-    /// Model, Context %, Cost, Thinking, Tools, Background.
+    /// Project, Thinking, Tools, Background, Files.
     pub fn render(&self) -> String {
         let mut lines = Vec::with_capacity(8);
 
-        // Line 1: Identity bar — status emoji + session title + agent name.
-        // This is what shows in the floating pin preview at the chat top.
+        // Status emoji encodes agent state (Running / Idle). Placed on line 1
+        // so the pin preview signals activity without needing to expand.
         let status_emoji = match self.state {
             State::Running => "\u{1f7e2}", // 🟢
             State::Idle => "\u{26aa}",     // ⚪
         };
-        lines.push(format!("{status_emoji} <b>{}</b>", self.session_title));
+
+        // Resolve context window: authoritative kernel-supplied value first,
+        // substring fallback for older kernels / stale pins from before the
+        // first turn.
+        let window = self
+            .context_window_tokens
+            .or_else(|| fallback_context_window(&self.model));
+
+        // Line 1: model + context gauge (preferred) or session title (fallback
+        // until the first TurnStarted event arrives after a bot restart).
+        if self.model.is_empty() {
+            lines.push(format!("{status_emoji} <b>{}</b>", self.session_title));
+        } else {
+            let head = format!("{status_emoji} <code>{}</code>", self.model);
+            let gauge = match (self.input_tokens, window) {
+                (0, Some(limit)) => format!(" · 0/{} (0%)", format_token_count(limit)),
+                (used, Some(limit)) if limit > 0 => {
+                    let pct = (used as f64 / limit as f64 * 100.0) as u32;
+                    format!(
+                        " · {}/{} ({pct}%)",
+                        format_token_count(used),
+                        format_token_count(limit),
+                    )
+                }
+                (used, _) if used > 0 => format!(" · {}", format_token_count(used)),
+                _ => String::new(),
+            };
+            lines.push(format!("{head}{gauge}"));
+            // Line 2: session subtitle — keeps "where am I?" info available
+            // when the pin is expanded, just demoted from line 1.
+            lines.push(format!("<i>{}</i>", self.session_title));
+        }
 
         // Project: name: branch (shown when available).
         if !self.project_name.is_empty() {
@@ -217,32 +241,6 @@ impl PinnedSessionCard {
                 format!("Project: {}: {}", self.project_name, self.project_branch)
             };
             lines.push(project_line);
-        }
-
-        let model_info = if self.model.is_empty() {
-            None
-        } else {
-            lookup_model_info(&self.model)
-        };
-
-        // Model.
-        if !self.model.is_empty() {
-            lines.push(format!("Model: <code>{}</code>", self.model));
-        }
-
-        // Context: input_tokens is the current prompt/context size in our
-        // stream protocol. output_tokens is cumulative completion — must NOT
-        // be mixed into the context meter.
-        if self.input_tokens > 0 {
-            let used_str = format_token_count(self.input_tokens);
-            let context_line = if let Some(ref info) = model_info {
-                let limit_str = format_token_count(info.context_window);
-                let pct = (self.input_tokens as f64 / info.context_window as f64 * 100.0) as u32;
-                format!("Context: {used_str} / {limit_str} ({pct}%)")
-            } else {
-                format!("Context: {used_str}")
-            };
-            lines.push(context_line);
         }
 
         // Thinking time (rara-specific, shown when non-zero).
@@ -330,9 +328,24 @@ impl PinnedSessionCard {
     /// Called when a tool call finishes.
     pub fn on_tool_end(&mut self) { self.dirty = true; }
 
-    /// Called when turn metrics arrive (resolves the model name).
-    pub fn on_turn_metrics(&mut self, model: String) {
+    /// Called when turn metrics arrive (resolves the model name and
+    /// authoritative context window).
+    pub fn on_turn_metrics(&mut self, model: String, context_window_tokens: Option<u32>) {
         self.model = model;
+        if context_window_tokens.is_some() {
+            self.context_window_tokens = context_window_tokens;
+        }
+        self.dirty = true;
+    }
+
+    /// Called when the kernel emits `TurnStarted` — lets the card surface
+    /// model + context window in the pin preview before any LLM iteration
+    /// completes (so the card is never "empty" during a turn).
+    pub fn on_turn_started(&mut self, model: String, context_window_tokens: Option<u32>) {
+        self.model = model;
+        if context_window_tokens.is_some() {
+            self.context_window_tokens = context_window_tokens;
+        }
         self.dirty = true;
     }
 
@@ -415,20 +428,21 @@ mod tests {
     #[test]
     fn render_with_model_and_context() {
         let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
-        card.model = "claude-sonnet-4".to_string();
+        card.on_turn_started("claude-sonnet-4".into(), Some(200_000));
         card.input_tokens = 45_000;
         card.output_tokens = 12_000;
         card.thinking_ms = 5_000;
         card.tool_calls = 8;
 
         let text = card.render();
-        // Identity bar: 🟢 mita
-        assert!(text.contains("\u{1f7e2}"));
-        assert!(text.contains("<b>mita</b>"));
-        assert!(text.contains("<code>claude-sonnet-4</code>"));
-        // Context uses input_tokens only (not input+output).
-        assert!(text.contains("45.0k / 200.0k"));
-        assert!(text.contains('%'));
+        let line1 = text.lines().next().expect("line 1 present");
+        // Line 1: model + context gauge — the pin preview telemetry.
+        assert!(line1.contains("\u{1f7e2}"));
+        assert!(line1.contains("<code>claude-sonnet-4</code>"));
+        assert!(line1.contains("45.0k/200.0k"));
+        assert!(line1.contains('%'));
+        // Line 2: session subtitle.
+        assert!(text.contains("<i>mita</i>"));
         assert!(!text.contains("Cost:"));
         assert!(text.contains("Thinking: 5s"));
         assert!(text.contains("8 tool calls"));
@@ -437,14 +451,39 @@ mod tests {
     #[test]
     fn render_unknown_model_omits_limit() {
         let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
-        card.model = "some-unknown-model".to_string();
+        // Unknown model, no kernel-supplied limit, no substring match either.
+        card.on_turn_started("some-unknown-model".into(), None);
         card.input_tokens = 10_000;
         card.output_tokens = 5_000;
 
         let text = card.render();
-        // Context uses input_tokens only, no limit/percent for unknown model.
-        assert!(text.contains("Context: 10.0k"));
-        assert!(!text.contains('%'));
+        let line1 = text.lines().next().expect("line 1 present");
+        // Raw token count without a limit/percent when window is unknown.
+        assert!(line1.contains("10.0k"));
+        assert!(!line1.contains('%'));
+    }
+
+    #[test]
+    fn render_line1_fallback_before_first_turn() {
+        // Before the first TurnStarted event the model is unknown — line 1
+        // falls back to the session title so the pin is never blank.
+        let card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        let text = card.render();
+        let line1 = text.lines().next().expect("line 1 present");
+        assert!(line1.contains("<b>mita</b>"));
+    }
+
+    #[test]
+    fn render_line1_zero_tokens_shows_limit() {
+        let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
+        card.on_turn_started("claude-sonnet-4".into(), Some(200_000));
+        // No UsageUpdate yet — line 1 should still show the model and the
+        // limit (with 0% used) rather than disappear.
+        let text = card.render();
+        let line1 = text.lines().next().expect("line 1 present");
+        assert!(line1.contains("<code>claude-sonnet-4</code>"));
+        assert!(line1.contains("0/200.0k"));
+        assert!(line1.contains("0%"));
     }
 
     #[test]
@@ -452,7 +491,7 @@ mod tests {
         let mut card = PinnedSessionCard::new(123, "s1".into(), "mita".into());
         card.on_stream_close();
         let text = card.render();
-        // Idle uses ⚪ emoji, no "Idle" text in identity bar.
+        // Idle uses ⚪ emoji on line 1 (session title fallback since no model).
         assert!(text.contains("\u{26aa}"));
         assert!(text.contains("<b>mita</b>"));
     }

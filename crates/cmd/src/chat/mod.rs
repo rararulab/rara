@@ -934,6 +934,7 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             tool_calls,
             model,
             rara_message_id: _,
+            context_window_tokens: _,
         } => CliEvent::TurnSummary {
             duration_ms,
             iterations: iterations as u32,
@@ -1016,6 +1017,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             text: format!("Loop detected ({pattern}): disabled {}", tools.join(", ")),
         },
         StreamEvent::ToolOutput { chunk, .. } => CliEvent::TextDelta { text: chunk },
+        StreamEvent::TurnStarted { .. } => CliEvent::Progress {
+            text: String::new(),
+        },
     }
 }
 
