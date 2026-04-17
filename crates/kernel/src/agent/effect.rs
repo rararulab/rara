@@ -163,6 +163,26 @@ pub enum Effect {
         /// Cumulative tool calls executed before the pause.
         tool_calls_made: usize,
     },
+    /// Inject a free-form system/user message into the conversation so the
+    /// LLM sees it on the next [`Effect::CallLlm`]. Used by the stream
+    /// recovery branches (rate-limit, empty-stream, retryable provider
+    /// error) to deliver the legacy recovery nudge text verbatim.
+    ///
+    /// The runner appends this message to both the live `messages` buffer
+    /// feeding the LLM and to the tape (under whatever role conventions
+    /// apply) before the next LLM call fires.
+    InjectUserMessage {
+        /// Full message text, including any `[System]` prefix the legacy
+        /// loop emits. The machine is responsible for formatting; the
+        /// runner is responsible only for delivery.
+        text: String,
+    },
+    /// Request that the runner run an auto-fold (context compression) on
+    /// the next iteration, before the upcoming [`Effect::CallLlm`].
+    /// Mirrors the legacy `force_fold_next_iteration` flag — used by the
+    /// empty-stream recovery branch when a zero-content response suggests
+    /// the context window is full.
+    ForceFoldNextIteration,
     /// Refresh the set of LLM-visible tool definitions after the LLM
     /// invoked `discover-tools` in the just-completed wave. The runner
     /// already owns the raw tool-output JSON, so the machine only carries

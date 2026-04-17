@@ -51,7 +51,10 @@
 //! - Deferred tool activation (`discover-tools`) feedback — ✓ machine-side
 //!   implemented; legacy removal pending
 //! - Per-iteration tape rebuild + sanitisation
-//! - Empty-stream / rate-limit recovery branches
+//! - Empty-stream / rate-limit recovery branches — ✓ machine-side implemented
+//!   via [`crate::agent::machine::LlmFailureKind`] and
+//!   [`Effect::InjectUserMessage`] / [`Effect::ForceFoldNextIteration`]; legacy
+//!   removal pending
 //! - Cascade trace assembly + mood inference
 //!
 //! Each item maps to either an additional [`Effect`] variant or extra fields
@@ -188,6 +191,18 @@ pub trait Subsystems: Send + Sync {
         &mut self,
         trigger_call_ids: Vec<crate::agent::effect::ToolCallId>,
     );
+
+    /// Mark the upcoming iteration as a forced auto-fold.
+    ///
+    /// Production implementations set the `force_fold_next_iteration` flag
+    /// on the per-turn runtime state so the next tape rebuild runs context
+    /// compression before the follow-up [`Effect::CallLlm`] issues. Emitted
+    /// by the empty-stream and rate-limit (with tools-made) recovery
+    /// branches to shrink the context before retrying.
+    ///
+    /// No default impl: silent no-op would hide a broken integration where
+    /// the recovery retry still overflows the context window.
+    async fn force_fold_next_iteration(&mut self);
 }
 
 /// Drive the [`AgentMachine`] to completion against `subsys`.
@@ -273,6 +288,16 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     subsys.emit_stream(wake_msg).await;
                 }
                 Effect::EmitStream { kind } => subsys.emit_stream(kind).await,
+                Effect::InjectUserMessage { text } => {
+                    // Stream-recovery nudges need to land in the tape *and*
+                    // be surfaced to the user so they can see why the agent
+                    // re-tried. Mirrors the continuation-wake handling.
+                    subsys.inject_user_message(text.clone()).await;
+                    subsys.emit_stream(text).await;
+                }
+                Effect::ForceFoldNextIteration => {
+                    subsys.force_fold_next_iteration().await;
+                }
                 Effect::ContextPressureWarning {
                     level,
                     estimated_tokens,
@@ -383,6 +408,9 @@ mod tests {
         /// Records each `refresh_deferred_tools` invocation's trigger id list
         /// so tests can assert on activation ordering and payload.
         refresh_log:     Vec<Vec<ToolCallId>>,
+        /// Count of `force_fold_next_iteration` calls; tests assert this
+        /// against expected fold requests from recovery branches.
+        force_fold_hits: u32,
     }
 
     #[async_trait]
@@ -429,6 +457,8 @@ mod tests {
         async fn refresh_deferred_tools(&mut self, trigger_call_ids: Vec<ToolCallId>) {
             self.refresh_log.push(trigger_call_ids);
         }
+
+        async fn force_fold_next_iteration(&mut self) { self.force_fold_hits += 1; }
     }
 
     /// Factory producing a fresh stub with empty scripts for every field.
@@ -446,6 +476,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         }
     }
 
@@ -468,6 +499,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -515,6 +547,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -578,6 +611,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::with_max_continuations(8, 3);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -658,6 +692,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -700,6 +735,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -748,6 +784,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -797,6 +834,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -812,8 +850,9 @@ mod tests {
     async fn drive_propagates_llm_fatal_failure() {
         let mut subsys = ScriptedSubsys {
             llm_script:      vec![Event::LlmFailed {
-                retryable: false,
-                message:   "auth".into(),
+                kind: crate::agent::machine::LlmFailureKind::Permanent {
+                    message: "auth".into(),
+                },
             }],
             next_llm:        0,
             tool_responses:  vec![],
@@ -826,6 +865,7 @@ mod tests {
             context_samples: vec![],
             next_sample:     0,
             refresh_log:     vec![],
+            force_fold_hits: 0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -951,6 +991,117 @@ mod tests {
         assert_eq!(s.injected.len(), 2);
         assert!(s.injected[0].contains("[context-pressure:warning]"));
         assert!(s.injected[1].contains("[context-pressure:critical]"));
+    }
+
+    // ─── Stream recovery (empty stream / rate-limit) ────────────────────
+
+    /// Empty-stream recovery: inject nudge, force fold, retry with tools
+    /// disabled, then succeed on the follow-up call.
+    #[tokio::test]
+    async fn drive_recovers_from_empty_stream() {
+        use crate::agent::machine::LlmFailureKind;
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmFailed {
+                kind: LlmFailureKind::EmptyStream,
+            },
+            Event::LlmCompleted {
+                text:           "recovered".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(outcome.text, "recovered");
+        assert_eq!(s.force_fold_hits, 1, "empty stream should force a fold");
+        assert_eq!(s.injected.len(), 1);
+        assert!(
+            s.injected[0].contains("empty response"),
+            "inject text: {:?}",
+            s.injected[0]
+        );
+        assert!(
+            s.stream_log.iter().any(|l| l.contains("empty response")),
+            "nudge should also hit stream: {:?}",
+            s.stream_log
+        );
+    }
+
+    /// Rate-limit recovery after at least one tool call: fold, disable
+    /// tools, inject the "summarize" nudge, then wrap up on the retry.
+    #[tokio::test]
+    async fn drive_recovers_from_rate_limit_after_tool_call() {
+        use crate::agent::machine::LlmFailureKind;
+        let tc = Tc {
+            id:        ToolCallId::new("c1"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmCompleted {
+                text:           "thinking".into(),
+                tool_calls:     vec![tc.clone()],
+                has_tool_calls: true,
+            },
+            Event::LlmFailed {
+                kind: LlmFailureKind::RateLimited,
+            },
+            Event::LlmCompleted {
+                text:           "summarized".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        s.tool_responses = vec![vec![Tr {
+            id:          ToolCallId::new("c1"),
+            name:        ToolName::new("search"),
+            arguments:   "{}".into(),
+            success:     true,
+            duration_ms: 1,
+            error:       None,
+        }]];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(outcome.text, "summarized");
+        assert_eq!(s.force_fold_hits, 1);
+        assert!(
+            s.injected.iter().any(|m| m.contains("rate limit")),
+            "expected rate-limit nudge in injected: {:?}",
+            s.injected
+        );
+    }
+
+    /// Retryable failure before any tool call: no fold, inject nudge, retry.
+    #[tokio::test]
+    async fn drive_recovers_from_retryable_error() {
+        use crate::agent::machine::LlmFailureKind;
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmFailed {
+                kind: LlmFailureKind::Retryable {
+                    message: "503 upstream".into(),
+                },
+            },
+            Event::LlmCompleted {
+                text:           "fallback".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(outcome.text, "fallback");
+        assert_eq!(s.force_fold_hits, 0, "retryable does not force-fold");
+        assert!(
+            s.injected.iter().any(|m| m.contains("503 upstream")),
+            "inject should echo error: {:?}",
+            s.injected
+        );
     }
 
     /// Sampling `(0, 0)` (unavailable / disabled) never produces a
