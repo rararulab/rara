@@ -26,6 +26,14 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/api/client";
 import type { ProviderInfo } from "@/api/types";
 
+/**
+ * How long the in-memory provider catalog is considered fresh. Settings
+ * edits are rare, and `/api/v1/chat/providers` walks the whole KV map,
+ * so caching for a short window trades negligible staleness for fewer
+ * round-trips on rapid open/close of the dialog.
+ */
+const CACHE_TTL_MS = 60_000;
+
 interface Props {
   open:              boolean;
   onClose:           () => void;
@@ -56,14 +64,17 @@ export function RaraModelDialog({
   const [selectedIdx, setSelectedIdx] = useState(0);
 
   // Cache the fetched list across open/close cycles — settings rarely
-  // change and the dialog is opened per-click.
-  const cacheRef = useRef<ProviderInfo[] | null>(null);
+  // change and the dialog is opened per-click. Cached entries expire
+  // after CACHE_TTL_MS so edits made in /settings while this page is
+  // open eventually show up without a full page reload.
+  const cacheRef = useRef<{ list: ProviderInfo[]; at: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    // Serve from cache on reopen; refetch only on first load.
-    if (cacheRef.current) {
-      setEntries(cacheRef.current);
+    // Serve from cache on reopen when still fresh; refetch otherwise.
+    const cached = cacheRef.current;
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+      setEntries(cached.list);
       return;
     }
     const controller = new AbortController();
@@ -71,7 +82,7 @@ export function RaraModelDialog({
     api
       .get<ProviderInfo[]>("/api/v1/chat/providers", { signal: controller.signal })
       .then((list) => {
-        cacheRef.current = list;
+        cacheRef.current = { list, at: Date.now() };
         setEntries(list);
       })
       .catch((e: unknown) => {
@@ -95,7 +106,13 @@ export function RaraModelDialog({
     );
   }, [entries, query]);
 
-  // Clamp the selection cursor whenever the filtered list shrinks/grows.
+  // Reset the selection cursor whenever the query changes so the first
+  // match in the freshly-filtered list is always the highlighted row.
+  // Separate effect for `entries` clamps the cursor if the raw list
+  // grew/shrunk (e.g. after a refetch).
+  useEffect(() => {
+    setSelectedIdx(0);
+  }, [query]);
   useEffect(() => {
     setSelectedIdx((idx) =>
       filtered.length === 0 ? 0 : Math.min(idx, filtered.length - 1),

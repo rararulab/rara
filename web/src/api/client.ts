@@ -140,16 +140,36 @@ import type {
   SettingsMap, SettingValue, SettingsPatch,
 } from './types';
 
+/** Callers can pass an `AbortSignal` to cancel in-flight requests
+ *  (e.g. a React effect cleanup or a user-triggered dialog close). */
+type ApiOptions = { signal?: AbortSignal };
+
 export const api = {
-  get: <T>(path: string, options?: { signal?: AbortSignal }) =>
+  get: <T>(path: string, options?: ApiOptions) =>
     request<T>(path, options?.signal ? { signal: options.signal } : undefined),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
-  put: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
-  patch: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
-  del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  post: <T>(path: string, body?: unknown, options?: ApiOptions) =>
+    request<T>(path, {
+      method: 'POST',
+      body: body ? JSON.stringify(body) : undefined,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    }),
+  put: <T>(path: string, body?: unknown, options?: ApiOptions) =>
+    request<T>(path, {
+      method: 'PUT',
+      body: body ? JSON.stringify(body) : undefined,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    }),
+  patch: <T>(path: string, body?: unknown, options?: ApiOptions) =>
+    request<T>(path, {
+      method: 'PATCH',
+      body: body ? JSON.stringify(body) : undefined,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    }),
+  del: <T>(path: string, options?: ApiOptions) =>
+    request<T>(path, {
+      method: 'DELETE',
+      ...(options?.signal ? { signal: options.signal } : {}),
+    }),
   blob: (path: string) => requestBlob(path),
 };
 

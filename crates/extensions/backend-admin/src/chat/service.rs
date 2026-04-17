@@ -68,8 +68,13 @@ pub struct ProviderInfo {
 }
 
 /// Walk the flat settings map and assemble sanitised provider entries.
-/// Provider ids with no `default_model` are skipped; enabled providers
+///
+/// Provider ids with no `default_model` are skipped. Enabled providers
 /// sort first, then providers with an api key, then the rest by id.
+///
+/// The `enabled` flag is read strictly from the literal string `"true"`
+/// to match how the Settings UI writes the value — any other shape
+/// (including `"1"`, `"yes"`, `"True"`) is treated as disabled.
 pub(crate) fn collect_providers(
     settings: &std::collections::HashMap<String, String>,
 ) -> Vec<ProviderInfo> {
@@ -82,11 +87,16 @@ pub(crate) fn collect_providers(
         };
         // `rest` looks like `<id>.<field>` — or `<id>.<sub>.<more>` for
         // nested fields we do not care about. Split on the FIRST dot so
-        // `id` ends at the first segment.
+        // `id` ends at the first segment. Reject empty ids to shield
+        // against malformed keys like `llm.providers..default_model`
+        // producing a ghost entry.
         let (id, field) = match rest.split_once('.') {
             Some(pair) => pair,
             None => continue,
         };
+        if id.is_empty() {
+            continue;
+        }
         by_id.entry(id).or_default().insert(field, value.as_str());
     }
 
@@ -124,6 +134,121 @@ pub(crate) fn collect_providers(
         if diff.is_eq() { a.id.cmp(&b.id) } else { diff }
     });
     entries
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use std::collections::HashMap;
+
+    use super::{ProviderInfo, collect_providers};
+
+    fn settings(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn omits_api_key_values_from_serialized_output() {
+        // The whole point of the endpoint: raw key material must never
+        // appear in the response body, only its presence as a boolean.
+        let s = settings(&[
+            ("llm.providers.kimi.api_key", "sk-secret-value"),
+            ("llm.providers.kimi.default_model", "kimi-k2.5"),
+            ("llm.providers.kimi.enabled", "true"),
+        ]);
+        let out = collect_providers(&s);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "kimi");
+        assert!(out[0].has_api_key);
+
+        let json = serde_json::to_string(&out).expect("serialize");
+        assert!(
+            !json.contains("sk-secret-value"),
+            "serialized output leaked api_key: {json}"
+        );
+        // The boolean `has_api_key` field legitimately contains the
+        // substring — check the value side of the JSON by looking for
+        // the literal key name followed by a colon.
+        assert!(
+            !json.contains("\"api_key\":"),
+            "serialized output should not expose raw `api_key` field: {json}"
+        );
+    }
+
+    #[test]
+    fn skips_providers_without_default_model() {
+        let s = settings(&[
+            ("llm.providers.configured.api_key", "abc"),
+            ("llm.providers.configured.default_model", "m1"),
+            ("llm.providers.no_model.api_key", "abc"),
+        ]);
+        let out = collect_providers(&s);
+        let ids: Vec<&str> = out.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["configured"]);
+    }
+
+    #[test]
+    fn ignores_malformed_empty_id_keys() {
+        // `llm.providers..default_model` should not materialise a row
+        // with id="" — protects against typos / partial writes.
+        let s = settings(&[
+            ("llm.providers..default_model", "m1"),
+            ("llm.providers.real.default_model", "m2"),
+        ]);
+        let out = collect_providers(&s);
+        let ids: Vec<&str> = out.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["real"]);
+    }
+
+    #[test]
+    fn enabled_requires_literal_true_string() {
+        // Mirrors the guard on `enabled`: only lowercase "true" counts.
+        let s = settings(&[
+            ("llm.providers.a.default_model", "m"),
+            ("llm.providers.a.enabled", "True"),
+            ("llm.providers.b.default_model", "m"),
+            ("llm.providers.b.enabled", "true"),
+            ("llm.providers.c.default_model", "m"),
+            ("llm.providers.c.enabled", "1"),
+        ]);
+        let out = collect_providers(&s);
+        let flags: HashMap<_, _> = out.iter().map(|p| (p.id.as_str(), p.enabled)).collect();
+        assert_eq!(flags.get("a").copied(), Some(false));
+        assert_eq!(flags.get("b").copied(), Some(true));
+        assert_eq!(flags.get("c").copied(), Some(false));
+    }
+
+    #[test]
+    fn sorts_enabled_first_then_api_key_then_id() {
+        let s = settings(&[
+            ("llm.providers.zeta.default_model", "m"),
+            ("llm.providers.zeta.enabled", "true"),
+            ("llm.providers.alpha.default_model", "m"),
+            ("llm.providers.alpha.api_key", "k"),
+            ("llm.providers.mid.default_model", "m"),
+        ]);
+        let out = collect_providers(&s);
+        let ids: Vec<&str> = out.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["zeta", "alpha", "mid"]);
+    }
+
+    #[test]
+    fn ignores_nested_subfields() {
+        // `llm.providers.X.fallback.models` is a known rara key shape
+        // that is NOT one of the fields we surface — it should be
+        // quietly ignored rather than crash or alter the output.
+        let s = settings(&[
+            ("llm.providers.x.default_model", "m"),
+            ("llm.providers.x.fallback.models", "a,b,c"),
+        ]);
+        let out: Vec<ProviderInfo> = collect_providers(&s);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "x");
+        assert!(!out[0].enabled);
+        assert!(!out[0].has_api_key);
+    }
 }
 
 /// Central orchestrator for session-based AI chat.

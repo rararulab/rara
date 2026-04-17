@@ -638,10 +638,11 @@ export default function PiChat() {
           // would overwrite any previously saved rara provider with a
           // sentinel the kernel's DriverRegistry cannot route to, which
           // caused the original "LLM provider not configured" failure
-          // (see #1554).
+          // (see #1554). `isUnknownModel` returns true for null/undefined
+          // too, so the subsequent reads are safe without the `?.` guard.
           const picked = !isUnknownModel(agent.state.model);
-          const model = picked ? (agent.state.model?.id ?? null) : null;
-          const provider = picked ? (agent.state.model?.provider ?? null) : null;
+          const model = picked ? agent.state.model!.id : null;
+          const provider = picked ? agent.state.model!.provider : null;
           const thinking = asThinkingLevel(agent.state.thinkingLevel);
 
           // Nothing worth persisting.

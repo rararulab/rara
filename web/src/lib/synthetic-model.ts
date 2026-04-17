@@ -30,7 +30,7 @@ export function syntheticModel(
   modelId: string,
   options?: { baseUrl?: string; contextWindow?: number; name?: string },
 ): Model<any> {
-  return {
+  const model: Model<any> = {
     id:            modelId,
     name:          options?.name ?? `${providerId} / ${modelId}`,
     api:           "openai-completions",
@@ -41,7 +41,8 @@ export function syntheticModel(
     cost:          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: options?.contextWindow ?? 128_000,
     maxTokens:     4096,
-  } as Model<any>;
+  };
+  return model;
 }
 
 /** Sentinel model-id/provider assigned by pi-agent-core before any pick. */
