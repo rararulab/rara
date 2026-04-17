@@ -43,7 +43,8 @@
 //!   implemented; legacy removal pending
 //! - Context pressure warnings + session-length reminders injected as user
 //!   messages
-//! - Tool-call-limit circuit breaker with oneshot resume
+//! - Tool-call-limit circuit breaker with oneshot resume — ✓ machine-side
+//!   implemented; legacy removal pending
 //! - Repetition guard truncation
 //! - Deferred tool activation (`discover-tools`) feedback
 //! - Per-iteration tape rebuild + sanitisation
@@ -128,6 +129,20 @@ pub trait Subsystems: Send + Sync {
     /// LLM sees it on the next `call_llm`.  Used by continuation wake.
     /// Default: no-op (test stubs that don't model message history).
     async fn inject_user_message(&mut self, _text: String) {}
+
+    /// Pause the turn and await the user's continue/stop decision.
+    ///
+    /// Production implementations are expected to:
+    /// - emit the user-facing `ToolCallLimit` stream event keyed by `limit_id`;
+    /// - register a oneshot channel keyed by `(session, limit_id)`;
+    /// - `tokio::select!` over the oneshot, a hard timeout (legacy used 120s),
+    ///   and the turn cancel token;
+    /// - emit `ToolCallLimitResolved` before returning;
+    /// - map the outcome onto [`Event::LimitResolved`] (timeout / drop /
+    ///   explicit `Stop` all produce `LimitDecision::Stop`).
+    ///
+    /// Treat a cancel-token firing as [`Event::Interrupted`] instead.
+    async fn pause_for_limit(&mut self, limit_id: u64, tool_calls_made: usize) -> Event;
 }
 
 /// Drive the [`AgentMachine`] to completion against `subsys`.
@@ -168,6 +183,12 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     subsys
                         .loop_breaker_triggered(disabled_tools, pattern, tool_calls_made)
                         .await;
+                }
+                Effect::PauseForLimit {
+                    limit_id,
+                    tool_calls_made,
+                } => {
+                    follow_up = Some(subsys.pause_for_limit(limit_id, tool_calls_made).await);
                 }
                 Effect::RunTools { calls } => {
                     follow_up = Some(subsys.run_tools(calls).await);
@@ -235,12 +256,16 @@ mod tests {
     /// Pure in-memory subsystem stub for end-to-end runner tests.
     /// Scripts the LLM responses up front so each turn is fully deterministic.
     struct ScriptedSubsys {
-        llm_script:     Vec<Event>,
-        next_llm:       usize,
-        tool_responses: Vec<Vec<Tr>>,
-        next_tool:      usize,
-        tape_log:       Vec<TapeAppendKind>,
-        stream_log:     Vec<String>,
+        llm_script:      Vec<Event>,
+        next_llm:        usize,
+        tool_responses:  Vec<Vec<Tr>>,
+        next_tool:       usize,
+        tape_log:        Vec<TapeAppendKind>,
+        stream_log:      Vec<String>,
+        /// Scripted user decisions for each `pause_for_limit` invocation,
+        /// consumed in order. Leave empty for tests that never pause.
+        limit_decisions: Vec<crate::agent::effect::LimitDecision>,
+        next_limit:      usize,
     }
 
     #[async_trait]
@@ -265,21 +290,29 @@ mod tests {
         async fn append_tape(&mut self, kind: TapeAppendKind) { self.tape_log.push(kind); }
 
         async fn emit_stream(&mut self, kind: String) { self.stream_log.push(kind); }
+
+        async fn pause_for_limit(&mut self, limit_id: u64, _tool_calls_made: usize) -> Event {
+            let decision = self.limit_decisions[self.next_limit];
+            self.next_limit += 1;
+            Event::LimitResolved { limit_id, decision }
+        }
     }
 
     #[tokio::test]
     async fn drive_terminates_on_text_only_response() {
         let mut subsys = ScriptedSubsys {
-            llm_script:     vec![Event::LlmCompleted {
+            llm_script:      vec![Event::LlmCompleted {
                 text:           "ok".into(),
                 tool_calls:     vec![],
                 has_tool_calls: false,
             }],
-            next_llm:       0,
-            tool_responses: vec![],
-            next_tool:      0,
-            tape_log:       vec![],
-            stream_log:     vec![],
+            next_llm:        0,
+            tool_responses:  vec![],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -297,7 +330,7 @@ mod tests {
             arguments: "{}".into(),
         };
         let mut subsys = ScriptedSubsys {
-            llm_script:     vec![
+            llm_script:      vec![
                 Event::LlmCompleted {
                     text:           "thinking".into(),
                     tool_calls:     vec![tc.clone()],
@@ -309,8 +342,8 @@ mod tests {
                     has_tool_calls: false,
                 },
             ],
-            next_llm:       0,
-            tool_responses: vec![vec![Tr {
+            next_llm:        0,
+            tool_responses:  vec![vec![Tr {
                 id:          ToolCallId::new("c1"),
                 name:        ToolName::new("search"),
                 arguments:   "{}".into(),
@@ -318,9 +351,11 @@ mod tests {
                 duration_ms: 5,
                 error:       None,
             }]],
-            next_tool:      0,
-            tape_log:       vec![],
-            stream_log:     vec![],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -346,7 +381,7 @@ mod tests {
             arguments: r#"{"reason":"checking services"}"#.into(),
         };
         let mut subsys = ScriptedSubsys {
-            llm_script:     vec![
+            llm_script:      vec![
                 // Iteration 0: call continue-work
                 Event::LlmCompleted {
                     text:           "checking...".into(),
@@ -366,8 +401,8 @@ mod tests {
                     has_tool_calls: false,
                 },
             ],
-            next_llm:       0,
-            tool_responses: vec![vec![Tr {
+            next_llm:        0,
+            tool_responses:  vec![vec![Tr {
                 id:          ToolCallId::new("c1"),
                 name:        ToolName::new("continue-work"),
                 arguments:   r#"{"reason":"checking services"}"#.into(),
@@ -375,9 +410,11 @@ mod tests {
                 duration_ms: 1,
                 error:       None,
             }]],
-            next_tool:      0,
-            tape_log:       vec![],
-            stream_log:     vec![],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
         };
         let mut machine = AgentMachine::with_max_continuations(8, 3);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -396,17 +433,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn drive_pauses_then_continues_on_limit() {
+        use crate::agent::effect::LimitDecision;
+
+        // Two tool waves with `limit_interval = 1` so the first wave trips
+        // the circuit breaker. The user continues, the second wave runs,
+        // and then the LLM wraps up.
+        let tc_a = Tc {
+            id:        ToolCallId::new("a"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let tc_b = Tc {
+            id:        ToolCallId::new("b"),
+            name:      ToolName::new("search"),
+            arguments: r#"{"q":"2"}"#.into(),
+        };
+        let mut subsys = ScriptedSubsys {
+            llm_script:      vec![
+                Event::LlmCompleted {
+                    text:           "first".into(),
+                    tool_calls:     vec![tc_a.clone()],
+                    has_tool_calls: true,
+                },
+                Event::LlmCompleted {
+                    text:           "second".into(),
+                    tool_calls:     vec![tc_b.clone()],
+                    has_tool_calls: true,
+                },
+                Event::LlmCompleted {
+                    text:           "wrap".into(),
+                    tool_calls:     vec![],
+                    has_tool_calls: false,
+                },
+            ],
+            next_llm:        0,
+            tool_responses:  vec![
+                vec![Tr {
+                    id:          ToolCallId::new("a"),
+                    name:        ToolName::new("search"),
+                    arguments:   "{}".into(),
+                    success:     true,
+                    duration_ms: 1,
+                    error:       None,
+                }],
+                vec![Tr {
+                    id:          ToolCallId::new("b"),
+                    name:        ToolName::new("search"),
+                    arguments:   r#"{"q":"2"}"#.into(),
+                    success:     true,
+                    duration_ms: 1,
+                    error:       None,
+                }],
+            ],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![LimitDecision::Continue, LimitDecision::Continue],
+            next_limit:      0,
+        };
+        let mut machine = AgentMachine::with_tool_call_limit(8, 1);
+        let outcome = drive(&mut machine, &mut subsys).await;
+        assert!(outcome.success);
+        assert_eq!(outcome.text, "wrap");
+        assert_eq!(outcome.tool_calls_made, 2);
+        assert_eq!(subsys.next_limit, 2, "pause_for_limit fired once per wave");
+    }
+
+    #[tokio::test]
+    async fn drive_stops_gracefully_when_user_declines_limit() {
+        use crate::agent::effect::LimitDecision;
+
+        let tc = Tc {
+            id:        ToolCallId::new("a"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let mut subsys = ScriptedSubsys {
+            llm_script:      vec![Event::LlmCompleted {
+                text:           "first".into(),
+                tool_calls:     vec![tc.clone()],
+                has_tool_calls: true,
+            }],
+            next_llm:        0,
+            tool_responses:  vec![vec![Tr {
+                id:          ToolCallId::new("a"),
+                name:        ToolName::new("search"),
+                arguments:   "{}".into(),
+                success:     true,
+                duration_ms: 1,
+                error:       None,
+            }]],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![LimitDecision::Stop],
+            next_limit:      0,
+        };
+        let mut machine = AgentMachine::with_tool_call_limit(8, 1);
+        let outcome = drive(&mut machine, &mut subsys).await;
+        assert!(outcome.success, "stop-by-limit is a graceful success");
+        assert_eq!(outcome.text, "first");
+        assert_eq!(outcome.tool_calls_made, 1);
+    }
+
+    #[tokio::test]
     async fn drive_propagates_llm_fatal_failure() {
         let mut subsys = ScriptedSubsys {
-            llm_script:     vec![Event::LlmFailed {
+            llm_script:      vec![Event::LlmFailed {
                 retryable: false,
                 message:   "auth".into(),
             }],
-            next_llm:       0,
-            tool_responses: vec![],
-            next_tool:      0,
-            tape_log:       vec![],
-            stream_log:     vec![],
+            next_llm:        0,
+            tool_responses:  vec![],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;

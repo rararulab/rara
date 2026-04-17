@@ -41,7 +41,7 @@
 
 use crate::{
     agent::{
-        effect::{Effect, FinishReason, TapeAppendKind, ToolCall, ToolResult},
+        effect::{Effect, FinishReason, LimitDecision, TapeAppendKind, ToolCall, ToolResult},
         loop_breaker::{LoopBreakerConfig, LoopIntervention, ToolCallLoopBreaker},
     },
     tool::ToolName,
@@ -56,6 +56,9 @@ pub enum Phase {
     AwaitingLlm,
     /// LLM responded with tool calls; runner is dispatching them.
     ExecutingTools,
+    /// Tool-call-limit tripped; runner is awaiting the user's continue/stop
+    /// decision before another LLM call is issued.
+    PausedForLimit,
     /// Terminal: turn finished successfully.
     Done,
     /// Terminal: turn failed.
@@ -92,6 +95,15 @@ pub struct AgentMachine {
     /// Tools the loop breaker has disabled, accumulated across the turn.
     /// Threaded into every subsequent [`Effect::CallLlm`].
     disabled_tools:       Vec<ToolName>,
+    /// Tool-call-limit circuit breaker: pause the turn every this many
+    /// cumulative tool calls and ask the user whether to continue. Zero
+    /// disables the circuit breaker entirely.
+    limit_interval:       usize,
+    /// Next `tool_calls_made` threshold at which to pause.
+    next_limit_at:        usize,
+    /// Monotonic counter for limit-pause ids, handed to the runner so it
+    /// can key its oneshot channel and reject stale decisions.
+    limit_id_counter:     u64,
 }
 
 impl AgentMachine {
@@ -110,6 +122,27 @@ impl AgentMachine {
             max_continuations: DEFAULT_MAX_CONTINUATIONS,
             loop_breaker: ToolCallLoopBreaker::new(LoopBreakerConfig::builder().build()),
             disabled_tools: Vec::new(),
+            limit_interval: 0,
+            next_limit_at: usize::MAX,
+            limit_id_counter: 0,
+        }
+    }
+
+    /// Construct a machine with a tool-call-limit circuit breaker.
+    ///
+    /// The turn will pause every `limit_interval` cumulative tool calls
+    /// and emit [`Effect::PauseForLimit`]; the runner awaits the user's
+    /// decision and feeds it back via [`Event::LimitResolved`]. A
+    /// `limit_interval` of zero disables the circuit breaker.
+    pub(crate) fn with_tool_call_limit(max_iterations: usize, limit_interval: usize) -> Self {
+        Self {
+            limit_interval,
+            next_limit_at: if limit_interval == 0 {
+                usize::MAX
+            } else {
+                limit_interval
+            },
+            ..Self::new(max_iterations)
         }
     }
 
@@ -289,36 +322,64 @@ impl AgentMachine {
                 };
 
                 self.iteration += 1;
+                let mut effects = vec![Effect::AppendTape {
+                    kind: TapeAppendKind::ToolResults,
+                }];
+                if let Some(e) = loop_breaker_effect {
+                    effects.push(e);
+                }
+
                 if self.iteration >= self.max_iterations {
                     self.phase = Phase::Done;
                     let text = std::mem::take(&mut self.last_assistant_text);
-                    let mut effects = vec![Effect::AppendTape {
-                        kind: TapeAppendKind::ToolResults,
-                    }];
-                    if let Some(e) = loop_breaker_effect {
-                        effects.push(e);
-                    }
                     effects.push(Effect::Finish {
                         text,
                         iterations: self.iteration,
                         tool_calls: self.tool_calls_made,
                         reason: FinishReason::MaxIterations,
                     });
-                    effects
+                } else if self.limit_interval > 0 && self.tool_calls_made >= self.next_limit_at {
+                    self.limit_id_counter += 1;
+                    self.phase = Phase::PausedForLimit;
+                    effects.push(Effect::PauseForLimit {
+                        limit_id:        self.limit_id_counter,
+                        tool_calls_made: self.tool_calls_made,
+                    });
                 } else {
                     self.phase = Phase::AwaitingLlm;
-                    let mut effects = vec![Effect::AppendTape {
-                        kind: TapeAppendKind::ToolResults,
-                    }];
-                    if let Some(e) = loop_breaker_effect {
-                        effects.push(e);
-                    }
                     effects.push(Effect::CallLlm {
                         iteration:      self.iteration,
                         tools_enabled:  self.tools_enabled,
                         disabled_tools: self.disabled_tools.clone(),
                     });
-                    effects
+                }
+                effects
+            }
+
+            // ── User decided whether to continue after a limit pause ─────
+            (Phase::PausedForLimit, Event::LimitResolved { limit_id, decision })
+                if limit_id == self.limit_id_counter =>
+            {
+                match decision {
+                    LimitDecision::Continue => {
+                        self.next_limit_at = self.tool_calls_made + self.limit_interval;
+                        self.phase = Phase::AwaitingLlm;
+                        vec![Effect::CallLlm {
+                            iteration:      self.iteration,
+                            tools_enabled:  self.tools_enabled,
+                            disabled_tools: self.disabled_tools.clone(),
+                        }]
+                    }
+                    LimitDecision::Stop => {
+                        self.phase = Phase::Done;
+                        let text = std::mem::take(&mut self.last_assistant_text);
+                        vec![Effect::Finish {
+                            text,
+                            iterations: self.iteration,
+                            tool_calls: self.tool_calls_made,
+                            reason: FinishReason::StoppedByLimit,
+                        }]
+                    }
                 }
             }
 
@@ -331,7 +392,10 @@ impl AgentMachine {
             }
 
             // ── Interruption from any non-terminal state ─────────────────
-            (Phase::AwaitingLlm | Phase::ExecutingTools, Event::Interrupted) => {
+            (
+                Phase::AwaitingLlm | Phase::ExecutingTools | Phase::PausedForLimit,
+                Event::Interrupted,
+            ) => {
                 self.phase = Phase::Failed;
                 vec![Effect::Fail {
                     message: "turn interrupted".to_owned(),
@@ -384,6 +448,16 @@ pub enum Event {
     },
     /// User cancelled the turn (Ctrl-C, /stop, kernel shutdown, …).
     Interrupted,
+    /// User (or the pause timeout) decided whether to continue after a
+    /// tool-call-limit pause.
+    LimitResolved {
+        /// Id of the pause the decision resolves. Stale ids are ignored
+        /// by the machine to prevent a late decision from resuming a
+        /// subsequent pause.
+        limit_id: u64,
+        /// Continue or stop.
+        decision: LimitDecision,
+    },
 }
 
 #[cfg(test)]
@@ -897,6 +971,186 @@ mod tests {
                 "disabled set should persist at iteration {i}",
             );
         }
+    }
+
+    // ─── Tool-call-limit circuit breaker ────────────────────────────────
+
+    /// With `limit_interval = 1`, the very first tool wave trips the
+    /// pause. The machine emits `PauseForLimit` and transitions to
+    /// `PausedForLimit`; feeding `Continue` back resumes the turn.
+    #[test]
+    fn pause_for_limit_fires_at_threshold_and_continue_resumes() {
+        let mut m = AgentMachine::with_tool_call_limit(8, 1);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           "step".into(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        assert_eq!(m.phase(), Phase::PausedForLimit);
+        let pause = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::PauseForLimit {
+                    limit_id,
+                    tool_calls_made,
+                } => Some((*limit_id, *tool_calls_made)),
+                _ => None,
+            })
+            .expect("expected PauseForLimit effect");
+        assert_eq!(pause, (1, 1));
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::CallLlm { .. })),
+            "no CallLlm should be emitted while paused",
+        );
+
+        let effects = m.step(Event::LimitResolved {
+            limit_id: pause.0,
+            decision: LimitDecision::Continue,
+        });
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        assert!(matches!(effects.as_slice(), [Effect::CallLlm { .. }]));
+    }
+
+    /// `Stop` is a graceful termination: `Finish` with `StoppedByLimit`.
+    #[test]
+    fn pause_for_limit_stop_terminates_gracefully() {
+        let mut m = AgentMachine::with_tool_call_limit(8, 1);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           "step".into(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        let effects = m.step(Event::LimitResolved {
+            limit_id: 1,
+            decision: LimitDecision::Stop,
+        });
+        assert_eq!(m.phase(), Phase::Done);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::Finish {
+                reason: FinishReason::StoppedByLimit,
+                ..
+            }]
+        ));
+    }
+
+    /// Stale `LimitResolved` (mismatched id) must not advance the machine.
+    /// In legacy code this is prevented by the session-scoped oneshot key,
+    /// so the machine mirrors that guarantee with the id check.
+    #[test]
+    fn pause_for_limit_ignores_stale_resolution() {
+        let mut m = AgentMachine::with_tool_call_limit(8, 1);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           "step".into(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        // Feed a wrong id — falls into the invalid-transition arm.
+        let effects = m.step(Event::LimitResolved {
+            limit_id: 999,
+            decision: LimitDecision::Continue,
+        });
+        assert_eq!(m.phase(), Phase::Failed);
+        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+    }
+
+    /// `limit_interval = 0` disables the circuit breaker entirely; the
+    /// machine keeps looping and never emits `PauseForLimit`.
+    #[test]
+    fn zero_interval_disables_limit() {
+        let mut m = AgentMachine::with_tool_call_limit(8, 0);
+        let _ = m.step(Event::TurnStarted);
+        for i in 0..3 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "t".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "t")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(&format!("c{i}"), "t", "{}", true)],
+            });
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::PauseForLimit { .. })),
+                "limit should stay disabled at wave {i}",
+            );
+            assert_eq!(m.phase(), Phase::AwaitingLlm);
+        }
+    }
+
+    /// Continue advances `next_limit_at` by `limit_interval`, so the next
+    /// pause only fires after another full interval of tool calls.
+    #[test]
+    fn continue_advances_next_threshold_by_interval() {
+        let mut m = AgentMachine::with_tool_call_limit(16, 2);
+        let _ = m.step(Event::TurnStarted);
+
+        // Two tool calls → crosses first threshold (2 ≥ 2) → pause.
+        let _ = m.step(Event::LlmCompleted {
+            text:           "x".into(),
+            tool_calls:     vec![tool_call("a", "t"), tool_call("b", "t")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![
+                tool_result("a", "t", "{}", true),
+                tool_result("b", "t", r#"{"q":"2"}"#, true),
+            ],
+        });
+        assert_eq!(m.phase(), Phase::PausedForLimit);
+        let _ = m.step(Event::LimitResolved {
+            limit_id: 1,
+            decision: LimitDecision::Continue,
+        });
+
+        // One more tool call → at 3, below new threshold (2 + 2 = 4), no pause.
+        let _ = m.step(Event::LlmCompleted {
+            text:           "y".into(),
+            tool_calls:     vec![tool_call("c", "t")],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c", "t", r#"{"q":"3"}"#, true)],
+        });
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::PauseForLimit { .. })),
+            "below advanced threshold should not pause",
+        );
+
+        // Another call → reaches 4 → pause again with next id.
+        let _ = m.step(Event::LlmCompleted {
+            text:           "z".into(),
+            tool_calls:     vec![tool_call("d", "t")],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("d", "t", r#"{"q":"4"}"#, true)],
+        });
+        assert_eq!(m.phase(), Phase::PausedForLimit);
+        let id = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::PauseForLimit { limit_id, .. } => Some(*limit_id),
+                _ => None,
+            })
+            .expect("expected second PauseForLimit");
+        assert_eq!(id, 2, "limit id monotonically increases");
     }
 
     /// Mirrors the legacy `run_agent_loop` exemption for read-only tools:
