@@ -79,9 +79,22 @@ export interface ChatMessageData {
   seq: number;
   role: "system" | "user" | "assistant" | "tool" | "tool_result";
   content: string | ChatContentBlock[];
+  /** Tool calls requested by the assistant (only present on assistant-role
+   *  messages that invoke tools). Matches the backend `ChatMessage.tool_calls`
+   *  field emitted from persisted `ToolCall` tape entries. */
+  tool_calls?: ChatToolCallData[];
   tool_call_id?: string;
   tool_name?: string;
   created_at: string;
+}
+
+/** A single tool invocation as persisted on an assistant message. */
+export interface ChatToolCallData {
+  id: string;
+  name: string;
+  /** Decoded tool arguments — a JSON object, string, or null depending on
+   *  what the model produced. Typically an object. */
+  arguments: unknown;
 }
 
 export type ChatContentBlock =

@@ -161,7 +161,24 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
               .filter((b): b is { type: "text"; text: string } => b.type === "text")
               .map((b) => b.text)
               .join("\n");
-      const content = parseAssistantContent(raw);
+      const content: (TextContent | ThinkingContent | ToolCall)[] =
+        parseAssistantContent(raw);
+      // Surface persisted tool-call requests so pi-web-ui reducers (and the
+      // artifacts panel's reconstructFromMessages) can see them.
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        for (const tc of m.tool_calls) {
+          const args =
+            tc.arguments && typeof tc.arguments === "object"
+              ? (tc.arguments as Record<string, unknown>)
+              : {};
+          content.push({
+            type: "toolCall",
+            id: tc.id,
+            name: tc.name,
+            arguments: args,
+          });
+        }
+      }
       const assistant: AssistantMessage = {
         role: "assistant",
         content,
@@ -408,6 +425,11 @@ export default function PiChat() {
       if (agentMsgs.length > 0) {
         agent.replaceMessages(agentMsgs);
       }
+      // Rebuild the artifacts panel from the same message list so switching
+      // back to a session restores every previously-created artifact.
+      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
+        agentMsgs,
+      );
     } catch {
       /* session may have no messages yet */
     }
@@ -424,7 +446,11 @@ export default function PiChat() {
       const msgs = await api.get<ChatMessageData[]>(
         `/api/v1/chat/sessions/${encodeURIComponent(agent.sessionId)}/messages?limit=200`,
       );
-      agent.replaceMessages(toAgentMessages(msgs));
+      const agentMsgs = toAgentMessages(msgs);
+      agent.replaceMessages(agentMsgs);
+      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
+        agentMsgs,
+      );
       chatPanelRef.current?.agentInterface?.requestUpdate();
     } catch {
       /* ignore */
