@@ -819,6 +819,28 @@ call `discover-tools` to load it first.{tool_list}
     )
 }
 
+/// Map a [`crate::session::ThinkingLevel`] to a provider
+/// [`llm::ThinkingConfig`].
+///
+/// Budgets mirror Anthropic's extended-thinking guidance: larger levels give
+/// the model more scratch tokens for silent reasoning before answering.
+/// `Off` returns `None` so the driver sees no thinking field.
+fn thinking_level_to_config(
+    level: Option<crate::session::ThinkingLevel>,
+) -> Option<llm::ThinkingConfig> {
+    use crate::session::ThinkingLevel;
+    let budget = match level? {
+        ThinkingLevel::Off => return None,
+        ThinkingLevel::Low => 1024,
+        ThinkingLevel::Medium => 4096,
+        ThinkingLevel::High => 16384,
+    };
+    Some(llm::ThinkingConfig {
+        enabled:       true,
+        budget_tokens: Some(budget),
+    })
+}
+
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
@@ -916,8 +938,27 @@ pub(crate) async fn run_agent_loop(
     let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest, tools.as_ref());
     let provider_hint = manifest.provider_hint.as_deref();
 
-    // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) = handle.session_resolve_driver(session_key)?;
+    // Load per-session LLM overrides (model + thinking level) from the
+    // session index. A user-facing UI can pin these via the admin chat
+    // session API; when unset we fall back to the agent manifest defaults.
+    let session_entry = handle
+        .session_index()
+        .get_session(&session_key)
+        .await
+        .ok()
+        .flatten();
+    let model_override = session_entry.as_ref().and_then(|s| s.model.clone());
+    let thinking_level_override = session_entry.as_ref().and_then(|s| s.thinking_level);
+    let thinking_config = thinking_level_to_config(thinking_level_override);
+
+    // Resolve driver + model. Prefer the session's pinned model over the
+    // manifest default; fall through to the shared syscall otherwise.
+    let (driver, model) = match model_override.as_deref() {
+        Some(m) => handle
+            .driver_registry()
+            .resolve(&manifest.name, provider_hint, Some(m))?,
+        None => handle.session_resolve_driver(session_key)?,
+    };
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -1350,7 +1391,7 @@ pub(crate) async fn run_agent_loop(
             tools:               tool_defs.clone(),
             temperature:         Some(0.7),
             max_tokens:          Some(2048),
-            thinking:            None,
+            thinking:            thinking_config.clone(),
             tool_choice:         if tool_defs.is_empty() {
                 llm::ToolChoice::None
             } else {
