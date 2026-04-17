@@ -52,6 +52,11 @@ pub struct ToolResult {
     pub id:          ToolCallId,
     /// Tool name (for tape persistence and metrics).
     pub name:        ToolName,
+    /// JSON-encoded argument string as emitted by the LLM. Preserved here
+    /// (even though the call has already executed) so downstream consumers
+    /// — notably the loop breaker — can fingerprint `(name, arguments)`
+    /// pairs when deciding whether to disable a tool.
+    pub arguments:   String,
     /// Whether the tool ran to completion without error.
     pub success:     bool,
     /// Wall-clock duration of the call in milliseconds.
@@ -71,9 +76,13 @@ pub enum Effect {
     /// Issue a streaming LLM completion request for the current iteration.
     CallLlm {
         /// Zero-based iteration counter (informational).
-        iteration:     usize,
+        iteration:      usize,
         /// Whether tool calls are currently enabled.
-        tools_enabled: bool,
+        tools_enabled:  bool,
+        /// Tools the loop breaker has disabled for the remainder of the turn.
+        /// The runner is responsible for filtering these out of the tool
+        /// definitions passed to the LLM.
+        disabled_tools: Vec<ToolName>,
     },
     /// Execute a batch of tool calls concurrently.
     RunTools {
@@ -109,6 +118,21 @@ pub enum Effect {
         turn: usize,
         /// Maximum continuations allowed.
         max:  usize,
+    },
+    /// Signal that the loop breaker tripped and one or more tools were
+    /// disabled for the remainder of the turn. Emitted immediately before
+    /// the [`Effect::CallLlm`] of the next iteration so the runner can
+    /// surface a user-visible notification and/or inject an explanatory
+    /// system message into the conversation.
+    LoopBreakerTriggered {
+        /// Tools the breaker just disabled (newly disabled this trip, not
+        /// the full cumulative set).
+        disabled_tools:  Vec<ToolName>,
+        /// Detection pattern label: `"exact_duplicate"`, `"pingpong"`, or
+        /// `"flooding"`.
+        pattern:         String,
+        /// Total tool calls the turn had accumulated when the trip fired.
+        tool_calls_made: usize,
     },
     /// Terminate the loop with a failure.
     Fail {

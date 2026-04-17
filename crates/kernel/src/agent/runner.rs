@@ -39,7 +39,8 @@
 //!
 //! - Auto-fold (pressure-driven context compression) and
 //!   `force_fold_next_iteration`
-//! - Loop breaker (`crate::agent::loop_breaker`) interventions
+//! - Loop breaker (`crate::agent::loop_breaker`) interventions — ✓ machine-side
+//!   implemented; legacy removal pending
 //! - Context pressure warnings + session-length reminders injected as user
 //!   messages
 //! - Tool-call-limit circuit breaker with oneshot resume
@@ -54,9 +55,12 @@
 
 use async_trait::async_trait;
 
-use crate::agent::{
-    effect::{Effect, ToolCall, ToolResult},
-    machine::{AgentMachine, Event, Phase},
+use crate::{
+    agent::{
+        effect::{Effect, ToolCall, ToolResult},
+        machine::{AgentMachine, Event, Phase},
+    },
+    tool::ToolName,
 };
 
 /// Outcome surfaced to the caller of [`drive`].
@@ -84,7 +88,31 @@ pub struct DriveOutcome {
 #[async_trait]
 pub trait Subsystems: Send + Sync {
     /// Issue an LLM completion request and produce the next event.
-    async fn call_llm(&mut self, iteration: usize, tools_enabled: bool) -> Event;
+    ///
+    /// `disabled_tools` lists tool names the loop breaker has removed from
+    /// circulation for the remainder of the turn; the production impl must
+    /// filter these out of the manifest passed to the LLM.
+    async fn call_llm(
+        &mut self,
+        iteration: usize,
+        tools_enabled: bool,
+        disabled_tools: Vec<ToolName>,
+    ) -> Event;
+
+    /// Surface a loop-breaker trip to the user (stream event, tape entry,
+    /// …). The machine has already updated its `disabled_tools` state
+    /// before this is invoked, so implementations only need to *announce*
+    /// the event — they do not need to track it.
+    ///
+    /// Default: no-op (test stubs that don't care about loop-breaker
+    /// telemetry).
+    async fn loop_breaker_triggered(
+        &mut self,
+        _disabled_tools: Vec<ToolName>,
+        _pattern: String,
+        _tool_calls_made: usize,
+    ) {
+    }
 
     /// Execute a wave of tool calls, producing the next event.
     async fn run_tools(&mut self, calls: Vec<ToolCall>) -> Event;
@@ -124,8 +152,22 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                 Effect::CallLlm {
                     iteration,
                     tools_enabled,
+                    disabled_tools,
                 } => {
-                    follow_up = Some(subsys.call_llm(iteration, tools_enabled).await);
+                    follow_up = Some(
+                        subsys
+                            .call_llm(iteration, tools_enabled, disabled_tools)
+                            .await,
+                    );
+                }
+                Effect::LoopBreakerTriggered {
+                    disabled_tools,
+                    pattern,
+                    tool_calls_made,
+                } => {
+                    subsys
+                        .loop_breaker_triggered(disabled_tools, pattern, tool_calls_made)
+                        .await;
                 }
                 Effect::RunTools { calls } => {
                     follow_up = Some(subsys.run_tools(calls).await);
@@ -203,7 +245,12 @@ mod tests {
 
     #[async_trait]
     impl Subsystems for ScriptedSubsys {
-        async fn call_llm(&mut self, _iteration: usize, _tools_enabled: bool) -> Event {
+        async fn call_llm(
+            &mut self,
+            _iteration: usize,
+            _tools_enabled: bool,
+            _disabled_tools: Vec<ToolName>,
+        ) -> Event {
             let ev = self.llm_script[self.next_llm].clone();
             self.next_llm += 1;
             ev
@@ -266,6 +313,7 @@ mod tests {
             tool_responses: vec![vec![Tr {
                 id:          ToolCallId::new("c1"),
                 name:        ToolName::new("search"),
+                arguments:   "{}".into(),
                 success:     true,
                 duration_ms: 5,
                 error:       None,
@@ -322,6 +370,7 @@ mod tests {
             tool_responses: vec![vec![Tr {
                 id:          ToolCallId::new("c1"),
                 name:        ToolName::new("continue-work"),
+                arguments:   r#"{"reason":"checking services"}"#.into(),
                 success:     true,
                 duration_ms: 1,
                 error:       None,
