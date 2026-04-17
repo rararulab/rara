@@ -972,6 +972,16 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             output_tokens,
             thinking_ms,
         },
+        StreamEvent::TurnUsage {
+            input_tokens,
+            output_tokens,
+            total_tokens: _,
+            model: _,
+        } => CliEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            thinking_ms: 0,
+        },
         StreamEvent::BackgroundTaskStarted {
             agent_name,
             description,
