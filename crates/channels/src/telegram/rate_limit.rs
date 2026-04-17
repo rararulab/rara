@@ -21,8 +21,15 @@
 //!
 //! `editMessage` counts against the same quota as `sendMessage`. We treat all
 //! outbound requests (edit + send) as one stream per chat.
+//!
+//! All quotas use `Quota::with_period(...)` which yields **burst capacity 1**
+//! and paces strictly at the declared period. The alternative
+//! `Quota::per_minute(20)` would seed a fresh limiter with 20 cells of burst,
+//! allowing an idle chat to drain all 20 edits instantly — which is exactly
+//! the bursty plan-streaming case where Telegram will 429 us on the 21st
+//! request within the rolling minute.
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use governor::{
@@ -44,14 +51,17 @@ pub struct ChatRateLimiter {
     /// One limiter per chat_id. Quota depends on chat kind (group vs private),
     /// derived from the sign of `chat_id` at first lookup.
     per_chat: Arc<DashMap<i64, Arc<DirectLimiter>>>,
-    /// Global 30 req/sec cap across all chats.
+    /// Global ~30 req/sec cap across all chats (paced, burst 1).
     global:   Arc<DirectLimiter>,
 }
 
 impl ChatRateLimiter {
-    /// Build a new limiter with the Telegram global cap (30 req/sec).
+    /// Build a new limiter with the Telegram global cap (~30 req/sec, paced).
     pub fn new() -> Self {
-        let global = Quota::per_second(NonZeroU32::new(30).expect("30 > 0"));
+        // 34ms period ≈ 29.4 req/sec — stays safely below the 30/sec global
+        // cap while keeping burst 1.
+        let global =
+            Quota::with_period(Duration::from_millis(34)).expect("34ms period is non-zero");
         Self {
             per_chat: Arc::new(DashMap::new()),
             global:   Arc::new(RateLimiter::direct(global)),
@@ -69,12 +79,13 @@ impl ChatRateLimiter {
             .entry(chat_id)
             .or_insert_with(|| {
                 let quota = if chat_id < 0 {
-                    // 20/min for groups, supergroups, and forum-topic
-                    // supergroups (editMessage shares sendMessage quota).
-                    Quota::per_minute(NonZeroU32::new(20).expect("20 > 0"))
+                    // Groups, supergroups, forum-topic supergroups:
+                    // 1 msg per 3s ≈ 20/min, burst 1. editMessage shares
+                    // the sendMessage quota.
+                    Quota::with_period(Duration::from_secs(3)).expect("3s period is non-zero")
                 } else {
-                    // ~60/min for private chats (1/sec).
-                    Quota::per_second(NonZeroU32::new(1).expect("1 > 0"))
+                    // Private chats: 1 msg/sec, burst 1.
+                    Quota::with_period(Duration::from_secs(1)).expect("1s period is non-zero")
                 };
                 Arc::new(RateLimiter::direct(quota))
             })

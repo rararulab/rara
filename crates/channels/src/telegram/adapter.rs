@@ -1690,6 +1690,7 @@ impl ChannelAdapter for TelegramAdapter {
             let approval_bot = self.bot.clone();
             let approval_config = Arc::clone(&self.config);
             let approval_session_index = Arc::clone(handle.session_index());
+            let approval_rate_limiter = Arc::clone(&self.rate_limiter);
             let mut approval_shutdown = self.shutdown_rx.clone();
             tokio::spawn(async move {
                 approval_listener(
@@ -1697,6 +1698,7 @@ impl ChannelAdapter for TelegramAdapter {
                     approval_rx,
                     approval_config,
                     approval_session_index,
+                    approval_rate_limiter,
                     &mut approval_shutdown,
                 )
                 .await;
@@ -1711,6 +1713,7 @@ impl ChannelAdapter for TelegramAdapter {
             let question_bot = self.bot.clone();
             let question_config = Arc::clone(&self.config);
             let question_mgr = Arc::clone(mgr);
+            let question_rate_limiter = Arc::clone(&self.rate_limiter);
             let mut question_shutdown = self.shutdown_rx.clone();
             tokio::spawn(async move {
                 question_listener(
@@ -1718,6 +1721,7 @@ impl ChannelAdapter for TelegramAdapter {
                     question_rx,
                     question_config,
                     question_mgr,
+                    question_rate_limiter,
                     &mut question_shutdown,
                 )
                 .await;
@@ -2574,6 +2578,7 @@ async fn approval_listener(
     mut rx: tokio::sync::broadcast::Receiver<ApprovalRequest>,
     config: Arc<StdRwLock<TelegramConfig>>,
     session_index: SessionIndexRef,
+    rate_limiter: Arc<super::rate_limit::ChatRateLimiter>,
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
     loop {
@@ -2684,6 +2689,7 @@ async fn approval_listener(
                     InlineKeyboardButton::callback("❌ Deny", format!("guard:deny:{}", req.id)),
                 ]]);
 
+                rate_limiter.acquire(chat_id).await;
                 let send_req = with_thread_id!(
                     bot.send_message(ChatId(chat_id), &display_text)
                         .parse_mode(ParseMode::Html)
@@ -2720,6 +2726,7 @@ async fn approval_listener(
                         let expiry_msg_id = sent_msg.id;
                         let timeout_secs = req.timeout_secs;
                         let request_id = req.id;
+                        let expiry_rate_limiter = Arc::clone(&rate_limiter);
                         let handle = tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
 
@@ -2732,6 +2739,7 @@ async fn approval_listener(
 
                             // Collapse to compact one-liner on expiry.
                             let expired_text = "🛡 <b>Guard</b> ⏰ timed out".to_string();
+                            expiry_rate_limiter.acquire(chat_id).await;
                             let _ = expiry_bot
                                 .edit_message_text(expiry_chat_id, expiry_msg_id, expired_text)
                                 .parse_mode(ParseMode::Html)
@@ -2760,6 +2768,7 @@ async fn question_listener(
     mut rx: tokio::sync::broadcast::Receiver<UserQuestion>,
     config: Arc<StdRwLock<TelegramConfig>>,
     mgr: UserQuestionManagerRef,
+    rate_limiter: Arc<super::rate_limit::ChatRateLimiter>,
     shutdown_rx: &mut watch::Receiver<bool>,
 ) {
     loop {
@@ -2778,7 +2787,7 @@ async fn question_listener(
                     }
                 };
 
-                if let Err(e) = dispatch_user_question(&bot, &config, &mgr, question).await {
+                if let Err(e) = dispatch_user_question(&bot, &config, &mgr, &rate_limiter, question).await {
                     warn!(error = %e, "telegram question listener: dispatch failed");
                 }
             }
@@ -2798,6 +2807,7 @@ async fn dispatch_user_question(
     bot: &teloxide::Bot,
     config: &Arc<StdRwLock<TelegramConfig>>,
     mgr: &UserQuestionManagerRef,
+    rate_limiter: &Arc<super::rate_limit::ChatRateLimiter>,
     question: UserQuestion,
 ) -> anyhow::Result<()> {
     let primary_chat_id = {
@@ -2833,6 +2843,7 @@ async fn dispatch_user_question(
             if origin_chat != pm {
                 let notice =
                     "🔒 I sent a private question to your DM. Please check there to answer.";
+                rate_limiter.acquire(origin_chat).await;
                 let breadcrumb =
                     with_thread_id!(bot.send_message(ChatId(origin_chat), notice), origin_thread);
                 if let Err(e) = breadcrumb.await {
@@ -2887,6 +2898,7 @@ async fn dispatch_user_question(
             })
             .collect();
         let markup = InlineKeyboardMarkup::new(keyboard);
+        rate_limiter.acquire(route_chat_id).await;
         let req = with_thread_id!(
             bot.send_message(ChatId(route_chat_id), &text)
                 .parse_mode(ParseMode::Html)
@@ -2895,6 +2907,7 @@ async fn dispatch_user_question(
         );
         req.await
     } else {
+        rate_limiter.acquire(route_chat_id).await;
         let req = with_thread_id!(
             bot.send_message(ChatId(route_chat_id), &text)
                 .parse_mode(ParseMode::Html),
@@ -3496,6 +3509,7 @@ async fn handle_update(
                                     error = %e,
                                     "telegram adapter: command handler failed"
                                 );
+                                rate_limiter.acquire(chat_id).await;
                                 let req = with_thread_id!(
                                     bot.send_message(
                                         ChatId(chat_id),
@@ -3586,6 +3600,7 @@ async fn handle_update(
                                     error = %e,
                                     "telegram adapter: New Session button handler failed"
                                 );
+                                rate_limiter.acquire(chat_id).await;
                                 let req = with_thread_id!(
                                     bot.send_message(
                                         ChatId(chat_id),
@@ -3601,6 +3616,7 @@ async fn handle_update(
                         // Fallback for stripped/test configurations where no
                         // `"new"` command handler is registered: preserve the
                         // original acknowledgment so the button is not silent.
+                        rate_limiter.acquire(chat_id).await;
                         let req = with_thread_id!(
                             bot.send_message(
                                 ChatId(chat_id),
