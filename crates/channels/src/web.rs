@@ -81,7 +81,7 @@ const BROADCAST_CAPACITY: usize = 256;
 // ---------------------------------------------------------------------------
 
 /// An event sent over SSE / WebSocket to the client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, strum::IntoStaticStr)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebEvent {
     /// Agent response message (final reply).
@@ -162,31 +162,6 @@ pub enum WebEvent {
     },
     /// Stream completed (no more deltas).
     Done,
-}
-
-/// Static variant label for `WebEvent`, used in diagnostic logging.
-fn web_event_kind(event: &WebEvent) -> &'static str {
-    match event {
-        WebEvent::Message { .. } => "Message",
-        WebEvent::Typing => "Typing",
-        WebEvent::Phase { .. } => "Phase",
-        WebEvent::Error { .. } => "Error",
-        WebEvent::TextDelta { .. } => "TextDelta",
-        WebEvent::ReasoningDelta { .. } => "ReasoningDelta",
-        WebEvent::ToolCallStart { .. } => "ToolCallStart",
-        WebEvent::ToolCallEnd { .. } => "ToolCallEnd",
-        WebEvent::TurnRationale { .. } => "TurnRationale",
-        WebEvent::Progress { .. } => "Progress",
-        WebEvent::TurnMetrics { .. } => "TurnMetrics",
-        WebEvent::PlanCreated { .. } => "PlanCreated",
-        WebEvent::PlanProgress { .. } => "PlanProgress",
-        WebEvent::PlanReplan { .. } => "PlanReplan",
-        WebEvent::PlanCompleted { .. } => "PlanCompleted",
-        WebEvent::BackgroundTaskStarted { .. } => "BackgroundTaskStarted",
-        WebEvent::BackgroundTaskDone { .. } => "BackgroundTaskDone",
-        WebEvent::DockTurnComplete { .. } => "DockTurnComplete",
-        WebEvent::Done => "Done",
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +486,7 @@ impl WebAdapter {
                 }
             };
             let receiver_count = tx.receiver_count();
-            let event_kind = web_event_kind(event);
+            let event_kind: &'static str = event.into();
             tracing::debug!(
                 session_key,
                 receiver_count,
