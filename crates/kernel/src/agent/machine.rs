@@ -85,6 +85,13 @@ pub const MAX_LLM_RECOVERIES: u32 = 3;
 /// Default maximum self-elected continuations per turn.
 pub const DEFAULT_MAX_CONTINUATIONS: usize = 10;
 
+/// Name of the meta-tool the LLM calls to activate deferred tools.
+///
+/// Appearing (successfully) in a completed tool wave triggers an
+/// [`Effect::RefreshDeferredTools`] so the next [`Effect::CallLlm`] sees
+/// the newly activated catalog.
+pub const DISCOVER_TOOLS_TOOL_NAME: &str = "discover-tools";
+
 /// Mutable state carried across machine transitions for one turn.
 #[derive(Debug)]
 pub struct AgentMachine {
@@ -401,6 +408,15 @@ impl AgentMachine {
                     }
                 };
 
+                // Collect call ids of successful discover-tools invocations so
+                // the runner can resolve their outputs and refresh the LLM
+                // tool catalog before the next `CallLlm`.
+                let discover_trigger_ids: Vec<_> = results
+                    .iter()
+                    .filter(|r| r.name == DISCOVER_TOOLS_TOOL_NAME && r.success)
+                    .map(|r| r.id.clone())
+                    .collect();
+
                 self.iteration += 1;
                 let mut effects = vec![Effect::AppendTape {
                     kind: TapeAppendKind::ToolResults,
@@ -412,26 +428,39 @@ impl AgentMachine {
                 if self.iteration >= self.max_iterations {
                     self.phase = Phase::Done;
                     let text = std::mem::take(&mut self.last_assistant_text);
+                    // Terminal wave — no upcoming CallLlm, so the activation
+                    // set would never be consulted. Skip the refresh.
                     effects.push(Effect::Finish {
                         text,
                         iterations: self.iteration,
                         tool_calls: self.tool_calls_made,
                         reason: FinishReason::MaxIterations,
                     });
-                } else if self.limit_interval > 0 && self.tool_calls_made >= self.next_limit_at {
-                    self.limit_id_counter += 1;
-                    self.phase = Phase::PausedForLimit;
-                    effects.push(Effect::PauseForLimit {
-                        limit_id:        self.limit_id_counter,
-                        tool_calls_made: self.tool_calls_made,
-                    });
                 } else {
-                    self.phase = Phase::AwaitingLlm;
-                    effects.push(Effect::CallLlm {
-                        iteration:      self.iteration,
-                        tools_enabled:  self.tools_enabled,
-                        disabled_tools: self.disabled_tools.clone(),
-                    });
+                    // Refresh once *before* either the pause or the next LLM
+                    // call. When a limit pause follows, the user-resume path
+                    // (LimitResolved::Continue) will re-enter `CallLlm` with
+                    // the activation set already in place.
+                    if !discover_trigger_ids.is_empty() {
+                        effects.push(Effect::RefreshDeferredTools {
+                            trigger_call_ids: discover_trigger_ids,
+                        });
+                    }
+                    if self.limit_interval > 0 && self.tool_calls_made >= self.next_limit_at {
+                        self.limit_id_counter += 1;
+                        self.phase = Phase::PausedForLimit;
+                        effects.push(Effect::PauseForLimit {
+                            limit_id:        self.limit_id_counter,
+                            tool_calls_made: self.tool_calls_made,
+                        });
+                    } else {
+                        self.phase = Phase::AwaitingLlm;
+                        effects.push(Effect::CallLlm {
+                            iteration:      self.iteration,
+                            tools_enabled:  self.tools_enabled,
+                            disabled_tools: self.disabled_tools.clone(),
+                        });
+                    }
                 }
                 effects
             }
@@ -1357,5 +1386,166 @@ mod tests {
                 "exempt tool should not flood at wave {i}",
             );
         }
+    }
+
+    /// A successful `discover-tools` call in a mid-turn wave must queue a
+    /// [`Effect::RefreshDeferredTools`] right before the next
+    /// [`Effect::CallLlm`] so the upcoming LLM call sees the freshly
+    /// activated catalog.
+    #[test]
+    fn discover_tools_emits_refresh_before_next_llm_call() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", DISCOVER_TOOLS_TOOL_NAME)],
+            has_tool_calls: true,
+        });
+
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result(
+                "c1",
+                DISCOVER_TOOLS_TOOL_NAME,
+                r#"{"query":"fs"}"#,
+                true,
+            )],
+        });
+
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        let refresh_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::RefreshDeferredTools { .. }))
+            .expect("expected RefreshDeferredTools");
+        let call_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::CallLlm { .. }))
+            .expect("expected follow-up CallLlm");
+        assert!(
+            refresh_idx < call_idx,
+            "refresh must precede next CallLlm: {effects:?}"
+        );
+        match &effects[refresh_idx] {
+            Effect::RefreshDeferredTools { trigger_call_ids } => {
+                assert_eq!(
+                    trigger_call_ids,
+                    &vec![crate::agent::effect::ToolCallId::new("c1")]
+                );
+            }
+            other => panic!("unexpected effect variant: {other:?}"),
+        }
+    }
+
+    /// Collect every successful `discover-tools` call in a mixed wave while
+    /// ignoring failed and unrelated calls.
+    #[test]
+    fn discover_tools_mixed_wave_only_forwards_successful_ids() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![
+                tool_call("a", DISCOVER_TOOLS_TOOL_NAME),
+                tool_call("b", "search"),
+                tool_call("c", DISCOVER_TOOLS_TOOL_NAME),
+            ],
+            has_tool_calls: true,
+        });
+
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![
+                tool_result("a", DISCOVER_TOOLS_TOOL_NAME, "{}", true),
+                tool_result("b", "search", "{}", true),
+                // A failed discover-tools must not trigger activation.
+                tool_result("c", DISCOVER_TOOLS_TOOL_NAME, "{}", false),
+            ],
+        });
+
+        let refresh = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::RefreshDeferredTools { trigger_call_ids } => Some(trigger_call_ids),
+                _ => None,
+            })
+            .expect("expected RefreshDeferredTools");
+        assert_eq!(
+            refresh,
+            &vec![crate::agent::effect::ToolCallId::new("a")],
+            "only successful discover-tools ids should propagate"
+        );
+    }
+
+    /// Waves that don't include a successful `discover-tools` call must NOT
+    /// emit a refresh effect — the runner would otherwise redo work for
+    /// every iteration.
+    #[test]
+    fn no_refresh_when_discover_tools_absent() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::RefreshDeferredTools { .. })),
+            "no refresh expected: {effects:?}"
+        );
+    }
+
+    /// A terminal wave that hits `max_iterations` must NOT emit a refresh —
+    /// there's no upcoming LLM call to consume the activation set.
+    #[test]
+    fn terminal_max_iterations_wave_skips_refresh() {
+        let mut m = AgentMachine::new(1);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           "final".into(),
+            tool_calls:     vec![tool_call("c1", DISCOVER_TOOLS_TOOL_NAME)],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", DISCOVER_TOOLS_TOOL_NAME, "{}", true)],
+        });
+        assert_eq!(m.phase(), Phase::Done);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::RefreshDeferredTools { .. })),
+            "refresh should be suppressed on terminal wave: {effects:?}"
+        );
+    }
+
+    /// When a discover-tools wave also trips the tool-call limit, the refresh
+    /// must precede the pause so that on resume the stored activation set is
+    /// already in place for the next `CallLlm`.
+    #[test]
+    fn refresh_precedes_pause_for_limit() {
+        let mut m = AgentMachine::with_tool_call_limit(8, 1);
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", DISCOVER_TOOLS_TOOL_NAME)],
+            has_tool_calls: true,
+        });
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", DISCOVER_TOOLS_TOOL_NAME, "{}", true)],
+        });
+        let refresh_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::RefreshDeferredTools { .. }))
+            .expect("expected RefreshDeferredTools");
+        let pause_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::PauseForLimit { .. }))
+            .expect("expected PauseForLimit");
+        assert!(
+            refresh_idx < pause_idx,
+            "refresh must precede pause: {effects:?}"
+        );
     }
 }

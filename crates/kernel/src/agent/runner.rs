@@ -48,7 +48,8 @@
 //! - Tool-call-limit circuit breaker with oneshot resume — ✓ machine-side
 //!   implemented; legacy removal pending
 //! - Repetition guard truncation
-//! - Deferred tool activation (`discover-tools`) feedback
+//! - Deferred tool activation (`discover-tools`) feedback — ✓ machine-side
+//!   implemented; legacy removal pending
 //! - Per-iteration tape rebuild + sanitisation
 //! - Empty-stream / rate-limit recovery branches
 //! - Cascade trace assembly + mood inference
@@ -168,6 +169,25 @@ pub trait Subsystems: Send + Sync {
     ///
     /// Treat a cancel-token firing as [`Event::Interrupted`] instead.
     async fn pause_for_limit(&mut self, limit_id: u64, tool_calls_made: usize) -> Event;
+
+    /// Refresh the LLM-visible tool catalog after one or more successful
+    /// `discover-tools` calls in the most recent wave.
+    ///
+    /// `trigger_call_ids` lists the originating tool-call ids so the runner
+    /// can resolve each call's output JSON (which it already owns), extract
+    /// the activated tool names, merge them into the session's
+    /// `activated_deferred` set, regenerate the tool definitions passed to
+    /// the next [`Effect::CallLlm`], and persist the updated set to the
+    /// process table so activations survive across turns.
+    ///
+    /// Fire-and-forget from the machine's perspective: the runner does not
+    /// produce a follow-up event. Failures (e.g. unparseable output) must be
+    /// logged but never abort the turn — the LLM can always call
+    /// `discover-tools` again.
+    async fn refresh_deferred_tools(
+        &mut self,
+        trigger_call_ids: Vec<crate::agent::effect::ToolCallId>,
+    );
 }
 
 /// Drive the [`AgentMachine`] to completion against `subsys`.
@@ -234,6 +254,9 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     tool_calls_made,
                 } => {
                     follow_up = Some(subsys.pause_for_limit(limit_id, tool_calls_made).await);
+                }
+                Effect::RefreshDeferredTools { trigger_call_ids } => {
+                    subsys.refresh_deferred_tools(trigger_call_ids).await;
                 }
                 Effect::RunTools { calls } => {
                     follow_up = Some(subsys.run_tools(calls).await);
@@ -357,6 +380,9 @@ mod tests {
         /// A test can leave this empty to keep sampling off (zero window).
         context_samples: Vec<(usize, usize)>,
         next_sample:     usize,
+        /// Records each `refresh_deferred_tools` invocation's trigger id list
+        /// so tests can assert on activation ordering and payload.
+        refresh_log:     Vec<Vec<ToolCallId>>,
     }
 
     #[async_trait]
@@ -399,6 +425,10 @@ mod tests {
                 (0, 0)
             }
         }
+
+        async fn refresh_deferred_tools(&mut self, trigger_call_ids: Vec<ToolCallId>) {
+            self.refresh_log.push(trigger_call_ids);
+        }
     }
 
     /// Factory producing a fresh stub with empty scripts for every field.
@@ -415,6 +445,7 @@ mod tests {
             next_limit:      0,
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         }
     }
 
@@ -436,6 +467,7 @@ mod tests {
             injected:        vec![],
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -482,6 +514,7 @@ mod tests {
             injected:        vec![],
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -544,6 +577,7 @@ mod tests {
             injected:        vec![],
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         };
         let mut machine = AgentMachine::with_max_continuations(8, 3);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -623,6 +657,7 @@ mod tests {
             injected:        vec![],
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -664,12 +699,113 @@ mod tests {
             injected:        vec![],
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
         assert!(outcome.success, "stop-by-limit is a graceful success");
         assert_eq!(outcome.text, "first");
         assert_eq!(outcome.tool_calls_made, 1);
+    }
+
+    #[tokio::test]
+    async fn drive_refreshes_deferred_tools_after_discover_wave() {
+        use crate::agent::machine::DISCOVER_TOOLS_TOOL_NAME;
+
+        let tc = Tc {
+            id:        ToolCallId::new("d1"),
+            name:      ToolName::new(DISCOVER_TOOLS_TOOL_NAME),
+            arguments: r#"{"query":"fs"}"#.into(),
+        };
+        let mut subsys = ScriptedSubsys {
+            llm_script:      vec![
+                Event::LlmCompleted {
+                    text:           "let me discover".into(),
+                    tool_calls:     vec![tc.clone()],
+                    has_tool_calls: true,
+                },
+                Event::LlmCompleted {
+                    text:           "done".into(),
+                    tool_calls:     vec![],
+                    has_tool_calls: false,
+                },
+            ],
+            next_llm:        0,
+            tool_responses:  vec![vec![Tr {
+                id:          ToolCallId::new("d1"),
+                name:        ToolName::new(DISCOVER_TOOLS_TOOL_NAME),
+                arguments:   r#"{"query":"fs"}"#.into(),
+                success:     true,
+                duration_ms: 1,
+                error:       None,
+            }]],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
+            refresh_log:     vec![],
+        };
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut subsys).await;
+        assert!(outcome.success);
+        assert_eq!(
+            subsys.refresh_log,
+            vec![vec![ToolCallId::new("d1")]],
+            "runner should receive exactly one refresh call with the discover-tools trigger id",
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_skips_refresh_when_no_discover_tools() {
+        let tc = Tc {
+            id:        ToolCallId::new("s1"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let mut subsys = ScriptedSubsys {
+            llm_script:      vec![
+                Event::LlmCompleted {
+                    text:           "thinking".into(),
+                    tool_calls:     vec![tc.clone()],
+                    has_tool_calls: true,
+                },
+                Event::LlmCompleted {
+                    text:           "done".into(),
+                    tool_calls:     vec![],
+                    has_tool_calls: false,
+                },
+            ],
+            next_llm:        0,
+            tool_responses:  vec![vec![Tr {
+                id:          ToolCallId::new("s1"),
+                name:        ToolName::new("search"),
+                arguments:   "{}".into(),
+                success:     true,
+                duration_ms: 1,
+                error:       None,
+            }]],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
+            refresh_log:     vec![],
+        };
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut subsys).await;
+        assert!(outcome.success);
+        assert!(
+            subsys.refresh_log.is_empty(),
+            "refresh should not fire on plain tool waves: {:?}",
+            subsys.refresh_log,
+        );
     }
 
     #[tokio::test]
@@ -689,6 +825,7 @@ mod tests {
             injected:        vec![],
             context_samples: vec![],
             next_sample:     0,
+            refresh_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
