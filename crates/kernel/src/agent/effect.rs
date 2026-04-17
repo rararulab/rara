@@ -163,6 +163,24 @@ pub enum Effect {
         /// Cumulative tool calls executed before the pause.
         tool_calls_made: usize,
     },
+    /// Refresh the set of LLM-visible tool definitions after the LLM
+    /// invoked `discover-tools` in the just-completed wave. The runner
+    /// already owns the raw tool-output JSON, so the machine only carries
+    /// the call ids of the triggering `discover-tools` invocations; the
+    /// runner extracts activated tool names from the corresponding outputs,
+    /// merges them into the session's `activated_deferred` set, regenerates
+    /// the LLM tool definitions, and persists the set to the process
+    /// table.
+    ///
+    /// Emitted between [`Effect::AppendTape`] (`ToolResults`) and the next
+    /// [`Effect::CallLlm`] so the upcoming LLM call sees the newly
+    /// activated catalog. Fire-and-continue: no follow-up event.
+    RefreshDeferredTools {
+        /// Tool call ids of every successful `discover-tools` invocation
+        /// in the wave that just completed. Preserves the order from the
+        /// original [`Effect::RunTools::calls`] slice.
+        trigger_call_ids: Vec<ToolCallId>,
+    },
     /// Terminate the loop with a failure.
     Fail {
         /// Free-form failure description.
