@@ -38,6 +38,7 @@ Concrete channel adapter implementations for the rara platform — bridges the k
 - Telegram bot token comes from the settings store (not config file) — the adapter is skipped if the token is unset.
 - The `reqwest` version for telegram proxy is pinned to 0.12 (`reqwest012`) because teloxide 0.17 requires it — do not upgrade to workspace reqwest 0.13 until teloxide supports it.
 - Group message handling is controlled by `GroupPolicy` — respect the policy to avoid responding in unauthorized groups.
+- **Rate limiting**: All outbound Telegram API calls (`send_message`, `edit_message_text`, `send_photo`, `send_voice`, `send_chat_action`) MUST pass through `ChatRateLimiter::acquire(chat_id)` first (see `src/telegram/rate_limit.rs`). Telegram's group quota is 20 msg/min per group (editMessage shares sendMessage quota — tdlib/td#3034), and bypassing the limiter will cause 429 FloodWait errors that silently drop plan-summary inline buttons in forum topics.
 
 ## What NOT To Do
 
@@ -45,6 +46,7 @@ Concrete channel adapter implementations for the rara platform — bridges the k
 - Do NOT bypass `IOSubsystem` for sending messages — adapters should only be accessed through the kernel's I/O layer.
 - Do NOT upgrade the telegram `reqwest` dependency to 0.13 — teloxide 0.17 is pinned to 0.12.
 - Do NOT hardcode chat IDs or bot tokens — they come from runtime settings.
+- Do NOT use `bot.send_message()` / `bot.edit_message_text()` directly — **why:** bypasses `ChatRateLimiter`; Telegram will 429 and inline buttons will silently vanish in forum topics. Always call `rate_limiter.acquire(chat_id).await` first.
 
 ## Dependencies
 

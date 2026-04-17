@@ -272,26 +272,19 @@ const INITIAL_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(
 /// Maximum retry delay for exponential backoff.
 const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Edit interval for private (1:1) chats. Telegram allows ~60 msg/min per
-/// private chat.
-const MIN_EDIT_INTERVAL_PRIVATE: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Minimum time between successive streaming edits, regardless of delta
+/// size. Acts as a coalescing floor so pathological sub-ms bursts (from
+/// extremely fast token streams) don't translate into thrashing edit calls.
+/// Telegram's per-chat quota is enforced separately by
+/// [`super::rate_limit::ChatRateLimiter`];
+/// this floor is purely for local batching efficiency.
+const MIN_EDIT_FLOOR: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Edit interval for group / supergroup / forum-topic chats. Telegram caps
-/// edits at 20 msg/min per group (edit shares sendMessage quota —
-/// tdlib/td#3034), so we must stay above 3000 ms per chat to avoid 429
-/// FloodWait. Use 3500 ms for safety buffer.
-const MIN_EDIT_INTERVAL_GROUP: std::time::Duration = std::time::Duration::from_millis(3500);
-
-/// Resolve the edit interval for a given chat_id. Telegram negative chat_ids
-/// are groups/supergroups/channels; positive ids are private 1:1 chats.
-#[inline]
-fn min_edit_interval(chat_id: i64) -> std::time::Duration {
-    if chat_id < 0 {
-        MIN_EDIT_INTERVAL_GROUP
-    } else {
-        MIN_EDIT_INTERVAL_PRIVATE
-    }
-}
+/// Minimum character delta since the last streaming edit before we flush
+/// another one. Emits ~1 edit per ~100 chars of generated text — coarse
+/// enough to fit within Telegram's per-chat quota after the rate limiter
+/// gates it, fine enough to feel "live".
+const EDIT_DELTA_THRESHOLD: usize = 100;
 
 /// Maximum characters per Telegram message before splitting to a new message.
 /// Set below 4096 to leave buffer for HTML tag expansion from markdown→html.
@@ -424,9 +417,9 @@ impl ProgressMessage {
         Self {
             message_id: None,
             tools: Vec::new(),
-            // TODO(#1510): thread chat_id through so we can use the group interval here.
+            // Prime `last_edit` so the first event triggers an immediate flush.
             last_edit: Instant::now()
-                .checked_sub(MIN_EDIT_INTERVAL_PRIVATE)
+                .checked_sub(MIN_EDIT_FLOOR)
                 .unwrap_or_else(Instant::now),
             turn_started: Instant::now(),
             input_tokens: 0,
@@ -986,29 +979,35 @@ struct StreamingMessage {
     /// Monotonic tag identifying which turn owns this entry. Used by the
     /// delayed cleanup task to distinguish its own state from a successor
     /// turn's fresh state.
-    epoch:                 u64,
+    epoch:                    u64,
     /// All message IDs sent for this stream (multiple when splitting long
     /// content).
-    message_ids:           Vec<MessageId>,
+    message_ids:              Vec<MessageId>,
     /// Accumulated raw text for the current (latest) message.
-    accumulated:           String,
+    accumulated:              String,
     /// Number of raw characters already finalized into earlier split messages.
-    streamed_prefix_chars: usize,
+    streamed_prefix_chars:    usize,
     /// Last successful `editMessageText` timestamp for throttling.
-    last_edit:             Instant,
+    last_edit:                Instant,
     /// Whether new text has been appended since the last edit.
-    dirty:                 bool,
+    dirty:                    bool,
+    /// Bytes of text appended to `accumulated` since the last flushed edit.
+    /// Used by the throttle tick to gate flushes on delta size rather than
+    /// wall time alone.
+    pending_bytes_since_edit: usize,
 }
 
 impl StreamingMessage {
     fn new() -> Self {
         Self {
-            epoch:                 STREAM_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            message_ids:           Vec::new(),
-            accumulated:           String::new(),
-            streamed_prefix_chars: 0,
-            last_edit:             Instant::now(),
-            dirty:                 false,
+            epoch:                    STREAM_EPOCH
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            message_ids:              Vec::new(),
+            accumulated:              String::new(),
+            streamed_prefix_chars:    0,
+            last_edit:                Instant::now(),
+            dirty:                    false,
+            pending_bytes_since_edit: 0,
         }
     }
 }
@@ -1107,6 +1106,11 @@ pub struct TelegramAdapter {
     /// keyboard attached to outbound messages. Populated by the streaming
     /// forwarder and read by [`Self::send`].
     keyboard_state:        Arc<DashMap<i64, KeyboardMeta>>,
+    /// Per-chat + global rate limiter for outbound Telegram API calls. All
+    /// `sendMessage`, `editMessageText`, `sendPhoto`, `sendVoice`, and
+    /// `sendChatAction` call sites must `.acquire(chat_id)` first (see
+    /// `AGENT.md` invariants).
+    rate_limiter:          Arc<super::rate_limit::ChatRateLimiter>,
 }
 
 impl TelegramAdapter {
@@ -1141,6 +1145,7 @@ impl TelegramAdapter {
             voice_chat_ids: Arc::new(DashSet::new()),
             settings,
             keyboard_state: Arc::new(DashMap::new()),
+            rate_limiter: Arc::new(super::rate_limit::ChatRateLimiter::new()),
         }
     }
 
@@ -1317,6 +1322,7 @@ impl TelegramAdapter {
                 input_file
             };
 
+            self.rate_limiter.acquire(chat_id).await;
             if attachment.mime_type.starts_with("image/") {
                 let req =
                     with_thread_id!(self.bot.send_photo(ChatId(chat_id), input_file), thread_id);
@@ -1350,6 +1356,7 @@ impl TelegramAdapter {
         };
 
         let input_file = teloxide::types::InputFile::memory(audio.data).file_name("reply.ogg");
+        self.rate_limiter.acquire(chat_id).await;
         let req = with_thread_id!(self.bot.send_voice(ChatId(chat_id), input_file), thread_id);
         if let Err(e) = req.await {
             warn!(error = %e, "failed to send voice note, falling back to text");
@@ -1466,6 +1473,7 @@ impl ChannelAdapter for TelegramAdapter {
                                     crate::telegram::markdown::markdown_to_telegram_html(&content);
                                 let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
                                 let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
+                                self.rate_limiter.acquire(chat_id).await;
                                 let edit_result = self
                                     .bot
                                     .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
@@ -1485,6 +1493,7 @@ impl ChannelAdapter for TelegramAdapter {
 
                                 if edit_ok {
                                     for chunk in chunks.iter().skip(1) {
+                                        self.rate_limiter.acquire(chat_id).await;
                                         let req = with_thread_id!(
                                             self.bot
                                                 .send_message(ChatId(chat_id), chunk)
@@ -1527,6 +1536,7 @@ impl ChannelAdapter for TelegramAdapter {
                     let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
                     let last_idx = chunks.len().saturating_sub(1);
                     for (i, chunk) in chunks.iter().enumerate() {
+                        self.rate_limiter.acquire(chat_id).await;
                         let mut req = with_thread_id!(
                             self.bot
                                 .send_message(ChatId(chat_id), chunk)
@@ -1574,6 +1584,7 @@ impl ChannelAdapter for TelegramAdapter {
                 if let Some(ref target_id) = edit_target {
                     if let Ok(msg_id) = parse_message_id(target_id) {
                         let html = crate::telegram::markdown::markdown_to_telegram_html(&delta);
+                        self.rate_limiter.acquire(chat_id).await;
                         let _ = self
                             .bot
                             .edit_message_text(ChatId(chat_id), msg_id, &html)
@@ -1581,12 +1592,14 @@ impl ChannelAdapter for TelegramAdapter {
                             .await;
                     }
                 } else {
+                    self.rate_limiter.acquire(chat_id).await;
                     let req =
                         with_thread_id!(self.bot.send_message(ChatId(chat_id), &delta), thread_id);
                     let _ = req.await;
                 }
             }
             PlatformOutbound::Progress { .. } => {
+                self.rate_limiter.acquire(chat_id).await;
                 let req = with_thread_id!(
                     self.bot
                         .send_chat_action(ChatId(chat_id), ChatAction::Typing),
@@ -1649,6 +1662,7 @@ impl ChannelAdapter for TelegramAdapter {
         let stt_service = self.stt_service.clone();
         let voice_chat_ids = Arc::clone(&self.voice_chat_ids);
         let settings = Arc::clone(&self.settings);
+        let rate_limiter = Arc::clone(&self.rate_limiter);
 
         // Register slash-menu with Telegram so '/' shows available commands.
         {
@@ -1727,6 +1741,7 @@ impl ChannelAdapter for TelegramAdapter {
                 stt_service,
                 voice_chat_ids,
                 settings,
+                rate_limiter,
             )
             .await;
         });
@@ -1743,6 +1758,7 @@ impl ChannelAdapter for TelegramAdapter {
 
     async fn typing_indicator(&self, session_key: &str) -> Result<(), KernelError> {
         let chat_id = parse_chat_id(session_key)?;
+        self.rate_limiter.acquire(chat_id).await;
         self.bot
             .send_chat_action(ChatId(chat_id), ChatAction::Typing)
             .await
@@ -1814,6 +1830,7 @@ async fn polling_loop(
     stt_service: Option<rara_stt::SttService>,
     voice_chat_ids: Arc<DashSet<i64>>,
     settings: Arc<dyn SettingsProvider>,
+    rate_limiter: Arc<super::rate_limit::ChatRateLimiter>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -1874,6 +1891,7 @@ async fn polling_loop(
                     let stt = stt_service.clone();
                     let voice_ids = Arc::clone(&voice_chat_ids);
                     let stg = Arc::clone(&settings);
+                    let rl = Arc::clone(&rate_limiter);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -1890,6 +1908,7 @@ async fn polling_loop(
                             &stt,
                             &voice_ids,
                             &stg,
+                            &rl,
                         )
                         .await;
                     });
@@ -3057,6 +3076,7 @@ async fn handle_update(
     stt_service: &Option<rara_stt::SttService>,
     voice_chat_ids: &Arc<DashSet<i64>>,
     settings: &Arc<dyn SettingsProvider>,
+    rate_limiter: &Arc<super::rate_limit::ChatRateLimiter>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -3461,7 +3481,14 @@ async fn handle_update(
 
                         match handler.handle(&info, &ctx).await {
                             Ok(result) => {
-                                dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
+                                dispatch_command_result(
+                                    bot,
+                                    chat_id,
+                                    tg_thread_id,
+                                    result,
+                                    rate_limiter,
+                                )
+                                .await;
                             }
                             Err(e) => {
                                 error!(
@@ -3544,7 +3571,14 @@ async fn handle_update(
 
                         match handler.handle(&info, &ctx).await {
                             Ok(result) => {
-                                dispatch_command_result(bot, chat_id, tg_thread_id, result).await;
+                                dispatch_command_result(
+                                    bot,
+                                    chat_id,
+                                    tg_thread_id,
+                                    result,
+                                    rate_limiter,
+                                )
+                                .await;
                             }
                             Err(e) => {
                                 error!(
@@ -3727,6 +3761,7 @@ async fn handle_update(
                     "\u{1f4ac} New topic: <a href=\"{link}\">{name}</a>",
                     name = guard_html_escape(&topic_name),
                 );
+                rate_limiter.acquire(chat_id).await;
                 let _ = bot
                     .send_message(ChatId(chat_id), notice)
                     .parse_mode(ParseMode::Html)
@@ -3737,6 +3772,7 @@ async fn handle_update(
                 // activity there (the original message stays in General —
                 // Telegram does not allow moving messages between topics).
                 let intro = format!("\u{1f4ac} {topic_name}");
+                rate_limiter.acquire(chat_id).await;
                 let _ =
                     with_thread_id!(bot.send_message(ChatId(chat_id), &intro), tg_thread_id).await;
 
@@ -3761,6 +3797,7 @@ async fn handle_update(
     let msg = match handle.resolve(raw).await {
         Ok(msg) => msg,
         Err(IOError::SystemBusy) => {
+            rate_limiter.acquire(chat_id).await;
             let req = with_thread_id!(
                 bot.send_message(
                     ChatId(chat_id),
@@ -3772,6 +3809,7 @@ async fn handle_update(
             return;
         }
         Err(IOError::RateLimited { message }) => {
+            rate_limiter.acquire(chat_id).await;
             let req = with_thread_id!(
                 bot.send_message(ChatId(chat_id), format!("\u{26a0}\u{fe0f} {message}")),
                 tg_thread_id
@@ -3821,10 +3859,12 @@ async fn handle_update(
                     handle.trace_service().clone(),
                     rara_message_id.clone(),
                     Arc::clone(settings),
+                    Arc::clone(rate_limiter),
                 );
             }
         }
         Err(_) => {
+            rate_limiter.acquire(chat_id).await;
             let req = with_thread_id!(
                 bot.send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。"),
                 tg_thread_id
@@ -3844,13 +3884,16 @@ async fn dispatch_command_result(
     chat_id: i64,
     thread_id: Option<i64>,
     result: CommandResult,
+    rate_limiter: &super::rate_limit::ChatRateLimiter,
 ) {
     match result {
         CommandResult::Text(text) => {
+            rate_limiter.acquire(chat_id).await;
             let req = with_thread_id!(bot.send_message(ChatId(chat_id), text), thread_id);
             let _ = req.await;
         }
         CommandResult::Html(html) => {
+            rate_limiter.acquire(chat_id).await;
             let req = with_thread_id!(
                 bot.send_message(ChatId(chat_id), html)
                     .parse_mode(ParseMode::Html),
@@ -3877,6 +3920,7 @@ async fn dispatch_command_result(
                 })
                 .collect();
             let markup = InlineKeyboardMarkup::new(rows);
+            rate_limiter.acquire(chat_id).await;
             let req = with_thread_id!(
                 bot.send_message(ChatId(chat_id), html)
                     .parse_mode(ParseMode::Html)
@@ -3888,6 +3932,7 @@ async fn dispatch_command_result(
         CommandResult::Photo { data, caption } => {
             use teloxide::types::InputFile;
 
+            rate_limiter.acquire(chat_id).await;
             let mut request = bot.send_photo(ChatId(chat_id), InputFile::memory(data));
             if let Some(caption) = caption {
                 request = request.caption(caption);
@@ -3933,6 +3978,7 @@ fn spawn_stream_forwarder(
     trace_service: rara_kernel::trace::TraceService,
     rara_message_id: String,
     settings: Arc<dyn SettingsProvider>,
+    rate_limiter: Arc<super::rate_limit::ChatRateLimiter>,
 ) {
     use rara_kernel::io::{PlanStepStatus, StreamEvent};
 
@@ -3979,7 +4025,7 @@ fn spawn_stream_forwarder(
             None => return,
         };
 
-        let mut throttle = tokio::time::interval(min_edit_interval(chat_id));
+        let mut throttle = tokio::time::interval(MIN_EDIT_FLOOR);
         throttle.tick().await; // skip immediate first tick
 
         let mut typing_interval = tokio::time::interval(std::time::Duration::from_secs(4));
@@ -4043,6 +4089,8 @@ fn spawn_stream_forwarder(
                             let flush_req = {
                                 if let Some(mut state) = active_streams.get_mut(&chat_id) {
                                     state.accumulated.push_str(&text);
+                                    state.pending_bytes_since_edit =
+                                        state.pending_bytes_since_edit.saturating_add(text.len());
                                     state.dirty = true;
 
                                     if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
@@ -4065,7 +4113,7 @@ fn spawn_stream_forwarder(
                             };
 
                             if let Some(req) = flush_req {
-                                let result = flush_edit(&bot, chat_id, thread_id, &req).await;
+                                let result = flush_edit(&bot, chat_id, thread_id, &req, &rate_limiter).await;
                                 let split_applied =
                                     matches!(result, FlushResult::Sent(_) | FlushResult::Edited);
                                 apply_flush_result(&active_streams, chat_id, result);
@@ -4077,6 +4125,7 @@ fn spawn_stream_forwarder(
                                         state.accumulated.clear();
                                         state.message_ids.push(MessageId(0)); // sentinel
                                         state.dirty = false;
+                                        state.pending_bytes_since_edit = 0;
                                     }
                                 }
                             }
@@ -4120,20 +4169,23 @@ fn spawn_stream_forwarder(
 
                             // Send typing indicator before the first progress message.
                             if progress.message_id.is_none() {
+                                rate_limiter.acquire(chat_id).await;
                                 let req = with_thread_id!(bot
                                     .send_chat_action(ChatId(chat_id), ChatAction::Typing), thread_id);
                                 let _ = req.await;
                             }
 
                             let text = progress.render_text();
-                            if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
+                            if progress.last_edit.elapsed() >= MIN_EDIT_FLOOR {
                                 match progress.message_id {
                                     Some(mid) => {
+                                        rate_limiter.acquire(chat_id).await;
                                         let _ = bot
                                             .edit_message_text(ChatId(chat_id), mid, &text)
                                             .await;
                                     }
                                     None => {
+                                        rate_limiter.acquire(chat_id).await;
                                         let req = with_thread_id!(bot
                                             .send_message(ChatId(chat_id), &text), thread_id);
                                         if let Ok(msg) = req.await
@@ -4172,14 +4224,16 @@ fn spawn_stream_forwarder(
                             }
 
                             let text = progress.render_text();
-                            if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
+                            if progress.last_edit.elapsed() >= MIN_EDIT_FLOOR {
                                 match progress.message_id {
                                     Some(mid) => {
+                                        rate_limiter.acquire(chat_id).await;
                                         let _ = bot
                                             .edit_message_text(ChatId(chat_id), mid, &text)
                                             .await;
                                     }
                                     None => {
+                                        rate_limiter.acquire(chat_id).await;
                                         let req = with_thread_id!(bot
                                             .send_message(ChatId(chat_id), &text), thread_id);
                                         if let Ok(msg) = req.await
@@ -4209,6 +4263,7 @@ fn spawn_stream_forwarder(
                                     state.accumulated.clear();
                                     state.streamed_prefix_chars = 0;
                                     state.dirty = false;
+                                    state.pending_bytes_since_edit = 0;
                                     ids
                                 } else {
                                     Vec::new()
@@ -4241,6 +4296,7 @@ fn spawn_stream_forwarder(
                             // Send initial plan message immediately.
                             let text = progress.render_text();
                             if !text.is_empty() {
+                                rate_limiter.acquire(chat_id).await;
                                 let req = with_thread_id!(bot.send_message(ChatId(chat_id), &text), thread_id);
                                 match req.await {
                                     Ok(msg) => { progress.message_id = Some(msg.id); }
@@ -4298,8 +4354,9 @@ fn spawn_stream_forwarder(
 
                                 // Render and edit with throttle + dirty flag.
                                 let text = progress.render_text();
-                                if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
+                                if progress.last_edit.elapsed() >= MIN_EDIT_FLOOR {
                                     if let Some(mid) = progress.message_id {
+                                        rate_limiter.acquire(chat_id).await;
                                         let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                     }
                                     progress.last_edit = Instant::now();
@@ -4330,6 +4387,7 @@ fn spawn_stream_forwarder(
 
                                 let text = progress.render_text();
                                 if let Some(mid) = progress.message_id {
+                                    rate_limiter.acquire(chat_id).await;
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                 }
                                 progress.last_edit = Instant::now();
@@ -4368,6 +4426,7 @@ fn spawn_stream_forwarder(
                                 // Final render.
                                 let text = progress.render_text();
                                 if let Some(mid) = progress.message_id {
+                                    rate_limiter.acquire(chat_id).await;
                                     let _ = bot.edit_message_text(ChatId(chat_id), mid, &text).await;
                                 }
                             }
@@ -4387,8 +4446,9 @@ fn spawn_stream_forwarder(
                             // Trigger a progress re-render if we have a message
                             if progress.message_id.is_some() || !progress.tools.is_empty() {
                                 let text = progress.render_text();
-                                if progress.last_edit.elapsed() >= min_edit_interval(chat_id) {
+                                if progress.last_edit.elapsed() >= MIN_EDIT_FLOOR {
                                     if let Some(mid) = progress.message_id {
+                                        rate_limiter.acquire(chat_id).await;
                                         let _ = bot
                                             .edit_message_text(ChatId(chat_id), mid, &text)
                                             .await;
@@ -4406,11 +4466,13 @@ fn spawn_stream_forwarder(
                                 // Send initial thinking message immediately so
                                 // the user sees feedback instead of silence.
                                 if progress.message_id.is_none() {
+                                    rate_limiter.acquire(chat_id).await;
                                     let req = with_thread_id!(bot
                                         .send_chat_action(ChatId(chat_id), ChatAction::Typing), thread_id);
                                     let _ = req.await;
                                     let text = progress.render_text();
                                     if !text.is_empty() {
+                                        rate_limiter.acquire(chat_id).await;
                                         let req = with_thread_id!(bot
                                             .send_message(ChatId(chat_id), &text), thread_id);
                                         if let Ok(msg) = req.await
@@ -4478,6 +4540,7 @@ fn spawn_stream_forwarder(
                                     format!("limit:stop:{session_key}:{limit_id}"),
                                 ),
                             ]]);
+                            rate_limiter.acquire(chat_id).await;
                             let req = with_thread_id!(bot
                                 .send_message(ChatId(chat_id), &text)
                                 .parse_mode(ParseMode::Html)
@@ -4552,13 +4615,13 @@ fn spawn_stream_forwarder(
                                 // Guard dropped here.
                             };
                             if let Some(req) = flush_req {
-                                let result = flush_edit(&bot, chat_id, thread_id, &req).await;
+                                let result = flush_edit(&bot, chat_id, thread_id, &req, &rate_limiter).await;
                                 apply_flush_result(&active_streams, chat_id, result);
                             }
 
                             // ── Pinned status bar: final flush ──
                             pinned.on_stream_close();
-                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key).await;
+                            flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key, &rate_limiter).await;
 
                             // ── Finalize: always create trace + compact summary ──
                             // Every agent turn (including pure text replies) gets a
@@ -4593,6 +4656,7 @@ fn spawn_stream_forwarder(
                                 let mid = if let Some(mid) = progress.message_id {
                                     mid
                                 } else {
+                                    rate_limiter.acquire(chat_id).await;
                                     let req = with_thread_id!(bot
                                         .send_message(ChatId(chat_id), &compact)
                                         .parse_mode(ParseMode::Html), thread_id);
@@ -4647,6 +4711,7 @@ fn spawn_stream_forwarder(
                                         // exhaust the edit quota with progress
                                         // updates, so the final edit often hits
                                         // a rate-limit window.
+                                        rate_limiter.acquire(chat_id).await;
                                         let edit_res = bot
                                             .edit_message_text(ChatId(chat_id), mid, &compact)
                                             .parse_mode(ParseMode::Html)
@@ -4656,6 +4721,7 @@ fn spawn_stream_forwarder(
                                             if let Some(secs) = parse_retry_after(&e.to_string()) {
                                                 info!(chat_id, retry_after = secs, "compact summary edit rate-limited, retrying");
                                                 tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                                rate_limiter.acquire(chat_id).await;
                                                 if let Err(ref re) = bot
                                                     .edit_message_text(ChatId(chat_id), mid, &compact)
                                                     .parse_mode(ParseMode::Html)
@@ -4666,6 +4732,7 @@ fn spawn_stream_forwarder(
                                                     // Rate-limit window still closed for edits. A fresh send uses
                                                     // 1 msg from the 20/min group quota and is often available when
                                                     // edits are blocked — better than silently dropping the buttons.
+                                                    rate_limiter.acquire(chat_id).await;
                                                     let fresh = with_thread_id!(
                                                         bot.send_message(ChatId(chat_id), &compact)
                                                             .parse_mode(ParseMode::Html)
@@ -4678,6 +4745,7 @@ fn spawn_stream_forwarder(
                                                 }
                                             } else if !e.to_string().contains("message is not modified") {
                                                 warn!(chat_id, error = %e, "compact summary edit failed — falling back to fresh send");
+                                                rate_limiter.acquire(chat_id).await;
                                                 let fresh = with_thread_id!(
                                                     bot.send_message(ChatId(chat_id), &compact)
                                                         .parse_mode(ParseMode::Html)
@@ -4696,6 +4764,7 @@ fn spawn_stream_forwarder(
                                         // without buttons. For newly sent messages the
                                         // compact text is already visible.
                                         if progress.message_id.is_some() {
+                                            rate_limiter.acquire(chat_id).await;
                                             let edit_res = bot
                                                 .edit_message_text(ChatId(chat_id), mid, &compact)
                                                 .parse_mode(ParseMode::Html)
@@ -4703,6 +4772,7 @@ fn spawn_stream_forwarder(
                                             if let Err(ref e) = edit_res {
                                                 if let Some(secs) = parse_retry_after(&e.to_string()) {
                                                     tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                                                    rate_limiter.acquire(chat_id).await;
                                                     let _ = bot
                                                         .edit_message_text(ChatId(chat_id), mid, &compact)
                                                         .parse_mode(ParseMode::Html)
@@ -4721,7 +4791,15 @@ fn spawn_stream_forwarder(
                 _ = throttle.tick() => {
                     let flush_req = {
                         if let Some(state) = active_streams.get(&chat_id) {
-                            if state.dirty && !state.accumulated.is_empty() {
+                            // Delta-gated flush: only emit an edit when enough new
+                            // content has accumulated. `pending_bytes_since_edit`
+                            // is used as a cheap proxy for char delta — UTF-8
+                            // bytes >= chars, so this slightly over-estimates
+                            // growth for multi-byte scripts, which is safe
+                            // (errs on the side of fewer edits).
+                            let enough_delta =
+                                state.pending_bytes_since_edit >= EDIT_DELTA_THRESHOLD;
+                            if state.dirty && !state.accumulated.is_empty() && enough_delta {
                                 let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
                                 Some(FlushRequest {
                                     message_ids: state.message_ids.clone(),
@@ -4737,7 +4815,7 @@ fn spawn_stream_forwarder(
                         // Guard dropped here.
                     };
                     if let Some(req) = flush_req {
-                        let result = flush_edit(&bot, chat_id, thread_id, &req).await;
+                        let result = flush_edit(&bot, chat_id, thread_id, &req, &rate_limiter).await;
                         apply_flush_result(&active_streams, chat_id, result);
                     }
 
@@ -4755,11 +4833,13 @@ fn spawn_stream_forwarder(
                         let text = progress.render_text();
                         match progress.message_id {
                             Some(mid) => {
+                                rate_limiter.acquire(chat_id).await;
                                 let _ = bot
                                     .edit_message_text(ChatId(chat_id), mid, &text)
                                     .await;
                             }
                             None => {
+                                rate_limiter.acquire(chat_id).await;
                                 let req = with_thread_id!(bot
                                     .send_message(ChatId(chat_id), &text), thread_id);
                                 if let Ok(msg) = req.await
@@ -4774,10 +4854,11 @@ fn spawn_stream_forwarder(
 
                     // ── Pinned session card: flush on state change only ──
                     if pinned.needs_flush() {
-                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key).await;
+                        flush_pinned_status(&bot, chat_id, thread_id, &mut pinned, &settings, &pinned_settings_key, &pinned_session_key, &rate_limiter).await;
                     }
                 }
                 _ = typing_interval.tick() => {
+                    rate_limiter.acquire(chat_id).await;
                     let req = with_thread_id!(bot
                         .send_chat_action(ChatId(chat_id), ChatAction::Typing), thread_id);
                     let _ = req.await;
@@ -4940,19 +5021,23 @@ async fn flush_pinned_status(
     settings: &Arc<dyn SettingsProvider>,
     settings_key: &str,
     session_settings_key: &str,
+    rate_limiter: &super::rate_limit::ChatRateLimiter,
 ) {
     use teloxide::payloads::PinChatMessageSetters;
 
     let html = pinned.render();
     let need_new_msg = match pinned.message_id {
-        Some(mid) => bot
-            .edit_message_text(ChatId(chat_id), mid, &html)
-            .parse_mode(ParseMode::Html)
-            .await
-            .is_err(),
+        Some(mid) => {
+            rate_limiter.acquire(chat_id).await;
+            bot.edit_message_text(ChatId(chat_id), mid, &html)
+                .parse_mode(ParseMode::Html)
+                .await
+                .is_err()
+        }
         None => true,
     };
     if need_new_msg {
+        rate_limiter.acquire(chat_id).await;
         let req = with_thread_id!(
             bot.send_message(ChatId(chat_id), &html)
                 .parse_mode(ParseMode::Html),
@@ -4960,6 +5045,7 @@ async fn flush_pinned_status(
         );
         if let Ok(msg) = req.await {
             pinned.message_id = Some(msg.id);
+            rate_limiter.acquire(chat_id).await;
             let _ = bot
                 .pin_chat_message(ChatId(chat_id), msg.id)
                 .disable_notification(true)
@@ -4991,9 +5077,11 @@ async fn flush_edit(
     chat_id: i64,
     thread_id: Option<i64>,
     req: &FlushRequest,
+    rate_limiter: &super::rate_limit::ChatRateLimiter,
 ) -> FlushResult {
     if req.message_ids.is_empty() || req.message_ids.last().copied() == Some(MessageId(0)) {
         // First message or new split — send a new message.
+        rate_limiter.acquire(chat_id).await;
         let req2 = with_thread_id!(
             bot.send_message(ChatId(chat_id), &req.text_html)
                 .parse_mode(ParseMode::Html),
@@ -5008,6 +5096,7 @@ async fn flush_edit(
         }
     } else {
         let msg_id = *req.message_ids.last().unwrap();
+        rate_limiter.acquire(chat_id).await;
         match bot
             .edit_message_text(ChatId(chat_id), msg_id, &req.text_html)
             .parse_mode(ParseMode::Html)
@@ -5053,16 +5142,19 @@ fn apply_flush_result(
                 }
                 state.last_edit = Instant::now();
                 state.dirty = false;
+                state.pending_bytes_since_edit = 0;
             }
             FlushResult::Edited | FlushResult::Failed => {
                 state.last_edit = Instant::now();
                 state.dirty = false;
+                state.pending_bytes_since_edit = 0;
             }
             FlushResult::RateLimited => {
                 // Leave dirty=true so the next tick retries.
             }
             FlushResult::SendFailed => {
                 state.dirty = false;
+                state.pending_bytes_since_edit = 0;
             }
         }
     }
