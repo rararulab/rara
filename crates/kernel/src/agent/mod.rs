@@ -17,6 +17,7 @@ pub mod effect;
 pub mod fold;
 pub(crate) mod loop_breaker;
 pub mod machine;
+pub(crate) mod mood;
 pub(crate) mod repetition;
 pub mod runner;
 pub mod scheduled;
