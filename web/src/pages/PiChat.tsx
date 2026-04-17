@@ -32,13 +32,38 @@ import type { UserMessage, AssistantMessage, TextContent } from "@mariozechner/p
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { api } from "@/api/client";
-import type { ChatSession, ChatMessageData } from "@/api/types";
+import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 
 /** Strip `<think>...</think>` blocks from assistant text. */
 function stripThinkTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
+/**
+ * Map pi-mono's thinking level (which has six buckets) down to rara's
+ * four-bucket backend enum. `"minimal"` collapses into `"low"` and
+ * `"xhigh"` collapses into `"high"` since the kernel has no tighter
+ * budgets for those extremes.
+ */
+function mapThinkingLevelToBackend(
+  level: string | undefined,
+): ThinkingLevel | null {
+  switch (level) {
+    case "off":
+      return "off";
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+    case "xhigh":
+      return "high";
+    default:
+      return null;
+  }
 }
 
 function mimeToFilename(mimeType: string, index: number): string {
@@ -268,6 +293,16 @@ export default function PiChat() {
     if (!agent) return;
     agent.clearMessages();
     agent.sessionId = session.key;
+
+    // Restore the session's persisted thinking-level so pi-chat-panel's
+    // selector reflects the last setting used for this conversation.
+    // Model restoration is deferred: reconstructing a full `Model<any>`
+    // from just the stored id requires provider knowledge we don't
+    // persist yet, so the global selector state wins for now.
+    if (session.thinking_level) {
+      agent.state.thinkingLevel = session.thinking_level;
+    }
+
     try {
       const msgs = await api.get<ChatMessageData[]>(
         `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
@@ -376,9 +411,30 @@ export default function PiChat() {
       chatPanelRef.current = chatPanel;
       container.appendChild(chatPanel);
 
-      // 7. Wire agent into the panel — skip API key prompt since rara manages keys server-side
+      // 7. Wire agent into the panel — skip API key prompt since rara manages
+      //    keys server-side, and sync the current model/thinking override to
+      //    the backend before every send so the kernel sees the user's
+      //    selection for this turn.
       await chatPanel.setAgent(agent, {
         onApiKeyRequired: async () => true,
+        onBeforeSend: async () => {
+          const key = agent.sessionId;
+          if (!key) return;
+          const model = agent.state.model?.id ?? null;
+          const thinking_level = mapThinkingLevelToBackend(
+            agent.state.thinkingLevel,
+          );
+          // Skip the PATCH when nothing would change.
+          if (!model && !thinking_level) return;
+          try {
+            await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+              model,
+              thinking_level,
+            });
+          } catch (e) {
+            console.warn("Failed to persist session LLM override:", e);
+          }
+        },
       });
 
       // 8. Hide model/thinking selectors — rara manages these server-side
