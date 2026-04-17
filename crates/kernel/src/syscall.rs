@@ -289,11 +289,11 @@ impl SyscallDispatcher {
                     context: None,
                     origin_endpoint,
                     // Syscall-driven approval requests are not bound to a
-                    // single platform user — `KernelHandle::request_approval`
-                    // does not carry the inbound message identity. Setting
+                    // single user — `KernelHandle::request_approval` does
+                    // not carry the inbound message identity. Setting
                     // `None` falls back to chat-level authorization, which
                     // is the pre-existing behavior.
-                    origin_platform_user_id: None,
+                    origin_user_id: None,
                 };
 
                 // Spawn a task so the event loop is not blocked while waiting

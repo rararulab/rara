@@ -28,29 +28,29 @@ use snafu::Snafu;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::io::Endpoint;
+use crate::{identity::UserId, io::Endpoint};
 
 /// A question submitted by the agent to the user.
 #[derive(Debug, Clone, Serialize)]
 pub struct UserQuestion {
     /// Unique identifier for this question.
-    pub id: Uuid,
+    pub id:               Uuid,
     /// The question text to present to the user.
-    pub question: String,
+    pub question:         String,
     /// Whether the question is sensitive (e.g. asks for API keys, passwords,
     /// tokens).
     ///
     /// Channel adapters MUST route sensitive prompts to a private surface
     /// (e.g. Telegram DM via `primary_chat_id`) and avoid leaking the text
     /// into shared chats, even when the endpoint points at a group/topic.
-    pub sensitive: bool,
+    pub sensitive:        bool,
     /// Optional pre-defined answer choices.
     ///
     /// When `Some`, adapters SHOULD render structured controls (e.g. Telegram
     /// inline keyboard) so the user can pick without typing, and the answer
     /// returned to the agent is the exact selected option string. When
     /// `None`, adapters fall back to free-form reply-to-message input.
-    pub options: Option<Vec<String>>,
+    pub options:          Option<Vec<String>>,
     /// Originating endpoint of the agent turn that raised this question.
     ///
     /// Channel adapters route the rendered prompt back to this endpoint (e.g.
@@ -58,15 +58,15 @@ pub struct UserQuestion {
     /// `None` for origins that do not carry an endpoint (background tasks,
     /// legacy callers), in which case adapters fall back to a default
     /// destination such as Telegram's `primary_chat_id`.
-    pub endpoint: Option<Endpoint>,
-    /// Platform-native user identifier of the user who triggered this
-    /// question (e.g. Telegram `msg.from.id` as a string).
+    pub endpoint:         Option<Endpoint>,
+    /// Kernel `UserId` of the user who triggered this question.
     ///
-    /// Channel adapters MUST compare incoming answers (reply text or
-    /// callback press) against this value and reject mismatches, so that
-    /// other members of a shared chat cannot answer on behalf of the asker.
-    /// `None` when the origin has no platform-level identity.
-    pub expected_platform_user_id: Option<String>,
+    /// Channel adapters resolve the incoming reply/callback sender to a
+    /// `UserId` (via `IdentityResolver`) and compare against this value,
+    /// rejecting mismatches so other members of a shared chat cannot answer
+    /// on behalf of the asker. `None` when the origin has no platform-level
+    /// identity.
+    pub expected_user_id: Option<UserId>,
 }
 
 /// Error from user question operations.
@@ -135,10 +135,10 @@ impl UserQuestionManager {
     /// question back to the same conversation surface (e.g. a Telegram forum
     /// topic) rather than a default destination.
     ///
-    /// `expected_platform_user_id` identifies the user who triggered the
-    /// turn (typically `ToolContext::origin_platform_user_id`). Adapters
-    /// MUST validate incoming answers against it to prevent hijacking in
-    /// shared chats.
+    /// `expected_user_id` is the kernel `UserId` of the user who triggered
+    /// the turn (derived from `ToolContext::user_id`). Adapters resolve
+    /// incoming answers to a `UserId` and compare, preventing hijacking in
+    /// shared chats and allowing cross-channel approvals to match.
     ///
     /// When `sensitive` is `true`, adapters MUST route the prompt to a
     /// private surface (e.g. the user's DM) rather than to `endpoint` if it
@@ -155,7 +155,7 @@ impl UserQuestionManager {
         &self,
         question: String,
         endpoint: Option<Endpoint>,
-        expected_platform_user_id: Option<String>,
+        expected_user_id: Option<UserId>,
         sensitive: bool,
         options: Option<Vec<String>>,
         timeout: std::time::Duration,
@@ -168,7 +168,7 @@ impl UserQuestionManager {
             sensitive,
             options,
             endpoint,
-            expected_platform_user_id,
+            expected_user_id,
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();

@@ -60,16 +60,16 @@ pub enum ApprovalDecision {
 /// An approval request submitted by an agent before executing a tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {
-    pub id: Uuid,
-    pub session_key: SessionKey,
-    pub tool_name: String,
-    pub tool_args: serde_json::Value,
-    pub summary: String,
-    pub risk_level: RiskLevel,
-    pub requested_at: Timestamp,
-    pub timeout_secs: u64,
+    pub id:              Uuid,
+    pub session_key:     SessionKey,
+    pub tool_name:       String,
+    pub tool_args:       serde_json::Value,
+    pub summary:         String,
+    pub risk_level:      RiskLevel,
+    pub requested_at:    Timestamp,
+    pub timeout_secs:    u64,
     /// Optional context explaining why the agent wants to call this tool.
-    pub context: Option<String>,
+    pub context:         Option<String>,
     /// Originating endpoint of the agent turn that raised this approval
     /// request.
     ///
@@ -82,16 +82,17 @@ pub struct ApprovalRequest {
     /// `primary_chat_id`.
     #[serde(default)]
     pub origin_endpoint: Option<crate::io::Endpoint>,
-    /// Platform-native user identifier of the user who triggered the turn
-    /// that raised this approval request (e.g. Telegram `msg.from.id` as a
-    /// string).
+    /// Kernel `UserId` of the originator of the turn that raised this
+    /// approval request.
     ///
-    /// Channel adapters MUST compare incoming approve/deny presses against
-    /// this value when set, so other members of a shared chat cannot
-    /// resolve a guard prompt meant for the original asker. `None` when the
-    /// origin has no platform-level identity (CLI, background jobs).
+    /// Adapters resolve incoming approve/deny presses to a `UserId` (via
+    /// `IdentityResolver`) and compare against this value, so cross-channel
+    /// routing still works: a web-originated turn whose approval is sent to
+    /// Telegram can only be resolved by the same kernel user pressing the
+    /// Telegram button. `None` when the origin has no platform-level
+    /// identity (CLI, background jobs).
     #[serde(default)]
-    pub origin_platform_user_id: Option<String>,
+    pub origin_user_id:  Option<UserId>,
 }
 
 /// Response after an approval request is resolved.

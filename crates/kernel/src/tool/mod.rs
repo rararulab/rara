@@ -336,35 +336,38 @@ pub type ToolRegistryRef = Arc<ToolRegistry>;
 #[derive(Clone)]
 pub struct ToolContext {
     /// The authenticated user identifier for the current session.
-    pub user_id:                 String,
+    pub user_id:               String,
     /// The session key for the current conversation turn.
-    pub session_key:             crate::session::SessionKey,
+    pub session_key:           crate::session::SessionKey,
     /// The originating endpoint (e.g. Telegram chat) for routing replies.
-    pub origin_endpoint:         Option<crate::io::Endpoint>,
-    /// Platform-native user identifier of the user who triggered this turn
-    /// (e.g. the Telegram `msg.from.id` as a string).
+    pub origin_endpoint:       Option<crate::io::Endpoint>,
+    /// Kernel `UserId` of the user who triggered this turn, when the origin
+    /// is a real platform message. `None` for synthetic/background origins
+    /// (scheduled jobs, Mita/system bootstraps, `handle_spawn_agent`
+    /// re-entry), where no identifiable human triggered the turn.
     ///
-    /// Tools that raise interactive prompts (`ask-user`) use this to bind
-    /// pending requests to the expected responder, so that other members of a
-    /// shared group chat cannot resolve a question meant for one specific
-    /// user. `None` for origins that have no platform-level identity (CLI,
-    /// background jobs, synthetic re-entry).
-    pub origin_platform_user_id: Option<String>,
+    /// Tools that raise interactive prompts (`ask-user`, guard approval)
+    /// propagate this into `UserQuestion::expected_user_id` /
+    /// `ApprovalRequest::origin_user_id` so channel adapters can gate
+    /// responses to the originating user. `None` intentionally skips the
+    /// identity gate so fallback chat-level auth still lets the prompt be
+    /// answered (scheduled tasks etc. have no platform identity to bind).
+    pub origin_user_id:        Option<crate::identity::UserId>,
     /// Event queue for pushing outbound events.
-    pub event_queue:             crate::queue::ShardedQueueRef,
+    pub event_queue:           crate::queue::ShardedQueueRef,
     /// The inbound message ID that triggered the current turn.
-    pub rara_message_id:         crate::io::MessageId,
+    pub rara_message_id:       crate::io::MessageId,
     /// Context window size in tokens for the current model.
-    pub context_window_tokens:   usize,
+    pub context_window_tokens: usize,
     /// Live tool registry for the current session (includes dynamic MCP tools).
     /// Used by `discover-tools` to query the deferred catalog at runtime.
-    pub tool_registry:           Option<ToolRegistryRef>,
+    pub tool_registry:         Option<ToolRegistryRef>,
     /// Stream handle for emitting real-time output during execution.
     /// `None` when streaming is not available (e.g. background tasks).
-    pub stream_handle:           Option<crate::io::StreamHandle>,
+    pub stream_handle:         Option<crate::io::StreamHandle>,
     /// The tool call ID assigned by the LLM for this invocation.
     /// Used to correlate streaming output with the tool call.
-    pub tool_call_id:            Option<String>,
+    pub tool_call_id:          Option<String>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -373,7 +376,7 @@ impl std::fmt::Debug for ToolContext {
             .field("user_id", &self.user_id)
             .field("session_key", &self.session_key)
             .field("origin_endpoint", &self.origin_endpoint)
-            .field("origin_platform_user_id", &self.origin_platform_user_id)
+            .field("origin_user_id", &self.origin_user_id)
             .field("event_queue", &"...")
             .field("rara_message_id", &self.rara_message_id)
             .field("context_window_tokens", &self.context_window_tokens)
