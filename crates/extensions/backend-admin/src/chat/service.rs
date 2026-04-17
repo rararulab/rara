@@ -123,6 +123,7 @@ impl SessionService {
         &self,
         title: Option<String>,
         model: Option<String>,
+        model_provider: Option<String>,
         thinking_level: Option<ThinkingLevel>,
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
@@ -131,6 +132,7 @@ impl SessionService {
             key: SessionKey::new(),
             title,
             model,
+            model_provider,
             thinking_level,
             system_prompt,
             message_count: 0,
@@ -180,6 +182,7 @@ impl SessionService {
         key: &SessionKey,
         title: Option<String>,
         model: Option<String>,
+        model_provider: Option<String>,
         thinking_level: Option<ThinkingLevel>,
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
@@ -189,6 +192,9 @@ impl SessionService {
         }
         if let Some(m) = model {
             session.model = Some(m);
+        }
+        if let Some(mp) = model_provider {
+            session.model_provider = Some(mp);
         }
         if let Some(tl) = thinking_level {
             session.thinking_level = Some(tl);
@@ -231,6 +237,7 @@ impl SessionService {
                     key:            *key,
                     title:          title.map(ToOwned::to_owned),
                     model:          model.map(ToOwned::to_owned),
+                    model_provider: None,
                     thinking_level: None,
                     system_prompt:  system_prompt.map(ToOwned::to_owned),
                     message_count:  0,

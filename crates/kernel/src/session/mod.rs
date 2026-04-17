@@ -95,9 +95,11 @@ base::define_id!(
 
 /// Reasoning/thinking budget override for a chat session.
 ///
-/// Serialises as the lowercase variant name (`"off"`, `"low"`, `"medium"`,
-/// `"high"`). When a session's thinking level is `None`, the agent
-/// manifest's default thinking configuration applies.
+/// Mirrors the six-bucket scale exposed by pi-mono's chat panel so the UI
+/// selector round-trips without any lossy mapping. Serialises as the
+/// lowercase variant name (`"off"`, `"minimal"`, `"low"`, `"medium"`,
+/// `"high"`, `"xhigh"`). When a session's thinking level is `None`, the
+/// agent manifest's default thinking configuration applies.
 #[derive(
     Debug,
     Clone,
@@ -115,12 +117,16 @@ base::define_id!(
 pub enum ThinkingLevel {
     /// Reasoning disabled — no scratch budget.
     Off,
-    /// Low reasoning budget (small scratch allocation).
+    /// Minimal scratch budget for lightweight reasoning.
+    Minimal,
+    /// Low reasoning budget.
     Low,
     /// Medium reasoning budget.
     Medium,
-    /// High reasoning budget (largest scratch allocation).
+    /// High reasoning budget.
     High,
+    /// Maximum reasoning budget (pi-mono `xhigh`).
+    Xhigh,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +147,12 @@ pub struct SessionEntry {
     /// LLM model name used for this session (e.g. `"gpt-4o"`,
     /// `"claude-sonnet-4-5-20250929"`).
     pub model:          Option<String>,
+    /// Provider identifier paired with [`model`](Self::model) (e.g.
+    /// `"anthropic"`, `"openai"`). Lets the UI reconstruct a full
+    /// `Model<any>` via `getModel(provider, id)` when a session is
+    /// re-opened; the kernel also uses it as a routing hint.
+    #[serde(default)]
+    pub model_provider: Option<String>,
     /// Optional reasoning/thinking level override. When `None`, the agent
     /// manifest's default thinking configuration is used.
     #[serde(default)]

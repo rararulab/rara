@@ -248,6 +248,7 @@ async fn ensure_dock_kernel_session(
         key:            session_key,
         title:          Some(format!("Dock: {dock_session_id}")),
         model:          None,
+        model_provider: None,
         thinking_level: None,
         system_prompt:  None,
         message_count:  0,

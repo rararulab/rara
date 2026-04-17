@@ -90,8 +90,11 @@ pub struct CreateSessionRequest {
     pub title:          Option<String>,
     /// Optional LLM model override (e.g. `"gpt-4o"`).
     pub model:          Option<String>,
-    /// Optional thinking-level override (`"off"`, `"low"`, `"medium"`,
-    /// `"high"`).
+    /// Optional provider identifier paired with `model` (e.g. `"anthropic"`,
+    /// `"openai"`). Enables the UI to round-trip a full model object.
+    pub model_provider: Option<String>,
+    /// Optional thinking-level override — one of `"off"`, `"minimal"`,
+    /// `"low"`, `"medium"`, `"high"`, `"xhigh"`.
     pub thinking_level: Option<String>,
     /// Optional system prompt override.
     pub system_prompt:  Option<String>,
@@ -113,7 +116,10 @@ pub struct UpdateSessionRequest {
     pub title:          Option<String>,
     /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
     pub model:          Option<String>,
-    /// New thinking-level override (`"off"`, `"low"`, `"medium"`, `"high"`).
+    /// New provider identifier paired with `model`.
+    pub model_provider: Option<String>,
+    /// New thinking-level override — one of `"off"`, `"minimal"`, `"low"`,
+    /// `"medium"`, `"high"`, `"xhigh"`.
     pub thinking_level: Option<String>,
     /// New system prompt override.
     pub system_prompt:  Option<String>,
@@ -239,7 +245,13 @@ async fn create_session(
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
     let thinking_level = parse_thinking_level(req.thinking_level)?;
     let session = service
-        .create_session(req.title, req.model, thinking_level, req.system_prompt)
+        .create_session(
+            req.title,
+            req.model,
+            req.model_provider,
+            thinking_level,
+            req.system_prompt,
+        )
         .await?;
     Ok((StatusCode::CREATED, Json(session)))
 }
@@ -309,6 +321,7 @@ async fn update_session(
             &parse_session_key(&key)?,
             req.title,
             req.model,
+            req.model_provider,
             thinking_level,
             req.system_prompt,
         )
