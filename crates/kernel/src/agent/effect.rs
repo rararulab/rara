@@ -23,7 +23,24 @@
 //! state machine free of `.await` so it can be unit-tested synchronously
 //! against any combination of events without spinning up real subsystems.
 
-use crate::tool::ToolName;
+use crate::{cascade::CascadeTrace, tool::ToolName};
+
+/// Lightweight, serialisable inference of the conversation's emotional tone,
+/// carried on [`Effect::EmitCascadeTrace`] so the runner can update the
+/// soul-state persistence layer without pulling `rara_soul` into the pure
+/// state machine.
+///
+/// Mirrors the legacy `crate::mood::MoodInference` struct exactly — the
+/// `label` string uses the `MoodLabel` snake_case serde representation
+/// (`"calm" | "cheerful" | "focused" | "playful" | "tired"`) so the runner
+/// can `serde_json::from_value` it back into the real enum at the boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoodInference {
+    /// Snake-case mood label, matching `rara_soul::MoodLabel` serde form.
+    pub label:      &'static str,
+    /// Confidence score in `[0.3, 0.9]`, scaling with keyword-hit density.
+    pub confidence: f32,
+}
 
 /// Identifier for a single tool invocation issued by the LLM.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -229,6 +246,29 @@ pub enum Effect {
         /// in the wave that just completed. Preserves the order from the
         /// original [`Effect::RunTools::calls`] slice.
         trigger_call_ids: Vec<ToolCallId>,
+    },
+    /// Emit the structured cascade trace assembled during the turn and the
+    /// inferred mood just before the terminal [`Effect::Finish`] /
+    /// [`Effect::Fail`].
+    ///
+    /// Emitted at end-of-turn only — cascade assembly is real-time (the
+    /// machine accumulates entries as events arrive) but publication is
+    /// one-shot so the runner can write a single `cascade.trace` event to
+    /// the tape and update soul mood in a single boundary.
+    ///
+    /// Ordering contract: when a turn terminates, this effect is the first
+    /// in the terminal-effect tail, followed by either [`Effect::Finish`]
+    /// or [`Effect::Fail`]. The runner is responsible for persisting both
+    /// the trace (via `Subsystems::emit_cascade_trace`) and the mood label
+    /// (same hook) before returning to the caller.
+    EmitCascadeTrace {
+        /// Final assembled cascade trace for this turn.
+        trace: CascadeTrace,
+        /// Inferred mood over the turn's assistant text, or `None` when
+        /// there is no clear signal (apology / empty / no assistant
+        /// output). `None` means "keep the existing mood" in the legacy
+        /// semantics.
+        mood:  Option<MoodInference>,
     },
     /// Terminate the loop with a failure.
     Fail {

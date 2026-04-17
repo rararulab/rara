@@ -64,7 +64,9 @@
 //!   via [`crate::agent::machine::LlmFailureKind`] and
 //!   [`Effect::InjectUserMessage`] / [`Effect::ForceFoldNextIteration`]; legacy
 //!   removal pending
-//! - Cascade trace assembly + mood inference
+//! - Cascade trace assembly + mood inference — ✓ machine-side implemented via
+//!   [`Effect::EmitCascadeTrace`] and [`Subsystems::emit_cascade_trace`];
+//!   legacy removal pending
 //!
 //! Each item maps to either an additional [`Effect`] variant or extra fields
 //! on [`AgentMachine`].
@@ -73,7 +75,7 @@ use async_trait::async_trait;
 
 use crate::{
     agent::{
-        effect::{Effect, PressureLevel, ToolCall, ToolResult},
+        effect::{Effect, MoodInference, PressureLevel, ToolCall, ToolResult},
         machine::{AgentMachine, Event, Phase},
     },
     tool::ToolName,
@@ -235,6 +237,35 @@ pub trait Subsystems: Send + Sync {
     /// No default impl: silent no-op would leave the runner's message
     /// buffer permanently stale, so test stubs must opt in explicitly.
     async fn rebuild_tape(&mut self, iteration: usize);
+
+    /// Publish the finalised cascade trace and the inferred mood for the
+    /// just-completed turn.
+    ///
+    /// Emitted exactly once per turn, as the first effect preceding the
+    /// terminal [`Effect::Finish`] / [`Effect::Fail`] pair. Production
+    /// implementations:
+    ///
+    /// - Persist the trace as a `cascade.trace` event entry on the tape so the
+    ///   web UI can reconstruct the trace without re-scanning message history
+    ///   (mirrors the legacy `tape.append_event("cascade.trace", …)` call).
+    /// - Forward `mood` — when `Some` — to `rara_soul::loader::save_state` so
+    ///   the next turn renders the soul template with the updated mood
+    ///   + confidence. `None` means "keep current mood" (apology / no
+    ///   signal) and should be treated as a no-op.
+    ///
+    /// Failures must be logged but never abort the turn — mood persistence
+    /// and trace storage are both best-effort observability, not correctness
+    /// boundaries.
+    ///
+    /// No default impl: a silent no-op would suppress the trace in
+    /// production without any compile-time warning (anti-pattern: "Do NOT
+    /// use noop trait implementations"). Test stubs keep a `Vec` log; the
+    /// production impl wires the kernel handle's tape + soul loader.
+    async fn emit_cascade_trace(
+        &mut self,
+        trace: crate::cascade::CascadeTrace,
+        mood: Option<MoodInference>,
+    );
 }
 
 /// Drive the [`AgentMachine`] to completion against `subsys`.
@@ -346,6 +377,9 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     subsys.inject_user_message(text.clone()).await;
                     subsys.emit_stream(text).await;
                 }
+                Effect::EmitCascadeTrace { trace, mood } => {
+                    subsys.emit_cascade_trace(trace, mood).await;
+                }
                 Effect::Finish {
                     text,
                     iterations,
@@ -449,6 +483,10 @@ mod tests {
         /// Iterations observed via `rebuild_tape`, in order. Every
         /// iteration must rebuild exactly once before its CallLlm.
         rebuild_log:     Vec<usize>,
+        /// Captured cascade traces + mood (one entry per
+        /// `emit_cascade_trace` invocation). Tests assert on this directly
+        /// rather than reconstructing the trace after the fact.
+        cascade_log:     Vec<(crate::cascade::CascadeTrace, Option<MoodInference>)>,
     }
 
     #[async_trait]
@@ -499,6 +537,14 @@ mod tests {
         async fn force_fold_next_iteration(&mut self) { self.force_fold_hits += 1; }
 
         async fn rebuild_tape(&mut self, iteration: usize) { self.rebuild_log.push(iteration); }
+
+        async fn emit_cascade_trace(
+            &mut self,
+            trace: crate::cascade::CascadeTrace,
+            mood: Option<MoodInference>,
+        ) {
+            self.cascade_log.push((trace, mood));
+        }
     }
 
     /// Factory producing a fresh stub with empty scripts for every field.
@@ -518,6 +564,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         }
     }
 
@@ -542,6 +589,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -591,6 +639,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -656,6 +705,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::with_max_continuations(8, 3);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -738,6 +788,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -782,6 +833,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -832,6 +884,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -883,6 +936,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -915,6 +969,7 @@ mod tests {
             refresh_log:     vec![],
             force_fold_hits: 0,
             rebuild_log:     vec![],
+            cascade_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -1441,5 +1496,55 @@ mod tests {
         let outcome = drive(&mut machine, &mut s).await;
         assert!(outcome.success);
         assert_eq!(s.force_fold_hits, 0);
+    }
+
+    /// The machine must surface exactly one cascade trace to the subsystem
+    /// per turn, populated with the user input + all rounds, and the mood
+    /// inference driven off the assistant-text tail should be non-None for
+    /// any turn that emitted textual assistant content.
+    #[tokio::test]
+    async fn drive_emits_cascade_trace_on_terminal_stop() {
+        let mut s = subsys();
+        s.llm_script = vec![Event::LlmCompleted {
+            text:           "太好了 awesome!".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        }];
+        let mut machine = AgentMachine::new(8);
+        machine.set_cascade_message_id("msg-42".to_owned());
+        machine.observe_user_input("please do the thing");
+
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(
+            s.cascade_log.len(),
+            1,
+            "exactly one cascade emission per turn"
+        );
+        let (trace, mood) = &s.cascade_log[0];
+        assert_eq!(trace.message_id, "msg-42");
+        assert!(!trace.ticks.is_empty());
+        let mood = mood.as_ref().expect("mood must be inferred");
+        assert_eq!(mood.label, "cheerful");
+    }
+
+    /// A fatal LLM failure must also emit exactly one cascade trace,
+    /// distinguishable because the turn recorded no assistant text (hence
+    /// mood is `None`).
+    #[tokio::test]
+    async fn drive_emits_cascade_trace_on_failure() {
+        let mut s = subsys();
+        s.llm_script = vec![Event::LlmFailed {
+            kind: crate::agent::machine::LlmFailureKind::Permanent {
+                message: "auth".into(),
+            },
+        }];
+        let mut machine = AgentMachine::new(8);
+        machine.observe_user_input("hi");
+
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(!outcome.success);
+        assert_eq!(s.cascade_log.len(), 1);
+        assert!(s.cascade_log[0].1.is_none());
     }
 }

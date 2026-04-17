@@ -30,7 +30,7 @@ use crate::memory::{TapEntry, TapEntryKind};
 // ---------------------------------------------------------------------------
 
 /// Top-level cascade trace for a single agent turn.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CascadeTrace {
     /// Opaque identifier for this trace (e.g. `"{session_key}-{seq}"`).
     pub message_id: String,
@@ -59,7 +59,7 @@ impl CascadeTrace {
 ///
 /// A new tick starts when a new assistant `Message` entry appears after
 /// tool results (i.e. the LLM was called again).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CascadeTick {
     /// Zero-based tick index within the trace.
     pub index:   usize,
@@ -68,7 +68,7 @@ pub struct CascadeTick {
 }
 
 /// A single entry in the cascade trace.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CascadeEntry {
     /// Human-readable entry ID: `"{kind_prefix} . {tick}-{short_id}-{seq}"`.
     pub id:        String,
@@ -110,7 +110,7 @@ impl CascadeEntryKind {
 }
 
 /// Aggregate statistics for the cascade trace.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CascadeSummary {
     /// Total number of ticks (LLM call rounds).
     pub tick_count:      usize,
@@ -133,6 +133,7 @@ pub struct CascadeSummary {
 /// Unlike a simple field-by-field builder, this struct tracks internal state
 /// (`seen_assistant`, `last_was_tool_result`) to detect tick boundaries
 /// dynamically as entries arrive.
+#[derive(Debug)]
 pub struct CascadeAssembler {
     message_id:           String,
     ticks:                Vec<CascadeTick>,

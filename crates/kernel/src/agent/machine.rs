@@ -46,8 +46,10 @@ use crate::{
             ToolResult,
         },
         loop_breaker::{LoopBreakerConfig, LoopIntervention, ToolCallLoopBreaker},
+        mood,
         repetition::RepetitionGuard,
     },
+    cascade::CascadeAssembler,
     tool::ToolName,
 };
 
@@ -194,6 +196,22 @@ pub struct AgentMachine {
     /// flag — they still emit [`Effect::ForceFoldNextIteration`] and rely
     /// on the subsystem to no-op when its own fold path has been disabled.
     fold_disabled:        bool,
+    /// Real-time cascade trace assembler. Entries are appended via
+    /// [`AgentMachine::observe_user_input`] (turn start) and implicitly on
+    /// every `LlmCompleted` / `ToolsCompleted` transition. The finished
+    /// trace is consumed once, via [`AgentMachine::finalize_cascade_trace`],
+    /// when the machine first produces a terminal [`Effect::Finish`] /
+    /// [`Effect::Fail`].
+    cascade_asm:          CascadeAssembler,
+    /// Latched once [`Effect::EmitCascadeTrace`] has been prepended to a
+    /// terminal effect vector so a double-terminal step (e.g. the fallback
+    /// `invalid transition` arm firing after `Done`) does not emit a
+    /// duplicate trace.
+    cascade_emitted:      bool,
+    /// Every non-empty assistant text seen this turn, appended in order
+    /// (intermediate + final). Fed into [`mood::infer_mood`] at
+    /// end-of-turn; the inference itself only inspects the tail window.
+    assistant_texts:      Vec<String>,
 }
 
 impl AgentMachine {
@@ -221,6 +239,9 @@ impl AgentMachine {
             auto_fold_config: None,
             force_fold_pending: false,
             fold_disabled: false,
+            cascade_asm: CascadeAssembler::new(String::new()),
+            cascade_emitted: false,
+            assistant_texts: Vec::new(),
         }
     }
 
@@ -637,9 +658,162 @@ impl AgentMachine {
     /// Drive the machine with one event.  Returns the side effects the runner
     /// must perform before feeding the next event back in.
     ///
+    /// Push an assistant text sample into the cascade assembler (and the
+    /// mood inference corpus). No-op on empty strings to match the legacy
+    /// `build_cascade` skip-empty-thought rule and to avoid polluting the
+    /// mood window with zero-content responses.
+    fn push_cascade_assistant(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.assistant_texts.push(text.to_owned());
+        self.cascade_asm
+            .push_assistant(text, None, jiff::Timestamp::now(), None);
+    }
+
+    /// Record the tool-call wave the LLM just emitted in the cascade trace.
+    fn push_cascade_tool_calls(&mut self, calls: &[ToolCall]) {
+        if calls.is_empty() {
+            return;
+        }
+        let pairs: Vec<(&str, &str)> = calls
+            .iter()
+            .map(|c| (c.name.as_str(), c.arguments.as_str()))
+            .collect();
+        self.cascade_asm
+            .push_tool_calls(&pairs, jiff::Timestamp::now(), None);
+    }
+
+    /// Record a tool-result wave in the cascade trace. Uses the per-call
+    /// `error` string when the tool failed, and a synthesised
+    /// "ok ({duration}ms)" marker on success — the machine does not see the
+    /// real tool output, only [`ToolResult`] metadata.
+    fn push_cascade_tool_results(&mut self, results: &[ToolResult]) {
+        if results.is_empty() {
+            return;
+        }
+        let rendered: Vec<String> = results
+            .iter()
+            .map(|r| match (&r.error, r.success) {
+                (Some(msg), _) => msg.clone(),
+                (None, true) => format!("ok ({}ms)", r.duration_ms),
+                (None, false) => "error".to_owned(),
+            })
+            .collect();
+        let refs: Vec<&str> = rendered.iter().map(String::as_str).collect();
+        self.cascade_asm
+            .push_tool_results(&refs, jiff::Timestamp::now(), None);
+    }
+
+    /// Consume the assembled trace + compute mood inference, latching
+    /// `cascade_emitted` so a duplicate terminal step does not re-emit the
+    /// effect. Returns `None` on the second and subsequent calls — the
+    /// caller should only invoke this when prepending
+    /// [`Effect::EmitCascadeTrace`] to a terminal effect vector.
+    fn finalize_cascade_trace(&mut self) -> Option<Effect> {
+        if self.cascade_emitted {
+            return None;
+        }
+        self.cascade_emitted = true;
+        // Replace with a throwaway empty assembler; the original holds the
+        // accumulated entries and can be consumed by `finish`.
+        let asm = std::mem::replace(&mut self.cascade_asm, CascadeAssembler::new(String::new()));
+        let trace = asm.finish();
+        let mood = mood::infer_mood(&self.assistant_texts);
+        Some(Effect::EmitCascadeTrace { trace, mood })
+    }
+
+    /// If `effects` contains a terminal [`Effect::Finish`] or
+    /// [`Effect::Fail`], prepend a single [`Effect::EmitCascadeTrace`]
+    /// immediately before the first terminal effect. Idempotent: further
+    /// calls are no-ops once `cascade_emitted` latches.
+    ///
+    /// Keeping the injection central here — rather than modifying every
+    /// `Effect::Finish` / `Effect::Fail` construction site — keeps the
+    /// terminal paths syntactically unchanged and guarantees every exit
+    /// carries the same trace+mood payload in the same relative position.
+    fn inject_cascade_trace(&mut self, mut effects: Vec<Effect>) -> Vec<Effect> {
+        if self.cascade_emitted {
+            return effects;
+        }
+        let terminal_idx = effects
+            .iter()
+            .position(|e| matches!(e, Effect::Finish { .. } | Effect::Fail { .. }));
+        if let Some(idx) = terminal_idx
+            && let Some(cascade_effect) = self.finalize_cascade_trace()
+        {
+            effects.insert(idx, cascade_effect);
+        }
+        effects
+    }
+
+    /// Seed the cascade trace with the user input that started this turn.
+    ///
+    /// Must be called once, before driving the machine with
+    /// [`Event::TurnStarted`], so the assembled trace's first tick contains a
+    /// [`CascadeEntryKind::UserInput`] entry. The runner typically calls this
+    /// together with [`AgentMachine::set_cascade_message_id`] immediately
+    /// after constructing the machine.
+    ///
+    /// [`CascadeEntryKind::UserInput`]: crate::cascade::CascadeEntryKind::UserInput
+    pub fn observe_user_input(&mut self, text: &str) {
+        self.cascade_asm
+            .push_user(text, jiff::Timestamp::now(), None);
+    }
+
+    /// Set the cascade trace's message id (typically a Rara-side message
+    /// handle). Call this exactly once, before [`Event::TurnStarted`].
+    ///
+    /// Left as a setter rather than a constructor argument because adding a
+    /// mandatory field to every existing constructor would ripple through
+    /// every call site and every test; the assembler tolerates an empty id
+    /// and the runner only reads the id when it serialises the trace for
+    /// downstream persistence.
+    pub fn set_cascade_message_id(&mut self, id: String) {
+        let previous = std::mem::replace(&mut self.cascade_asm, CascadeAssembler::new(id));
+        let drained = previous.finish();
+        // Late calls (after entries were pushed) silently drop the prior
+        // partial trace — a loud warning surfaces the misuse without
+        // corrupting the new turn's trace.
+        if !drained.ticks.is_empty() {
+            tracing::warn!(
+                "set_cascade_message_id called after cascade entries were already pushed; \
+                 dropping prior entries"
+            );
+        }
+    }
+
     /// Calling `step` after the machine has reached [`Phase::Done`] or
     /// [`Phase::Failed`] is a logic error and produces no effects.
     pub fn step(&mut self, event: Event) -> Vec<Effect> {
+        // Real-time cascade assembly: record the entries implied by the
+        // incoming event before dispatching the transition so the trace
+        // mirrors what the legacy `run_agent_loop` publishes. The push
+        // helpers are no-ops on empty payloads; we inspect the event by
+        // reference first so the borrow checker accepts the later `match`
+        // that consumes it.
+        match &event {
+            Event::LlmCompleted {
+                text, tool_calls, ..
+            } => {
+                self.push_cascade_assistant(text);
+                self.push_cascade_tool_calls(tool_calls);
+            }
+            Event::ToolsCompleted { results } => {
+                self.push_cascade_tool_results(results);
+            }
+            _ => {}
+        }
+
+        let effects = self.step_inner(event);
+        self.inject_cascade_trace(effects)
+    }
+
+    /// Pure transition function: consumes the event and returns the raw
+    /// effect list without cascade-trace injection. Split out so the outer
+    /// [`AgentMachine::step`] can centralise `EmitCascadeTrace` emission
+    /// without the transition arms needing to know about it.
+    fn step_inner(&mut self, event: Event) -> Vec<Effect> {
         match (self.phase, event) {
             // ── Turn boot ────────────────────────────────────────────────
             (Phase::Idle, Event::TurnStarted) => {
@@ -1020,6 +1194,7 @@ mod tests {
                 Effect::AppendTape {
                     kind: TapeAppendKind::AssistantFinal,
                 },
+                Effect::EmitCascadeTrace { .. },
                 Effect::Finish {
                     reason: FinishReason::Stopped,
                     ..
@@ -1115,7 +1290,10 @@ mod tests {
             },
         });
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     #[test]
@@ -1136,7 +1314,10 @@ mod tests {
             },
         });
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     #[test]
@@ -1229,7 +1410,10 @@ mod tests {
             kind: LlmFailureKind::EmptyStream,
         });
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     #[test]
@@ -1264,7 +1448,10 @@ mod tests {
             reason: "denied path".into(),
         });
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     #[test]
@@ -1273,7 +1460,10 @@ mod tests {
         let _ = m.step(Event::TurnStarted);
         let effects = m.step(Event::Interrupted);
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     #[test]
@@ -1287,7 +1477,10 @@ mod tests {
         });
         let effects = m.step(Event::Interrupted);
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     #[test]
@@ -1448,7 +1641,10 @@ mod tests {
         // Feed ToolsCompleted before any LLM call — pure logic bug.
         let effects = m.step(Event::ToolsCompleted { results: vec![] });
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     // ─── Loop breaker integration ────────────────────────────────────────
@@ -1656,10 +1852,13 @@ mod tests {
         assert_eq!(m.phase(), Phase::Done);
         assert!(matches!(
             effects.as_slice(),
-            [Effect::Finish {
-                reason: FinishReason::StoppedByLimit,
-                ..
-            }]
+            [
+                Effect::EmitCascadeTrace { .. },
+                Effect::Finish {
+                    reason: FinishReason::StoppedByLimit,
+                    ..
+                },
+            ]
         ));
     }
 
@@ -1684,7 +1883,10 @@ mod tests {
             decision: LimitDecision::Continue,
         });
         assert_eq!(m.phase(), Phase::Failed);
-        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::EmitCascadeTrace { .. }, Effect::Fail { .. }]
+        ));
     }
 
     /// `limit_interval = 0` disables the circuit breaker entirely; the
@@ -2616,5 +2818,163 @@ mod tests {
             .filter(|e| matches!(e, Effect::ForceFoldNextIteration))
             .count();
         assert_eq!(fold_count, 1, "exactly one ForceFold per boundary");
+    }
+
+    // ---- Cascade trace + mood tests -----------------------------------
+
+    /// Full multi-round turn: user input + assistant thought + tool call +
+    /// tool result + final assistant text should all surface in the single
+    /// `EmitCascadeTrace` emitted just before `Finish`.
+    #[test]
+    fn cascade_trace_accumulates_full_turn() {
+        use crate::cascade::CascadeEntryKind;
+
+        let mut m = AgentMachine::new(8);
+        m.set_cascade_message_id("msg-xyz".to_owned());
+        m.observe_user_input("太好了 please search awesome!");
+
+        let _ = m.step(Event::TurnStarted);
+
+        // Round 1: thought + tool call.
+        let _ = m.step(Event::LlmCompleted {
+            text:           "thinking hard".into(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+
+        // Tool results observed.
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{\"q\":\"x\"}", true)],
+        });
+
+        // Final round: terminal assistant text.
+        let effects = m.step(Event::LlmCompleted {
+            text:           "太好了 awesome all done!".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        });
+
+        // The terminal vector must contain exactly one EmitCascadeTrace,
+        // positioned immediately before Finish.
+        let mut emit_idx = None;
+        let mut finish_idx = None;
+        for (i, eff) in effects.iter().enumerate() {
+            match eff {
+                Effect::EmitCascadeTrace { .. } => emit_idx = Some(i),
+                Effect::Finish { .. } => finish_idx = Some(i),
+                _ => {}
+            }
+        }
+        let emit_idx = emit_idx.expect("EmitCascadeTrace missing");
+        let finish_idx = finish_idx.expect("Finish missing");
+        assert_eq!(
+            emit_idx + 1,
+            finish_idx,
+            "EmitCascadeTrace must precede Finish"
+        );
+
+        let Effect::EmitCascadeTrace { trace, mood } = &effects[emit_idx] else {
+            unreachable!()
+        };
+        assert_eq!(trace.message_id, "msg-xyz");
+        assert_eq!(trace.ticks.len(), 2, "expect two ticks: {trace:?}");
+
+        // Round 0 must contain user input + thought + action + observation.
+        let round0 = &trace.ticks[0];
+        assert!(round0.entries.iter().any(|e| {
+            e.kind == CascadeEntryKind::UserInput && e.content.contains("search awesome")
+        }));
+        assert!(
+            round0
+                .entries
+                .iter()
+                .any(|e| e.kind == CascadeEntryKind::Thought && e.content == "thinking hard")
+        );
+        assert!(
+            round0
+                .entries
+                .iter()
+                .any(|e| e.kind == CascadeEntryKind::Action && e.content.contains("search"))
+        );
+        assert!(
+            round0
+                .entries
+                .iter()
+                .any(|e| e.kind == CascadeEntryKind::Observation)
+        );
+
+        // Round 1 carries the final assistant text as a Thought entry.
+        let round1 = &trace.ticks[1];
+        assert!(
+            round1
+                .entries
+                .iter()
+                .any(|e| e.kind == CascadeEntryKind::Thought && e.content.contains("awesome"))
+        );
+
+        // Mood inference over assistant text tail should pick "cheerful".
+        let mood = mood.as_ref().expect("mood must be inferred");
+        assert_eq!(mood.label, "cheerful");
+        assert!(mood.confidence > 0.3);
+    }
+
+    /// The machine must latch `cascade_emitted` so a second terminal step
+    /// (e.g. late event arriving at `Phase::Done`) does not re-emit.
+    #[test]
+    fn cascade_trace_emitted_only_once() {
+        let mut m = AgentMachine::new(8);
+        m.observe_user_input("hi");
+        let _ = m.step(Event::TurnStarted);
+
+        let effects = m.step(Event::LlmCompleted {
+            text:           "bye".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        });
+        let first_count = effects
+            .iter()
+            .filter(|e| matches!(e, Effect::EmitCascadeTrace { .. }))
+            .count();
+        assert_eq!(first_count, 1);
+
+        // A follow-up Interrupted event on an already-Done machine must
+        // not produce another EmitCascadeTrace.
+        let effects = m.step(Event::Interrupted);
+        let second_count = effects
+            .iter()
+            .filter(|e| matches!(e, Effect::EmitCascadeTrace { .. }))
+            .count();
+        assert_eq!(second_count, 0, "EmitCascadeTrace must latch once per turn");
+    }
+
+    /// A turn that fails without any assistant text still emits a cascade
+    /// trace (possibly empty body) but the mood is `None` because the
+    /// assistant-text tail is empty.
+    #[test]
+    fn cascade_trace_on_failure_carries_no_mood() {
+        let mut m = AgentMachine::new(8);
+        m.observe_user_input("hi");
+        let _ = m.step(Event::TurnStarted);
+
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::Permanent {
+                message: "auth".into(),
+            },
+        });
+        let emit = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::EmitCascadeTrace { trace, mood } => Some((trace, mood)),
+                _ => None,
+            })
+            .expect("EmitCascadeTrace missing on failure");
+        assert!(
+            emit.1.is_none(),
+            "no assistant text → no mood: {:?}",
+            emit.1
+        );
+        // User-input entry must still be present so downstream tracing is
+        // not lying about what triggered the turn.
+        assert!(!emit.0.ticks.is_empty());
     }
 }
