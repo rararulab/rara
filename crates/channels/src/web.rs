@@ -1228,6 +1228,39 @@ mod tests {
     }
 
     #[test]
+    fn parses_document_attachment_frame() {
+        let raw = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "summarize this" },
+                {
+                    "type": "file_base64",
+                    "media_type": "application/pdf",
+                    "data": "JVBERi0x",
+                    "filename": "spec.pdf"
+                }
+            ]
+        })
+        .to_string();
+
+        let payload = parse_inbound_text_frame(&raw);
+
+        assert!(matches!(
+            payload.content,
+            MessageContent::Multimodal(blocks)
+                if matches!(
+                    blocks.as_slice(),
+                    [
+                        ContentBlock::Text { text },
+                        ContentBlock::FileBase64 { media_type, data, filename }
+                    ] if text == "summarize this"
+                        && media_type == "application/pdf"
+                        && data == "JVBERi0x"
+                        && filename.as_deref() == Some("spec.pdf")
+                )
+        ));
+    }
+
+    #[test]
     fn turn_rationale_is_forwarded_to_web_clients() {
         let event = StreamEvent::TurnRationale {
             text: "checking logs".to_owned(),

@@ -28,6 +28,16 @@ import {
 } from "@mariozechner/pi-web-ui";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+// Importing the extract-document tool from pi-web-ui triggers the
+// module-level `registerToolRenderer("extract_document", ...)` side
+// effect so pi-mono can render server-triggered document-extraction tool
+// calls in chat.
+import { extractDocumentTool } from "@mariozechner/pi-web-ui";
+
+// Reference the tool so Vite's tree-shaker keeps the module (and its
+// `registerToolRenderer` side effect) in the bundle. The actual tool
+// object is executed server-side; the renderer is what matters here.
+void extractDocumentTool;
 import type {
   UserMessage,
   AssistantMessage,
@@ -489,7 +499,23 @@ export default function PiChat() {
       // 5. Create the Agent with rara's WebSocket-backed stream function.
       //    The streamFn reads agent.sessionId at call time to get the active session key.
       const agent: Agent = new Agent({
-        streamFn: createRaraStreamFn(() => agent.sessionId),
+        streamFn: createRaraStreamFn(
+          () => agent.sessionId,
+          () => {
+            // Surface raw attachments from the latest user turn so the
+            // rara-stream adapter can forward document bytes as
+            // `file_base64` blocks in addition to pi-mono's client-side
+            // extracted text.
+            for (let i = agent.state.messages.length - 1; i >= 0; i--) {
+              const m = agent.state.messages[i];
+              if (m.role === "user-with-attachments") {
+                return (m as UserMessageWithAttachments).attachments;
+              }
+              if (m.role === "user") return [];
+            }
+            return [];
+          },
+        ),
         convertToLlm: defaultConvertToLlm,
         sessionId: initialSession.key,
       });

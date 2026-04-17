@@ -2040,6 +2040,14 @@ impl<'a> WireMessage<'a> {
                         ContentBlock::AudioBase64 { .. } => WireContentPart::Text {
                             text: "[audio: not transcribed]",
                         },
+                        // Documents are extracted client-side and delivered as
+                        // a sibling Text block; leak the raw-bytes variant
+                        // through as a placeholder so the prompt structure is
+                        // preserved.
+                        ContentBlock::FileBase64 { .. } => WireContentPart::Text {
+                            text: "[document: raw bytes omitted — extracted text provided \
+                                   separately]",
+                        },
                     })
                     .collect();
                 WireContent::Multimodal(parts)

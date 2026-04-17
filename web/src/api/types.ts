@@ -88,7 +88,13 @@ export type ChatContentBlock =
   | { type: "text"; text: string }
   | { type: "image_url"; url: string }
   | { type: "image_base64"; media_type: string; data: string }
-  | { type: "audio_base64"; media_type: string; data: string };
+  | { type: "audio_base64"; media_type: string; data: string }
+  | {
+      type: "file_base64";
+      media_type: string;
+      data: string;
+      filename?: string;
+    };
 
 export interface SendMessageResponse {
   message: ChatMessageData;

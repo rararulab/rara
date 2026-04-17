@@ -29,6 +29,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { Attachment } from "@mariozechner/pi-web-ui";
 
 import { BASE_URL } from "@/api/client";
 
@@ -74,6 +75,15 @@ type WebEvent =
 
 /** Callback that returns the current session key for WebSocket connections. */
 export type SessionKeyFn = () => string | undefined;
+
+/**
+ * Callback that returns raw attachments associated with the pending user
+ * turn. Documents (PDF/DOCX/XLSX/PPTX) are serialized as `file_base64`
+ * blocks so the backend can forward the raw bytes to tools / multimodal
+ * models while still receiving the client-side extracted text via the
+ * pi-mono attachment pipeline.
+ */
+export type PendingAttachmentsFn = () => Attachment[] | undefined;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -131,20 +141,56 @@ export function buildWsUrl(sessionKey: string): string {
 }
 
 /**
- * Extract the latest user message content from a pi-ai Context.
- * Returns a plain string for text-only messages, or a JSON string
- * matching the backend InboundPayload format when images are present.
+ * Wire-format block sent to the backend `InboundPayload.content` field.
+ * Mirrors rara's `ChatContentBlock` (crates/kernel/src/channel/types.rs).
  */
-function extractUserPayload(context: Context): string {
+type RaraBlock =
+  | { type: "text"; text: string }
+  | { type: "image_base64"; media_type: string; data: string }
+  | {
+      type: "file_base64";
+      media_type: string;
+      data: string;
+      filename?: string;
+    };
+
+/**
+ * Extract the latest user message content from a pi-ai Context and
+ * augment it with non-image document attachments as `file_base64` blocks.
+ *
+ * Returns a plain string for text-only messages with no attachments, or a
+ * JSON string matching the backend `InboundPayload` when images or raw
+ * document bytes need to be forwarded.
+ */
+function extractUserPayload(
+  context: Context,
+  attachments: Attachment[],
+): string {
   for (let i = context.messages.length - 1; i >= 0; i--) {
     const msg = context.messages[i];
     if (msg.role === "user") {
-      if (typeof msg.content === "string") return msg.content;
+      const hasImages =
+        typeof msg.content !== "string" &&
+        msg.content.some((c) => c.type === "image");
+      const documentAttachments = attachments.filter(
+        (a) => a.type === "document",
+      );
 
-      // Check if there are any image blocks
-      const hasImages = msg.content.some((c) => c.type === "image");
+      if (typeof msg.content === "string") {
+        if (documentAttachments.length === 0) return msg.content;
+        const blocks: RaraBlock[] = [{ type: "text", text: msg.content }];
+        for (const doc of documentAttachments) {
+          blocks.push({
+            type: "file_base64",
+            media_type: doc.mimeType,
+            data: doc.content,
+            filename: doc.fileName,
+          });
+        }
+        return JSON.stringify({ content: blocks });
+      }
 
-      if (!hasImages) {
+      if (!hasImages && documentAttachments.length === 0) {
         // Text-only — return plain string (backend parses as plain text)
         return msg.content
           .filter((c): c is TextContent => c.type === "text")
@@ -155,9 +201,6 @@ function extractUserPayload(context: Context): string {
       // Multimodal — build JSON payload matching backend InboundPayload.
       // Backend's parse_inbound_text_frame() tries JSON first, so this
       // will be deserialized as InboundPayload { content: MessageContent }.
-      type RaraBlock =
-        | { type: "text"; text: string }
-        | { type: "image_base64"; media_type: string; data: string };
       const blocks: RaraBlock[] = msg.content.flatMap((c): RaraBlock[] => {
         if (c.type === "text") {
           return [{ type: "text", text: c.text }];
@@ -171,6 +214,14 @@ function extractUserPayload(context: Context): string {
         }
         return [];
       });
+      for (const doc of documentAttachments) {
+        blocks.push({
+          type: "file_base64",
+          media_type: doc.mimeType,
+          data: doc.content,
+          filename: doc.fileName,
+        });
+      }
       return JSON.stringify({ content: blocks });
     }
   }
@@ -184,9 +235,16 @@ function extractUserPayload(context: Context): string {
 /**
  * Create a StreamFn that bridges rara's WebSocket chat API to pi-ai events.
  * The `getSessionKey` callback is invoked at stream time to obtain the
- * current session key for the WebSocket connection.
+ * current session key for the WebSocket connection. The optional
+ * `getPendingAttachments` callback surfaces raw attachments (in particular
+ * document base64 bytes) so they can be forwarded to the backend as
+ * `file_base64` blocks alongside the text-extracted content that pi-mono
+ * already inserts into the pi-ai Context.
  */
-export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
+export function createRaraStreamFn(
+  getSessionKey: SessionKeyFn,
+  getPendingAttachments?: PendingAttachmentsFn,
+): StreamFn {
   return (
     model: Model<any>,
     context: Context,
@@ -206,7 +264,10 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
       return stream;
     }
 
-    const userPayload = extractUserPayload(context);
+    const userPayload = extractUserPayload(
+      context,
+      getPendingAttachments?.() ?? [],
+    );
     const wsUrl = buildWsUrl(sessionKey);
 
     // Accumulated content blocks for building partial messages
