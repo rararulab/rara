@@ -831,9 +831,11 @@ fn thinking_level_to_config(
     use crate::session::ThinkingLevel;
     let budget = match level? {
         ThinkingLevel::Off => return None,
+        ThinkingLevel::Minimal => 512,
         ThinkingLevel::Low => 1024,
         ThinkingLevel::Medium => 4096,
         ThinkingLevel::High => 16384,
+        ThinkingLevel::Xhigh => 32768,
     };
     Some(llm::ThinkingConfig {
         enabled:       true,
@@ -948,15 +950,22 @@ pub(crate) async fn run_agent_loop(
         .ok()
         .flatten();
     let model_override = session_entry.as_ref().and_then(|s| s.model.clone());
+    let provider_override = session_entry
+        .as_ref()
+        .and_then(|s| s.model_provider.clone());
     let thinking_level_override = session_entry.as_ref().and_then(|s| s.thinking_level);
     let thinking_config = thinking_level_to_config(thinking_level_override);
 
-    // Resolve driver + model. Prefer the session's pinned model over the
-    // manifest default; fall through to the shared syscall otherwise.
+    // Resolve driver + model. Prefer the session's pinned model/provider
+    // over the manifest default; fall through to the shared syscall when
+    // nothing is pinned.
     let (driver, model) = match model_override.as_deref() {
-        Some(m) => handle
-            .driver_registry()
-            .resolve(&manifest.name, provider_hint, Some(m))?,
+        Some(m) => {
+            let hint = provider_override.as_deref().or(provider_hint);
+            handle
+                .driver_registry()
+                .resolve(&manifest.name, hint, Some(m))?
+        }
         None => handle.session_resolve_driver(session_key)?,
     };
 
