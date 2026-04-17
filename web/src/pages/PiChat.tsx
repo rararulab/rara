@@ -35,7 +35,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 // module-level `registerToolRenderer("extract_document", ...)` side
 // effect so pi-mono can render server-triggered document-extraction tool
 // calls in chat.
-import { extractDocumentTool, ModelSelector } from "@mariozechner/pi-web-ui";
+import { extractDocumentTool } from "@mariozechner/pi-web-ui";
 
 // Reference the tool so Vite's tree-shaker keeps the module (and its
 // `registerToolRenderer` side effect) in the bundle. The actual tool
@@ -52,10 +52,14 @@ import type {
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
-import { api, settingsApi } from "@/api/client";
+import { api } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
+import {
+  RaraModelDialog,
+  type RaraProviderEntry,
+} from "@/components/RaraModelDialog";
 
 /** Strip `<think>...</think>` blocks — used only for UI preview/title text. */
 function stripForPreview(text: string): string {
@@ -104,22 +108,31 @@ function isToolFailure(text: string): boolean {
 }
 
 /**
- * Map rara's LLM provider ids (as they appear in `/api/v1/settings`
- * under `llm.providers.<id>.enabled`) to the provider ids pi-mono's
- * `ModelSelector` filters by (`model.provider` on each pi-ai `Model`).
- *
- * Entries with an empty array (e.g. `ollama`) are known but not yet
- * exposed through pi-mono's built-in catalog — they need a
- * `CustomProvidersStore` injection to appear in the selector. Leaving
- * them empty keeps them out of the allowlist so the UI does not imply
- * support that is not wired up.
+ * Build a pi-ai `Model<any>`-shaped object from rara's own provider
+ * data. pi-chat-panel uses `agent.state.model` only for UI display (the
+ * model-name pill above the composer); actual streaming bypasses pi-ai
+ * entirely and rides on rara's WebSocket, so the synthesized fields
+ * (`api`, `baseUrl`, `cost`, `contextWindow`) need only be structurally
+ * valid — their values never hit the wire.
  */
-const RARA_TO_PIMONO_PROVIDERS: Record<string, readonly string[]> = {
-  openrouter: ["openrouter"],
-  codex: ["openai-codex"],
-  "kimi-code": ["kimi-coding"],
-  ollama: [],
-};
+function syntheticModel(
+  providerId: string,
+  modelId: string,
+  options?: { baseUrl?: string; contextWindow?: number; name?: string },
+): unknown {
+  return {
+    id:            modelId,
+    name:          options?.name ?? `${providerId} / ${modelId}`,
+    api:           "openai-completions",
+    provider:      providerId,
+    baseUrl:       options?.baseUrl ?? "",
+    reasoning:     false,
+    input:         ["text", "image"],
+    cost:          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: options?.contextWindow ?? 128_000,
+    maxTokens:     4096,
+  };
+}
 
 function mimeToFilename(mimeType: string, index: number): string {
   const ext = mimeType.split("/")[1] || "bin";
@@ -441,6 +454,7 @@ export default function PiChat() {
   const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const navigate = useNavigate();
 
   /** Switch the agent to a different session, loading its history. */
@@ -450,23 +464,14 @@ export default function PiChat() {
     agent.clearMessages();
     agent.sessionId = session.key;
 
-    // Restore the session's persisted model + thinking-level so
-    // pi-chat-panel's selectors reflect the last settings used for this
-    // conversation. `getModel(provider, id)` rebuilds a fully typed
-    // `Model<any>` when both fields are available; otherwise the global
-    // selector state remains in place.
+    // Restore the session's persisted model + thinking-level so the
+    // model pill in the composer reflects the last settings used for
+    // this conversation. We build a synthetic pi-ai Model rather than
+    // looking the pair up in pi-ai's catalog — rara's provider ids
+    // (`kimi`, `openrouter`, `scnet`, ...) do not exist there.
     if (session.model && session.model_provider) {
-      try {
-        const { getModel } = await import("@mariozechner/pi-ai");
-        // getModel is loosely typed at runtime; cast is safe because
-        // the ids originally came from the same catalog.
-        agent.state.model = getModel(
-          session.model_provider as never,
-          session.model as never,
-        );
-      } catch (e) {
-        console.warn("Failed to restore model for session:", e);
-      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agent.state.model = syntheticModel(session.model_provider, session.model) as any;
     }
     if (session.thinking_level) {
       agent.state.thinkingLevel = session.thinking_level;
@@ -610,53 +615,18 @@ export default function PiChat() {
       chatPanelRef.current = chatPanel;
       container.appendChild(chatPanel);
 
-      // 7. Derive the provider allowlist for pi-mono's ModelSelector from
-      //    the set of rara LLM providers currently enabled in settings.
-      //    Rara's provider ids (`openrouter`, `codex`, `kimi-code`, ...) do
-      //    not match pi-mono's provider ids 1:1, so the mapping is explicit.
-      //    `/api/v1/chat/models` cannot be used here: its ids are
-      //    OpenRouter-style `"<family>/<model>"`, and the family prefix is
-      //    NOT pi-mono's provider name — pi-mono's `ModelSelector` filters
-      //    by `model.provider`, which for OpenRouter models is the literal
-      //    string `"openrouter"`, not `openai`/`anthropic`/etc. (verified
-      //    against `vendor/pi-mono/packages/ai/src/models.generated.ts`).
-      //
-      //    Best-effort: if the fetch fails or yields no enabled providers,
-      //    leave the allowlist undefined so pi-mono falls back to showing
-      //    everything rather than locking the user out.
-      let allowedProviders: string[] | undefined;
-      try {
-        const rawSettings = await settingsApi.list();
-        const providers = new Set<string>();
-        for (const [key, value] of Object.entries(rawSettings)) {
-          // rara stores booleans as the literal string "true".
-          if (value !== "true") continue;
-          const match = /^llm\.providers\.([^.]+)\.enabled$/.exec(key);
-          if (!match) continue;
-          for (const piProvider of RARA_TO_PIMONO_PROVIDERS[match[1]] ?? []) {
-            providers.add(piProvider);
-          }
-        }
-        if (providers.size > 0) allowedProviders = [...providers];
-      } catch (e) {
-        console.warn("Failed to load settings for selector filter:", e);
-      }
-
-      // 8. Wire agent into the panel — skip API key prompt since rara manages
+      // 7. Wire agent into the panel — skip API key prompt since rara manages
       //    keys server-side, and sync the current model/thinking override to
       //    the backend before every send so the kernel sees the user's
-      //    selection for this turn.
+      //    selection for this turn. Overriding `onModelSelect` replaces
+      //    pi-mono's `ModelSelector` (which only knows its own hard-coded
+      //    `MODELS` catalog) with rara's native dialog sourced from
+      //    `/api/v1/settings` — the only place provider ids (`openrouter`,
+      //    `kimi`, `minimax`, `glm`, `scnet`, ...) align with rara's kernel
+      //    `DriverRegistry`.
       await chatPanel.setAgent(agent, {
         onApiKeyRequired: async () => true,
-        onModelSelect: () => {
-          // Open pi-mono's native ModelSelector but restrict to providers
-          // rara's backend can actually route to.
-          ModelSelector.open(
-            agent.state.model,
-            (model) => { agent.state.model = model; },
-            allowedProviders,
-          );
-        },
+        onModelSelect: () => setModelDialogOpen(true),
         onBeforeSend: async () => {
           const key = agent.sessionId;
           if (!key) return;
@@ -757,6 +727,23 @@ export default function PiChat() {
           onNavigate={navigate}
         />
       )}
+      {/* Rara-native model picker — replaces pi-mono's ModelSelector. */}
+      <RaraModelDialog
+        open={modelDialogOpen}
+        onClose={() => setModelDialogOpen(false)}
+        currentProvider={agentRef.current?.state.model?.provider ?? null}
+        onSelect={(entry: RaraProviderEntry) => {
+          const agent = agentRef.current;
+          if (agent) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            agent.state.model = syntheticModel(entry.id, entry.default_model, {
+              baseUrl: entry.base_url,
+            }) as any;
+            chatPanelRef.current?.agentInterface?.requestUpdate();
+          }
+          setModelDialogOpen(false);
+        }}
+      />
     </div>
   );
 }
