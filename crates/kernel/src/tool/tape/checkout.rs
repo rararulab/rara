@@ -92,6 +92,8 @@ impl ToolExecute for TapeCheckoutTool {
             key: new_key.clone(),
             title: Some(format!("Fork from {anchor_name}")),
             model: None,
+            model_provider: None,
+            thinking_level: None,
             system_prompt: None,
             message_count: 0,
             preview: None,

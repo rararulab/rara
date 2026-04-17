@@ -912,6 +912,25 @@ pub enum StreamEvent {
         model:           String,
         rara_message_id: String,
     },
+    /// Final per-turn token usage (emitted once, after the agent loop
+    /// finishes, before stream close). Distinct from `UsageUpdate` which is
+    /// emitted per-iteration for progress UX — this one carries the settled
+    /// totals clients need for cost display.
+    ///
+    /// - `input_tokens`: the latest iteration's prompt_tokens (= the largest
+    ///   context the turn sent; each iteration re-sends the full context so
+    ///   this is effectively the max).
+    /// - `output_tokens`: cumulative completion_tokens across all iterations in
+    ///   this turn.
+    /// - `total_tokens`: `input_tokens + output_tokens`.
+    /// - `model`: the model id actually used for the turn (respects per-session
+    ///   overrides when set).
+    TurnUsage {
+        input_tokens:  u32,
+        output_tokens: u32,
+        total_tokens:  u32,
+        model:         String,
+    },
     /// A plan has been created with a goal and ordered steps.
     PlanCreated {
         goal:                    String,

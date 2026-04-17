@@ -159,6 +159,8 @@ pub async fn create_test_session(
             key: key.clone(),
             title: None,
             model: None,
+            model_provider: None,
+            thinking_level: None,
             system_prompt: None,
             message_count: 0,
             preview: None,

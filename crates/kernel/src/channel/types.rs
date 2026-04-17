@@ -141,6 +141,23 @@ pub enum ContentBlock {
         media_type: String,
         data:       String,
     },
+    /// Inline base64-encoded non-image document attachment (PDF/DOCX/XLSX/PPTX
+    /// and friends).
+    ///
+    /// Document extraction currently happens client-side (pi-mono's
+    /// `extract-document` tool and `attachment-utils.loadAttachment`), so
+    /// text extracted from the file still reaches the LLM as a
+    /// [`Text`](Self::Text) block for compatibility with text-only models.
+    /// This variant preserves the raw bytes end-to-end for future paths
+    /// that hand the file to a native multimodal model or invoke
+    /// `extract-document` server-side. The current LLM serializer renders
+    /// it as a text placeholder (`[document: …]`).
+    FileBase64 {
+        media_type: String,
+        data:       String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename:   Option<String>,
+    },
 }
 
 /// Message content — either plain text or multimodal blocks.
@@ -171,7 +188,8 @@ impl MessageContent {
                     ContentBlock::Text { text } => Some(text.as_str()),
                     ContentBlock::ImageUrl { .. }
                     | ContentBlock::ImageBase64 { .. }
-                    | ContentBlock::AudioBase64 { .. } => None,
+                    | ContentBlock::AudioBase64 { .. }
+                    | ContentBlock::FileBase64 { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),

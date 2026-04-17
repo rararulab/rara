@@ -534,17 +534,23 @@ pub struct TurnTrace {
 #[derive(Debug)]
 pub struct AgentTurnResult {
     /// The final text produced by the agent.
-    pub text:       String,
+    pub text:          String,
     /// Number of LLM iterations consumed.
-    pub iterations: usize,
+    pub iterations:    usize,
     /// Number of tool calls executed.
-    pub tool_calls: usize,
+    pub tool_calls:    usize,
     /// Model used for this turn.
-    pub model:      String,
+    pub model:         String,
+    /// Largest prompt_tokens across all iterations in this turn — each
+    /// iteration re-sends the full context so the last one is effectively
+    /// the max. `0` when no usage data was reported by the provider.
+    pub input_tokens:  u32,
+    /// Sum of completion_tokens across all iterations in this turn.
+    pub output_tokens: u32,
     /// Detailed trace of the turn for observability.
-    pub trace:      TurnTrace,
+    pub trace:         TurnTrace,
     /// Structured cascade trace built in real time during the turn.
-    pub cascade:    crate::cascade::CascadeTrace,
+    pub cascade:       crate::cascade::CascadeTrace,
 }
 
 impl AgentTurnResult {
@@ -552,11 +558,13 @@ impl AgentTurnResult {
     /// judgment decides Rara should not reply.
     pub fn empty() -> Self {
         Self {
-            text:       String::new(),
-            iterations: 0,
-            tool_calls: 0,
-            model:      String::new(),
-            trace:      TurnTrace {
+            text:          String::new(),
+            iterations:    0,
+            tool_calls:    0,
+            model:         String::new(),
+            input_tokens:  0,
+            output_tokens: 0,
+            trace:         TurnTrace {
                 duration_ms:      0,
                 model:            String::new(),
                 input_text:       None,
@@ -567,7 +575,7 @@ impl AgentTurnResult {
                 error:            None,
                 rara_message_id:  crate::io::MessageId::new(),
             },
-            cascade:    crate::cascade::CascadeTrace::empty(),
+            cascade:       crate::cascade::CascadeTrace::empty(),
         }
     }
 }
@@ -819,6 +827,44 @@ call `discover-tools` to load it first.{tool_list}
     )
 }
 
+/// Map a [`crate::session::ThinkingLevel`] to a provider
+/// [`llm::ThinkingConfig`].
+///
+/// Budgets mirror Anthropic's extended-thinking guidance: larger levels give
+/// the model more scratch tokens for silent reasoning before answering.
+///
+/// The output distinguishes three states:
+///
+/// * `None` — no session override. Drivers fall back to their own default (e.g.
+///   OpenAI Responses uses "medium" effort for reasoning models).
+/// * `Some(ThinkingConfig { enabled: false, .. })` — the user explicitly
+///   selected `Off`. Drivers must disable extended thinking even when the model
+///   family defaults to reasoning.
+/// * `Some(ThinkingConfig { enabled: true, budget_tokens: Some(_) })` — an
+///   explicit non-zero budget.
+fn thinking_level_to_config(
+    level: Option<crate::session::ThinkingLevel>,
+) -> Option<llm::ThinkingConfig> {
+    use crate::session::ThinkingLevel;
+    let budget = match level? {
+        ThinkingLevel::Off => {
+            return Some(llm::ThinkingConfig {
+                enabled:       false,
+                budget_tokens: None,
+            });
+        }
+        ThinkingLevel::Minimal => 512,
+        ThinkingLevel::Low => 1024,
+        ThinkingLevel::Medium => 4096,
+        ThinkingLevel::High => 16384,
+        ThinkingLevel::Xhigh => 32768,
+    };
+    Some(llm::ThinkingConfig {
+        enabled:       true,
+        budget_tokens: Some(budget),
+    })
+}
+
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
@@ -916,8 +962,34 @@ pub(crate) async fn run_agent_loop(
     let (effective_prompt, has_soul) = build_agent_system_prompt(&manifest, tools.as_ref());
     let provider_hint = manifest.provider_hint.as_deref();
 
-    // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) = handle.session_resolve_driver(session_key)?;
+    // Load per-session LLM overrides (model + thinking level) from the
+    // session index. A user-facing UI can pin these via the admin chat
+    // session API; when unset we fall back to the agent manifest defaults.
+    let session_entry = handle
+        .session_index()
+        .get_session(&session_key)
+        .await
+        .ok()
+        .flatten();
+    let model_override = session_entry.as_ref().and_then(|s| s.model.clone());
+    let provider_override = session_entry
+        .as_ref()
+        .and_then(|s| s.model_provider.clone());
+    let thinking_level_override = session_entry.as_ref().and_then(|s| s.thinking_level);
+    let thinking_config = thinking_level_to_config(thinking_level_override);
+
+    // Resolve driver + model. Prefer the session's pinned model/provider
+    // over the manifest default; fall through to the shared syscall when
+    // nothing is pinned.
+    let (driver, model) = match model_override.as_deref() {
+        Some(m) => {
+            let hint = provider_override.as_deref().or(provider_hint);
+            handle
+                .driver_registry()
+                .resolve(&manifest.name, hint, Some(m))?
+        }
+        None => handle.session_resolve_driver(session_key)?,
+    };
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -1089,6 +1161,10 @@ pub(crate) async fn run_agent_loop(
     // each iteration re-sends the full context.
     let mut cumulative_output_tokens: u32 = 0;
     let mut cumulative_thinking_ms: u64 = 0;
+    // Last iteration's prompt_tokens — each iteration re-sends the full
+    // context, so this represents the max context size for the turn.
+    // Surfaced in `AgentTurnResult.input_tokens` for the final usage event.
+    let mut last_prompt_tokens: u32 = 0;
     let user_id = Some(tool_context.user_id.as_str());
 
     // ── Context folding state ────────────────────────────────────────
@@ -1350,7 +1426,7 @@ pub(crate) async fn run_agent_loop(
             tools:               tool_defs.clone(),
             temperature:         Some(0.7),
             max_tokens:          Some(2048),
-            thinking:            None,
+            thinking:            thinking_config.clone(),
             tool_choice:         if tool_defs.is_empty() {
                 llm::ToolChoice::None
             } else {
@@ -1519,6 +1595,7 @@ pub(crate) async fn run_agent_loop(
                     if let Some(ref u) = last_usage {
                         cumulative_output_tokens =
                             cumulative_output_tokens.saturating_add(u.completion_tokens);
+                        last_prompt_tokens = u.prompt_tokens;
                         stream_handle.emit(StreamEvent::UsageUpdate {
                             input_tokens:  u.prompt_tokens,
                             output_tokens: cumulative_output_tokens,
@@ -1987,6 +2064,8 @@ pub(crate) async fn run_agent_loop(
                 iterations: iteration + 1,
                 tool_calls: tool_calls_made,
                 model: model.clone(),
+                input_tokens: last_prompt_tokens,
+                output_tokens: cumulative_output_tokens,
                 trace,
                 cascade,
             });
@@ -3006,6 +3085,8 @@ pub(crate) async fn run_agent_loop(
         iterations: actual_iterations,
         tool_calls: tool_calls_made,
         model: model.clone(),
+        input_tokens: last_prompt_tokens,
+        output_tokens: cumulative_output_tokens,
         trace,
         cascade,
     })

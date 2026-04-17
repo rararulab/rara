@@ -245,15 +245,17 @@ async fn ensure_dock_kernel_session(
 
     let now = chrono::Utc::now();
     let entry = SessionEntry {
-        key:           session_key,
-        title:         Some(format!("Dock: {dock_session_id}")),
-        model:         None,
-        system_prompt: None,
-        message_count: 0,
-        preview:       None,
-        metadata:      None,
-        created_at:    now,
-        updated_at:    now,
+        key:            session_key,
+        title:          Some(format!("Dock: {dock_session_id}")),
+        model:          None,
+        model_provider: None,
+        thinking_level: None,
+        system_prompt:  None,
+        message_count:  0,
+        preview:        None,
+        metadata:       None,
+        created_at:     now,
+        updated_at:     now,
     };
     index
         .create_session(&entry)

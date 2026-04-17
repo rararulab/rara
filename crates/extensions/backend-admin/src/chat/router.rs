@@ -41,12 +41,28 @@ use rara_kernel::{
     cascade::CascadeTrace,
     channel::types::{ChannelType, ChatMessage},
 };
-use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
+use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
 use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionService};
+
+/// Parse an optional thinking-level string from a request body, converting
+/// invalid values into a 400 response with a list of accepted variants.
+fn parse_thinking_level(raw: Option<String>) -> Result<Option<ThinkingLevel>, ChatError> {
+    use strum::VariantNames;
+    raw.map(|s| {
+        s.parse::<ThinkingLevel>()
+            .map_err(|_| ChatError::InvalidRequest {
+                message: format!(
+                    "invalid thinking level: {s} (expected one of: {})",
+                    ThinkingLevel::VARIANTS.join(", "),
+                ),
+            })
+    })
+    .transpose()
+}
 
 /// Parse a session key from a URL path parameter, returning 400 on invalid
 /// UUID.
@@ -71,11 +87,17 @@ fn parse_channel_type(raw: &str) -> Result<ChannelType, ChatError> {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     /// Optional human-readable title.
-    pub title:         Option<String>,
+    pub title:          Option<String>,
     /// Optional LLM model override (e.g. `"gpt-4o"`).
-    pub model:         Option<String>,
+    pub model:          Option<String>,
+    /// Optional provider identifier paired with `model` (e.g. `"anthropic"`,
+    /// `"openai"`). Enables the UI to round-trip a full model object.
+    pub model_provider: Option<String>,
+    /// Optional thinking-level override — one of `"off"`, `"minimal"`,
+    /// `"low"`, `"medium"`, `"high"`, `"xhigh"`.
+    pub thinking_level: Option<String>,
     /// Optional system prompt override.
-    pub system_prompt: Option<String>,
+    pub system_prompt:  Option<String>,
 }
 
 /// Query parameters for `GET /sessions`.
@@ -91,11 +113,16 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     /// New human-readable title.
-    pub title:         Option<String>,
+    pub title:          Option<String>,
     /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
-    pub model:         Option<String>,
+    pub model:          Option<String>,
+    /// New provider identifier paired with `model`.
+    pub model_provider: Option<String>,
+    /// New thinking-level override — one of `"off"`, `"minimal"`, `"low"`,
+    /// `"medium"`, `"high"`, `"xhigh"`.
+    pub thinking_level: Option<String>,
     /// New system prompt override.
-    pub system_prompt: Option<String>,
+    pub system_prompt:  Option<String>,
 }
 
 /// Request body for `PUT /models/favorites`.
@@ -216,8 +243,15 @@ async fn create_session(
     State(service): State<SessionService>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
+    let thinking_level = parse_thinking_level(req.thinking_level)?;
     let session = service
-        .create_session(req.title, req.model, req.system_prompt)
+        .create_session(
+            req.title,
+            req.model,
+            req.model_provider,
+            thinking_level,
+            req.system_prompt,
+        )
         .await?;
     Ok((StatusCode::CREATED, Json(session)))
 }
@@ -281,11 +315,14 @@ async fn update_session(
     Path(key): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionEntry>, ChatError> {
+    let thinking_level = parse_thinking_level(req.thinking_level)?;
     let session = service
         .update_session_fields(
             &parse_session_key(&key)?,
             req.title,
             req.model,
+            req.model_provider,
+            thinking_level,
             req.system_prompt,
         )
         .await?;

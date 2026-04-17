@@ -30,4 +30,4 @@ pub use rara_kernel::channel::types::{
 // ---------------------------------------------------------------------------
 // Re-exports from rara-kernel::session (canonical session types)
 // ---------------------------------------------------------------------------
-pub use rara_kernel::session::{ChannelBinding, SessionEntry, SessionKey};
+pub use rara_kernel::session::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};

@@ -90,6 +90,46 @@ base::define_id!(
 );
 
 // ---------------------------------------------------------------------------
+// ThinkingLevel
+// ---------------------------------------------------------------------------
+
+/// Reasoning/thinking budget override for a chat session.
+///
+/// Mirrors the six-bucket scale exposed by pi-mono's chat panel so the UI
+/// selector round-trips without any lossy mapping. Serialises as the
+/// lowercase variant name (`"off"`, `"minimal"`, `"low"`, `"medium"`,
+/// `"high"`, `"xhigh"`). When a session's thinking level is `None`, the
+/// agent manifest's default thinking configuration applies.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::Display,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ThinkingLevel {
+    /// Reasoning disabled — no scratch budget.
+    Off,
+    /// Minimal scratch budget for lightweight reasoning.
+    Minimal,
+    /// Low reasoning budget.
+    Low,
+    /// Medium reasoning budget.
+    Medium,
+    /// High reasoning budget.
+    High,
+    /// Maximum reasoning budget (pi-mono `xhigh`).
+    Xhigh,
+}
+
+// ---------------------------------------------------------------------------
 // SessionEntry
 // ---------------------------------------------------------------------------
 
@@ -101,27 +141,37 @@ base::define_id!(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     /// Unique session key (serves as primary key in the database).
-    pub key:           SessionKey,
+    pub key:            SessionKey,
     /// Human-readable title / label shown in session lists.
-    pub title:         Option<String>,
+    pub title:          Option<String>,
     /// LLM model name used for this session (e.g. `"gpt-4o"`,
     /// `"claude-sonnet-4-5-20250929"`).
-    pub model:         Option<String>,
+    pub model:          Option<String>,
+    /// Provider identifier paired with [`model`](Self::model) (e.g.
+    /// `"anthropic"`, `"openai"`). Lets the UI reconstruct a full
+    /// `Model<any>` via `getModel(provider, id)` when a session is
+    /// re-opened; the kernel also uses it as a routing hint.
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    /// Optional reasoning/thinking level override. When `None`, the agent
+    /// manifest's default thinking configuration is used.
+    #[serde(default)]
+    pub thinking_level: Option<ThinkingLevel>,
     /// Optional system prompt override. When `None`, the service-level
     /// default system prompt is used.
-    pub system_prompt: Option<String>,
+    pub system_prompt:  Option<String>,
     /// Running total of messages in this session.
-    pub message_count: i64,
+    pub message_count:  i64,
     /// Short preview text (typically the first user message, truncated)
     /// for display in session listings.
-    pub preview:       Option<String>,
+    pub preview:        Option<String>,
     /// Arbitrary JSON metadata for client-specific extensions.
-    pub metadata:      Option<serde_json::Value>,
+    pub metadata:       Option<serde_json::Value>,
     /// When the session was first created.
-    pub created_at:    DateTime<Utc>,
+    pub created_at:     DateTime<Utc>,
     /// When the session was last modified (message appended, metadata
     /// changed, etc.).
-    pub updated_at:    DateTime<Utc>,
+    pub updated_at:     DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------

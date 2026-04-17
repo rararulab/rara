@@ -552,15 +552,17 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
     let session_index = kernel_handle.session_index();
     let now = Utc::now();
     let new_entry = SessionEntry {
-        key:           SessionKey::new(),
-        title:         None,
-        model:         None,
-        system_prompt: None,
-        message_count: 0,
-        preview:       None,
-        metadata:      None,
-        created_at:    now,
-        updated_at:    now,
+        key:            SessionKey::new(),
+        title:          None,
+        model:          None,
+        model_provider: None,
+        thinking_level: None,
+        system_prompt:  None,
+        message_count:  0,
+        preview:        None,
+        metadata:       None,
+        created_at:     now,
+        updated_at:     now,
     };
 
     let created = match session_index.create_session(&new_entry).await {
@@ -871,15 +873,17 @@ async fn get_or_create_cli_session(
 
     let now = Utc::now();
     let entry = SessionEntry {
-        key:           SessionKey::new(),
-        title:         Some(chat_id.to_owned()),
-        model:         None,
-        system_prompt: None,
-        message_count: 0,
-        preview:       None,
-        metadata:      None,
-        created_at:    now,
-        updated_at:    now,
+        key:            SessionKey::new(),
+        title:          Some(chat_id.to_owned()),
+        model:          None,
+        model_provider: None,
+        thinking_level: None,
+        system_prompt:  None,
+        message_count:  0,
+        preview:        None,
+        metadata:       None,
+        created_at:     now,
+        updated_at:     now,
     };
     let created = session_index
         .create_session(&entry)
@@ -967,6 +971,16 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             input_tokens,
             output_tokens,
             thinking_ms,
+        },
+        StreamEvent::TurnUsage {
+            input_tokens,
+            output_tokens,
+            total_tokens: _,
+            model: _,
+        } => CliEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            thinking_ms: 0,
         },
         StreamEvent::BackgroundTaskStarted {
             agent_name,

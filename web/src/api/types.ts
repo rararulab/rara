@@ -49,10 +49,24 @@ export interface ChatModel {
 
 
 // Chat Sessions
+
+/** LLM thinking-level override persisted per session. Mirrors pi-mono's
+ *  six-bucket scale so the chat-panel selector round-trips without any
+ *  lossy mapping. */
+export type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+
 export interface ChatSession {
   key: string;
   title: string | null;
   model: string | null;
+  model_provider: string | null;
+  thinking_level: ThinkingLevel | null;
   system_prompt: string | null;
   message_count: number;
   preview: string | null;
@@ -65,16 +79,35 @@ export interface ChatMessageData {
   seq: number;
   role: "system" | "user" | "assistant" | "tool" | "tool_result";
   content: string | ChatContentBlock[];
+  /** Tool calls requested by the assistant (only present on assistant-role
+   *  messages that invoke tools). Matches the backend `ChatMessage.tool_calls`
+   *  field emitted from persisted `ToolCall` tape entries. */
+  tool_calls?: ChatToolCallData[];
   tool_call_id?: string;
   tool_name?: string;
   created_at: string;
+}
+
+/** A single tool invocation as persisted on an assistant message. */
+export interface ChatToolCallData {
+  id: string;
+  name: string;
+  /** Decoded tool arguments — a JSON object, string, or null depending on
+   *  what the model produced. Typically an object. */
+  arguments: unknown;
 }
 
 export type ChatContentBlock =
   | { type: "text"; text: string }
   | { type: "image_url"; url: string }
   | { type: "image_base64"; media_type: string; data: string }
-  | { type: "audio_base64"; media_type: string; data: string };
+  | { type: "audio_base64"; media_type: string; data: string }
+  | {
+      type: "file_base64";
+      media_type: string;
+      data: string;
+      filename?: string;
+    };
 
 export interface SendMessageResponse {
   message: ChatMessageData;
@@ -89,6 +122,16 @@ export type ChatStreamEvent =
   | { type: "iteration"; index: number }
   | { type: "tool_call_start"; id: string; name: string }
   | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string }
+  | {
+      type: "usage";
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      total_tokens: number;
+      cost: number;
+      model: string;
+    }
   | { type: "done"; text: string }
   | { type: "error"; message: string };
 
