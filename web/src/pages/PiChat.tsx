@@ -23,6 +23,9 @@ import {
   ProviderKeysStore,
   CustomProvidersStore,
   defaultConvertToLlm,
+  ProvidersModelsTab,
+  ProxyTab,
+  SettingsDialog,
   type Attachment,
   type UserMessageWithAttachments,
 } from "@mariozechner/pi-web-ui";
@@ -333,17 +336,21 @@ function SessionListPanel({
             ))
           )}
         </div>
-        {/* Settings link at the bottom */}
+        {/*
+          Server-wide admin settings (MCP servers, agent manifests, skills,
+          kernel config). Chat-user preferences (provider API keys, proxy,
+          theme, thinking default) live in pi-mono's SettingsDialog opened
+          from the gear icon in the top bar.
+        */}
         <div className="border-t border-border px-4 py-3">
           <button
             onClick={() => { onNavigate("/settings"); onClose(); }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
             </svg>
-            Settings
+            Admin
           </button>
         </div>
       </div>
@@ -565,6 +572,24 @@ export default function PiChat() {
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M3 12h18M3 6h18M3 18h18" />
+        </svg>
+      </button>
+      {/*
+        Settings button — opens pi-mono's SettingsDialog (provider API keys,
+        custom providers, proxy). Rara's server-wide admin config (MCP servers,
+        agent manifests, kernel config) still lives at `/settings` — reachable
+        from the session-list footer.
+      */}
+      <button
+        onClick={() =>
+          SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()])
+        }
+        className="absolute left-14 top-2 z-50 flex h-11 w-11 items-center justify-center rounded-md bg-background/80 text-muted-foreground shadow-sm backdrop-blur hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+        title="Settings"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
       {/* Voice recorder button — fixed top-right */}
