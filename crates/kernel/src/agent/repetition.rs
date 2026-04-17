@@ -35,6 +35,7 @@ const CHECK_INTERVAL: usize = 500;
 /// in the accumulated text, `feed` returns `Some(byte_index)` indicating
 /// the point at which the output should be truncated (keeping only the
 /// first occurrence plus the probe).
+#[derive(Debug)]
 pub(crate) struct RepetitionGuard {
     /// Characters accumulated since the last check.
     chars_since_check: usize,

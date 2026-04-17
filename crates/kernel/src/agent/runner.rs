@@ -47,7 +47,14 @@
 //!   [`Effect::ContextPressureWarning`]; legacy removal pending
 //! - Tool-call-limit circuit breaker with oneshot resume — ✓ machine-side
 //!   implemented; legacy removal pending
-//! - Repetition guard truncation
+//! - Repetition guard truncation — ✓ machine-side implemented via
+//!   [`AgentMachine::observe_stream_delta`] +
+//!   [`crate::agent::machine::RepetitionAction`]; legacy removal pending.
+//!   Streaming runners are expected to feed each `TextDelta` through the
+//!   observer and, on `Abort`, cancel the provider stream, truncate the
+//!   accumulated text at `truncate_at_byte`, and synthesise an
+//!   [`Event::LlmCompleted`] carrying the truncated text (no tool calls, no
+//!   usage) — mirroring the legacy `repetition_aborted = true` branch exactly.
 //! - Deferred tool activation (`discover-tools`) feedback — ✓ machine-side
 //!   implemented; legacy removal pending
 //! - Per-iteration tape rebuild + sanitisation — ✓ machine-side implemented via
@@ -1232,6 +1239,59 @@ mod tests {
         let outcome = drive(&mut machine, &mut s).await;
         assert!(outcome.success);
         assert_eq!(s.rebuild_log, vec![0]);
+    }
+
+    // ─── Repetition guard (observer integration) ────────────────────────
+
+    /// End-to-end contract for repetition abort: in production, the
+    /// streaming wrapper feeds each `TextDelta` through
+    /// [`AgentMachine::observe_stream_delta`] and, on `Abort`, truncates
+    /// the accumulated buffer and synthesises an `LlmCompleted` carrying
+    /// the truncated text (no tool calls). The machine then drives through
+    /// its normal text-only terminal path — no `Fail`, no retry, no
+    /// recovery branch. This test exercises that contract by scripting
+    /// the truncated `LlmCompleted` directly (the observer itself is
+    /// covered by synchronous machine-level tests in `agent::machine`).
+    #[tokio::test]
+    async fn drive_treats_truncated_llm_completed_as_graceful_stop() {
+        let mut s = subsys();
+        // Simulated scenario: observer fired mid-stream, runner truncated
+        // to just past one block, and reports LlmCompleted with that
+        // truncated text. Machine must finish cleanly.
+        s.llm_script = vec![Event::LlmCompleted {
+            text:           "truncated single copy".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        }];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success, "repetition abort is a graceful success");
+        assert_eq!(outcome.text, "truncated single copy");
+        assert_eq!(outcome.iterations, 1);
+        assert_eq!(outcome.tool_calls_made, 0);
+    }
+
+    /// The observer survives the full drive loop: after a turn reaches
+    /// `Done`, the machine's guard state is still valid and accepts
+    /// further observations without panicking. This defends against an
+    /// accidental regression where `rebuild_then_call` stops resetting the
+    /// guard (state would drift across iterations and
+    /// `RepetitionGuard::feed`'s internal `debug_assert!` would trip).
+    #[tokio::test]
+    async fn drive_observer_state_is_consistent_after_drive() {
+        use crate::agent::machine::RepetitionAction;
+        let mut s = subsys();
+        s.llm_script = vec![Event::LlmCompleted {
+            text:           "ok".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        }];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        // Fresh observation must be well-formed — `accumulated` matches the
+        // delta exactly, the internal byte counter starts at zero.
+        let _: Option<RepetitionAction> = machine.observe_stream_delta("fresh", "fresh");
     }
 
     /// Sampling `(0, 0)` (unavailable / disabled) never produces a

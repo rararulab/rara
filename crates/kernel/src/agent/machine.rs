@@ -46,6 +46,7 @@ use crate::{
             ToolResult,
         },
         loop_breaker::{LoopBreakerConfig, LoopIntervention, ToolCallLoopBreaker},
+        repetition::RepetitionGuard,
     },
     tool::ToolName,
 };
@@ -132,6 +133,13 @@ pub struct AgentMachine {
     /// turn.  Critical can fire even after Warning has fired (they are
     /// distinct thresholds), but each is still one-shot.
     warned_at_critical:   bool,
+    /// Streaming repetition detector. Reset at the start of every LLM
+    /// round (fresh accumulated buffer per iteration) so only *intra*-round
+    /// verbatim loops trip it. The legacy loop fingerprints each `TextDelta`
+    /// against the per-iteration `accumulated_text`; mirror that contract
+    /// exactly by wiping state the instant the machine enters
+    /// [`Phase::AwaitingLlm`].
+    repetition_guard:     RepetitionGuard,
 }
 
 impl AgentMachine {
@@ -155,6 +163,7 @@ impl AgentMachine {
             limit_id_counter: 0,
             warned_at_warning: false,
             warned_at_critical: false,
+            repetition_guard: RepetitionGuard::new(),
         }
     }
 
@@ -278,7 +287,13 @@ impl AgentMachine {
     /// regenerates messages from the tape before the call fires —
     /// preserving the legacy `run_agent_loop`'s "tape is the single source
     /// of truth" invariant.
-    fn rebuild_then_call(&self) -> [Effect; 2] {
+    ///
+    /// Takes `&mut self` so it can also reset the per-iteration
+    /// [`RepetitionGuard`]: a fresh accumulator starts for every new LLM
+    /// round, matching the legacy loop's `let mut accumulated_text =
+    /// String::new()` pattern.
+    fn rebuild_then_call(&mut self) -> [Effect; 2] {
+        self.repetition_guard = RepetitionGuard::new();
         [
             Effect::RebuildTape {
                 iteration: self.iteration,
@@ -289,6 +304,43 @@ impl AgentMachine {
                 disabled_tools: self.disabled_tools.clone(),
             },
         ]
+    }
+
+    /// Synchronous observation: feed a streaming text delta into the
+    /// repetition guard and report whether the runner should abort the
+    /// in-flight stream.
+    ///
+    /// The runner calls this between `StreamDelta::TextDelta` events (after
+    /// pushing the delta onto its accumulated text buffer). When the guard
+    /// detects that the trailing 200 characters of the accumulated output
+    /// also appear earlier in the text, it returns a
+    /// [`RepetitionAction::Abort`] carrying the byte index at which the
+    /// runner should truncate `accumulated_text`. The runner then cancels
+    /// the provider stream and synthesises an
+    /// [`Event::LlmCompleted`] carrying the truncated text (no tool calls,
+    /// empty token usage), matching the legacy loop's
+    /// `repetition_aborted = true` branch which skips the driver-error path
+    /// entirely.
+    ///
+    /// Like [`AgentMachine::observe_context_usage`], this method does **not**
+    /// consume an [`Event`] and does **not** mutate [`Phase`]. It is a pure
+    /// per-delta observation used on a hot path (thousands of calls per
+    /// second under streaming), so it intentionally avoids the event/effect
+    /// round-trip.
+    ///
+    /// Arguments match the legacy call site verbatim: `delta` is the new
+    /// text just appended, `accumulated` is the full buffer *including* the
+    /// delta. The guard tracks its own byte count and will
+    /// `debug_assert!(total_bytes == accumulated.len())` — passing the
+    /// buffer *before* appending the delta is a caller bug.
+    pub fn observe_stream_delta(
+        &mut self,
+        delta: &str,
+        accumulated: &str,
+    ) -> Option<RepetitionAction> {
+        self.repetition_guard
+            .feed(delta, accumulated)
+            .map(|truncate_at_byte| RepetitionAction::Abort { truncate_at_byte })
     }
 
     /// Translate an LLM-failure event into recovery effects.
@@ -619,6 +671,34 @@ impl AgentMachine {
             }
         }
     }
+}
+
+/// Decision returned by [`AgentMachine::observe_stream_delta`] when the
+/// repetition guard fires.
+///
+/// The runner cancels the provider stream, truncates its accumulated text
+/// at `truncate_at_byte`, and synthesises an [`Event::LlmCompleted`] with the
+/// truncated text (no tool calls). The legacy loop's `repetition_aborted`
+/// branch treats the aborted stream as a successful iteration that produced
+/// no tool usage — the follow-up `LlmCompleted` event drives the machine
+/// through the standard terminal path (either `Finish` or the next iteration
+/// via `AwaitingLlm`, depending on `has_tool_calls`, which is always `false`
+/// for repetition aborts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepetitionAction {
+    /// Abort the stream and truncate accumulated text at this byte index.
+    ///
+    /// The index is guaranteed to land on a UTF-8 character boundary
+    /// because the underlying `RepetitionGuard::feed` computes it from
+    /// `char_indices` on the caller's accumulated buffer — passing it
+    /// directly to `String::truncate` is safe.
+    Abort {
+        /// Byte offset into the runner's accumulated text buffer at which
+        /// to truncate. Points just past the first occurrence of the
+        /// repeating probe so the user sees one clean copy of the looped
+        /// block.
+        truncate_at_byte: usize,
+    },
 }
 
 /// Classification of an LLM streaming-call failure.
@@ -2023,6 +2103,156 @@ mod tests {
         assert!(
             refresh_idx < pause_idx,
             "refresh must precede pause: {effects:?}"
+        );
+    }
+
+    // ─── Repetition guard (observe_stream_delta) ────────────────────────
+
+    /// Build a string of `n` characters that is globally unique — no
+    /// 200-char slice repeats. Mirrors the helper in `repetition::tests`.
+    fn unique_chars(n: usize) -> String {
+        let mut s = String::with_capacity(n * 4);
+        let mut i = 0u32;
+        while s.chars().count() < n {
+            let mut num = i;
+            let mut buf = Vec::new();
+            loop {
+                buf.push(b'a' + (num % 26) as u8);
+                num /= 26;
+                if num == 0 {
+                    break;
+                }
+            }
+            buf.reverse();
+            for &b in &buf {
+                if s.chars().count() >= n {
+                    break;
+                }
+                s.push(char::from(b));
+            }
+            if s.chars().count() < n {
+                s.push('_');
+            }
+            i += 1;
+        }
+        s.chars().take(n).collect()
+    }
+
+    #[test]
+    fn observe_stream_delta_returns_none_for_unique_text() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let text = unique_chars(800);
+        assert!(m.observe_stream_delta(&text, &text).is_none());
+    }
+
+    #[test]
+    fn observe_stream_delta_returns_none_below_min_length() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        // Well below MIN_CHECK_LEN (600) — even pure repetition is skipped.
+        let block = "x".repeat(400);
+        assert!(m.observe_stream_delta(&block, &block).is_none());
+    }
+
+    #[test]
+    fn observe_stream_delta_detects_exact_block_repetition() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let block = unique_chars(300);
+        let repeated = format!("{block}{block}");
+        match m.observe_stream_delta(&repeated, &repeated) {
+            Some(RepetitionAction::Abort { truncate_at_byte }) => {
+                assert!(
+                    truncate_at_byte <= block.len() + 200,
+                    "truncate_at_byte {truncate_at_byte} should be at most one block + probe"
+                );
+            }
+            None => panic!("expected Abort, got None"),
+        }
+    }
+
+    /// Incremental feeding (one delta at a time) must produce the same
+    /// abort signal as a single bulk feed — this is the realistic runtime
+    /// shape: providers emit 5–50 byte deltas, not 600-byte chunks.
+    #[test]
+    fn observe_stream_delta_fires_on_incremental_feeding() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let block = unique_chars(300);
+        let combined = format!("{block}{block}{block}");
+        let chars: Vec<char> = combined.chars().collect();
+        let mut acc = String::new();
+        let mut detected = false;
+        for chunk in chars.chunks(100) {
+            let delta: String = chunk.iter().collect();
+            acc.push_str(&delta);
+            if m.observe_stream_delta(&delta, &acc).is_some() {
+                detected = true;
+                break;
+            }
+        }
+        assert!(detected, "incremental feeding must eventually fire");
+    }
+
+    /// The guard state is per-LLM-round: every transition that re-enters
+    /// `AwaitingLlm` via `rebuild_then_call` wipes the accumulator so the
+    /// next iteration starts from zero. Without this reset, the byte-count
+    /// `debug_assert` in `RepetitionGuard::feed` would trip on the second
+    /// iteration's first delta.
+    #[test]
+    fn observe_stream_delta_resets_per_llm_round() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+
+        // Iteration 0: feed some text that doesn't trigger (below MIN_CHECK_LEN
+        // means no detection but bytes/chars still accumulate internally).
+        let half = "abc".repeat(50); // 150 chars
+        let _ = m.observe_stream_delta(&half, &half);
+
+        // Finish iteration 0 with a tool call and advance to iteration 1.
+        let _ = m.step(Event::LlmCompleted {
+            text:           half.clone(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        // Now in AwaitingLlm for iteration 1. A fresh feed of equal length
+        // must NOT trip the internal byte-drift debug_assert — the guard was
+        // reset by `rebuild_then_call`.
+        let fresh = "xyz".repeat(50);
+        assert!(m.observe_stream_delta(&fresh, &fresh).is_none());
+    }
+
+    /// Two independent iterations each surface their own repetition — the
+    /// reset per round does not swallow a later iteration's loop.
+    #[test]
+    fn observe_stream_delta_fires_in_later_iteration_after_reset() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+
+        // Iteration 0: complete a tool round so the machine advances.
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+
+        // Iteration 1: feed a repeating stream — abort must fire here.
+        let block = unique_chars(300);
+        let repeated = format!("{block}{block}");
+        assert!(
+            matches!(
+                m.observe_stream_delta(&repeated, &repeated),
+                Some(RepetitionAction::Abort { .. })
+            ),
+            "expected Abort on iteration 1"
         );
     }
 }
